@@ -3087,16 +3087,16 @@ future<db::rp_handle> db::commitlog::add_entry(const cf_id_type& id, const commi
     return _segment_manager->allocate_when_possible(cl_entry_writer(cew), timeout);
 }
 
-future<std::vector<db::rp_handle>> 
-db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
+future<utils::chunked_vector<db::rp_handle>>
+db::commitlog::add_entries(utils::chunked_vector<commitlog_entry_writer> entry_writers, db::timeout_clock::time_point timeout) {
     class cl_entries_writer final : public entry_writer {
-        std::vector<commitlog_entry_writer> _writers;
+        utils::chunked_vector<commitlog_entry_writer> _writers;
         std::unordered_set<table_schema_version> _known;
         const segment* _sizes_computed = nullptr;
     public:
-        std::vector<rp_handle> res;
+        utils::chunked_vector<rp_handle> res;
 
-        cl_entries_writer(force_sync sync, std::vector<commitlog_entry_writer> entry_writers)
+        cl_entries_writer(force_sync sync, utils::chunked_vector<commitlog_entry_writer> entry_writers)
             : entry_writer(sync, entry_writers.size()), _writers(std::move(entry_writers))
         {
             res.reserve(_writers.size());
@@ -3144,7 +3144,7 @@ db::commitlog::add_entries(std::vector<commitlog_entry_writer> entry_writers, db
             res.emplace_back(std::move(h));
         }
 
-        using result_type = std::vector<db::rp_handle>;
+        using result_type = utils::chunked_vector<db::rp_handle>;
 
         result_type result() {
             return std::move(res);

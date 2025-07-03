@@ -384,7 +384,7 @@ public:
     // function enables putting multiple CQL queries into a single raft command
     // and vice versa, split mutations from one query into separate commands.
     // It supports write-only queries, read-modified-writes not supported.
-    future<std::vector<mutation>> get_mutations_internal(
+    future<utils::chunked_vector<mutation>> get_mutations_internal(
         const sstring query_string,
         service::query_state& query_state,
         api::timestamp_type timestamp,

@@ -49,7 +49,7 @@ public:
     schema_mutations(const schema_mutations&) = default;
     schema_mutations& operator=(const schema_mutations&) = default;
 
-    void copy_to(std::vector<mutation>& dst) const;
+    void copy_to(utils::chunked_vector<mutation>& dst) const;
 
     const mutation& columnfamilies_mutation() const {
         return _columnfamilies;

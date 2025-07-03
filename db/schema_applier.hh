@@ -20,7 +20,7 @@ namespace db {
 
 namespace schema_tables {
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload = false);
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, utils::chunked_vector<mutation> mutations, bool reload = false);
 
 }
 

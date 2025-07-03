@@ -118,7 +118,7 @@ private:
 
     std::vector<removed_column> _removed_columns;
 
-    std::vector<mutation_description> _mutations;
+    utils::chunked_vector<mutation_description> _mutations;
 
     std::vector<sstring> _change_log;
 
@@ -131,7 +131,7 @@ private:
 
     schema_ptr build_schema() const;
 
-    std::vector<mutation> build_mutations(schema_ptr s) const;
+    utils::chunked_vector<mutation> build_mutations(schema_ptr s) const;
 public:
     explicit table_description(std::vector<column> partition_key, std::vector<column> clustering_key);
 
@@ -153,13 +153,13 @@ public:
     void rename_partition_column(const sstring& from, const sstring& to);
     void rename_clustering_column(const sstring& from, const sstring& to);
 
-    std::vector<mutation_description>& unordered_mutations() { return _mutations; }
-    const std::vector<mutation_description>& unordered_mutations() const { return _mutations; }
+    utils::chunked_vector<mutation_description>& unordered_mutations() { return _mutations; }
+    const utils::chunked_vector<mutation_description>& unordered_mutations() const { return _mutations; }
 
     struct table {
         sstring schema_changes_log;
         schema_ptr schema;
-        std::vector<mutation> mutations;
+        utils::chunked_vector<mutation> mutations;
     };
     table build() const;
 };

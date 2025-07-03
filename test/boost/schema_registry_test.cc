@@ -26,6 +26,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "gms/feature_service.hh"
 #include "view_info.hh"
+#include "mutation/async_utils.hh"
 
 BOOST_AUTO_TEST_SUITE(schema_registry_test)
 
@@ -172,7 +173,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
         // Use schema mutations so that table id is the same as in s0.
         {
             auto sm0 = db::schema_tables::make_schema_mutations(s0, api::new_timestamp(), true);
-            std::vector<mutation> muts;
+            utils::chunked_vector<mutation> muts;
             sm0.copy_to(muts);
             db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(),
                                             e.get_feature_service().local(), muts).get();
@@ -292,6 +293,27 @@ SEASTAR_THREAD_TEST_CASE(test_view_info_is_recovered_after_dying) {
         [view_schema, base_info] (table_schema_version) -> view_schema_and_base_info { return {frozen_schema(view_schema), base_info}; });
     auto view_registry_schema = local_schema_registry().get_or_null(view_schema->version());
     BOOST_REQUIRE(view_registry_schema);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_merge_schema_with_large_collection_of_mutations) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        utils::chunked_vector<mutation> mutations;
+        for (auto i : std::views::iota(0, 1000)) {
+            auto s0 = schema_builder("ks", fmt::format("cf_{}", i))
+                    .with_column("pk", bytes_type, column_kind::partition_key)
+                    .with_column("v1", bytes_type)
+                    .build();
+
+            db::schema_tables::make_schema_mutations(s0, api::new_timestamp(), true).copy_to(mutations);
+        }
+
+        BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
+        seastar::memory::scoped_large_allocation_warning_threshold guard((size_t(128) << 10)+1); // 128 KiB + 1 byte
+        db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(),
+                                        e.get_feature_service().local(), mutations).get();
+        BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
+
+    }).get();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

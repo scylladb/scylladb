@@ -34,7 +34,7 @@ struct group0_state_machine_merger;
 struct schema_change {
     // Mutations of schema tables (such as `system_schema.keyspaces`, `system_schema.tables` etc.)
     // e.g. computed from a DDL statement (keyspace/table/type create/drop/alter etc.)
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct broadcast_table_query {
@@ -42,20 +42,20 @@ struct broadcast_table_query {
 };
 
 struct topology_change {
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 // Allows executing combined topology & schema mutations under a single RAFT command.
 // The order of the mutations doesn't matter.
 struct mixed_change {
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 // This command is used to write data to tables other than topology or
 // schema tables. and it updates any in-memory data structures based on
 // mutations' table_id.
 struct write_mutations {
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct group0_command {
@@ -113,7 +113,7 @@ class group0_state_machine : public raft_state_machine {
     gms::feature_service& _feature_service;
     gms::feature::listener_registration _topology_on_raft_support_listener;
 
-    modules_to_reload get_modules_to_reload(const std::vector<canonical_mutation>& mutations);
+    modules_to_reload get_modules_to_reload(const utils::chunked_vector<canonical_mutation>& mutations);
     future<> reload_modules(modules_to_reload modules);
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
@@ -130,6 +130,6 @@ public:
 bool should_flush_system_topology_after_applying(const mutation& mut, const data_dictionary::database db);
 
 // Used to write data to topology and other tables except schema tables.
-future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms);
+future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms);
 
 } // end of namespace service

@@ -34,8 +34,8 @@ static_assert(writable_sstable_versions[2] == expected_writable_sstable_versions
 future <> test_schema_changes_int(sstable_version_types sstable_vtype) {
   return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     std::map<schema_ptr, shared_sstable> cache;
-    for_each_schema_change([&] (schema_ptr base, const std::vector<mutation>& base_mutations,
-                                schema_ptr changed, const std::vector<mutation>& changed_mutations) {
+    for_each_schema_change([&] (schema_ptr base, const utils::chunked_vector<mutation>& base_mutations,
+                                schema_ptr changed, const utils::chunked_vector<mutation>& changed_mutations) {
         auto it = cache.find(base);
 
         shared_sstable created_with_base_schema;

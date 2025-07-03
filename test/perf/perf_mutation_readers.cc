@@ -27,29 +27,29 @@ class combined {
     mutable simple_schema _schema;
     perf::reader_concurrency_semaphore_wrapper _semaphore;
     reader_permit _permit;
-    std::vector<mutation> _one_row;
-    std::vector<mutation> _single;
-    std::vector<std::vector<mutation>> _disjoint_interleaved;
-    std::vector<std::vector<mutation>> _disjoint_ranges;
-    std::vector<std::vector<mutation>> _overlapping_partitions_disjoint_rows;
+    utils::chunked_vector<mutation> _one_row;
+    utils::chunked_vector<mutation> _single;
+    std::vector<utils::chunked_vector<mutation>> _disjoint_interleaved;
+    std::vector<utils::chunked_vector<mutation>> _disjoint_ranges;
+    std::vector<utils::chunked_vector<mutation>> _overlapping_partitions_disjoint_rows;
 private:
-    static std::vector<mutation> create_one_row(simple_schema&, reader_permit);
-    static std::vector<mutation> create_single_stream(simple_schema&, reader_permit);
-    static std::vector<std::vector<mutation>> create_disjoint_interleaved_streams(simple_schema&, reader_permit);
-    static std::vector<std::vector<mutation>> create_disjoint_ranges_streams(simple_schema&, reader_permit);
-    static std::vector<std::vector<mutation>> create_overlapping_partitions_disjoint_rows_streams(simple_schema&, reader_permit);
+    static utils::chunked_vector<mutation> create_one_row(simple_schema&, reader_permit);
+    static utils::chunked_vector<mutation> create_single_stream(simple_schema&, reader_permit);
+    static std::vector<utils::chunked_vector<mutation>> create_disjoint_interleaved_streams(simple_schema&, reader_permit);
+    static std::vector<utils::chunked_vector<mutation>> create_disjoint_ranges_streams(simple_schema&, reader_permit);
+    static std::vector<utils::chunked_vector<mutation>> create_overlapping_partitions_disjoint_rows_streams(simple_schema&, reader_permit);
 protected:
     simple_schema& schema() const { return _schema; }
     reader_permit permit() const { return _permit; }
-    const std::vector<mutation>& one_row_stream() const { return _one_row; }
-    const std::vector<mutation>& single_stream() const { return _single; }
-    const std::vector<std::vector<mutation>>& disjoint_interleaved_streams() const {
+    const utils::chunked_vector<mutation>& one_row_stream() const { return _one_row; }
+    const utils::chunked_vector<mutation>& single_stream() const { return _single; }
+    const std::vector<utils::chunked_vector<mutation>>& disjoint_interleaved_streams() const {
         return _disjoint_interleaved;
     }
-    const std::vector<std::vector<mutation>>& disjoint_ranges_streams() const {
+    const std::vector<utils::chunked_vector<mutation>>& disjoint_ranges_streams() const {
         return _disjoint_ranges;
     }
-    const std::vector<std::vector<mutation>>& overlapping_partitions_disjoint_rows_streams() const {
+    const std::vector<utils::chunked_vector<mutation>>& overlapping_partitions_disjoint_rows_streams() const {
         return _overlapping_partitions_disjoint_rows;
     }
     future<> consume_all(mutation_reader mr) const;
@@ -65,7 +65,7 @@ public:
     { }
 };
 
-std::vector<mutation> combined::create_one_row(simple_schema& s, reader_permit permit)
+utils::chunked_vector<mutation> combined::create_one_row(simple_schema& s, reader_permit permit)
 {
     return s.make_pkeys(1)
         | std::views::transform([&] (auto& dkey) {
@@ -73,10 +73,10 @@ std::vector<mutation> combined::create_one_row(simple_schema& s, reader_permit p
             m.apply(s.make_row(permit, s.make_ckey(0), "value"));
             return m;
           })
-        | std::ranges::to<std::vector<mutation>>();
+        | std::ranges::to<utils::chunked_vector<mutation>>();
 }
 
-std::vector<mutation> combined::create_single_stream(simple_schema& s, reader_permit permit)
+utils::chunked_vector<mutation> combined::create_single_stream(simple_schema& s, reader_permit permit)
 {
     return s.make_pkeys(32)
         | std::views::transform([&] (auto& dkey) {
@@ -86,44 +86,44 @@ std::vector<mutation> combined::create_single_stream(simple_schema& s, reader_pe
             }
             return m;
           })
-        | std::ranges::to<std::vector<mutation>>();
+        | std::ranges::to<utils::chunked_vector<mutation>>();
 }
 
-std::vector<std::vector<mutation>> combined::create_disjoint_interleaved_streams(simple_schema& s, reader_permit permit)
+std::vector<utils::chunked_vector<mutation>> combined::create_disjoint_interleaved_streams(simple_schema& s, reader_permit permit)
 {
     auto base = create_single_stream(s, permit);
-    std::vector<std::vector<mutation>> mss;
+    std::vector<utils::chunked_vector<mutation>> mss;
     for (auto i = 0; i < 4; i++) {
         mss.emplace_back(
             base
             | std::views::drop(i)
             | std::views::take(base.size() - i)
             | std::views::stride(4)
-            | std::ranges::to<std::vector>()
+            | std::ranges::to<utils::chunked_vector<mutation>>()
         );
     }
     return mss;
 }
 
-std::vector<std::vector<mutation>> combined::create_disjoint_ranges_streams(simple_schema& s, reader_permit permit)
+std::vector<utils::chunked_vector<mutation>> combined::create_disjoint_ranges_streams(simple_schema& s, reader_permit permit)
 {
     auto base = create_single_stream(s, permit);
-    std::vector<std::vector<mutation>> mss;
+    std::vector<utils::chunked_vector<mutation>> mss;
     auto slice = base.size() / 4;
     for (auto i = 0; i < 4; i++) {
         mss.emplace_back(
             base
             | std::views::drop(i * slice)
             | std::views::take(std::min((i + 1) * slice, base.size()) - i * slice)
-            | std::ranges::to<std::vector>()
+            | std::ranges::to<utils::chunked_vector<mutation>>()
         );
     }
     return mss;
 }
 
-std::vector<std::vector<mutation>> combined::create_overlapping_partitions_disjoint_rows_streams(simple_schema& s, reader_permit permit) {
+std::vector<utils::chunked_vector<mutation>> combined::create_overlapping_partitions_disjoint_rows_streams(simple_schema& s, reader_permit permit) {
     auto keys = s.make_pkeys(4);
-    std::vector<std::vector<mutation>> mss;
+    std::vector<utils::chunked_vector<mutation>> mss;
     for (int i = 0; i < 4; i++) {
         mss.emplace_back(keys
             | std::views::transform([&] (auto& dkey) {
@@ -133,7 +133,7 @@ std::vector<std::vector<mutation>> combined::create_overlapping_partitions_disjo
                 }
                 return m;
               })
-            | std::ranges::to<std::vector<mutation>>());
+            | std::ranges::to<utils::chunked_vector<mutation>>());
     }
     return mss;
 }
