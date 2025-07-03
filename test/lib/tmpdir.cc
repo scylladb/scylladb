@@ -62,5 +62,8 @@ void tmpdir::operator=(tmpdir&& other) noexcept {
 }
 
 tmpdir::~tmpdir() {
+    if (_preserve_on_failure && std::uncaught_exceptions() > 0) {
+        return;
+    }
     remove();
 }

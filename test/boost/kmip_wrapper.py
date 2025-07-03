@@ -2,8 +2,7 @@ import ssl
 import sys
 
 from kmip.services import auth
-from kmip.services.server.server import build_argument_parser
-from kmip.services.server.server import KmipServer
+from kmip_patched.server import build_argument_parser, KmipServer
 
 # Helper wrapper for running pykmip in scylla testing. Needed because TLS options
 # (hardcoded) in pykmip are obsolete and will not work with connecting using gnutls
@@ -61,7 +60,11 @@ def main():
     kwargs['live_policies'] = True
 
     # Create and start the server.
+    print("Creating KMIP server")
+    sys.stdout.flush()
     s = KmipServer(**kwargs)
+    print("Created KMIP server")
+    sys.stdout.flush()
     # Fix TLS. Try to get this into mainline project, but that will take time...
     s.auth_suite = TLS13AuthenticationSuite(s.auth_suite.ciphers)
     # force port to zero -> select dynamically
