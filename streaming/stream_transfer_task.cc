@@ -17,6 +17,8 @@
 #include "streaming/stream_reason.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "service/topology_guard.hh"
+#include "readers/evictable.hh"
+#include "readers/multi_range.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "mutation/frozen_mutation.hh"
@@ -46,6 +48,33 @@ stream_transfer_task::stream_transfer_task(shared_ptr<stream_session> session, t
 }
 
 stream_transfer_task::~stream_transfer_task() = default;
+
+static mutation_reader make_streaming_reader(lw_shared_ptr<replica::table> cf, reader_permit permit, const dht::partition_range_vector& prs) {
+    const auto compaction_time = gc_clock::now();
+    auto evictable_source = mutation_source([cf, compaction_time] (
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps,
+            tracing::trace_state_ptr,
+            streamed_mutation::forwarding,
+            mutation_reader::forwarding fwd_mr) {
+        return cf->make_streaming_reader(std::move(schema), std::move(permit), pr, ps, fwd_mr, compaction_time);
+    });
+    auto multi_range_source = mutation_source([evictable_source] (
+            schema_ptr schema,
+            reader_permit permit,
+            const dht::partition_range& pr,
+            const query::partition_slice& ps,
+            tracing::trace_state_ptr ts,
+            streamed_mutation::forwarding,
+            mutation_reader::forwarding fwd_mr) {
+        return make_auto_paused_evictable_reader(evictable_source, std::move(schema), std::move(permit), pr, ps, std::move(ts), fwd_mr);
+    });
+
+    return make_multi_range_reader(cf->schema(), std::move(permit), std::move(multi_range_source), prs,
+            cf->schema()->full_slice(), nullptr, mutation_reader::forwarding::no);
+}
 
 struct send_info {
     netw::messaging_service& ms;
@@ -77,7 +106,7 @@ struct send_info {
         , cf(tbl_)
         , ranges(std::move(ranges_))
         , prs(dht::to_partition_ranges(ranges))
-        , reader(cf->make_streaming_reader(cf->schema(), std::move(permit_), prs, gc_clock::now()))
+        , reader(make_streaming_reader(cf, std::move(permit_), prs))
         , update(std::move(update_fn))
     {
     }
