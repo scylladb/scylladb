@@ -43,8 +43,9 @@ public:
     using post_replay_cleanup = bool_class<class post_replay_cleanup_tag>;
 
 private:
-    static constexpr uint32_t replay_interval = 60 * 1000; // milliseconds
+    static constexpr std::chrono::seconds replay_interval = std::chrono::seconds(60);
     static constexpr uint32_t page_size = 128; // same as HHOM, for now, w/out using any heuristics. TODO: set based on avg batch size.
+    static constexpr std::chrono::seconds write_timeout = std::chrono::seconds(300);
 
     using clock_type = lowres_clock;
 
