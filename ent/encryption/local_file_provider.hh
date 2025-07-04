@@ -30,6 +30,8 @@ public:
     local_system_key(encryption_context&, const sstring&);
     ~local_system_key();
 
+    static bool is_local_file_name(const sstring&);
+
     future<shared_ptr<symmetric_key>> get_key() override;
     future<> validate() const override;
     const sstring& name() const override;

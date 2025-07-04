@@ -449,6 +449,110 @@ SEASTAR_TEST_CASE(test_kmip_provider, *check_run_test_decorator("ENABLE_KMIP_TES
     });
 }
 
+SEASTAR_TEST_CASE(test_replicated_provider_with_kmip_system_key, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        // 1. Create KMIP key using a Python script.
+        bp::child client;
+        bp::ipstream is;
+        std::future<void> client_status;
+        std::promise<std::string> key_promise;
+        auto f = key_promise.get_future();
+
+        auto cleanup_client = defer([&] {
+            if (client.running()) {
+                BOOST_TEST_MESSAGE("Stopping PyKMIP client");
+                client.terminate();
+                client_status.get();
+            }
+        });
+
+        std::string host = info.host.substr(0, info.host.find(':'));
+        std::string port = info.host.substr(info.host.find(':') + 1);
+        std::string script = "test/boost/kmip_create_key.py";
+        std::string key_id;
+        auto cfg = fmt::format(R"foo(
+[client]
+hostname={}
+port={}
+certfile={}
+keyfile={}
+ca_certs={}
+)foo",
+        host, port, info.cert, info.key, info.ca);
+
+        auto cfgfile = fmt::format("{}/pykmip-client.conf", tmp.path().string());
+        {
+            std::ofstream of(cfgfile);
+            of << cfg;
+        }
+
+        BOOST_TEST_MESSAGE(fmt::format("Creating KMIP key"));
+
+        client = bp::child(
+                bp::search_path("python3"), script, cfgfile,
+                (bp::std_out & bp::std_err) > is, bp::std_in.close()
+            );
+
+        client_status = std::async([&] {
+        static std::regex key_ex("Created key with id: ([^\n]+)");
+
+            std::string line;
+            bool b = false;
+
+            do {
+                while (std::getline(is, line)) {
+                    std::cout << line << std::endl;
+                    std::smatch m;
+                    if (!b && std::regex_match(line, m, key_ex)) {
+                        key_promise.set_value(m[1].str());
+                        b = true;
+                    }
+                }
+            } while (client.running());
+
+            if (!b) {
+                key_promise.set_value("");
+            }
+        });
+        // arbitrary timeout of 20s for the client to make some output. Very generous.
+        if (client_status.wait_for(20s) == std::future_status::timeout) {
+            throw std::runtime_error("PyKMIP client timed out");
+        }
+
+        key_id = f.get();
+        if (key_id.empty()) {
+            throw std::runtime_error("Failed to create KMIP key");
+        }
+
+        BOOST_TEST_MESSAGE(fmt::format("Created KMIP key with id: {}", key_id));
+
+        // 2. Encrypt a table with the Replicated Key Provider, using the KMIP
+        //    key as system key.
+        auto sysdir = tmp.path() / "system_keys";
+        auto keyfile = tmp.path() / "secret_key";
+        auto yaml = fmt::format(R"(
+kmip_hosts:
+    kmip_test:
+        hosts: {0}
+        certificate: {1}
+        keyfile: {2}
+        truststore: {3}
+        priority_string: {4}
+system_key_directory: {5}
+)", info.host, info.cert, info.key, info.ca, info.prio, sysdir.string());
+        test_provider_args args{
+            .tmp = tmp,
+            .options = fmt::format("'key_provider': 'ReplicatedKeyProviderFactory', 'system_key_file': 'kmip://kmip_test/{}', 'secret_key_file': '{}','cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", key_id, keyfile.string()),
+            .extra_yaml = yaml,
+            .n_tables = 1,
+            .n_restarts = 1,
+            .explicit_provider = {},
+        };
+        co_await test_provider(args);
+        BOOST_REQUIRE(fs::exists(tmp.path()));
+    });
+}
+
 #endif // HAVE_KMIP
 
 class fake_proxy {
