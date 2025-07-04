@@ -21,7 +21,6 @@ namespace statements {
 
 struct index_target {
     static const sstring target_option_name;
-    static const sstring custom_index_option_name;
     static const boost::regex target_regex;
 
     enum class target_type {

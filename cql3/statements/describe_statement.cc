@@ -231,6 +231,17 @@ description index(const data_dictionary::database& db, const sstring& ks, const 
     if (!schema) {
         throw exceptions::invalid_request_exception(format("Table for existing index '{}' not found in '{}'", name, ks));
     }
+    
+    index_metadata im = schema->all_indices().find(name)->second;
+
+    auto custom_class = secondary_index::secondary_index_manager::get_custom_class(im);
+
+    if (custom_class) {
+        auto desc = (*custom_class)->describe(im, *schema);
+        if (desc) {
+            return std::move(*desc);
+        }
+    }
 
     std::optional<view_ptr> idx;
     auto views = db.find_table(ks, schema->cf_name()).views();
