@@ -152,6 +152,7 @@ class system_key;
 class kmip_host;
 class kms_host;
 class gcp_host;
+class azure_host;
 
 /**
  * Context is a singleton object, shared across shards. I.e. even though there are obvious mutating
@@ -169,6 +170,7 @@ public:
     virtual shared_ptr<kmip_host> get_kmip_host(const sstring&) = 0;
     virtual shared_ptr<kms_host> get_kms_host(const sstring&) = 0;
     virtual shared_ptr<gcp_host> get_gcp_host(const sstring&) = 0;
+    virtual shared_ptr<azure_host> get_azure_host(const sstring&) = 0;
 
     virtual shared_ptr<key_provider> get_cached_provider(const sstring& id) const = 0;
     virtual void cache_provider(const sstring& id, shared_ptr<key_provider>) = 0;
