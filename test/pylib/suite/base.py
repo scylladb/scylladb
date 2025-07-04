@@ -503,32 +503,33 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
     return False
 
 
-def prepare_dir(dirname: pathlib.Path, pattern: str) -> None:
+def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) -> None:
     # Ensure the dir exists.
     dirname.mkdir(parents=True, exist_ok=True)
 
-    # Remove old artifacts.
-    if pattern == '*':
-        shutil.rmtree(dirname, ignore_errors=True)
-    else:
-        for p in dirname.glob(pattern):
-            p.unlink()
+    if not save_log_on_success:
+        # Remove old artifacts.
+        if pattern == '*':
+            shutil.rmtree(dirname, ignore_errors=True)
+        else:
+            for p in dirname.glob(pattern):
+                p.unlink()
 
 
-def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool) -> None:
-    prepare_dir(tempdir_base, "*.log")
+def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
     setup_cgroup(gather_metrics)
+    prepare_dir(tempdir_base, "*.log", save_log_on_success)
     for directory in ['report', 'ldap_instances']:
         full_path_directory = tempdir_base / directory
-        prepare_dir(full_path_directory, '*')
+        prepare_dir(full_path_directory, '*', save_log_on_success)
     for mode in modes:
-        prepare_dir(tempdir_base / mode, "*.log")
-        prepare_dir(tempdir_base / mode, "*.reject")
-        prepare_dir(tempdir_base / mode / "xml", "*.xml")
-        prepare_dir(tempdir_base / mode / "failed_test", "*")
-        prepare_dir(tempdir_base / mode / "allure", "*.xml")
+        prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
+        prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
         if TEST_RUNNER != "pytest":
-            prepare_dir(tempdir_base / mode / "pytest", "*")
+            prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
 
 
 @universalasync.async_to_sync_wraps
