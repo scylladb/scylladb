@@ -60,7 +60,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     # Options for compatibility with test.py
     parser.addoption('--save-log-on-success', default=False,
                         dest="save_log_on_success", action="store_true",
-                        help="Save test log output on success.")
+                        help="Save test log output on success and skip cleanup before the run.")
     parser.addoption('--coverage', action='store_true', default=False,
                       help="When running code instrumented with coverage support"
                            "Will route the profiles to `tmpdir`/mode/coverage/`suite` and post process them in order to generate "
@@ -180,7 +180,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # Run stuff just once for the pytest session even running under xdist.
     if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
         temp_dir = Path(session.config.getoption("--tmpdir")).absolute()
-        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes(), gather_metrics=session.config.getoption("--gather-metrics"))
+        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes(), gather_metrics=session.config.getoption("--gather-metrics"), save_log_on_success=session.config.getoption("save_log_on_success"),)
         start_3rd_party_services(tempdir_base=temp_dir, toxiproxy_byte_limit=session.config.getoption('byte_limit'))
 
 
