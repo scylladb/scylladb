@@ -63,7 +63,6 @@
 #include "transport/cql_protocol_extension.hh"
 #include "utils/bit_cast.hh"
 #include "utils/labels.hh"
-#include "db/config.hh"
 #include "utils/reusable_buffer.hh"
 
 template<typename T = void>
@@ -251,7 +250,7 @@ void cql_sg_stats::rename_metrics() {
 }
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
-        service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg,
+        service::memory_limiter& ml, cql_server_config config,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket)
     : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency)})

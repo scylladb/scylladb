@@ -45,10 +45,6 @@ class query_processor;
 
 }
 
-namespace db {
-class config;
-}
-
 namespace scollectd {
 
 class registrations;
@@ -216,7 +212,6 @@ public:
     cql_server(distributed<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
             cql_server_config config,
-            const db::config& db_cfg,
             qos::service_level_controller& sl_controller,
             gms::gossiper& g,
             scheduling_group_key stats_key,
