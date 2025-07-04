@@ -106,25 +106,15 @@ class AuditTester(Tester):
         return session
 
 
-@dataclass
+@dataclass(eq=True, order=True)
 class AuditEntry:
     category: str
-    statement: str
-    table: str
-    ks: str
-    user: str
     cl: str
     error: bool
-
-    def __eq__(self, other):
-        return isinstance(other, AuditEntry) and self.__dict__ == other.__dict__
-
-    def __hash__(self):
-        return hash(tuple(self.__dict__.values()))
-
-    def __lt__(self, other):
-        return (self.category, self.cl, self.error, self.ks, self.statement, self.table, self.user) < \
-               (other.category, other.cl, other.error, other.ks, other.statement, other.table, other.user)
+    ks: str
+    statement: str
+    table: str
+    user: str
 
 class AuditBackend:
     def __init__(self) -> None:
@@ -446,7 +436,7 @@ class TestCQLAudit(AuditTester):
             operation = query if expected_operation is None else expected_operation
             error = expected_error is not None
 
-            expected_entries = [AuditEntry(category, operation, table, ks, user, cl, error)]
+            expected_entries = [AuditEntry(category, cl, error, ks, operation, table, user)]
         else:
             expected_entries = []
 
@@ -1196,7 +1186,7 @@ class TestCQLAudit(AuditTester):
                 "INSERT INTO test8 (userid, password) VALUES (user4, ch@ngem3c)",
                 "DELETE name FROM test8 WHERE userid = user1",
             ]
-            expected_entries = list(map(lambda query: AuditEntry("DML", query, "test8", "ks", "anonymous", "QUORUM", False), expected_audit_operations))
+            expected_entries = list(map(lambda query: AuditEntry(category="DML", statement=query, table="test8", ks="ks", user="anonymous", cl="QUORUM", error=False), expected_audit_operations))
 
             with self.assert_entries_were_added(session, expected_entries, merge_duplicate_rows=False):
                 session.execute(batch_query)
@@ -1323,7 +1313,7 @@ class TestCQLAudit(AuditTester):
             )
 
             auditted_query = SimpleStatement("INSERT INTO test_config_lifeupdate (userid, password, name) VALUES ('user2', 'password2', 'second user');", consistency_level=ConsistencyLevel.QUORUM)
-            expected_new_entries = [AuditEntry("DML", auditted_query.query_string, "test_config_lifeupdate", "ks", "anonymous", "QUORUM", False)]
+            expected_new_entries = [AuditEntry(category="DML", statement=auditted_query.query_string, table="test_config_lifeupdate", ks="ks", user="anonymous", cl="QUORUM", error=False)]
 
             # Started with enabled_but_empty_audit_config config: no auditing
             with self.assert_no_audit_entries_were_added(session):
@@ -1378,7 +1368,7 @@ class TestCQLAudit(AuditTester):
             )
 
             auditted_query = SimpleStatement("INSERT INTO test_config_no_lifeupdate (userid, password, name) VALUES ('user2', 'password2', 'second user');", consistency_level=ConsistencyLevel.QUORUM)
-            expected_new_entries = [AuditEntry("DML", auditted_query.query_string, "test_config_no_lifeupdate", "ks", "anonymous", "QUORUM", False)]
+            expected_new_entries = [AuditEntry(category="DML", statement=auditted_query.query_string, table="test_config_no_lifeupdate", ks="ks", user="anonymous", cl="QUORUM", error=False)]
 
             # Modifications of "audit", "audit_unix_socket_path", "audit_syslog_write_buffer_size" are forbidden and will fail
             config_changer.change_config(self, {"audit": "none"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
