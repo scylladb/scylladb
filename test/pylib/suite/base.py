@@ -508,8 +508,11 @@ def prepare_dir(dirname: pathlib.Path, pattern: str) -> None:
     dirname.mkdir(parents=True, exist_ok=True)
 
     # Remove old artifacts.
-    for p in dirname.glob(pattern):
-        p.unlink()
+    if pattern == '*':
+        shutil.rmtree(dirname, ignore_errors=True)
+    else:
+        for p in dirname.glob(pattern):
+            p.unlink()
 
 
 def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool) -> None:
@@ -517,17 +520,14 @@ def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: b
     setup_cgroup(gather_metrics)
     for directory in ['report', 'ldap_instances']:
         full_path_directory = tempdir_base / directory
-        shutil.rmtree(full_path_directory, ignore_errors=True)
         prepare_dir(full_path_directory, '*')
     for mode in modes:
         prepare_dir(tempdir_base / mode, "*.log")
         prepare_dir(tempdir_base / mode, "*.reject")
         prepare_dir(tempdir_base / mode / "xml", "*.xml")
-        shutil.rmtree(tempdir_base / mode / "failed_test", ignore_errors=True)
         prepare_dir(tempdir_base / mode / "failed_test", "*")
         prepare_dir(tempdir_base / mode / "allure", "*.xml")
         if TEST_RUNNER != "pytest":
-            shutil.rmtree(tempdir_base / mode / "pytest", ignore_errors=True)
             prepare_dir(tempdir_base / mode / "pytest", "*")
 
 
