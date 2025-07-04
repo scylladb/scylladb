@@ -240,6 +240,7 @@ future<> controller::do_start_server() {
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
               .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
+              .cql_duplicate_bind_variable_names_refer_to_same_variable = cfg.cql_duplicate_bind_variable_names_refer_to_same_variable,
             };
         });
 
