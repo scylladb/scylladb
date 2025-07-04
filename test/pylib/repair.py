@@ -32,6 +32,24 @@ async def load_tablet_repair_time(cql, hosts, table_id):
 
     return repair_time_map
 
+async def load_tablet_sstables_repaired_at(cql, hosts, table_id):
+    all_rows = []
+    ret = {}
+
+    for host in hosts:
+        logging.debug(f'Query hosts={host}');
+        rows = await cql.run_async(f"SELECT last_token, sstables_repaired_at from system.tablets where table_id = {table_id}", host=host)
+        all_rows += rows
+    for row in all_rows:
+        logging.debug(f"Got system.tablets={row}")
+
+    for row in all_rows:
+        key = str(row[0])
+        ret[key] = row[1]
+
+    return ret
+
+
 async def load_tablet_repair_task_infos(cql, host, table_id):
     repair_task_infos = {}
 

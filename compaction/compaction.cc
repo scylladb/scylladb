@@ -536,6 +536,7 @@ protected:
     utils::observable<> _stop_request_observable;
     // optional tombstone_gc_state that is used when gc has to check only the compacting sstables to collect tombstones.
     std::optional<tombstone_gc_state> _tombstone_gc_state_with_commitlog_check_disabled;
+    int64_t _output_repaired_at = 0;
 private:
     // Keeps track of monitors for input sstable.
     // If _update_backlog_tracker is set to true, monitors are responsible for adjusting backlog as compaction progresses.
@@ -618,6 +619,7 @@ protected:
     }
 
     void finish_new_sstable(compaction_writer* writer) {
+        writer->writer.set_repaired_at(_output_repaired_at);
         writer->writer.consume_end_of_stream();
         writer->sst->open_data().get();
         _end_size += writer->sst->bytes_on_disk();
@@ -795,9 +797,13 @@ private:
         double sum_of_estimated_droppable_tombstone_ratio = 0;
         _input_sstable_generations.reserve(_sstables.size());
         _input_sstables_basic_info.reserve(_sstables.size());
+        int64_t repaired_at = 0;
+        std::vector<int64_t> repaired_at_for_compacted_sstables;
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
+            repaired_at_for_compacted_sstables.push_back(sst_stats.repaired_at);
+            repaired_at = std::max(sst_stats.repaired_at, repaired_at);
             timestamp_tracker.update(sst_stats.min_timestamp);
             timestamp_tracker.update(sst_stats.max_timestamp);
 
@@ -830,7 +836,14 @@ private:
                 _rp = std::max(_rp, sst_stats.position);
             }
         }
-        log_info("{} [{}]", report_start_desc(), fmt::join(_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
+        if (repaired_at) {
+            _output_repaired_at = repaired_at;
+        }
+        log_info("{} [{}] type={}",
+                report_start_desc(),
+                fmt::join(_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","),
+                _type);
+        log_debug("repaired_at_vec={} output_repaired_at={}", repaired_at_for_compacted_sstables, _output_repaired_at);
         if (ssts->size() < _sstables.size()) {
             log_debug("{} out of {} input sstables are fully expired sstables that will not be actually compacted",
                       _sstables.size() - ssts->size(), _sstables.size());
@@ -1976,6 +1989,8 @@ get_fully_expired_sstables(const table_state& table_s, const std::vector<sstable
     }
 
     std::unordered_set<sstables::shared_sstable> candidates;
+    // Note: This contains both repaired and unrepaired sstables which means
+    // compaction consults both repaired and unrepaired sstables for tombstone gc.
     auto uncompacting_sstables = get_uncompacting_sstables(table_s, compacting);
     // Get list of uncompacting sstables that overlap the ones being compacted.
     std::vector<sstables::shared_sstable> overlapping = leveled_manifest::overlapping(*table_s.schema(), compacting, uncompacting_sstables);
