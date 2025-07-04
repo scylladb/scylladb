@@ -199,7 +199,6 @@ private:
 
     distributed<cql3::query_processor>& _query_processor;
     cql_server_config _config;
-    size_t _max_request_size;
     utils::updateable_value<uint32_t> _max_concurrent_requests;
     utils::updateable_value<bool> _cql_duplicate_bind_variable_names_refer_to_same_variable;
     semaphore& _memory_available;
