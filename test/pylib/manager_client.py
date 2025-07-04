@@ -522,14 +522,29 @@ class ManagerClient:
                                    timeout=timeout)
         self._driver_update()
 
-    async def server_get_config(self, server_id: ServerNum) -> dict[str, object]:
+    async def server_get_config(self, server_id: ServerNum) -> dict[str, Any]:
         data = await self.client.get_json(f"/cluster/server/{server_id}/get_config")
         assert isinstance(data, dict), f"server_get_config: got {type(data)} expected dict"
         return data
 
-    async def server_update_config(self, server_id: ServerNum, key: str, value: object) -> None:
-        await self.client.put_json(f"/cluster/server/{server_id}/update_config",
-                                   {"key": key, "value": value})
+    async def server_update_config(self,
+                                   server_id: ServerNum,
+                                   key: str | None = None,
+                                   value: Any = None,
+                                   *,
+                                   config_options: dict[str, Any] | None = None) -> None:
+        if key is not None:
+            if value is None:
+                raise RuntimeError("`value` is required if `key` is not None")
+            if config_options is not None:
+                raise RuntimeError("`key: value` pair and `config_options` dict can't be used simultaneously")
+            config_options = {key: value}
+        elif not isinstance(config_options, dict):
+            raise RuntimeError(f"`config_options` is expected to be a dict, not {type(config_options)}")
+        await self.client.put_json(
+            resource_uri=f"/cluster/server/{server_id}/update_config",
+            data={"config_options": config_options},
+        )
 
     async def server_update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
         await self.client.put_json(f"/cluster/server/{server_id}/update_cmdline",

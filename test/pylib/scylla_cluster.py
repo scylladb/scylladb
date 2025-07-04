@@ -565,10 +565,12 @@ class ScyllaServer:
         """Return the contents of conf/scylla.yaml as a dict."""
         return self.config
 
-    def update_config(self, key: str, value: object) -> None:
-        """Update conf/scylla.yaml by setting `value` under `key`.
-           If we're running, reload the config with a SIGHUP."""
-        self.config[key] = value
+    def update_config(self, config_options: dict[str, Any]) -> None:
+        """Update conf/scylla.yaml with `config_options` dict.
+
+        If we're running, reload the config with a SIGHUP.
+        """
+        self.config.update(config_options)
         self._write_config_file()
         if self.cmd:
             self.cmd.send_signal(signal.SIGHUP)
@@ -1357,14 +1359,16 @@ class ScyllaCluster:
         assert server_id in self.servers, f"Server {server_id} unknown"
         return self.servers[server_id].get_config()
 
-    def update_config(self, server_id: ServerNum, key: str, value: object) -> None:
-        """Update conf/scylla.yaml of the given server by setting `value` under `key`.
-           If the server is running, reload the config with a SIGHUP.
-           Marks the cluster as dirty.
-           Fails if the server cannot be found."""
+    def update_config(self, server_id: ServerNum, config_options: dict[str, Any]) -> None:
+        """Update conf/scylla.yaml of the given server with `config_options` dict.
+
+        If the server is running, reload the config with a SIGHUP.
+        Mark the cluster as dirty.
+        Fail if the server cannot be found.
+        """
         assert server_id in self.servers, f"Server {server_id} unknown"
         self.is_dirty = True
-        self.servers[server_id].update_config(key, value)
+        self.servers[server_id].update_config(config_options=config_options)
 
     def update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
         """Update the command-line options of the given server by merging the new options into the existing ones.
@@ -1900,13 +1904,17 @@ class ScyllaClusterManager:
         return self.cluster.get_config(ServerNum(int(request.match_info["server_id"])))
 
     async def _server_update_config(self, request: aiohttp.web.Request) -> None:
-        """Update conf/scylla.yaml of the given server by setting `value` under `key`.
-           If the server is running, reload the config with a SIGHUP.
-           Marks the cluster as dirty."""
+        """Update conf/scylla.yaml of the given server with `config_options` dict.
+
+        If the server is running, reload the config with a SIGHUP.
+        Mark the cluster as dirty.
+        """
         assert self.cluster
         data = await request.json()
-        self.cluster.update_config(ServerNum(int(request.match_info["server_id"])),
-                                   data['key'], data['value'])
+        self.cluster.update_config(
+            server_id=ServerNum(int(request.match_info["server_id"])),
+            config_options=data["config_options"],
+        )
 
     async def _server_update_cmdline(self, request: aiohttp.web.Request) -> None:
         """Update the command-line options of the given server by merging the new options into the existing ones.

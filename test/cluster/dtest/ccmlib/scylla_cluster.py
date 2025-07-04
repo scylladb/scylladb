@@ -18,6 +18,7 @@ from test.cluster.dtest.ccmlib.scylla_node import ScyllaNode
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from typing import Any
 
 
 SCYLLA_VERSION_FILE = Path(__file__).parent.parent.parent.parent / "build" / "SCYLLA-VERSION-FILE"
@@ -202,8 +203,9 @@ class ScyllaCluster:
         return SCYLLA_VERSION_FILE.read_text().strip()
 
     def set_configuration_options(self,
-                                  values: dict | None = None,
-                                  batch_commitlog: bool | None = None) -> ScyllaCluster:
+                                  values: dict[str, Any] | None = None,
+                                  batch_commitlog: bool | None = None,
+                                  nodes: ScyllaNode | list[ScyllaNode] | None = None) -> ScyllaCluster:
         values = {} if values is None else values.copy()
         if batch_commitlog is not None:
             if batch_commitlog:
@@ -215,10 +217,13 @@ class ScyllaCluster:
                 values["commitlog_sync_period_in_ms"] = 10000
                 values["commitlog_sync_batch_window_in_ms"] = None
         if values:
-            self._config_options.update(values)
-            for server in self._sorted_nodes(self.manager.all_servers()):
-                for k, v in values.items():
-                    self.manager.server_update_config(server_id=server.server_id, key=k, value=v)
+            if nodes is None:
+                self._config_options.update(values)  # keep values as a cluster config for new nodes
+                nodes = self.nodelist()
+            elif isinstance(nodes, ScyllaNode):
+                nodes = [nodes]
+            for node in nodes:
+                self.manager.server_update_config(server_id=node.server_id, config_options=values)
         return self
 
     @staticmethod
