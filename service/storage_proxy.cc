@@ -600,6 +600,8 @@ private:
         ++p->get_stats().received_mutations;
         p->get_stats().forwarded_mutations += forward_host_id.size();
 
+        co_await utils::get_local_injector().inject("storage_proxy_response_pause", utils::wait_for_message(5min));
+
         if (auto stale = _sp.apply_fence(fence, src_addr)) {
             errors.count += (forward_host_id.size() + 1);
             errors.local = std::move(*stale);
