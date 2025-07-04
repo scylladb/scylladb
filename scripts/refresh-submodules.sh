@@ -37,11 +37,20 @@ for ent in "${@:-${submodules[@]}}"; do
     # collect the summary
     head_ref=$(git rev-parse --short=8 HEAD)
     branch_ref=$(git rev-parse --short=8 origin/${branch})
-    count=$(git rev-list --no-merges --count HEAD..${bump_to})
+    count=$(git rev-list --first-parent --count HEAD..${bump_to})
     # create a summary using the output format of "git submodule summary"
     SUMMARY="
 * ${submodule} ${head_ref}...${branch_ref} (${count}):
-$(git log --pretty='format:  > %s' --no-merges HEAD..${bump_to})"
+$(git log --pretty='format: %H %s' --first-parent HEAD..${bump_to} | while IFS= read -r line; do
+        SUBJECT=$(echo $line | cut -d' ' -f2-)
+        echo "  > ${SUBJECT}"
+        if [[ "$SUBJECT" == "Merge "* ]]; then
+            COMMIT=$(echo $line | cut -d' ' -f1)
+            git log --pretty='format:    %s' --no-merges ${COMMIT}^1..${COMMIT}
+            echo
+        fi
+    done)
+"
 
     # fast-forward to origin/master
     git merge --ff-only ${bump_to}
