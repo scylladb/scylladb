@@ -111,6 +111,7 @@ class repair_service : public seastar::peering_sharded_service<repair_service> {
 
     shared_ptr<row_level_repair_gossip_helper> _gossip_helper;
     bool _stopped = false;
+    uint32_t _disabled_repair_tablet_count = 0;
 
     size_t _max_repair_memory;
     seastar::semaphore _memory_sem;
@@ -181,6 +182,9 @@ public:
     future<> repair_tablets(repair_uniq_id id, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only = true, dht::token_range_vector ranges_specified = {}, std::vector<sstring> dcs = {}, std::unordered_set<locator::host_id> hosts = {}, std::unordered_set<locator::host_id> ignore_nodes = {}, std::optional<int> ranges_parallelism = std::nullopt);
 
     future<gc_clock::time_point> repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas);
+    // Disable/Enable the repair_tablet rpc verb. When a request to repair a tablet comes, it will throw an exception
+    static future<> set_enable_repair_tablet_rpc(sharded<repair_service>& sharded_rs, bool enabled);
+    bool is_repair_tablet_rpc_disabled() const { return _disabled_repair_tablet_count > 0; }
 private:
 
     future<repair_update_system_table_response> repair_update_system_table_handler(
