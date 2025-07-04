@@ -257,7 +257,6 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
     : server("CQLServer", clogger, generic_server::config{db_cfg.uninitialized_connections_semaphore_cpu_concurrency})
     , _query_processor(qp)
     , _config(std::move(config))
-    , _max_concurrent_requests(db_cfg.max_concurrent_requests_per_shard)
     , _cql_duplicate_bind_variable_names_refer_to_same_variable(db_cfg.cql_duplicate_bind_variable_names_refer_to_same_variable)
     , _memory_available(ml.get_semaphore())
     , _notifier(std::make_unique<event_notifier>(*this))
@@ -735,7 +734,7 @@ future<> cql_server::connection::process_request() {
                 .then([this] { return util::skip_entire_stream(_read_buf); });
         }
 
-        if (_server._stats.requests_serving > _server._max_concurrent_requests) {
+        if (_server._stats.requests_serving > _server._config.max_concurrent_requests) {
             ++_server._stats.requests_shed;
             return _read_buf.skip(f.length).then([this, stream = f.stream] {
                 const auto message = format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}",

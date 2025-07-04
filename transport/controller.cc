@@ -239,6 +239,7 @@ future<> controller::do_start_server() {
               .shard_aware_transport_port_ssl = shard_aware_transport_port_ssl,
               .allow_shard_aware_drivers = cfg.enable_shard_aware_drivers(),
               .bounce_request_smp_service_group = bounce_request_smp_service_group,
+              .max_concurrent_requests = cfg.max_concurrent_requests_per_shard,
             };
         });
 
