@@ -658,6 +658,7 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::GROUP0_MODIFY_CONFIG:
     case messaging_verb::GET_GROUP0_UPGRADE_STATE:
     case messaging_verb::RAFT_TOPOLOGY_CMD:
+    case messaging_verb::BARRIER_AND_GET_TIME_CMD:
     case messaging_verb::JOIN_NODE_REQUEST:
     case messaging_verb::JOIN_NODE_RESPONSE:
     case messaging_verb::JOIN_NODE_QUERY:

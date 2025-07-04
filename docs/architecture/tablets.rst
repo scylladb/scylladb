@@ -151,7 +151,6 @@ enabled. If you plan to use any of the features listed below, CREATE your keyspa
 :ref:`with tablets disabled <tablets-enable-tablets>`.
 
 * Counters
-* Change Data Capture (CDC)
 * Lightweight Transactions (LWT)
 * Alternator (as it uses LWT)
 * Materialized Views (MV) ``*``
