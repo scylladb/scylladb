@@ -122,6 +122,8 @@ struct cql_server_config {
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
     utils::updateable_value<uint32_t> max_concurrent_requests;
     utils::updateable_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
+
+    utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
 };
 
 /**
