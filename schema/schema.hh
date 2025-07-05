@@ -749,6 +749,8 @@ public:
 
     const cdc::options& cdc_options() const;
 
+    bool has_vector_index() const;
+
     const ::tombstone_gc_options& tombstone_gc_options() const;
 
     const db::per_partition_rate_limit_options& per_partition_rate_limit_options() const {

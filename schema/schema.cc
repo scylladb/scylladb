@@ -1674,6 +1674,17 @@ const cdc::options& schema::cdc_options() const {
     return default_cdc_options;
 }
 
+bool schema::has_vector_index() const {
+    auto i = indices();
+    return std::any_of(i.begin(), i.end(), [](const auto& index) {
+        auto it = index.options().find("class_name");
+        if (it != index.options().end()) {
+            return it->second == "vector_index";
+        }
+        return false;
+    });
+}
+
 const ::tombstone_gc_options& schema::tombstone_gc_options() const {
     static const ::tombstone_gc_options default_tombstone_gc_options;
     const auto& schema_extensions = _raw._extensions;
