@@ -4789,7 +4789,7 @@ future<> storage_service::do_cluster_cleanup() {
         }
     }
 
-    // The wait above only wait until the comand is processed by the topology coordinator which start cleanup process,
+    // The wait above only wait until the command is processed by the topology coordinator which start cleanup process,
     // but we still need to wait for cleanup to complete here.
     co_await _topology_state_machine.event.when([this] {
         return std::all_of(_topology_state_machine._topology.normal_nodes.begin(), _topology_state_machine._topology.normal_nodes.end(), [] (auto& n) {
@@ -5086,7 +5086,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
                 : std::optional(_topology_state_machine._topology.committed_cdc_generations.back());
 
         if (last_committed_gen == gen) {
-            on_internal_error(rtlogger, "Wrong generation after complation of check and repair cdc stream");
+            on_internal_error(rtlogger, "Wrong generation after completion of check and repair cdc stream");
         }
     } else {
         // Wait until we commit a new CDC generation.
