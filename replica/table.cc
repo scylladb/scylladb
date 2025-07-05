@@ -2332,8 +2332,9 @@ table::make_memory_only_memtable_list() {
 
 lw_shared_ptr<memtable_list>
 table::make_memtable_list(compaction_group& cg) {
-    auto seal = [this, &cg] (flush_permit&& permit) {
-        return seal_active_memtable(cg, std::move(permit));
+    auto seal = [this, &cg] (flush_permit&& permit) -> future<> {
+        gate::holder holder = cg.flush_gate().hold();
+        co_await seal_active_memtable(cg, std::move(permit));
     };
     auto get_schema = [this] { return schema(); };
     return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group);
@@ -2473,6 +2474,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     auto closed_gate_fut = _async_gate.close();
 
     auto flush_future = co_await seastar::coroutine::as_future(flush());
+    co_await _flush_gate.close();
     co_await _t._compaction_manager.remove(as_table_state(), reason);
 
     if (flush_future.failed()) {
@@ -2636,9 +2638,8 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
                 for (auto& group : sg.merging_groups()) {
                     // Synchronize with ongoing writes that might be blocked waiting for memory.
                     // Also, disabling compaction provides stability on the sstable set.
-                    co_await group->stop("tablet merge");
                     // Flushes memtable, so all the data can be moved.
-                    co_await group->flush();
+                    co_await group->stop("tablet merge");
                     co_await main_group->merge_sstables_from(*group);
                 }
                 co_await sg.remove_empty_merging_groups();
