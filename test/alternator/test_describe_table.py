@@ -114,10 +114,10 @@ def test_describe_table_item_count(test_table):
 
 # Similar test for estimated size in bytes - TableSizeBytes - which again,
 # may reflect the size as long as six hours ago.
-@pytest.mark.xfail(reason="DescribeTable does not return table size")
 def test_describe_table_size(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert 'TableSizeBytes' in got
+    assert got['TableSizeBytes'] >= 0
 
 # Test the ProvisionedThroughput attribute returned by DescribeTable.
 # This is a very partial test: Our test table is configured without
