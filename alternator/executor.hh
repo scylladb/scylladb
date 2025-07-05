@@ -10,8 +10,8 @@
 
 #include <seastar/core/future.hh>
 #include "seastarx.hh"
-#include <seastar/json/json_elements.hh>
 #include <seastar/core/sharded.hh>
+#include <seastar/util/noncopyable_function.hh>
 
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
@@ -57,29 +57,6 @@ class schema_builder;
 namespace alternator {
 
 class rmw_operation;
-
-struct make_jsonable : public json::jsonable {
-    rjson::value _value;
-public:
-    explicit make_jsonable(rjson::value&& value);
-    std::string to_json() const override;
-};
-
-/**
- * Make return type for serializing the object "streamed",
- * i.e. direct to HTTP output stream. Note: only useful for
- * (very) large objects as there are overhead issues with this
- * as well, but for massive lists of return objects this can
- * help avoid large allocations/many re-allocs
- */
-json::json_return_type make_streamed(rjson::value&&);
-
-struct json_string : public json::jsonable {
-    std::string _value;
-public:
-    explicit json_string(std::string&& value);
-    std::string to_json() const override;
-};
 
 namespace parsed {
 class path;
@@ -169,7 +146,19 @@ class executor : public peering_sharded_service<executor> {
 
 public:
     using client_state = service::client_state;
-    using request_return_type = std::variant<json::json_return_type, api_error>;
+    // request_return_type is the return type of the executor methods, which
+    // can be one of:
+    // 1. A string, which is the response body for the request.
+    // 2. A body_writer, an asynchronous function (returning future<>) that
+    //    takes an output_stream and writes the response body into it.
+    // 3. An api_error, which is an error response that should be returned to
+    //    the client.
+    // The body_writer is used for streaming responses, where the response body
+    // is written in chunks to the output_stream. This allows for efficient
+    // handling of large responses without needing to allocate a large buffer
+    // in memory.
+    using body_writer = noncopyable_function<future<>(output_stream<char>&&)>;
+    using request_return_type = std::variant<std::string, body_writer, api_error>;
     stats _stats;
     // The metric_groups object holds this stat object's metrics registered
     // as long as the stats object is alive.
@@ -274,5 +263,14 @@ bool is_big(const rjson::value& val, int big_size = 100'000);
 // SELECT, DROP, etc.) on the given table. When permission is denied an
 // appropriate user-readable api_error::access_denied is thrown.
 future<> verify_permission(bool enforce_authorization, const service::client_state&, const schema_ptr&, auth::permission);
+
+/**
+ * Make return type for serializing the object "streamed",
+ * i.e. direct to HTTP output stream. Note: only useful for
+ * (very) large objects as there are overhead issues with this
+ * as well, but for massive lists of return objects this can
+ * help avoid large allocations/many re-allocs
+ */
+executor::body_writer make_streamed(rjson::value&&);
 
 }
