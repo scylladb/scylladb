@@ -533,12 +533,23 @@ future<> group0_voter_handler::update_nodes(
             rvlogger.debug("Node {} to be added is already a member", id);
             continue;
         }
-        const auto it = _topology.normal_nodes.find(id);
-        if (it == _topology.normal_nodes.end()) {
+        const auto* node = std::invoke([&id, this]() -> const replica_state* {
+            if (const auto it = _topology.normal_nodes.find(id); it != _topology.normal_nodes.end()) {
+                return &it->second;
+            }
+            rvlogger.debug("Node {} is not present in the normal nodes, checking joining nodes", id);
+            // when adding a node, it may not be present in the normal nodes yet, but might be joining
+            if (const auto it = _topology.transition_nodes.find(id); it != _topology.transition_nodes.end()) {
+                return &it->second;
+            }
+            rvlogger.debug("Node {} is not present in the joining nodes", id);
+            return nullptr;
+        });
+        if (!node) {
             rvlogger.warn("Node {} was not found in the topology, can't add as a voter candidate", id);
             continue;
         }
-        add_node(id, it->second, _gossiper.is_alive(locator::host_id{id.uuid()}));
+        add_node(id, *node, _gossiper.is_alive(locator::host_id{id.uuid()}));
     }
 
     std::unordered_set<raft::server_id> voters_add;
