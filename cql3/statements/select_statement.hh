@@ -43,6 +43,13 @@ namespace restrictions {
 
 namespace statements {
 
+
+/// Encapsulates a partition key and clustering key prefix as a primary key.
+struct primary_key {
+    dht::decorated_key partition;
+    clustering_key_prefix clustering;
+};
+
 /**
  * Encapsulates a completely parsed SELECT query, including the target
  * column family, expression, result count, and ordering clause.
@@ -133,12 +140,6 @@ public:
         lw_shared_ptr<query::read_command> cmd, dht::partition_range_vector&& partition_ranges, service::query_state& state,
          const query_options& options, gc_clock::time_point now, int32_t page_size, bool aggregate, bool nonpaged_filtering, uint64_t limit,
         std::optional<service::cas_shard> cas_shard) const;
-
-
-    struct primary_key {
-        dht::decorated_key partition;
-        clustering_key_prefix clustering;
-    };
 
     future<shared_ptr<cql_transport::messages::result_message>> process_results(foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd, const query_options& options, gc_clock::time_point now) const;
