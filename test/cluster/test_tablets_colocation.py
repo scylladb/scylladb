@@ -393,7 +393,8 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 4. run tablet repair on the base table
 # 5. verify both the base table and the view contain the missing data on the node that was down
 @pytest.mark.asyncio
-async def test_repair_colocated_base_and_view(manager: ManagerClient):
+@pytest.mark.parametrize("repair_table", ["base", "child"])
+async def test_repair_colocated_base_and_view(manager: ManagerClient, repair_table: str):
     cfg = {'enable_tablets': True}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -430,7 +431,8 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
 
         # Trigger repair of the single tablet
         tablet_token = 0
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', tablet_token)
+        table = 'test' if repair_table == 'base' else 'tv'
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, table, tablet_token)
 
         # Verify the view is repaired on server 2
         rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv", consistency_level=ConsistencyLevel.ONE))
