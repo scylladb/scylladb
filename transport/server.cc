@@ -63,7 +63,6 @@
 #include "transport/cql_protocol_extension.hh"
 #include "utils/bit_cast.hh"
 #include "utils/labels.hh"
-#include "db/config.hh"
 #include "utils/reusable_buffer.hh"
 
 template<typename T = void>
@@ -251,15 +250,12 @@ void cql_sg_stats::rename_metrics() {
 }
 
 cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
-        service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg,
+        service::memory_limiter& ml, cql_server_config config,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket)
-    : server("CQLServer", clogger, generic_server::config{db_cfg.uninitialized_connections_semaphore_cpu_concurrency})
+    : server("CQLServer", clogger, generic_server::config{std::move(config.uninitialized_connections_semaphore_cpu_concurrency)})
     , _query_processor(qp)
     , _config(std::move(config))
-    , _max_request_size(_config.max_request_size)
-    , _max_concurrent_requests(db_cfg.max_concurrent_requests_per_shard)
-    , _cql_duplicate_bind_variable_names_refer_to_same_variable(db_cfg.cql_duplicate_bind_variable_names_refer_to_same_variable)
     , _memory_available(ml.get_semaphore())
     , _notifier(std::make_unique<event_notifier>(*this))
     , _auth_service(auth_service)
@@ -289,11 +285,11 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         sm::make_gauge("requests_blocked_memory_current", [this] { return _memory_available.waiters(); },
                         sm::description(
                             seastar::format("Holds the number of requests that are currently blocked due to reaching the memory quota limit ({}B). "
-                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size))),
+                                            "Non-zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _config.max_request_size))),
         sm::make_counter("requests_blocked_memory", _stats.requests_blocked_memory,
                         sm::description(
                             seastar::format("Holds an incrementing counter with the requests that ever blocked due to reaching the memory quota limit ({}B). "
-                                            "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _max_request_size))),
+                                            "The first derivative of this value shows how often we block due to memory exhaustion in the \"CQL transport\" component.", _config.max_request_size))),
         sm::make_counter("requests_shed", _stats.requests_shed,
                         sm::description("Holds an incrementing counter with the requests that were shed due to overload (threshold configured via max_concurrent_requests_per_shard). "
                                             "The first derivative of this value shows how often we shed requests due to overload in the \"CQL transport\" component."))(basic_level),
@@ -306,7 +302,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         sm::make_gauge("requests_memory_available", [this] { return _memory_available.current(); },
                         sm::description(
                             seastar::format("Holds the amount of available memory for admitting new requests (max is {}B)."
-                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _max_request_size)))
+                                            "Zero value indicates that our bottleneck is memory and more specifically - the memory quota allocated for the \"CQL transport\" component.", _config.max_request_size)))
     };
 
     std::vector<sm::metric_definition> transport_metrics;
@@ -726,9 +722,9 @@ future<> cql_server::connection::process_request() {
         auto op = f.opcode;
         auto stream = f.stream;
         auto mem_estimate = f.length * 2 + 8000; // Allow for extra copies and bookkeeping
-        if (mem_estimate > _server._max_request_size) {
+        if (mem_estimate > _server._config.max_request_size) {
             const auto message = format("request size too large (frame size {:d}; estimate {:d}; allowed {:d})",
-                uint32_t(f.length), mem_estimate, _server._max_request_size);
+                uint32_t(f.length), mem_estimate, _server._config.max_request_size);
             clogger.debug("{}: {}, request dropped", _client_state.get_remote_address(), message);
             write_response(make_error(stream, exceptions::exception_code::INVALID, message, tracing::trace_state_ptr()));
             return std::exchange(_ready_to_respond, make_ready_future<>())
@@ -736,7 +732,7 @@ future<> cql_server::connection::process_request() {
                 .then([this] { return util::skip_entire_stream(_read_buf); });
         }
 
-        if (_server._stats.requests_serving > _server._max_concurrent_requests) {
+        if (_server._stats.requests_serving > _server._config.max_concurrent_requests) {
             ++_server._stats.requests_shed;
             return _read_buf.skip(f.length).then([this, stream = f.stream] {
                 const auto message = format("too many in-flight requests (configured via max_concurrent_requests_per_shard): {}",
@@ -1336,7 +1332,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
 cql3::dialect
 cql_server::connection::get_dialect() const {
     return cql3::dialect{
-        .duplicate_bind_variable_names_refer_to_same_variable = _server._cql_duplicate_bind_variable_names_refer_to_same_variable,
+        .duplicate_bind_variable_names_refer_to_same_variable = _server._config.cql_duplicate_bind_variable_names_refer_to_same_variable,
     };
 }
 
