@@ -1101,26 +1101,23 @@ private:
 
             global_request_id = guard.new_group0_state_id();
 
-            std::vector<canonical_mutation> updates;
             topology_mutation_builder builder(guard.write_timestamp());
+            topology_request_tracking_mutation_builder trbuilder(global_request_id, _sp._features.topology_requests_type_column);
+            trbuilder.set_truncate_table_data(table_id)
+                     .set("done", false)
+                     .set("start_time", db_clock::now());
+
             if (!_sp._features.topology_global_request_queue) {
                 builder.set_global_topology_request(global_topology_request::truncate_table)
                        .set_global_topology_request_id(global_request_id);
             } else {
                 builder.queue_global_topology_request_id(global_request_id);
+                trbuilder.set("request_type", global_topology_request::truncate_table);
             }
-            updates.emplace_back(builder.build());
-
-            updates.emplace_back(topology_request_tracking_mutation_builder(global_request_id, _sp._features.topology_requests_type_column)
-                                    .set_truncate_table_data(table_id)
-                                    .set("done", false)
-                                    .set("start_time", db_clock::now())
-                                    .set("request_type", global_topology_request::truncate_table)
-                                    .build());
 
             slogger.info("Creating TRUNCATE global topology request for table {}.{}", ks_name, cf_name);
 
-            topology_change change{std::move(updates)};
+            topology_change change{{builder.build(), trbuilder.build()}};
             sstring reason = "Truncating table";
             group0_command g0_cmd = _group0_client.prepare_command(std::move(change), guard, reason);
             try {
