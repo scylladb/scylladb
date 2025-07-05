@@ -261,7 +261,7 @@ def parse_cmd_line() -> argparse.Namespace:
         args.coverage = True
 
     args.tmpdir = os.path.abspath(args.tmpdir)
-    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics)
+    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics, save_log_on_success=args.save_log_on_success)
 
     if args.extra_scylla_cmdline_options:
         args.extra_scylla_cmdline_options = args.extra_scylla_cmdline_options.split()
