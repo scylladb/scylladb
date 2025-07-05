@@ -740,9 +740,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     auto saved_tmpr = get_token_metadata_ptr();
     {
         auto tmlock = co_await get_token_metadata_lock();
-        auto tmptr = make_token_metadata_ptr(token_metadata::config {
-            get_token_metadata().get_topology().get_config()
-        });
+        auto tmptr = _shared_token_metadata.make_token_metadata_ptr();
         tmptr->invalidate_cached_rings();
 
         tmptr->set_version(_topology_state_machine._topology.version);
@@ -3147,9 +3145,10 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
     try {
         auto base_shard = this_shard_id();
         pending_token_metadata_ptr[base_shard] = tmptr;
+        auto& sharded_token_metadata = _shared_token_metadata.container();
         // clone a local copy of updated token_metadata on all other shards
         co_await smp::invoke_on_others(base_shard, [&, tmptr] () -> future<> {
-            pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tmptr->clone_async());
+            pending_token_metadata_ptr[this_shard_id()] = sharded_token_metadata.local().make_token_metadata_ptr(co_await tmptr->clone_async());
         });
 
         // Precalculate new effective_replication_map for all keyspaces
