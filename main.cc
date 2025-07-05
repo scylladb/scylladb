@@ -119,6 +119,8 @@
 #include "utils/labels.hh"
 #include "tools/utils.hh"
 
+#include "webshell/webshell.hh"
+
 
 #define P11_KIT_FUTURE_UNSTABLE_API
 extern "C" {
@@ -2448,6 +2450,23 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             if (bool enabled = cfg->redis_port() || cfg->redis_ssl_port()) {
                 ss.local().register_protocol_server(redis_ctl, enabled).get();
+            }
+
+            sharded<webshell::server> webshell_server;
+            auto stop_webshell_server = defer_verbose_shutdown("webshell server", [&webshell_server] () mutable {
+                webshell_server.stop().get();
+            });
+            if (cfg->webshell_port()) {
+                webshell::config ws_cfg{
+                    .scheduling_group = dbcfg.statement_scheduling_group,
+                    .timeout_config = updateable_timeout_config(*cfg)
+                };
+                webshell_server.start(ws_cfg, std::ref(qp), std::ref(auth_service), std::ref(sl_controller)).get();
+                webshell_server.invoke_on_all([&cfg] (webshell::server& ws) {
+                    return ws.init(cfg->webshell_address(), cfg->webshell_port());
+                }).get();
+            } else {
+                stop_webshell_server->cancel();
             }
 
             stop_signal.ready();
