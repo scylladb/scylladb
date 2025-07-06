@@ -4175,6 +4175,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
     rcu_consumed_capacity_counter add_capacity(request, cl == db::consistency_level::LOCAL_QUORUM);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::SELECT);
+<<<<<<< HEAD
     co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
             service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
             [this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
@@ -4197,6 +4198,32 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
         return res;
 >>>>>>> d8fab2a01a (alternator: clean up and simplify request_return_type)
     });
+||||||| parent of a248336e66 (alternator: clean up by co-routinizing)
+    co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
+            [per_table_stats, this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
+
+        per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+        _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+        uint64_t rcu_half_units = 0;
+        auto res = make_ready_future<executor::request_return_type>(rjson::print(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units)));
+        per_table_stats->rcu_half_units_total += rcu_half_units;
+        _stats.rcu_half_units_total += rcu_half_units;
+        return res;
+    });
+=======
+    service::storage_proxy::coordinator_query_result qr =
+        co_await _proxy.query(
+            schema, std::move(command), std::move(partition_ranges), cl,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
+    per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    uint64_t rcu_half_units = 0;
+    rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
+    per_table_stats->rcu_half_units_total += rcu_half_units;
+    _stats.rcu_half_units_total += rcu_half_units;
+    co_return rjson::print(std::move(res));
+>>>>>>> a248336e66 (alternator: clean up by co-routinizing)
 }
 
 static void check_big_object(const rjson::value& val, int& size_left);
@@ -5458,7 +5485,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     std::string exclusive_start = exclusive_start_json ? exclusive_start_json->GetString() : "";
     int limit = limit_json ? limit_json->GetInt() : 100;
     if (limit < 1 || limit > 100) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0 and no greater than 100"));
+        co_return api_error::validation("Limit must be greater than 0 and no greater than 100");
     }
 
     auto tables = _proxy.data_dictionary().get_tables(); // hold on to temporary, table_names isn't a container, it's a view
@@ -5500,7 +5527,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
         rjson::add(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
 
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(response)));
+    co_return rjson::print(std::move(response));
 }
 
 future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header) {
@@ -5511,8 +5538,8 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     if (!override.empty()) {
         if (override == "disabled") {
             _stats.unsupported_operations++;
-            return make_ready_future<request_return_type>(api_error::unknown_operation(
-                "DescribeEndpoints disabled by configuration (alternator_describe_endpoints=disabled)"));
+            co_return api_error::unknown_operation(
+                "DescribeEndpoints disabled by configuration (alternator_describe_endpoints=disabled)");
         }
         host_header = std::move(override);
     }
@@ -5524,13 +5551,13 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     // A "Host:" header includes both host name and port, exactly what we need
     // to return.
     if (host_header.empty()) {
-        return make_ready_future<request_return_type>(api_error::validation("DescribeEndpoints needs a 'Host:' header in request"));
+        co_return api_error::validation("DescribeEndpoints needs a 'Host:' header in request");
     }
     rjson::add(response, "Endpoints", rjson::empty_array());
     rjson::push_back(response["Endpoints"], rjson::empty_object());
     rjson::add(response["Endpoints"][0], "Address", rjson::from_string(host_header));
     rjson::add(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(response)));
+    co_return rjson::print(std::move(response));
 }
 
 static std::map<sstring, sstring> get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
