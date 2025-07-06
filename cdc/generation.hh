@@ -200,5 +200,6 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
     size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
 
 future<mutation> create_table_streams_mutation(table_id, db_clock::time_point, const locator::tablet_map&, api::timestamp_type);
+utils::chunked_vector<mutation> make_drop_table_streams_mutations(table_id, api::timestamp_type ts);
 
 } // namespace cdc
