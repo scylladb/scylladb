@@ -935,15 +935,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 ks_name = *req_entry.new_keyspace_rf_change_ks_name;
                 saved_ks_props = *req_entry.new_keyspace_rf_change_data;
             }
-            cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
 
-            auto repl_opts = new_ks_props.get_replication_options();
-            repl_opts.erase(cql3::statements::ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
             utils::chunked_vector<canonical_mutation> updates;
             sstring error;
             if (_db.has_keyspace(ks_name)) {
                 auto& ks = _db.find_keyspace(ks_name);
                 auto tmptr = get_token_metadata_ptr();
+                cql3::statements::ks_prop_defs new_ks_props{std::map<sstring, sstring>{saved_ks_props.begin(), saved_ks_props.end()}};
+                new_ks_props.validate();
+                auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features());
                 size_t unimportant_init_tablet_count = 2; // must be a power of 2
                 locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
 
@@ -960,7 +960,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             continue;
                         }
                         old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
-                        locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
+                        locator::replication_strategy_params params{ks_md->strategy_options(), old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
                     } catch (const std::exception& e) {
@@ -995,6 +995,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         co_await coroutine::maybe_yield();
                     });
                 }
+
+                if (error.empty()) {
+                    auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
+                    for (auto& m: schema_muts) {
+                        updates.emplace_back(m);
+                    }
+                }
             } else {
                 error = "Can't ALTER keyspace " + ks_name + ", keyspace doesn't exist";
             }
@@ -1009,16 +1016,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             updates.push_back(canonical_mutation(topology_request_tracking_mutation_builder(req_id)
                                                          .done(error)
                                                          .build()));
-            if (error.empty()) {
-                const sstring strategy_name = "NetworkTopologyStrategy";
-                auto ks_md = keyspace_metadata::new_keyspace(ks_name, strategy_name, repl_opts,
-                                                             new_ks_props.get_initial_tablets(std::nullopt),
-                                                             new_ks_props.get_durable_writes(), new_ks_props.get_storage_options());
-                auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
-                for (auto& m: schema_muts) {
-                    updates.emplace_back(m);
-                }
-            }
 
             sstring reason = seastar::format("ALTER tablets KEYSPACE called with options: {}", saved_ks_props);
             rtlogger.trace("do update {} reason {}", updates, reason);

@@ -155,6 +155,13 @@ static locator::replication_strategy_config_options prepare_options(
         }
     }
 
+    // #22688 - filter out any dc*:0 and dc*:[] entries - consider these
+    // null and void (removed).
+    std::erase_if(options, [] (const auto& e) {
+        auto& [dc, rf] = e;
+        return locator::replication_factor_data(rf).count() == 0;
+    });
+
     return options;
 }
 
