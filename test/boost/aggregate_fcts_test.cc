@@ -60,7 +60,7 @@ SEASTAR_TEST_CASE(test_aggregate_avg) {
                                  "avg(g_2), "
                                  "avg(h) FROM test").get();
 
-        assert_that(msg).is_rows().with_size(1).with_row({{byte_type->decompose(int8_t(1))},
+        assert_that(msg).is_rows().with_size(2).with_row({{byte_type->decompose(int8_t(1))},
                                                           {short_type->decompose(int16_t(1))},
                                                           {int32_type->decompose(int32_t(1))},
                                                           {long_type->decompose(int64_t(1))},
