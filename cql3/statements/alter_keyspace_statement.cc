@@ -132,73 +132,6 @@ bool cql3::statements::alter_keyspace_statement::changes_tablets(query_processor
     return ks.get_replication_strategy().uses_tablets() && !_attrs->get_replication_options().empty();
 }
 
-namespace {
-// These functions are used to flatten all the options in the keyspace definition into a single-level map<string, string>.
-// (Currently options are stored in a nested structure that looks more like a map<string, map<string, string>>).
-// Flattening is simply joining the keys of maps from both levels with a colon ':' character,
-// or in other words: prefixing the keys in the output map with the option type, e.g. 'replication', 'storage', etc.,
-// so that the output map contains entries like: "replication:dc1" -> "3".
-// This is done to avoid key conflicts and to be able to de-flatten the map back into the original structure.
-
-void add_prefixed_key(const sstring& prefix,
-                      const cql3::statements::property_definitions::map_type& in,
-                      cql3::statements::property_definitions::map_type& out) {
-    for (const auto& [in_key, in_value]: in) {
-        out[prefix + ":" + in_key] = in_value;
-    }
-}
-
-void add_prefixed_key(const sstring& prefix,
-                      const cql3::statements::property_definitions::extended_map_type& in,
-                      cql3::statements::property_definitions::map_type& out) {
-    add_prefixed_key(prefix, cql3::statements::to_flattened_map(in), out);
-}
-
-cql3::statements::property_definitions::map_type get_current_options_flattened(
-        const shared_ptr<cql3::statements::ks_prop_defs>& ks,
-        const gms::feature_service& feat) {
-    cql3::statements::property_definitions::map_type all_options;
-
-    add_prefixed_key(ks->KW_REPLICATION, ks->get_replication_options(), all_options);
-    add_prefixed_key(ks->KW_STORAGE, ks->get_storage_options().to_map(), all_options);
-    // if no tablet options are specified in ATLER KS statement,
-    // we want to preserve the old ones and hence cannot overwrite them with defaults
-    if (ks->has_property(ks->KW_TABLETS)) {
-        auto initial_tablets = ks->get_initial_tablets(std::nullopt);
-        add_prefixed_key(ks->KW_TABLETS,
-                         cql3::statements::property_definitions::map_type{
-                            {"enabled", initial_tablets ? "true" : "false"},
-                            {"initial", std::to_string(initial_tablets.value_or(0))}},
-                         all_options);
-    }
-    add_prefixed_key(ks->KW_DURABLE_WRITES,
-                     cql3::statements::property_definitions::map_type{{sstring(ks->KW_DURABLE_WRITES), to_sstring(ks->get_boolean(ks->KW_DURABLE_WRITES, true))}},
-                     all_options);
-
-    return all_options;
-}
-
-cql3::statements::property_definitions::map_type get_old_options_flattened(const data_dictionary::keyspace& ks) {
-    cql3::statements::property_definitions::map_type all_options;
-
-    using namespace cql3::statements;
-    add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options(), all_options);
-    add_prefixed_key(ks_prop_defs::KW_STORAGE, ks.metadata()->get_storage_options().to_map(), all_options);
-    if (ks.metadata()->initial_tablets()) {
-        add_prefixed_key(ks_prop_defs::KW_TABLETS,
-                         cql3::statements::property_definitions::map_type{
-                            {"enabled", ks.metadata()->initial_tablets() ? "true" : "false"},
-                            {"initial", std::to_string(ks.metadata()->initial_tablets().value_or(0))}},
-                         all_options);
-    }
-    add_prefixed_key(ks_prop_defs::KW_DURABLE_WRITES,
-                     cql3::statements::property_definitions::map_type{{sstring(ks_prop_defs::KW_DURABLE_WRITES), to_sstring(ks.metadata()->durable_writes())}},
-                     all_options);
-
-    return all_options;
-}
-} // <anonymous> namespace
-
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, cql3::cql_warnings_vec>>
 cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_processor& qp, service::query_state& state, const query_options& options, service::group0_batch& mc) const {
     using namespace cql_transport;
@@ -212,31 +145,9 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat);
         utils::chunked_vector<mutation> muts;
         std::vector<sstring> warnings;
-        auto old_ks_options = get_old_options_flattened(ks);
-        auto ks_options = get_current_options_flattened(_attrs, feat);
-        ks_options.merge(old_ks_options);
 
         auto ts = mc.write_timestamp();
         auto global_request_id = mc.new_group0_state_id();
-
-        // #22688 - filter out any dc*:0 entries - consider these
-        // null and void (removed). Migration planning will treat it
-        // as dc*=0 still.
-        std::erase_if(ks_options, [](const auto& i) {
-            static constexpr std::string replication_prefix = ks_prop_defs::KW_REPLICATION + ":"s;
-            // Flattened map, replication entries starts with "replication:".
-            // Only valid options are replication_factor, class and per-dc rf:s. We want to
-            // filter out any dcN=0 entries.
-            auto& [key, val] = i;
-            if (key.starts_with(replication_prefix) && val == "0") {
-                std::string_view v(key);
-                v.remove_prefix(replication_prefix.size());
-                return v != ks_prop_defs::REPLICATION_FACTOR_KEY 
-                    && v != ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY
-                    ;
-            }
-            return false;
-        });
 
         // we only want to run the tablets path if there are actually any tablets changes, not only schema changes
         // TODO: the current `if (changes_tablets(qp))` is insufficient: someone may set the same RFs as before,
@@ -260,11 +171,11 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
             if (!qp.proxy().features().topology_global_request_queue) {
                 builder.set_global_topology_request(service::global_topology_request::keyspace_rf_change);
                 builder.set_global_topology_request_id(global_request_id);
-                builder.set_new_keyspace_rf_change_data(_name, ks_options);
+                builder.set_new_keyspace_rf_change_data(_name, _attrs->flattened());
             } else {
                 builder.queue_global_topology_request_id(global_request_id);
                 rtbuilder.set("request_type", service::global_topology_request::keyspace_rf_change)
-                         .set_new_keyspace_rf_change_data(_name, ks_options);
+                         .set_new_keyspace_rf_change_data(_name, _attrs->flattened());
 
             };
             service::topology_change change{{builder.build()}};
