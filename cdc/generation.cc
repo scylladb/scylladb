@@ -1175,4 +1175,20 @@ future<mutation> create_table_streams_mutation(table_id table, db_clock::time_po
     co_return std::move(m);
 }
 
+utils::chunked_vector<mutation>
+make_drop_table_streams_mutations(table_id table, api::timestamp_type ts) {
+    utils::chunked_vector<mutation> mutations;
+    mutations.reserve(3);
+    for (auto s : {db::system_keyspace::cdc_streams_state(),
+                   db::system_keyspace::cdc_streams_history(),
+                   db::system_keyspace::cdc_pending_streams()}) {
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        m.partition().apply(tombstone(ts, gc_clock::now()));
+        mutations.emplace_back(std::move(m));
+    }
+    return mutations;
+}
+
 } // namespace cdc
