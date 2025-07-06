@@ -18,7 +18,7 @@ Breaks: scylla-enterprise-conf (<< 2025.1.0~)
 
 Package: %{product}-server
 Architecture: any
-Depends: ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version})
+Depends: ${misc:Depends}, %{product}-conf (= ${binary:Version}), %{product}-python3 (= ${binary:Version}), procps
 Replaces: %{product}-tools (<<5.5), scylla-enterprise-tools (<< 2024.2.0~), scylla-enterprise-server (<< 2025.1.0~)
 Breaks: %{product}-tools (<<5.5), scylla-enterprise-tools (<< 2024.2.0~), scylla-enterprise-server (<< 2025.1.0~)
 Description: Scylla database server binaries
