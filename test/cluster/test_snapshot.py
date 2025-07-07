@@ -35,8 +35,10 @@ async def test_snapshot(manager, random_tables):
 
     t = await random_tables.add_table(ncolumns=5, pks=1)
 
-    for i in range(3):
+    for _ in range(3):
         await t.add_column()
+
+    await random_tables.add_udt(name="custom_type", cmd="(a text, b int)")
 
     manager.driver_close()
     server_d = await manager.server_add(property_file=server_a.property_file())
