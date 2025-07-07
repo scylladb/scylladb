@@ -11,6 +11,8 @@ import enum
 import itertools
 import logging
 import os.path
+import re
+import socket
 import socketserver
 import tempfile
 import threading
@@ -27,7 +29,7 @@ from cassandra.cluster import NoHostAvailable, Session
 from cassandra.query import SimpleStatement, named_tuple_factory
 from ccmlib.scylla_node import ScyllaNode, NodeError
 
-from dtest_class import Tester, create_ks
+from dtest_class import Tester, create_ks, wait_for
 from tools.assertions import assert_invalid
 from tools.cluster import run_rest_api
 from tools.data import rows_to_list, run_in_parallel
@@ -104,22 +106,15 @@ class AuditTester(Tester):
         return session
 
 
-@dataclass
+@dataclass(eq=True, order=True)
 class AuditEntry:
     category: str
-    statement: str
-    table: str
-    ks: str
-    user: str
     cl: str
     error: bool
-
-    def __eq__(self, other):
-        return isinstance(other, AuditEntry) and self.__dict__ == other.__dict__
-
-    def __hash__(self):
-        return hash(tuple(self.__dict__.values()))
-
+    ks: str
+    statement: str
+    table: str
+    user: str
 
 class AuditBackend:
     def __init__(self) -> None:
@@ -174,10 +169,15 @@ class AuditBackendTable(AuditBackend):
 
 class UnixSockerListener:
     class UnixDatagramHandler(socketserver.BaseRequestHandler):
+
         def handle(self):
-            data = self.request[0].decode("utf-8").strip()
-            if data != "Initializing syslog audit backend.":
-                with self.server.mutex:
+            with self.server.parent_instance.condition:
+                data = self.request[0].decode("utf-8").strip()
+                if data.startswith(self.server.parent_instance.notification_msg):
+                    received_id = int(data[len(self.server.parent_instance.notification_msg):])
+                    self.server.parent_instance.notification_id = received_id
+                    self.server.parent_instance.condition.notify_all()
+                elif data != "Initializing syslog audit backend.":
                     self.server.parent_instance.lines.append(data)
 
     class UnixDatagramServer(socketserver.ThreadingUnixDatagramServer):
@@ -192,15 +192,31 @@ class UnixSockerListener:
         self.server = self.UnixDatagramServer(socket_path, self.UnixDatagramHandler, self, threading.Lock())
         self.server.server_activate()
 
+        self.notification_msg = "Notifying syslog server with id: "
+        self.notification_id = 0
+        self.condition = threading.Condition(self.server.mutex)
+
         self.thread = threading.Thread(target=self.server.serve_forever)
         self.thread.start()
 
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+
+    def wait_for_newer_notification_id(self):
+        with self.condition:
+            expected_id = self.notification_id + 1
+            self.sock.sendto(bytes(self.notification_msg + str(expected_id), 'utf-8'), self.socket_path)
+            self.condition.wait_for(lambda: self.notification_id == expected_id)
+
     def get_lines(self):
-        return self.lines
+        # Make sure all in-progress handle() calls are finished
+        self.wait_for_newer_notification_id()
+        return copy.deepcopy(self.lines)
 
     def shutdown(self):
         self.server.shutdown()
         self.thread.join()
+        self.server.server_close()
+        self.sock.close()
 
 
 class AuditBackendSyslog(AuditBackend):
@@ -234,20 +250,24 @@ class AuditBackendSyslog(AuditBackend):
     @override
     def get_audit_log_list(self, session, consistency_level):
         lines = self.unix_socket_listener.get_lines()
+        entries = []
+        for idx, line in enumerate(lines):
+            entries.append(self.line_to_row(line, idx))
+        return entries
 
-        return lines
-
-    def line_to_row(self, line):
+    def line_to_row(self, line, idx):
         metadata, data = line.split(": ", 1)
-        elems = list(map(lambda x: x[1:], data.split('", ')))
-        elems[-1] = elems[-1][:-1]
-        date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        data = "".join(data.splitlines()) # Remove newlines
+        fields = ["node", "category", "cl", "error", "keyspace", "query", "client_ip", "table", "username"]
+        regexp = ", ".join(f"{field}=\"(?P<{field}>.*)\"" for field in fields)
+        match = re.match(regexp, data)
 
-        node = elems[0].split(":")[0]
-        source = elems[6].split(":")[0]
-        # static uuid is used to keep the same format as the table audit
-        event_time = uuid.UUID("2e4bc246-fea1-11ee-b73f-51b0926539af")
-        t = self.named_tuple_factory(date, node, event_time, elems[1], elems[2], elems[3] == "true", elems[4], elems[5], source, elems[7], elems[8])
+        date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        node = match.group("node").split(":")[0]
+        statement = match.group("query").replace("\\", "") 
+        source = match.group("client_ip").split(":")[0]
+        event_time = uuid.UUID(int=idx)
+        t = self.named_tuple_factory(date, node, event_time, match.group("category"), match.group("cl"), match.group("error") == "true", match.group("keyspace"), statement, source, match.group("table"), match.group("username"))
         return t
 
     def update_socket_path(self):
@@ -306,7 +326,7 @@ class TestCQLAudit(AuditTester):
         error=False,
     ):
         self.assert_audit_row_fields(row)
-        assert row.node == self.cluster.get_node_ip(1)
+        assert row.node in map(lambda x: x.address(), self.cluster.nodelist())
         assert row.category == category
         assert row.consistency == cl
         assert row.error == error
@@ -416,7 +436,7 @@ class TestCQLAudit(AuditTester):
             operation = query if expected_operation is None else expected_operation
             error = expected_error is not None
 
-            expected_entries = [AuditEntry(category, operation, table, ks, user, cl, error)]
+            expected_entries = [AuditEntry(category, cl, error, ks, operation, table, user)]
         else:
             expected_entries = []
 
@@ -448,26 +468,30 @@ class TestCQLAudit(AuditTester):
 
         yield
 
-        # Remember audit entries after executing the query.
-        rows_after = self.get_audit_log_list(session)
-        set_of_rows_after = set(rows_after)
-        assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
+        new_rows = []
+        def is_number_of_new_rows_correct():
+            rows_after = self.get_audit_log_list(session)
+            set_of_rows_after = set(rows_after)
+            assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
 
-        new_rows = rows_after[len(rows_before) :]
-        assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
+            new_rows = rows_after[len(rows_before) :]
+            assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
 
-        if merge_duplicate_rows:
-            new_rows = self.deduplicate_audit_entries(new_rows)
+            if merge_duplicate_rows:
+                new_rows = self.deduplicate_audit_entries(new_rows)
 
-        new_rows = self.filter_out_noise(
-            new_rows,
-            filter_out_auth=len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0,
-            filter_out_use=len([entry for entry in expected_entries if "USE " in entry.statement]) == 0
-        )
+            new_rows = self.filter_out_noise(
+                new_rows,
+                filter_out_auth=len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0,
+                filter_out_use=len([entry for entry in expected_entries if "USE " in entry.statement]) == 0
+            )
 
-        assert len(new_rows) == len(expected_entries), f"Expected {len(expected_entries)} new audit entries, but got {len(new_rows)} new entries: {new_rows}"
+            assert len(new_rows) <= len(expected_entries)
+            return len(new_rows) == len(expected_entries)
 
-        for row, entry in zip(new_rows, expected_entries):
+        wait_for(is_number_of_new_rows_correct, timeout=60)
+        sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row_operation, row_source, row_table_name, row.username))
+        for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
             self.assert_audit_row_eq(row, entry.category, entry.statement, entry.table, entry.ks, entry.user, entry.cl, entry.error)
 
     def verify_keyspace(self, audit_settings=None, helper=None):
@@ -511,7 +535,7 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_using_non_existent_keyspace(self, helper_class):
         """
         Test tha using a non-existent keyspace generates an audit entry with an
@@ -627,22 +651,22 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings=AuditTester.audit_default_settings, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace_extra_parameter(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,DML,DDL,DCL", "audit_keyspaces": "ks", "extra_parameter": "new"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace_many_ks(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "a,b,c,ks"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_keyspace_table_not_exists(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "DML,DDL", "audit_keyspaces": "ks", "audit_tables": "ks.fake"}, helper=helper)
@@ -755,20 +779,20 @@ class TestCQLAudit(AuditTester):
         self.verify_table(audit_settings={"audit": "table", "audit_categories": "AUTH,QUERY,DDL"}, table_prefix="test_audit_categories_part1", overwrite_audit_tables=True)
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_categories_part2(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH,DCL", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part2")
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_audit_categories_part3(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part3")
 
     PasswordMaskingCase = namedtuple("PasswordMaskingCase", ["name", "password", "new_password"])
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_user_password_masking(self, helper_class):
         """
         CREATE USER, ALTER USER, DROP USER statements
@@ -885,7 +909,7 @@ class TestCQLAudit(AuditTester):
         with self.assert_entries_were_added(session, [expected_entry]):
             assert_invalid(session, stmt, expected=Unavailable)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_role_password_masking(self, helper_class):
         """
         CREATE ROLE, ALTER ROLE, DROP ROLE statements
@@ -1066,7 +1090,7 @@ class TestCQLAudit(AuditTester):
                 assert len(rows_without_error) == 1
                 break
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_prepare(self, helper_class):
         """Test prepare statement"""
         with helper_class() as helper:
@@ -1094,7 +1118,7 @@ class TestCQLAudit(AuditTester):
                 table="cf",
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_permissions(self, helper_class):
         """Test user permissions"""
 
@@ -1126,7 +1150,7 @@ class TestCQLAudit(AuditTester):
                 expected_error=Unauthorized,
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_batch(self, helper_class):
         """
         BATCH statement
@@ -1162,7 +1186,7 @@ class TestCQLAudit(AuditTester):
                 "INSERT INTO test8 (userid, password) VALUES (user4, ch@ngem3c)",
                 "DELETE name FROM test8 WHERE userid = user1",
             ]
-            expected_entries = list(map(lambda query: AuditEntry("DML", query, "test8", "ks", "anonymous", "QUORUM", False), expected_audit_operations))
+            expected_entries = list(map(lambda query: AuditEntry(category="DML", statement=query, table="test8", ks="ks", user="anonymous", cl="QUORUM", error=False), expected_audit_operations))
 
             with self.assert_entries_were_added(session, expected_entries, merge_duplicate_rows=False):
                 session.execute(batch_query)
@@ -1262,7 +1286,7 @@ class TestCQLAudit(AuditTester):
                     self.verify_change(node, param, settings[param], mark, expected_result)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_config_liveupdate(self, helper_class, audit_config_changer):
         """
         Test liveupdate config changes in audit.
@@ -1289,7 +1313,7 @@ class TestCQLAudit(AuditTester):
             )
 
             auditted_query = SimpleStatement("INSERT INTO test_config_lifeupdate (userid, password, name) VALUES ('user2', 'password2', 'second user');", consistency_level=ConsistencyLevel.QUORUM)
-            expected_new_entries = [AuditEntry("DML", auditted_query.query_string, "test_config_lifeupdate", "ks", "anonymous", "QUORUM", False)]
+            expected_new_entries = [AuditEntry(category="DML", statement=auditted_query.query_string, table="test_config_lifeupdate", ks="ks", user="anonymous", cl="QUORUM", error=False)]
 
             # Started with enabled_but_empty_audit_config config: no auditing
             with self.assert_no_audit_entries_were_added(session):
@@ -1323,7 +1347,7 @@ class TestCQLAudit(AuditTester):
                 session.execute(auditted_query)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, pytest.param(AuditBackendSyslog, marks=pytest.mark.xfail(reason="syslog audit has duplicate entries"))])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
     def test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
@@ -1344,7 +1368,7 @@ class TestCQLAudit(AuditTester):
             )
 
             auditted_query = SimpleStatement("INSERT INTO test_config_no_lifeupdate (userid, password, name) VALUES ('user2', 'password2', 'second user');", consistency_level=ConsistencyLevel.QUORUM)
-            expected_new_entries = [AuditEntry("DML", auditted_query.query_string, "test_config_no_lifeupdate", "ks", "anonymous", "QUORUM", False)]
+            expected_new_entries = [AuditEntry(category="DML", statement=auditted_query.query_string, table="test_config_no_lifeupdate", ks="ks", user="anonymous", cl="QUORUM", error=False)]
 
             # Modifications of "audit", "audit_unix_socket_path", "audit_syslog_write_buffer_size" are forbidden and will fail
             config_changer.change_config(self, {"audit": "none"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNUPDATABLE_PARAM)
