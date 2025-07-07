@@ -17,6 +17,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/net/dns.hh>
+#include <seastar/net/tls.hh>
 
 #include <seastar/testing/test_case.hh>
 
@@ -415,11 +416,18 @@ database_path={}/pykmip.db
             throw std::runtime_error("Invalid port");
         }
         // wait for port.
+        tls::credentials_builder b;
+        co_await b.set_x509_trust_file(info.ca, seastar::tls::x509_crt_format::PEM);
+        co_await b.set_x509_key_file(info.cert, info.key, seastar::tls::x509_crt_format::PEM);
+        auto certs = b.build_certificate_credentials();
+
         for (;;) {
             try {
                 // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
-                co_await seastar::connect(socket_address(net::inet_address("127.0.0.1"), port));
+                auto c = co_await seastar::tls::connect(certs, socket_address(net::inet_address("127.0.0.1"), port));
                 BOOST_TEST_MESSAGE("PyKMIP server up and available"); // debug print. Why not.
+                co_await tls::check_session_is_resumed(c); // forces handshake. Make python ssl happy.
+                c.shutdown_output();
                 break;
             } catch (...) {
             }
