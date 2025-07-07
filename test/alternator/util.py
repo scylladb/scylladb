@@ -296,3 +296,54 @@ def wait_for_gsi_gone(table, gsi_name):
                 continue
         return
     raise AssertionError("wait_for_gsi_gone did not complete")
+
+# Read a parameter from Scylla's configuration, stored in the system table
+# which is also visible to Alternator. This function will only work on Scylla,
+# and fail otherwise, so should only be used in Scylla-only tests.
+# If this is Scylla, but the specific parameter name is not present in the
+# configuration, this function returns None. If the parameter is present,
+# it is returned (as a string).
+def scylla_config_read(dynamodb, name):
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    # We use query() here instead of the simpler get_item(), because
+    # commit 44a1daf only added support for system tables in Query and
+    # Scan, not in GetItem...
+    r = config_table.query(
+            KeyConditionExpression='#key=:val',
+            ExpressionAttributeNames={'#key': 'name'},
+            ExpressionAttributeValues={':val': name}
+        )
+    if not 'Items' in r:
+        return None
+    return r['Items'][0]['value']
+
+# Write a parameter in Scylla's configuration, using in the system table
+# which is also visible to Alternator. This function will only work on Scylla,
+# and fail otherwise, so should only be used in Scylla-only tests.
+# Also on Scylla, this function may fail with an exception if the
+# configuration parameter alternator_allow_system_table_write is not turned
+# on, so callers might want to catch such an exception and skip the test.
+def scylla_config_write(dynamodb, name, value):
+    config_table = dynamodb.Table('.scylla.alternator.system.config')
+    config_table.update_item(
+            Key={'name': name},
+            UpdateExpression='SET #val = :val',
+            ExpressionAttributeNames={'#val': 'value'},
+            ExpressionAttributeValues={':val': value}
+        )
+
+# A context manager that can be used in a "with" to temporarily set a
+# configuration parameter to a desired value, and restore its original
+# value when the context ends.
+# The configuration parameter has to be live-updatable.
+# Note that using this mechanism is only a good idea if you're sure that
+# no other workload or test is using the same Alternator cluster in parallel,
+# because the changed configuration will affect the other workload too.
+@contextmanager
+def scylla_config_temporary(dynamodb, name, value):
+    original_value = scylla_config_read(dynamodb, name)
+    scylla_config_write(dynamodb, name, value)
+    try:
+        yield
+    finally:
+        scylla_config_write(dynamodb, name, original_value)
