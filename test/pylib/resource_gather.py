@@ -94,6 +94,7 @@ class ResourceGather(ABC):
             bufsize=1,
             text=True,
             env=env,
+            shell=True,
             preexec_fn = self.put_process_to_cgroup
         )
         try:
