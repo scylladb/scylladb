@@ -1,0 +1,22 @@
+"vector_search_status": {
+    "id": "vector_search_status",
+    "summary": "Operational status of the Vector Search feature.",
+    "properties": {
+      "status": {
+        "type": "string",
+        "enum": [
+          "UNAVAILABLE",
+          "INITIALIZING",
+          "SERVING",
+          "INDEXING_EMBEDDINGS"
+        ]
+      },
+      "serving_mode": {
+        "type": "string",
+        "enum": [
+          "PRIMARY",
+          "SECONDARY"
+        ]
+      }
+    }
+}

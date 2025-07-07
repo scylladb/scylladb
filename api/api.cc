@@ -31,6 +31,7 @@
 #include "stream_manager.hh"
 #include "system.hh"
 #include "api/config.hh"
+#include "api/vector_search.hh"
 #include "task_manager.hh"
 #include "task_manager_test.hh"
 #include "tasks.hh"
@@ -66,9 +67,11 @@ future<> set_server_init(http_context& ctx) {
         rb->set_api_doc(r);
         rb02->set_api_doc(r);
         rb02->register_api_file(r, "swagger20_header");
+        register_vector_search(rb02, ctx, r);
         rb02->register_api_file(r, "metrics");
         rb->register_function(r, "system",
                 "The system related API");
+        register_vector_search_definitions(rb02, ctx, r);
         rb02->add_definitions_file(r, "metrics");
         set_system(ctx, r);
         rb->register_function(r, "error_injection",

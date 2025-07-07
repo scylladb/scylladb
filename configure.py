@@ -1276,6 +1276,8 @@ api = ['api/api.cc',
        'api/cql_server_test.cc',
        'api/service_levels.cc',
        Json2Code('api/api-doc/service_levels.json'),
+       Json2Code('api/api-doc/vector_search.json'),
+       'api/vector_search.cc',
        ]
 
 alternator = [
