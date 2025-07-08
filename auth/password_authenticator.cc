@@ -290,7 +290,11 @@ future<authenticated_user> password_authenticator::authenticate(
 
     try {
         const std::optional<sstring> salted_hash = co_await get_password_hash(username);
-        if (!salted_hash || !passwords::check(password, *salted_hash)) {
+        if (!salted_hash) {
+            throw exceptions::authentication_exception("Username and/or password are incorrect");
+        }
+        const bool password_match = passwords::check(password, *salted_hash);
+        if (!password_match) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
         co_return username;
