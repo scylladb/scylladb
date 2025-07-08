@@ -43,14 +43,6 @@ sstable_format_types format_from_string(std::string_view s);
 extern const std::unordered_map<sstable_version_types, seastar::sstring, seastar::enum_hash<sstable_version_types>> version_string;
 extern const std::unordered_map<sstable_format_types, seastar::sstring, seastar::enum_hash<sstable_format_types>> format_string;
 
-
-constexpr inline int operator<=>(sstable_version_types a, sstable_version_types b) {
-    auto to_int = [] (sstable_version_types x) {
-        return static_cast<std::underlying_type_t<sstable_version_types>>(x);
-    };
-    return to_int(a) - to_int(b);
-}
-
 }
 
 template <>
