@@ -5486,6 +5486,8 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
     auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
     const auto& topology = erm->get_topology();
     utils::chunked_vector<dht::token_range_endpoints> ranges;
+    ranges.reserve(tmap.tablet_count());
+    std::unordered_map<locator::host_id, locator::describe_ring_endpoint_info> host_infos;
     co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
         auto range = tmap.get_token_range(id);
         auto& replicas = info.replicas;
@@ -5496,16 +5498,18 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
         if (range.end()) {
             tr._end_token = range.end()->value().to_sstring();
         }
+        tr._endpoints.reserve(replicas.size());
+        tr._rpc_endpoints.reserve(replicas.size());
+        tr._endpoint_details.reserve(replicas.size());
         for (auto& r : replicas) {
-            dht::endpoint_details details;
-            const auto& node = topology.get_node(r.host);
-            const auto ip = _address_map.get(r.host);
-            details._datacenter = node.dc_rack().dc;
-            details._rack = node.dc_rack().rack;
-            details._host = ip;
-            tr._rpc_endpoints.push_back(_gossiper.get_rpc_address(r.host));
-            tr._endpoints.push_back(fmt::to_string(details._host));
-            tr._endpoint_details.push_back(std::move(details));
+            auto& endpoint = r.host;
+            auto it = host_infos.find(endpoint);
+            if (it == host_infos.end()) {
+                it = host_infos.emplace(endpoint, get_describe_ring_endpoint_info(endpoint, topology, _gossiper)).first;
+            }
+            tr._rpc_endpoints.emplace_back(it->second.rpc_addr);
+            tr._endpoints.emplace_back(fmt::to_string(it->second.details._host));
+            tr._endpoint_details.emplace_back(it->second.details);
         }
         ranges.push_back(std::move(tr));
         return make_ready_future<>();
