@@ -26,4 +26,10 @@ namespace locator {
     future<utils::chunked_vector<dht::token_range_endpoints>> describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc = false);
     future<std::unordered_map<dht::token_range, host_id_vector_replica_set>> get_range_to_address_map(
         locator::effective_replication_map_ptr erm, const utils::chunked_vector<token>& sorted_tokens);
+
+    struct describe_ring_endpoint_info {
+        dht::endpoint_details details;
+        sstring rpc_addr;
+    };
+    describe_ring_endpoint_info get_describe_ring_endpoint_info(host_id endpoint, const topology& topology, const gms::gossiper& gossiper);
 }

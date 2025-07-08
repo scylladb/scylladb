@@ -516,6 +516,12 @@ class ScyllaRESTAPIClient:
             params={"probability": probability},
         )
 
+    async def describe_ring(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> Any:
+        params = None
+        if (table):
+            params = {"table": table}
+        await self.client.get(f'/storage_service/describe_ring/{keyspace}', host=node_ip, params=params)
+
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
         self.lines: list[str] = lines
