@@ -1223,14 +1223,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         }
                         co_await in.close();
                         if (ex) {
-                            try {
-                                std::rethrow_exception(ex);
-                            } catch (const aws::aws_exception& aws_ex) {
-                                if (aws_ex.error().is_retryable()) {
-                                    throw filler_exception(format("{}", std::current_exception()).c_str());
-                                }
-                                throw;
+                            auto aws_ex = aws::aws_error::from_exception_ptr(ex);
+                            if (aws_ex.is_retryable()) {
+                                s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
+                                throw filler_exception(format("{}", ex).c_str());
                             }
+                            std::rethrow_exception(ex);
                         }
                     },
                     {},
