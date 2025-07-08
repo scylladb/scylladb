@@ -1199,7 +1199,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
-            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
+            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager), only_on_shard0(&*out_of_space_controller_shard0)).get();
             auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
                cm.stop().get();
             });
