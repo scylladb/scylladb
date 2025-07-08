@@ -884,15 +884,9 @@ sharded<locator::shared_token_metadata> token_metadata;
             //});
 
             schema::set_default_partitioner(cfg->partitioner(), cfg->murmur3_partitioner_ignore_msb_bits());
-            auto make_sched_group = [&] (sstring name, sstring short_name, unsigned shares) {
-                if (cfg->cpu_scheduler()) {
-                    return seastar::create_scheduling_group(name, short_name, shares).get();
-                } else {
-                    return seastar::scheduling_group();
-                }
-            };
-            auto background_reclaim_scheduling_group = make_sched_group("background_reclaim", "bgre", 50);
-            auto maintenance_scheduling_group = make_sched_group("streaming", "strm", 200);
+
+            auto background_reclaim_scheduling_group = create_scheduling_group("background_reclaim", "bgre", 50).get();
+            auto maintenance_scheduling_group = create_scheduling_group("streaming", "strm", 200).get();
 
             smp::invoke_on_all([&cfg, background_reclaim_scheduling_group] {
                 logalloc::tracker::config st_cfg;
@@ -1128,15 +1122,15 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             // Note: changed from using a move here, because we want the config object intact.
             replica::database_config dbcfg;
-            dbcfg.compaction_scheduling_group = make_sched_group("compaction", "comp", 1000);
-            dbcfg.memory_compaction_scheduling_group = make_sched_group("mem_compaction", "mcmp", 1000);
+            dbcfg.compaction_scheduling_group = create_scheduling_group("compaction", "comp", 1000).get();
+            dbcfg.memory_compaction_scheduling_group = create_scheduling_group("mem_compaction", "mcmp", 1000).get();
             dbcfg.streaming_scheduling_group = maintenance_scheduling_group;
-            dbcfg.statement_scheduling_group = make_sched_group("statement", "stmt", 1000);
-            dbcfg.memtable_scheduling_group = make_sched_group("memtable", "mt", 1000);
-            dbcfg.memtable_to_cache_scheduling_group = make_sched_group("memtable_to_cache", "mt2c", 200);
-            dbcfg.gossip_scheduling_group = make_sched_group("gossip", "gms", 1000);
-            dbcfg.commitlog_scheduling_group = make_sched_group("commitlog", "clog", 1000);
-            dbcfg.schema_commitlog_scheduling_group = make_sched_group("schema_commitlog", "sclg", 1000);
+            dbcfg.statement_scheduling_group = create_scheduling_group("statement", "stmt", 1000).get();
+            dbcfg.memtable_scheduling_group = create_scheduling_group("memtable", "mt", 1000).get();
+            dbcfg.memtable_to_cache_scheduling_group = create_scheduling_group("memtable_to_cache", "mt2c", 200).get();
+            dbcfg.gossip_scheduling_group = create_scheduling_group("gossip", "gms", 1000).get();
+            dbcfg.commitlog_scheduling_group = create_scheduling_group("commitlog", "clog", 1000).get();
+            dbcfg.schema_commitlog_scheduling_group = create_scheduling_group("schema_commitlog", "sclg", 1000).get();
             dbcfg.available_memory = memory::stats().total_memory();
 
             // Make sure to initialize the scheduling group keys at a point where we are sure
