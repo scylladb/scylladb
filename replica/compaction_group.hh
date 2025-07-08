@@ -57,6 +57,8 @@ class compaction_group {
     seastar::condition_variable _staging_done_condition;
     // Gates async operations confined to a single group.
     seastar::named_gate _async_gate;
+    // Gates flushes.
+    seastar::named_gate _flush_gate;
     bool _tombstone_gc_enabled = true;
 private:
     // Adds new sstable to the set of sstables
@@ -188,6 +190,10 @@ public:
 
     seastar::named_gate& async_gate() noexcept {
         return _async_gate;
+    }
+
+    seastar::named_gate& flush_gate() noexcept {
+        return _flush_gate;
     }
 
     compaction_manager& get_compaction_manager() noexcept;
