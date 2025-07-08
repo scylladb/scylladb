@@ -2387,8 +2387,8 @@ sharded<locator::shared_token_metadata> token_metadata;
                 view_builder.invoke_on_all(&db::view::view_builder::drain).get();
             });
             
-            checkpoint(stop_signal, "starting view building worker's state observer");
-            view_building_worker.invoke_on(0, &db::view::view_building_worker::start_state_observer).get();
+            checkpoint(stop_signal, "starting view building worker's background fibers");
+            view_building_worker.invoke_on(0, &db::view::view_building_worker::start_backgroud_fibers).get();
             auto drain_view_buiding_worker = defer_verbose_shutdown("draining view building worker", [&] {
                 view_building_worker.invoke_on_all(&db::view::view_building_worker::drain).get();
             });
