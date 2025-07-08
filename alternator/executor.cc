@@ -245,7 +245,19 @@ void executor::supplement_table_info(rjson::value& descr, const schema& schema, 
 // bytes (dash and UUID), and since directory names are limited to 255 bytes,
 // we need to limit table names to 222 bytes, instead of 255.
 // See https://github.com/scylladb/scylla/issues/4480
-static constexpr int max_table_name_length = 222;
+// We actually have two limits here,
+// * max_table_name_length is the limit that Alternator will impose on names
+//   of new Alternator tables.
+// * max_auxiliary_table_name_length is the potentially higher absolute limit
+//   that Scylla imposes on the names of auxiliary tables that Alternator
+//   wants to create internally - i.e. materialized views or CDC log tables.
+// The second limit might mean that it is not possible to add a GSI to an
+// existing table, because the name of the new auxiliary table may go over
+// the limit. The second limit is also one of the reasons why the first limit
+// is set lower than 222 - to have room to enable streams which add the extra
+// suffix "_scylla_cdc_log" to the table name.
+static constexpr int max_table_name_length = 192;
+static constexpr int max_auxiliary_table_name_length = 222;
 
 static bool valid_table_name_chars(std::string_view name) {
     for (auto c : name) {
@@ -261,10 +273,15 @@ static bool valid_table_name_chars(std::string_view name) {
     return true;
 }
 
+// validate_table_name() validates the TableName parameter in a request - it
+// should only be called in CreateTable or when a request looking for an
+// existing table failed to find it. validate_table_name() throws the
+// appropriate api_error if this validation fails.
 // The DynamoDB developer guide, https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html#HowItWorks.NamingRules
-// specifies that table names "names must be between 3 and 255 characters long
-// and can contain only the following characters: a-z, A-Z, 0-9, _ (underscore), - (dash), . (dot)
-// validate_table_name throws the appropriate api_error if this validation fails.
+// specifies that table "names must be between 3 and 255 characters long and
+// can contain only the following characters: a-z, A-Z, 0-9, _ (underscore),
+// - (dash), . (dot)". However, Alternator only allows max_table_name_length
+// characters (see above) - not 255.
 static void validate_table_name(const std::string& name) {
     if (name.length() < 3 || name.length() > max_table_name_length) {
         throw api_error::validation(
@@ -273,6 +290,27 @@ static void validate_table_name(const std::string& name) {
     if (!valid_table_name_chars(name)) {
         throw api_error::validation(
                 "TableName must satisfy regular expression pattern: [a-zA-Z0-9_.-]+");
+    }
+}
+
+// Validate that a CDC log table could be created for the base table with a
+// given table_name, and if not, throw a user-visible api_error::validation.
+// It is not possible to create a CDC log table if the table name is so long
+// that adding the 15-character suffix "_scylla_cdc_log" (cdc_log_suffix)
+// makes it go over max_auxiliary_table_name_length.
+// Note that if max_table_name_length is set to less than 207 (which is
+// max_auxiliary_table_name_length-15), then this function will never
+// fail. However, it's still important to call it in UpdateTable, in case
+// we have pre-existing tables with names longer than this to avoid #24598.
+static void validate_cdc_log_name_length(std::string_view table_name) {
+    if (cdc::log_name(table_name).length() > max_auxiliary_table_name_length) {
+        // CDC will add cdc_log_suffix ("_scylla_cdc_log") to the table name
+        // to create its log table, and this will exceed the maximum allowed
+        // length. To provide a more helpful error message, we assume that
+        // cdc::log_name() always adds a suffix of the same length.
+        int suffix_len = cdc::log_name(table_name).length() - table_name.length();
+        throw api_error::validation(fmt::format("Streams cannot be enabled to a table whose name is longer than {} characters: {}",
+            max_auxiliary_table_name_length - suffix_len, table_name));
     }
 }
 
@@ -294,10 +332,10 @@ static std::string view_name(std::string_view table_name, std::string_view index
                 fmt::format("IndexName '{}' must satisfy regular expression pattern: [a-zA-Z0-9_.-]+", index_name));
     }
     std::string ret = std::string(table_name) + delim + std::string(index_name);
-    if (ret.length() > max_table_name_length && validate_len) {
+    if (ret.length() > max_auxiliary_table_name_length && validate_len) {
         throw api_error::validation(
                 fmt::format("The total length of TableName ('{}') and IndexName ('{}') cannot exceed {} characters",
-                        table_name, index_name, max_table_name_length - delim.size()));
+                        table_name, index_name, max_auxiliary_table_name_length - delim.size()));
     }
     return ret;
 }
@@ -816,9 +854,6 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     elogger.trace("Deleting table {}", request);
 
     std::string table_name = get_table_name(request);
-    // DynamoDB returns validation error even when table does not exist
-    // and the table name is invalid.
-    validate_table_name(table_name);
 
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
     tracing::add_table_name(trace_state, keyspace_name, table_name);
@@ -834,6 +869,9 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
 
             std::optional<data_dictionary::table> tbl = p.local().data_dictionary().try_find_table(keyspace_name, table_name);
             if (!tbl) {
+                // DynamoDB returns validation error even when table does not exist
+                // and the table name is invalid.
+                validate_table_name(table_name);
                 throw api_error::resource_not_found(fmt::format("Requested resource not found: Table: {} not found", table_name));
             }
 
@@ -1560,7 +1598,9 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
 
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        executor::add_stream_options(*stream_specification, builder, sp);
+        if (executor::add_stream_options(*stream_specification, builder, sp)) {
+            validate_cdc_log_name_length(builder.cf_name());
+        }
     }
 
     // Parse the "Tags" parameter early, so we can avoid creating the table
@@ -1751,7 +1791,9 @@ future<executor::request_return_type> executor::update_table(client_state& clien
             rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
             if (stream_specification && stream_specification->IsObject()) {
                 empty_request = false;
-                add_stream_options(*stream_specification, builder, p.local());
+                if (add_stream_options(*stream_specification, builder, p.local())) {
+                    validate_cdc_log_name_length(builder.cf_name());
+                }
                 // Alternator Streams doesn't yet work when the table uses tablets (#16317)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
@@ -2745,10 +2787,12 @@ future<executor::request_return_type> executor::delete_item(client_state& client
 
 static schema_ptr get_table_from_batch_request(const service::storage_proxy& proxy, const rjson::value::ConstMemberIterator& batch_request) {
     sstring table_name = batch_request->name.GetString(); // JSON keys are always strings
-    validate_table_name(table_name);
     try {
         return proxy.data_dictionary().find_schema(sstring(executor::KEYSPACE_NAME_PREFIX) + table_name, table_name);
     } catch(data_dictionary::no_such_column_family&) {
+        // DynamoDB returns validation error even when table does not exist
+        // and the table name is invalid.
+        validate_table_name(table_name);
         throw api_error::resource_not_found(format("Requested resource not found: Table: {} not found", table_name));
     }
 }
