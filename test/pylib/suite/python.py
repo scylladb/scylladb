@@ -62,7 +62,8 @@ class PythonTestSuite(TestSuite):
                these if it came from a failed test.
             """
             for srv in cluster.servers.values():
-                srv.log_file.close()
+                if srv.log_file is not None:
+                    srv.log_file.close()
                 srv.maintenance_socket_dir.cleanup()
             await cluster.stop()
             await cluster.release_ips()
