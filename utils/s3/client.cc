@@ -1207,7 +1207,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 _get_cv.signal();
                                 utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                     // Inject retryable error after some data was already downloaded
-                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
+                                    throw std::system_error(ECONNRESET, std::system_category());
                                 });
                             }
                         } catch (...) {
