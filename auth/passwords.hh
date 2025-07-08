@@ -21,10 +21,11 @@ class no_supported_schemes : public std::runtime_error {
 public:
     no_supported_schemes();
 };
-
 ///
-/// Apache Cassandra uses a library to provide the bcrypt scheme. Many Linux implementations do not support bcrypt, so
-/// we support alternatives. The cost is loss of direct compatibility with Apache Cassandra system tables.
+/// Apache Cassandra uses a library to provide the bcrypt scheme. In ScyllaDB, we use SHA-512
+/// instead of bcrypt for performance and for historical reasons (see scylladb#24524).
+/// Currently, SHA-512 is always chosen as the hashing scheme for new passwords, but the other
+/// algorithms remain supported for CREATE ROLE WITH HASHED PASSWORD and backward compatibility.
 ///
 enum class scheme {
     bcrypt_y,
@@ -51,11 +52,11 @@ sstring generate_random_salt_bytes(RandomNumberEngine& g) {
 }
 
 ///
-/// Test each allowed hashing scheme and report the best supported one on the current system.
+/// Test given hashing scheme on the current system.
 ///
-/// \throws \ref no_supported_schemes when none of the known schemes is supported.
+/// \throws \ref no_supported_schemes when scheme is unsupported.
 ///
-scheme identify_best_supported_scheme();
+void verify_scheme(scheme scheme);
 
 std::string_view prefix_for_scheme(scheme) noexcept;
 

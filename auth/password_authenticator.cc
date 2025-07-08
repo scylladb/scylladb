@@ -55,7 +55,6 @@ static thread_local auto rng_for_salt = std::default_random_engine(std::random_d
 static std::string_view get_config_value(std::string_view value, std::string_view def) {
     return value.empty() ? def : value;
 }
-
 std::string password_authenticator::default_superuser(const db::config& cfg) {
     return std::string(get_config_value(cfg.auth_superuser_name(), DEFAULT_USER_NAME));
 }
@@ -125,7 +124,7 @@ future<> password_authenticator::legacy_create_default_if_missing() {
     }
     std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
     if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, passwords::detail::identify_best_supported_scheme());
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
     }
     const auto query = update_row_query();
     co_await _qp.execute_internal(
@@ -172,7 +171,7 @@ future<> password_authenticator::maybe_create_default_password() {
     // Set default superuser's password.
     std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
     if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, passwords::detail::identify_best_supported_scheme());
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
     }
     const auto update_query = update_row_query();
     co_await collect_mutations(_qp, batch, update_query, {salted_pwd, _superuser});
@@ -203,8 +202,8 @@ future<> password_authenticator::maybe_create_default_password_with_retries() {
 future<> password_authenticator::start() {
     return once_among_shards([this] {
         // Verify that at least one hashing scheme is supported.
-        auto scheme = passwords::detail::identify_best_supported_scheme();
-        plogger.info("Using password hashing scheme: {}", passwords::detail::prefix_for_scheme(scheme));
+        passwords::detail::verify_scheme(_scheme);
+        plogger.info("Using password hashing scheme: {}", passwords::detail::prefix_for_scheme(_scheme));
 
         _stopped = do_after_system_ready(_as, [this] {
             return async([this] {
@@ -315,7 +314,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
     auto maybe_hash = options.credentials.transform([&] (const auto& creds) -> sstring {
         return std::visit(make_visitor(
                 [&] (const password_option& opt) {
-                    return passwords::hash(opt.password, rng_for_salt, passwords::detail::identify_best_supported_scheme());
+                    return passwords::hash(opt.password, rng_for_salt, _scheme);
                 },
                 [] (const hashed_password_option& opt) {
                     return opt.hashed_password;
@@ -358,11 +357,11 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
                 query,
                 consistency_for_user(role_name),
                 internal_distributed_query_state(),
-                {passwords::hash(password, rng_for_salt, passwords::detail::identify_best_supported_scheme()), sstring(role_name)},
+                {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
         co_await collect_mutations(_qp, mc, query,
-                {passwords::hash(password, rng_for_salt, passwords::detail::identify_best_supported_scheme()), sstring(role_name)});
+                {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)});
     }
 }
 
