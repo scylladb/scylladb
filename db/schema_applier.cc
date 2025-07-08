@@ -280,7 +280,7 @@ static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_p
     for (auto& name : created) {
         slogger.info("Creating keyspace {}", name);
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
-        auto ksm = co_await create_keyspace_metadata(proxy,
+        auto ksm = co_await create_keyspace_metadata(
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
         affected.created.push_back(
                 co_await replica::database::prepare_create_keyspace_on_all_shards(
@@ -290,7 +290,7 @@ static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_p
     for (auto& name : altered) {
         slogger.info("Altering keyspace {}", name);
         auto sk_after_v = sk_after.contains(name) ? sk_after.at(name) : nullptr;
-        auto tmp_ksm = co_await create_keyspace_metadata(proxy,
+        auto tmp_ksm = co_await create_keyspace_metadata(
                 schema_result_value_type{name, after.at(name)}, sk_after_v);
         affected.altered.push_back(
                 co_await replica::database::prepare_update_keyspace_on_all_shards(
