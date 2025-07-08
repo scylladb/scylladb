@@ -55,7 +55,7 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
 // clear_gently will not necessarily keep the object allocation.
 
 template <typename T>
-concept HasClearGentlyMethod = requires (T x) {
+concept HasClearGentlyMethod = requires (std::remove_const_t<T> x) {
     { x.clear_gently() } -> std::same_as<future<>>;
 };
 
@@ -143,7 +143,7 @@ future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept;
 namespace internal {
 
 template <typename T>
-concept HasClearGentlyImpl = requires (T x) {
+concept HasClearGentlyImpl = requires (std::remove_const_t<T> x) {
     { clear_gently(x) } -> std::same_as<future<>>;
 };
 
@@ -165,7 +165,7 @@ future<> clear_gently(T&) noexcept {
 
 template <HasClearGentlyMethod T>
 future<> clear_gently(T& o) noexcept {
-    return futurize_invoke(std::bind(&T::clear_gently, &o));
+    return futurize_invoke(std::bind(&T::clear_gently, const_cast<std::remove_const_t<T>*>(&o)));
 }
 
 template <typename T>
