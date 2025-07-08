@@ -361,7 +361,7 @@ class ScyllaServer:
     TOPOLOGY_TIMEOUT = 1000
     start_time: float
     sleep_interval: float
-    log_file: BufferedWriter
+    log_file: BufferedWriter | None
     host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
@@ -384,6 +384,7 @@ class ScyllaServer:
         self.exe = pathlib.Path(version.path).resolve()
         self.vardir = pathlib.Path(vardir)
         self.logger = logger
+        self.log_file = None
         self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
         self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
         self.cluster_name = cluster_name
