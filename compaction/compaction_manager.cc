@@ -937,7 +937,7 @@ public:
     }
 };
 
-compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
+compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm, replica::out_of_space_controller* oos_controller)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
@@ -962,7 +962,14 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(&_reconcile_history_maps) {
+    , _tombstone_gc_state(&_reconcile_history_maps)
+    , _out_of_space_subscription(oos_controller && (this_shard_id() == 0) ? oos_controller->subscribe([this] (auto critical_level_reached) {
+        if (bool(critical_level_reached)) {
+            return container().invoke_on_all([] (compaction_manager& cm) { return cm.drain(); });
+        }
+        return container().invoke_on_all([] (compaction_manager& cm) { cm.enable(); });
+    }) : replica::out_of_space_controller::subscription())
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
@@ -2159,6 +2166,9 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
 future<std::vector<sstables::shared_sstable>>
 compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, table_state& t, sstables::compaction_type_options::split opt) {
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
+        co_return std::vector<sstables::shared_sstable>{sst};
+    }
+    if (!can_proceed(&t)) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
     std::vector<sstables::shared_sstable> ret;

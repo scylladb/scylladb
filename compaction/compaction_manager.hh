@@ -33,6 +33,7 @@
 #include "sstables/exceptions.hh"
 #include "tombstone_gc.hh"
 #include "utils/pluggable.hh"
+#include "replica/out_of_space_controller.hh"
 
 namespace db {
 class compaction_history_entry;
@@ -62,7 +63,7 @@ inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) 
 }
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
-class compaction_manager {
+class compaction_manager: public peering_sharded_service<compaction_manager> {
 public:
     using compaction_stats_opt = std::optional<sstables::compaction_stats>;
     struct stats {
@@ -163,6 +164,8 @@ private:
 
     per_table_history_maps _reconcile_history_maps;
     tombstone_gc_state _tombstone_gc_state;
+
+    replica::out_of_space_controller::subscription _out_of_space_subscription;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
@@ -254,7 +257,7 @@ private:
     // about invoking it. Ref #10146
     compaction_manager(tasks::task_manager& tm);
 public:
-    compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm);
+    compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm, replica::out_of_space_controller* oos_controller);
     ~compaction_manager();
     class for_testing_tag{};
     // An inline constructor for testing
