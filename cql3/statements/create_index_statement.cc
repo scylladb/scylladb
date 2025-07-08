@@ -400,7 +400,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
         m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
 
         ret = ::make_shared<event::schema_change>(
-                event::schema_change::change_type::UPDATED,
+                event::schema_change::change_type::CREATED,
                 event::schema_change::target_type::TABLE,
                 keyspace(),
                 column_family());
