@@ -6,11 +6,15 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <iterator>
 #include <ranges>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/condition-variable.hh>
+#include <seastar/core/semaphore.hh>
 #include <stdexcept>
 #include <unordered_set>
+#include <utility>
 
 #include "db/view/view_building_worker.hh"
 #include "db/view/view_consumer.hh"
@@ -20,6 +24,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "schema/schema_fwd.hh"
 #include "idl/view.dist.hh"
+#include "sstables/sstables.hh"
 #include "utils/exponential_backoff_retry.hh"
 
 static logging::logger vbw_logger("view_building_worker");
@@ -99,8 +104,9 @@ view_building_worker::view_building_worker(replica::database& db, db::system_key
     init_messaging_service();
 }
 
-void view_building_worker::start_state_observer() {
+void view_building_worker::start_backgroud_fibers() {
     SCYLLA_ASSERT(this_shard_id() == 0);
+    _staging_sstables_registrator = run_staging_sstables_registrator();
     _view_building_state_observer = run_view_building_state_observer();
     _mnotifier.register_listener(this);
 }
@@ -115,7 +121,11 @@ future<> view_building_worker::drain() {
     if (!_as.abort_requested()) {
         _as.request_abort();
     }
+    _staging_sstables_mutex.broken();
+    _sstables_to_register_event.broken();
     if (this_shard_id() == 0) {
+        auto sstable_registrator = std::exchange(_staging_sstables_registrator, make_ready_future<>());
+        co_await std::move(sstable_registrator);
         auto state_observer = std::exchange(_view_building_state_observer, make_ready_future<>());
         co_await std::move(state_observer);
         co_await _mnotifier.unregister_listener(this);
@@ -134,6 +144,110 @@ void view_building_worker::on_drop_view(const sstring& ks_name, const sstring& v
     (void)with_gate(_gate, [&, this] {
         return _sys_ks.remove_view_build_progress_across_all_shards(ks_name, view_name);
     });
+}
+
+future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, lw_shared_ptr<replica::table> table) {
+    co_await container().invoke_on(0, [ssts = std::move(ssts), table = std::move(table)] (view_building_worker& local_vbw) -> future<> {
+        try {
+            auto lock = co_await get_units(local_vbw._staging_sstables_mutex, 1, local_vbw._as);
+            auto table_id = table->schema()->id();
+            vbw_logger.debug("Saving {} sstables for table {} to create view building tasks", ssts.size(), table_id);
+            auto& sstables_queue = local_vbw._sstables_to_register[table_id];
+            sstables_queue.insert(sstables_queue.end(), std::make_move_iterator(ssts.begin()), std::make_move_iterator(ssts.end()));
+            local_vbw._sstables_to_register_event.broadcast();
+        } catch (semaphore_aborted&) {
+            vbw_logger.warn("Semaphore was aborted while waiting to register {} sstables for table {}", ssts.size(), table->schema()->id());
+        }
+    });
+}
+
+future<> view_building_worker::run_staging_sstables_registrator() {
+    while (!_as.abort_requested()) {
+        try {
+            auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
+            co_await create_staging_sstable_tasks();
+            lock.return_all();
+            _as.check();
+            co_await _sstables_to_register_event.when();
+        } catch (semaphore_aborted&) {
+            vbw_logger.warn("Got semaphore_aborted while creating staging sstable tasks");
+        } catch (broken_condition_variable&) {
+            vbw_logger.warn("Got broken_condition_variable while creating staging sstable tasks");
+        } catch (abort_requested_exception&) {
+            vbw_logger.warn("Got abort_requested_exception while creating staging sstable tasks");
+        } catch (service::group0_concurrent_modification&) {
+            vbw_logger.warn("Got group0_concurrent_modification while creating staging sstable tasks");
+        } catch (raft::request_aborted&) {
+            vbw_logger.warn("Got raft::request_aborted while creating staging sstable tasks");
+        }
+    }
+}
+
+static shard_id get_sstable_shard_id(const sstables::sstable& sst) {
+    auto shards = sst.get_shards_for_this_sstable();
+#ifdef SEASTAR_DEBUG
+    // Sstable from tablet-table should belong to only one shard
+    SCYLLA_ASSERT(shards.size() == 1);
+#endif
+    return shards[0];
+}
+
+static locator::tablet_id get_sstable_tablet_id(const locator::tablet_map& tablet_map, const sstables::sstable& sst) {
+    auto last_token = sst.get_last_decorated_key().token();
+    auto tablet_id = tablet_map.get_tablet_id(last_token);
+
+#ifdef SEASTAR_DEBUG
+    // Single sstable from tablet-table should contain data for only one tablet
+    auto first_token = sst.get_first_decorated_key().token();
+    auto first_token_tablet_id = tablet_map.get_tablet_id(first_token);
+    SCYLLA_ASSERT(tablet_id == first_token_tablet_id);
+#endif
+
+    return tablet_id;
+}
+
+future<> view_building_worker::create_staging_sstable_tasks() {
+    if (_sstables_to_register.empty()) {
+        co_return;
+    }
+
+    std::unordered_map<shard_id, std::unordered_map<table_id, std::unordered_map<dht::token, std::vector<sstables::shared_sstable>>>> new_sstables_per_shard;
+    utils::chunked_vector<canonical_mutation> cmuts;
+
+    auto guard = co_await _group0_client.start_operation(_as);
+    auto my_host_id = _db.get_token_metadata().get_topology().my_host_id();
+    for (auto& [table_id, ssts]: _sstables_to_register) {
+        auto& tablet_map = _db.get_token_metadata().tablets().get_tablet_map(table_id);
+
+        for (auto& sst: ssts) {
+            auto shard = get_sstable_shard_id(*sst);
+            auto tid = get_sstable_tablet_id(tablet_map, *sst);
+            auto last_token = tablet_map.get_last_token(tid);
+
+            view_building_task task {
+                utils::UUID_gen::get_time_UUID(), view_building_task::task_type::process_staging, view_building_task::task_state::idle,
+                table_id, ::table_id{}, {my_host_id, shard}, last_token
+            };
+            auto mut = co_await _group0_client.sys_ks().make_view_building_task_mutation(guard.write_timestamp(), task);
+            cmuts.emplace_back(std::move(mut));
+            new_sstables_per_shard[shard][table_id][last_token].push_back(sst);
+        }
+    }
+
+    vbw_logger.debug("Creating {} process_staging view_building_tasks", cmuts.size());
+    auto cmd = _group0_client.prepare_command(service::write_mutations{std::move(cmuts)}, guard, "create view building tasks");
+    co_await _group0_client.add_entry(std::move(cmd), std::move(guard), _as);
+
+    co_await container().invoke_on_all([new_sstables_per_shard] (view_building_worker& local_vbw) mutable {
+        auto& sstables_for_this_shard = new_sstables_per_shard[this_shard_id()];
+        for (auto& [tid, ssts_map]: sstables_for_this_shard) {
+            for (auto& [token, ssts]: ssts_map) {
+                auto& tid_ssts = local_vbw._staging_sstables[tid][token];
+                tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(ssts.begin()), std::make_move_iterator(ssts.end()));
+            }
+        }
+    });
+    _sstables_to_register.clear();
 }
 
 future<> view_building_worker::run_view_building_state_observer() {

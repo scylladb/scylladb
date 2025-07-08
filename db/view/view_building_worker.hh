@@ -17,6 +17,7 @@
 #include "locator/tablets.hh"
 #include "seastar/core/gate.hh"
 #include "db/view/view_building_state.hh"
+#include "sstables/shared_sstable.hh"
 #include "utils/UUID.hh"
 #include "service/migration_listener.hh"
 
@@ -145,12 +146,20 @@ private:
     std::unordered_set<table_id> _views_in_progress;
     future<> _view_building_state_observer = make_ready_future<>();
 
+    condition_variable _sstables_to_register_event;
+    semaphore _staging_sstables_mutex = semaphore(1);
+    std::unordered_map<table_id, std::vector<sstables::shared_sstable>> _sstables_to_register;
+    std::unordered_map<table_id, std::unordered_map<dht::token, std::vector<sstables::shared_sstable>>> _staging_sstables;
+    future<> _staging_sstables_registrator = make_ready_future<>();
+
 public:
     view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mnotifier,
             service::raft_group0_client& group0_client, view_update_generator& vug, netw::messaging_service& ms,
             view_building_state_machine& vbsm);
-    void start_state_observer();
+    void start_backgroud_fibers();
 
+    future<> register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, lw_shared_ptr<replica::table> table);
+    
     future<> drain();
     future<> stop();
 
@@ -165,6 +174,10 @@ private:
     bool is_shard_free(shard_id shard);
 
     dht::token_range get_tablet_token_range(table_id table_id, dht::token last_token);
+
+    future<> run_staging_sstables_registrator();
+    // Caller must hold units from `_staging_sstables_mutex`
+    future<> create_staging_sstable_tasks();
 
     void init_messaging_service();
     future<> uninit_messaging_service();
