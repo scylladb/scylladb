@@ -28,6 +28,7 @@
 #include "utils/UUID_gen.hh"
 #include "db/compaction_history_entry.hh"
 #include "db/system_keyspace.hh"
+#include "db/config.hh"
 #include "tombstone_gc-internals.hh"
 #include <cmath>
 #include "utils/labels.hh"
@@ -1247,6 +1248,19 @@ future<> compaction_manager::drain() {
     cmlog.info("Drained");
 }
 
+future<> compaction_manager::start(const db::config& cfg, utils::disk_space_monitor* dsm) {
+    if (dsm && (this_shard_id() == 0)) {
+        _out_of_space_subscription = dsm->subscribe(cfg.critical_disk_utilization_level, [this] (auto threshold_reached) {
+            if (threshold_reached) {
+                return container().invoke_on_all([] (compaction_manager& cm) { return cm.drain(); });
+            }
+            return container().invoke_on_all([] (compaction_manager& cm) { cm.enable(); });
+        });
+    }
+
+    return make_ready_future<>();
+}
+
 future<> compaction_manager::stop() {
     do_stop();
     if (auto cm = std::exchange(_task_manager_module, nullptr)) {
@@ -2265,6 +2279,9 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
 future<std::vector<sstables::shared_sstable>>
 compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, compaction_group_view& t, sstables::compaction_type_options::split opt) {
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
+        co_return std::vector<sstables::shared_sstable>{sst};
+    }
+    if (!can_proceed(&t)) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
     std::vector<sstables::shared_sstable> ret;

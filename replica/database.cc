@@ -2519,7 +2519,12 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
     co_await _view_update_read_concurrency_semaphores_group.adjust();
     _large_data_handler->start();
     // We need the compaction manager ready early so we can reshard.
-    _compaction_manager.enable();
+    if (!_compaction_manager.is_running()) {
+        // It might be already enabled or even drained by the out of space controller.
+        // In this case, we do not want to enable it again or worse accidently overwrite
+        // the drain call.
+        _compaction_manager.enable();
+    }
     co_await init_commitlog();
 }
 
