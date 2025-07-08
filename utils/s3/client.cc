@@ -204,7 +204,7 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
 }
 
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::yes, retry_strategy) {
+    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::no, retry_strategy) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
