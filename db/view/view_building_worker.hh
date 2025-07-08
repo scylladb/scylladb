@@ -178,6 +178,8 @@ private:
     future<> run_staging_sstables_registrator();
     // Caller must hold units from `_staging_sstables_mutex`
     future<> create_staging_sstable_tasks();
+    future<> discover_existing_staging_sstables();
+    std::unordered_map<table_id, std::vector<sstables::shared_sstable>> discover_local_staging_sstables(building_tasks building_tasks);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
