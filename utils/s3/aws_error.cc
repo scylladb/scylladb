@@ -13,6 +13,7 @@
 #endif
 
 #include "aws_error.hh"
+#include <seastar/util/log.hh>
 #include <gnutls/gnutls.h>
 #include <memory>
 
@@ -169,6 +170,22 @@ aws_error aws_error::from_maybe_nested_exception(const std::exception& maybe_nes
         current_exception = nullptr;
     }
     return {aws_error_type::UNKNOWN, maybe_nested_error.what(), retryable::no};
+}
+aws_error aws_error::from_exception_ptr(std::exception_ptr exception) {
+    if (exception) {
+        try {
+            std::rethrow_exception(exception);
+        } catch (const aws_exception& ex) {
+            return ex.error();
+        } catch (const std::system_error& ex) {
+            return from_system_error(ex);
+        } catch (const std::exception& ex) {
+            return from_maybe_nested_exception(ex);
+        } catch (...) {
+            return aws_error{aws_error_type::UNKNOWN, seastar::format("{}", std::current_exception()), retryable::no};
+        }
+    }
+    return aws_error{aws_error_type::UNKNOWN, "No exception was provided to `aws_error::from_exception_ptr` function call", retryable::no};
 }
 
 const aws_errors& aws_error::get_errors() {
