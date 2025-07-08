@@ -202,6 +202,10 @@ future<> password_authenticator::maybe_create_default_password_with_retries() {
 
 future<> password_authenticator::start() {
     return once_among_shards([this] {
+        // Verify that at least one hashing scheme is supported.
+        auto scheme = passwords::detail::identify_best_supported_scheme();
+        plogger.info("Using password hashing scheme: {}", passwords::detail::prefix_for_scheme(scheme));
+
         _stopped = do_after_system_ready(_as, [this] {
             return async([this] {
                 if (legacy_mode(_qp)) {
