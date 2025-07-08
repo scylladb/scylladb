@@ -1214,8 +1214,9 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                                 _get_cv.signal();
                                 utils::get_local_injector().inject("break_s3_inflight_req", [] {
-                                    // Inject retryable error after some data was already downloaded
-                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
+                                    // Inject a non-`aws_error` after partial data download to verify proper
+                                    // handling and that the fiber retries missing chunks
+                                    throw std::system_error(ECONNRESET, std::system_category());
                                 });
                             }
                         } catch (...) {
