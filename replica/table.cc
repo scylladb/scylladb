@@ -2707,7 +2707,17 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
             _storage_groups[tid.value()] = allocate_storage_group(*new_tablet_map, tid, std::move(range));
             tablet_migrating_in = true;
         } else if (_storage_groups.contains(tid.value()) && locator::is_post_cleanup(this_replica, new_tablet_map->get_tablet_info(tid), transition_info)) {
+            // The storage group should be cleaned up and stopped at this point usually by the tablet cleanup stage,
+            // unless the storage group was allocated after tablet cleanup was completed for this node. This could
+            // happen if the node was restarted after tablet cleanup was run but before moving to the next stage. To
+            // handle this case we stop the storage group here if it's not stopped already.
+            auto sg = _storage_groups[tid.value()];
+
             remove_storage_group(tid.value());
+
+            (void) with_gate(_t.async_gate(), [sg] {
+                return sg->stop("tablet post-cleanup").then([sg] {});
+            });
         }
     }
 

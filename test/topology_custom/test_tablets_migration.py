@@ -485,3 +485,56 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
 
         await s1_log.wait_for('Detected tablet merge for table', from_mark=s1_mark)
         await manager.api.quiesce_topology(servers[0].ip_addr)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
+    """
+    Migrate a tablet from one node to another, and restart the leaving replica during
+    the tablet cleanup stage, after tablet cleanup is completed.
+    Reproduces issue #24857
+    """
+    cfg = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
+    servers = await manager.servers_add(2, config=cfg)
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 8}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int)")
+
+        total_keys = 10
+        for pk in range(total_keys):
+            await cql.run_async(f"INSERT INTO {ks}.test(pk, c) VALUES({pk}, {pk+1})")
+        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+
+        tablet_token = 0
+
+        s0_host_id = await manager.get_host_id(servers[0].server_id)
+        s1_host_id = await manager.get_host_id(servers[1].server_id)
+
+        # Find which server holds the tablet
+        replica = await get_tablet_replica(manager, servers[0], ks, 'test', tablet_token)
+        if replica[0] == s0_host_id:
+            src_server, dst_host_id = servers[0], s1_host_id
+        else:
+            src_server, dst_host_id = servers[1], s0_host_id
+
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, "wait_after_tablet_cleanup", one_shot=False) for s in servers])
+
+        log = await manager.server_open_log(servers[0].server_id)
+        mark = await log.mark()
+
+        # Start migration - move tablet to other node
+        move_task = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, 'test', replica[0], replica[1], dst_host_id, 0, tablet_token))
+
+        await log.wait_for("Waiting after tablet cleanup", from_mark=mark, timeout=60)
+
+        # Restart the leaving replica (src_server)
+        await manager.server_stop(src_server.server_id)
+        await manager.server_start(src_server.server_id)
+        await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 30)
+
+        await asyncio.gather(*[manager.api.message_injection(s.ip_addr, "wait_after_tablet_cleanup") for s in servers])
+
+        await manager.api.quiesce_topology(servers[0].ip_addr)
