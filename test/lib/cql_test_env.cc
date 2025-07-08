@@ -640,7 +640,7 @@ private:
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
-            _cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager)).get();
+            _cm.start(std::ref(*cfg), std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager), only_on_shard0(&*_disk_space_monitor_shard0)).get();
             auto stop_cm = deferred_stop(_cm);
 
             _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();

@@ -28,6 +28,7 @@
 #include "utils/UUID_gen.hh"
 #include "db/compaction_history_entry.hh"
 #include "db/system_keyspace.hh"
+#include "db/config.hh"
 #include "tombstone_gc-internals.hh"
 #include <cmath>
 #include "utils/labels.hh"
@@ -1008,10 +1009,10 @@ public:
     }
 };
 
-compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
+compaction_manager::compaction_manager(const db::config& cfg, config cmcfg, abort_source& as, tasks::task_manager& tm, utils::disk_space_monitor* dsm)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _sys_ks("compaction_manager::system_keyspace")
-    , _cfg(std::move(cfg))
+    , _cfg(std::move(cmcfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
     , _compaction_controller(make_compaction_controller(compaction_sg(), static_shares(), [this] () -> float {
         _last_backlog = backlog();
@@ -1033,7 +1034,14 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(_shared_tombstone_gc_state) {
+    , _tombstone_gc_state(_shared_tombstone_gc_state)
+    , _out_of_space_subscription(dsm && (this_shard_id() == 0) ? dsm->subscribe(cfg.critical_disk_utilization_level, [this] (auto threshold_reached) {
+        if (threshold_reached) {
+            return container().invoke_on_all([] (compaction_manager& cm) { return cm.drain(); });
+        }
+        return container().invoke_on_all([] (compaction_manager& cm) { cm.enable(); });
+    }) : utils::disk_space_monitor::subscription())
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
@@ -2265,6 +2273,9 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
 future<std::vector<sstables::shared_sstable>>
 compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, compaction_group_view& t, sstables::compaction_type_options::split opt) {
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
+        co_return std::vector<sstables::shared_sstable>{sst};
+    }
+    if (!can_proceed(&t)) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
     std::vector<sstables::shared_sstable> ret;

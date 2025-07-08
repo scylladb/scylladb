@@ -35,10 +35,12 @@
 #include "tombstone_gc.hh"
 #include "utils/pluggable.hh"
 #include "compaction/compaction_reenabler.hh"
+#include "utils/disk_space_monitor.hh"
 
 namespace db {
 class compaction_history_entry;
 class system_keyspace;
+class config;
 }
 
 namespace sstables { class test_env_compaction_manager; }
@@ -64,7 +66,7 @@ inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) 
 }
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
-class compaction_manager {
+class compaction_manager: public peering_sharded_service<compaction_manager> {
 public:
     using compaction_stats_opt = std::optional<sstables::compaction_stats>;
     struct stats {
@@ -168,6 +170,8 @@ private:
     // still uses it with reference semantics (inconsistently though).
     // Drop this member, once the code is converted into using value semantics.
     tombstone_gc_state _tombstone_gc_state;
+
+    utils::disk_space_monitor::subscription _out_of_space_subscription;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
@@ -261,7 +265,7 @@ private:
     // about invoking it. Ref #10146
     compaction_manager(tasks::task_manager& tm);
 public:
-    compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm);
+    compaction_manager(const db::config& cfg, config cmcfg, abort_source& as, tasks::task_manager& tm, utils::disk_space_monitor* dsm);
     ~compaction_manager();
     class for_testing_tag{};
     // An inline constructor for testing
