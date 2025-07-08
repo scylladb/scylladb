@@ -1495,7 +1495,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         rtlogger.info("Initiating tablet cleanup of {} on {}", gid, dst);
                         return ser::storage_service_rpc_verbs::send_tablet_cleanup(&_messaging,
-                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid);
+                                                                                   dst.host, _as, raft::server_id(dst.host.uuid()), gid)
+                            .then([] {
+                                return utils::get_local_injector().inject("wait_after_tablet_cleanup", [] (auto& handler) -> future<> {
+                                    rtlogger.info("Waiting after tablet cleanup");
+                                    return handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{60});
+                                });
+                            });
                     })) {
                         transition_to(locator::tablet_transition_stage::end_migration);
                     }
