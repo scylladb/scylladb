@@ -22,7 +22,7 @@ static thread_local crypt_data tlcrypt = {};
 namespace detail {
 
 scheme identify_best_supported_scheme() {
-    const auto all_schemes = { scheme::bcrypt_y, scheme::bcrypt_a, scheme::sha_512, scheme::sha_256, scheme::md5 };
+    const auto all_schemes = { scheme::sha_512 };
     // "Random", for testing schemes.
     const sstring random_part_of_salt = "aaaabbbbccccdddd";
 
