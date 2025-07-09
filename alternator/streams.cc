@@ -934,9 +934,10 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 dynamodb = rjson::empty_object();
             }
             if (!record.ObjectEmpty()) {
-                // TODO: awsRegion?
+                // awsRegion was left out, since it's optional and we don't have a direct equivalent in Scylla.
                 rjson::add(record, "eventID", event_id(iter.shard.id, *timestamp));
                 rjson::add(record, "eventSource", "scylladb:alternator");
+                rjson::add(record, "eventVersion", "1.1");
                 rjson::push_back(records, std::move(record));
                 record = rjson::empty_object();
                 --limit;
@@ -951,11 +952,11 @@ future<executor::request_return_type> executor::get_records(client_state& client
             if (!dynamodb.HasMember("Keys")) {
                 auto keys = rjson::empty_object();
                 describe_single_item(*selection, row, key_names, keys);
+                // SizeInBytes was left out, since it's optional.
                 rjson::add(dynamodb, "Keys", std::move(keys));
                 rjson::add(dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
                 rjson::add(dynamodb, "SequenceNumber", sequence_number(ts));
                 rjson::add(dynamodb, "StreamViewType", type);
-                //TODO: SizeInBytes
             }
 
             /**
