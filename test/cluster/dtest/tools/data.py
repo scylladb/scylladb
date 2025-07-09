@@ -7,6 +7,7 @@
 import datetime
 import logging
 from concurrent.futures.thread import ThreadPoolExecutor
+from itertools import groupby
 
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -93,3 +94,30 @@ def run_in_parallel(functions_list):
     results = [task.result() for task in tasks]
     logger.debug(f"'{len(results)}' threads finished at {datetime.datetime.now()}")
     return results
+
+
+def run_query_with_data_processing(
+    session,
+    query,
+    consistency_level=ConsistencyLevel.ONE,
+    session_timeout=None,
+    group=False,
+    groupby_column=None,
+    restrict_column=None,
+    restrict_value=None,
+):
+    if not session_timeout:
+        session_timeout = 120
+    result = list(session.execute(SimpleStatement(query, consistency_level=consistency_level), timeout=session_timeout))
+    if result:
+        if restrict_column:
+            restrict_column_index = next(i for i, clmn in enumerate(result[0]._fields) if clmn == restrict_column)
+            restrict_value = [restrict_value] if not isinstance(restrict_value, list) else restrict_value
+
+        if group:
+            groupby_column_index = next(i for i, clmn in enumerate(result[0]._fields) if clmn == groupby_column)
+            result = [item[groupby_column_index] for item in result if item[restrict_column_index] in restrict_value] if restrict_value and restrict_column else [item[groupby_column_index] for item in result]
+            result = [[key, len(list(group))] for key, group in groupby(sorted(result))]
+        elif restrict_value and restrict_column:
+            result = [item for item in result if item[restrict_column_index] in restrict_value]
+    return result
