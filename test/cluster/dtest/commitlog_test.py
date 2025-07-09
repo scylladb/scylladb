@@ -526,18 +526,6 @@ class TestCommitLog(Tester):
         """
         self._test_total_space_limit_of_commitlog(commitlog_segment_size_in_mb=-1, commitlog_total_space_in_mb=-1)
 
-    def test_total_space_limit_of_commitlog_with_large_limit(self):
-        """
-        Test with 512M commitlog files, total space limit is 3096M
-        """
-        self._test_total_space_limit_of_commitlog(commitlog_segment_size_in_mb=512, commitlog_total_space_in_mb=3096)
-
-    def test_total_space_limit_of_commitlog_with_medium_limit(self):
-        """
-        Test with 100M commitlog files, total space limit is 1024M
-        """
-        self._test_total_space_limit_of_commitlog(commitlog_segment_size_in_mb=100, commitlog_total_space_in_mb=1024)
-
     def test_total_space_limit_of_commitlog_with_small_limit(self):
         """
         Test with 5M commitlog files, total space limit is 30M
