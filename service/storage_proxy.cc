@@ -132,6 +132,14 @@ void validate_read_replicas(const locator::effective_replication_map& erm, const
     }
 }
 
+void remove_non_local_host_ids(HostIdVector auto& host_ids, const locator::effective_replication_map& erm) {
+    const auto my_id = erm.get_topology().my_host_id();
+    auto it = std::ranges::remove_if(host_ids, [&my_id](locator::host_id& id) { 
+        return id != my_id;
+    }).begin();
+    host_ids.erase(it, host_ids.end());
+}
+
 } // namespace
 
 namespace storage_proxy_stats {
@@ -3386,7 +3394,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
 
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
-        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable cancellable, coordinator_mutate_options) {
+        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable cancellable, coordinator_mutate_options options) {
     replica::table& table = _db.local().find_column_family(s->id());
     auto erm = table.get_effective_replication_map();
     host_id_vector_replica_set natural_endpoints = erm->get_natural_replicas(token);
@@ -3412,6 +3420,11 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         return std::ranges::find(natural_endpoints, p) != natural_endpoints.end();
     }).begin();
     pending_endpoints.erase(itend, pending_endpoints.end());
+
+    if (options.node_local_only) {
+        remove_non_local_host_ids(natural_endpoints, *erm);
+        remove_non_local_host_ids(pending_endpoints, *erm);
+    }
 
     auto all = natural_endpoints;
     std::ranges::copy(pending_endpoints, std::back_inserter(all));
