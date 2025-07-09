@@ -19,6 +19,7 @@
 #include "service/pager/paging_state.hh"
 #include "cql3/values.hh"
 #include "utils/small_vector.hh"
+#include "service/storage_proxy_fwd.hh"
 
 namespace cql3 {
 

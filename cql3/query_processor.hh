@@ -34,6 +34,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 #include "db/auth_version.hh"
+#include "service/storage_proxy_fwd.hh"
 
 
 namespace lang { class manager; }
