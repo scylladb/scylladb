@@ -2458,7 +2458,7 @@ component_type sstable::component_from_sstring(version_types v, const sstring &s
     }
 }
 
-input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
+future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
         reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history, raw_stream raw,
         integrity_check integrity, integrity_error_handler error_handler) {
     file_input_stream_options options;
@@ -2475,13 +2475,15 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
     if (integrity == integrity_check::yes) {
         digest = get_digest();
     }
-
+    auto stream_creator = [this, f](uint64_t pos, uint64_t len, file_input_stream_options options) mutable -> future<input_stream<char>> {
+        co_return input_stream<char>(co_await _storage->make_data_or_index_source(*this, component_type::Data, std::move(f), pos, len, std::move(options)));
+    };
     if (_components->compression && raw == raw_stream::no) {
         if (_version >= sstable_version_types::mc) {
-            return make_compressed_file_m_format_input_stream(f, &_components->compression,
+            co_return make_compressed_file_m_format_input_stream(stream_creator, &_components->compression,
                pos, len, std::move(options), permit, digest);
         } else {
-            return make_compressed_file_k_l_format_input_stream(f, &_components->compression,
+            co_return make_compressed_file_k_l_format_input_stream(stream_creator, &_components->compression,
                 pos, len, std::move(options), permit, digest);
         }
     }
@@ -2489,22 +2491,21 @@ input_stream<char> sstable::data_stream(uint64_t pos, size_t len,
         auto checksum = get_checksum();
         auto file_len = data_size();
         if (_version >= sstable_version_types::mc) {
-             return make_checksummed_file_m_format_input_stream(f, file_len,
+             co_return make_checksummed_file_m_format_input_stream(stream_creator, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         } else {
-            return make_checksummed_file_k_l_format_input_stream(f, file_len,
+            co_return make_checksummed_file_k_l_format_input_stream(stream_creator, file_len,
                 *checksum, pos, len, std::move(options), digest, error_handler);
         }
     }
-    return make_file_input_stream(f, pos, len, std::move(options));
+    co_return co_await stream_creator(pos, len, std::move(options));
 }
 
 future<temporary_buffer<char>> sstable::data_read(uint64_t pos, size_t len, reader_permit permit) {
-    return do_with(data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {}), [len] (auto& stream) {
-        return stream.read_exactly(len).finally([&stream] {
-            return stream.close();
-        });
-    });
+    auto stream = co_await data_stream(pos, len, std::move(permit), tracing::trace_state_ptr(), {});
+    auto buff = co_await stream.read_exactly(len);
+    co_await stream.close();
+    co_return buff;
 }
 
 template <typename ChecksumType>
@@ -2670,10 +2671,10 @@ future<validate_checksums_result> validate_checksums(shared_sstable sst, reader_
 
     input_stream<char> data_stream;
     if (sst->get_compression()) {
-        data_stream = sst->data_stream(0, sst->ondisk_data_size(), permit,
+        data_stream = co_await sst->data_stream(0, sst->ondisk_data_size(), permit,
                 nullptr, nullptr, sstable::raw_stream::yes);
     } else {
-        data_stream = sst->data_stream(0, sst->data_size(), permit,
+        data_stream = co_await sst->data_stream(0, sst->data_size(), permit,
                 nullptr, nullptr, sstable::raw_stream::no,
                 integrity_check::yes, [&ret](sstring msg) {
                     sstlog.error("{}", msg);
@@ -3654,6 +3655,9 @@ future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_typ
     co_return co_await make_file_data_sink(std::move(f), file_output_stream_options{});
 }
 
+future<data_source> file_io_extension::wrap_source(const sstable& sst, component_type c, sstables::data_source_creator_fn, uint64_t, uint64_t) {
+    SCYLLA_ASSERT(0 && "You are not supposed to get here, file_io_extension::wrap_source() is not implemented");
+}
 } // namespace sstables
 
 namespace seastar {
