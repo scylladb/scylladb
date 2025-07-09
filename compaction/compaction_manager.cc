@@ -2228,6 +2228,11 @@ void compaction_manager::add(compaction_group_view& t) {
     }
 }
 
+compaction_manager::compaction_reenabler compaction_manager::add_with_compaction_disabled(compaction_group_view& view) {
+    add(view);
+    return compaction_reenabler(*this, view);
+}
+
 future<> compaction_manager::remove(compaction_group_view& t, sstring reason) noexcept {
     auto& c_state = get_compaction_state(&t);
     auto erase_state = defer([&t, this] () noexcept {
