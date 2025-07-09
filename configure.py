@@ -1377,6 +1377,7 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
     'test/lib/exception_utils.cc',
     'test/lib/random_schema.cc',
     'test/lib/key_utils.cc',
+    'test/lib/proc_utils.cc',
 ]
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc', 'utils/exceptions.cc']
