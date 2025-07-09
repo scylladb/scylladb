@@ -39,6 +39,7 @@
 #include "dht/token_range_endpoints.hh"
 #include "service/storage_service.hh"
 #include "service/cas_shard.hh"
+#include "service/storage_proxy_fwd.hh"
 
 class reconcilable_result;
 class frozen_mutation_and_schema;
