@@ -33,6 +33,14 @@ struct compaction_state {
     // to synchronize with minor, such that major doesn't miss any sstable.
     seastar::rwlock lock;
 
+    // Compations like major need to work on all sstables in the unrepaired
+    // set, no matter if the sstable is being repaired or not. The
+    // incremental_repair_lock lock is introduced to serialize repair and such
+    // compactions. This lock guarantees that no sstables are being repaired.
+    // Note that the minor compactions do not need to take this lock because
+    // they ignore sstables that are being repaired.
+    seastar::rwlock incremental_repair_lock;
+
     // Raised by any function running under run_with_compaction_disabled();
     long compaction_disabled_counter = 0;
 

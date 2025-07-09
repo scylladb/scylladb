@@ -1327,6 +1327,12 @@ public:
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
 
     friend class compaction_group;
+
+    future<> update_repaired_at_for_merge();
+
+    future<std::vector<compaction::compaction_group_view*>> get_compaction_group_views_for_repair(dht::token_range range);
+
+    future<> clear_being_repaired_for_range(dht::token_range range);
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);

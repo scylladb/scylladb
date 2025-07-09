@@ -1298,6 +1298,23 @@ void sstable::write_statistics() {
     write_simple<component_type::Statistics>(_components->statistics);
 }
 
+void sstable::mark_as_being_repaired(const service::session_id& id) {
+    being_repaired = id;
+}
+
+int64_t sstable::update_repaired_at(int64_t repaired_at) {
+    const stats_metadata& old_stats = get_stats_metadata();
+    auto old_repaired_at = old_stats.repaired_at;
+    if (old_repaired_at == repaired_at) {
+        return old_repaired_at;
+    }
+    auto stats = std::make_unique<stats_metadata>(old_stats);
+    stats->repaired_at = repaired_at;
+     _components->statistics.contents[metadata_type::Stats] = std::move(stats);
+    rewrite_statistics();
+    return old_repaired_at;
+}
+
 void sstable::rewrite_statistics() {
     sstlog.debug("Rewriting statistics component of sstable {}", get_filename());
 
@@ -3403,9 +3420,10 @@ future<> remove_table_directory_if_has_no_snapshots(fs::path table_dir) {
 }
 
 std::string to_string(const shared_sstable& sst, bool include_origin) {
+    auto repaired_at = sst->get_stats_metadata().repaired_at;
     return include_origin ?
-        fmt::format("{}:level={:d}:origin={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin()) :
-        fmt::format("{}:level={:d}", sst->get_filename(), sst->get_sstable_level());
+        fmt::format("{}:level={:d}:origin={}:repaired_at={}", sst->get_filename(), sst->get_sstable_level(), sst->get_origin(), repaired_at) :
+        fmt::format("{}:level={:d}:repaired_at={}", sst->get_filename(), sst->get_sstable_level(), repaired_at);
 }
 
 std::string sstable_stream_source::component_basename() const {

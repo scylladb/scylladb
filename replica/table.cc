@@ -61,6 +61,7 @@
 #include "readers/combined.hh"
 #include "readers/compacting.hh"
 #include "replica/schema_describe_helper.hh"
+#include "repair/incremental.hh"
 
 namespace replica {
 
@@ -123,6 +124,24 @@ lw_shared_ptr<sstables::sstable_set> compaction_group::make_sstable_set() const 
         return _main_sstables;
     }
     return make_lw_shared(sstables::make_compound_sstable_set(_t.schema(), { _main_sstables, _maintenance_sstables }));
+}
+
+int64_t compaction_group::get_sstables_repaired_at() const noexcept {
+    try {
+        auto tid = locator::tablet_id(group_id());
+        auto erm = _t.get_effective_replication_map();
+        if (!erm) {
+            return 0;
+        }
+        if (!erm->get_replication_strategy().uses_tablets()) {
+            return 0;
+        }
+        auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_t.schema()->id());
+        auto& tinfo = tmap.get_tablet_info(tid);
+        return tinfo.sstables_repaired_at;
+    } catch (locator::no_such_tablet_map) {
+        return 0;
+    }
 }
 
 lw_shared_ptr<const sstables::sstable_set> table::make_compound_sstable_set() const {
@@ -688,7 +707,7 @@ public:
         storage_group_map r;
 
         // Incremental repair is not supported with vnodes, so all sstables will be considered unrepaired.
-        auto noop_repair_sstable_classifier = [] (const sstables::shared_sstable&) { return repair_sstable_classification::unrepaired; };
+        auto noop_repair_sstable_classifier = [] (const sstables::shared_sstable&, int64_t sstables_repaired_at) { return repair_sstable_classification::unrepaired; };
 
         // this might not reflect real vnode range for this node, but with 256 tokens, the actual
         // first and last tokens are likely to be ~0.5% of the edges, so any measurement against
@@ -762,6 +781,8 @@ class tablet_storage_group_manager final : public storage_group_manager {
     locator::resize_decision::seq_number_t _split_ready_seq_number = std::numeric_limits<locator::resize_decision::seq_number_t>::min();
     future<> _merge_completion_fiber;
     condition_variable _merge_completion_event;
+    // Holds compaction reenabler which disables compaction temporarily during tablet merge
+    std::vector<compaction_manager::compaction_reenabler> _compaction_reenablers_for_merging;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -820,8 +841,17 @@ private:
 
     repair_classifier_func make_repair_sstable_classifier_func() const {
         // FIXME: implement it for incremental repair!
-        return [] (const sstables::shared_sstable& sst) {
-            return repair_sstable_classification::unrepaired;
+        return [] (const sstables::shared_sstable& sst, int64_t sstables_repaired_at) {
+            bool is_repaired = repair::is_repaired(sstables_repaired_at, sst);
+            if (is_repaired) {
+                return repair_sstable_classification::repaired;
+            } else {
+                if (!sst->being_repaired.uuid().is_null()) {
+                    return repair_sstable_classification::repairing;
+                } else {
+                    return repair_sstable_classification::unrepaired;
+                }
+            }
         };
     }
 
@@ -980,6 +1010,8 @@ bool storage_group::set_split_mode() {
             // TODO: use the actual sub-ranges instead, to help incremental selection on the read path.
             return compaction_group::make_empty_group(*_main_cg);
         };
+        tlogger.debug("storage_group::set_split_mode: Set sstables_repaired_at={} for split old_group={} old_range={}",
+                _main_cg->get_sstables_repaired_at(), _main_cg->group_id(), _main_cg->token_range());
         std::vector<compaction_group_ptr> split_ready_groups(2);
         split_ready_groups[to_idx(locator::tablet_range_side::left)] = create_cg();
         split_ready_groups[to_idx(locator::tablet_range_side::right)] = create_cg();
@@ -1012,6 +1044,7 @@ future<> compaction_group::split(sstables::compaction_type_options::split opt, t
     auto& cm = get_compaction_manager();
 
     for (auto view : all_views()) {
+        auto lock_holder = co_await cm.get_incremental_repair_read_lock(*view, "storage_group_split");
         // Waits on sstables produced by repair to be integrated into main set; off-strategy is usually a no-op with tablets.
         co_await cm.perform_offstrategy(*view, tablet_split_task_info);
         co_await cm.perform_split_compaction(*view, opt, tablet_split_task_info);
@@ -1137,7 +1170,9 @@ tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable
 
     auto& cg = compaction_group_for_sstable(sst);
     auto holder = cg.async_gate().hold();
-    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, cg.view_for_sstable(sst), split_compaction_options());
+    auto& view = cg.view_for_sstable(sst);
+    auto lock_holder = co_await _t.get_compaction_manager().get_incremental_repair_read_lock(view, "maybe_split_sstable");
+    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, view, split_compaction_options());
 }
 
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
@@ -1979,6 +2014,58 @@ std::vector<sstables::shared_sstable> compaction_group::all_sstables() const {
 }
 
 future<>
+compaction_group::update_repaired_at_for_merge() {
+    auto sstables = all_sstables();
+    auto sstables_repaired_at = get_sstables_repaired_at();
+    co_await seastar::async([&] {
+        for (auto& sst : sstables) {
+            thread::maybe_yield();
+            auto& stats = sst->get_stats_metadata();
+            if (stats.repaired_at > sstables_repaired_at) {
+                auto neww = 0;
+                auto old = sst->update_repaired_at(neww);
+                tlogger.info("Finished repaired_at update for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
+                        sst->get_filename(), old, neww, sstables_repaired_at, group_id(), token_range());
+            } else {
+                auto old = stats.repaired_at;
+                tlogger.debug("Skipped repaired_at update for tablet merge sstable={} old={} new={} sstables_repaired_at={} group_id={} range={}",
+                        sst->get_filename(), old, old, sstables_repaired_at, group_id(), token_range());
+            }
+        }
+    });
+}
+
+future<std::vector<compaction::compaction_group_view*>> table::get_compaction_group_views_for_repair(dht::token_range range) {
+    std::vector<compaction::compaction_group_view*> ret;
+    auto sgs = storage_groups_for_token_range(range);
+    for (auto& sg : sgs) {
+        co_await coroutine::maybe_yield();
+        auto cgs = sg->compaction_groups();
+        for (auto& cg : cgs) {
+            ret.push_back(&cg->view_for_unrepaired_data());
+        }
+    }
+    co_return ret;
+}
+
+future<> table::clear_being_repaired_for_range(dht::token_range range) {
+    auto sgs = storage_groups_for_token_range(range);
+    for (auto& sg : sgs) {
+        auto cgs = sg->compaction_groups();
+        for (auto& cg : cgs) {
+            auto sstables = cg->all_sstables();
+            co_await coroutine::maybe_yield();
+            for (auto& sst : sstables) {
+                co_await coroutine::maybe_yield();
+                if (!sst->being_repaired.uuid().is_null()) {
+                    sst->being_repaired = service::session_id(utils::UUID());
+                }
+            }
+        }
+    }
+}
+
+future<>
 compaction_group::merge_sstables_from(compaction_group& group) {
     auto permit = co_await _t.get_sstable_list_permit();
     table::sstable_list_builder builder(_t, std::move(permit));
@@ -2124,8 +2211,9 @@ table::compact_all_sstables(tasks::task_info info, do_flush do_flush, bool consi
     // Forces off-strategy before major, so sstables previously sitting on maintenance set will be included
     // in the compaction's input set, to provide same semantics as before maintenance set came into existence.
     co_await perform_offstrategy_compaction(info);
-    co_await parallel_foreach_compaction_group_view([this, info, consider_only_existing_data] (compaction::compaction_group_view& view) {
-        return _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data);
+    co_await parallel_foreach_compaction_group_view([this, info, consider_only_existing_data] (compaction::compaction_group_view& view) -> future<> {
+        auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
+        co_await _compaction_manager.perform_major_compaction(view, info, consider_only_existing_data);
     });
 }
 
@@ -2175,6 +2263,7 @@ future<bool> table::perform_offstrategy_compaction(tasks::task_info info) {
     _off_strategy_trigger.cancel();
     bool performed = false;
     co_await parallel_foreach_compaction_group_view([this, &performed, info] (compaction::compaction_group_view& view) -> future<> {
+        auto lock_holder = co_await _compaction_manager.get_incremental_repair_read_lock(view, "compact_all_sstables");
         performed |= co_await _compaction_manager.perform_offstrategy(view, info);
     });
     co_return performed;
@@ -2192,6 +2281,7 @@ future<> table::perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_o
         co_await flush();
     }
 
+    auto lock_holder = co_await get_compaction_manager().get_incremental_repair_read_lock(cg->as_view_for_static_sharding(), "perform_cleanup_compaction");
     co_return co_await get_compaction_manager().perform_cleanup(std::move(sorted_owned_ranges), cg->as_view_for_static_sharding(), info);
 }
 
@@ -2570,6 +2660,10 @@ public:
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override {
         return _t.get_token_range_after_split(t);
     }
+
+    int64_t get_sstables_repaired_at() const noexcept override {
+        return _cg.get_sstables_repaired_at();
+    }
 };
 
 std::unique_ptr<compaction_group::compaction_group_view> compaction_group::make_compacting_view() {
@@ -2780,7 +2874,12 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
         }
         for (unsigned i = 0; i < split_size; i++) {
             auto group_id = first_new_id + i;
-            split_ready_groups[i]->update_id_and_range(group_id, new_tmap.get_token_range(locator::tablet_id(group_id)));
+            auto old_range = old_tmap.get_token_range(locator::tablet_id(id));
+            auto new_range = new_tmap.get_token_range(locator::tablet_id(group_id));
+            auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at;
+            tlogger.debug("Setting sstables_repaired_at={} for split tablet_id={} old_tid={} new_tid={} old_range={} new_range={} idx={}",
+                    sstables_repaired_at, table_id, id, group_id, old_range, new_range, i);
+            split_ready_groups[i]->update_id_and_range(group_id, new_range);
             new_storage_groups[group_id] = make_lw_shared<storage_group>(std::move(split_ready_groups[i]));
         }
 
@@ -2797,17 +2896,32 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
     while (!_t.async_gate().is_closed()) {
         try {
             co_await utils::get_local_injector().inject("merge_completion_fiber", utils::wait_for_message(60s));
-
-            co_await for_each_storage_group_gently([] (storage_group& sg) -> future<> {
+            auto ks_name = schema()->ks_name();
+            auto cf_name = schema()->cf_name();
+            // Enable compaction after merge is done.
+            auto cres = std::exchange(_compaction_reenablers_for_merging, {});
+            co_await for_each_storage_group_gently([ks_name, cf_name] (storage_group& sg) -> future<> {
                 auto main_group = sg.main_compaction_group();
+                tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} started",
+                        ks_name, cf_name, main_group->group_id(), main_group->token_range());
+                int nr = 0;
+                int sz = sg.merging_groups().size();
                 for (auto& group : sg.merging_groups()) {
+                    tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} merging {} out of {} groups",
+                            ks_name, cf_name, main_group->group_id(), main_group->token_range(), ++nr, sz);
                     // Synchronize with ongoing writes that might be blocked waiting for memory.
                     // Also, disabling compaction provides stability on the sstable set.
                     // Flushes memtable, so all the data can be moved.
                     co_await group->stop("tablet merge");
+                    if (utils::get_local_injector().enter("merge_completion_fiber_error")) {
+                        tlogger.info("Got merge_completion_fiber_error");
+                        co_await sleep(std::chrono::seconds(60));
+                    }
                     co_await main_group->merge_sstables_from(*group);
                 }
                 co_await sg.remove_empty_merging_groups();
+                tlogger.debug("Merge compaction groups for table={}.{} group_id={} range={} finished",
+                        ks_name, cf_name, main_group->group_id(), main_group->token_range());
             });
         } catch (...) {
             tlogger.error("Failed to merge compaction groups for table {}.{}", schema()->ks_name(), schema()->cf_name());
@@ -2840,8 +2954,12 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
             continue;
         }
         auto new_tid = id >> log2_reduce_factor;
-
-        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_tmap.get_token_range(locator::tablet_id(new_tid)), make_repair_sstable_classifier_func());
+        auto new_range = new_tmap.get_token_range(locator::tablet_id(new_tid));
+        auto new_cg = make_lw_shared<compaction_group>(_t, new_tid, new_range, make_repair_sstable_classifier_func());
+        for (auto& view : new_cg->all_views()) {
+            auto cre = _t.get_compaction_manager().stop_and_disable_compaction_no_wait(*view, "tablet merging");
+            _compaction_reenablers_for_merging.push_back(std::move(cre));
+        }
         auto new_sg = make_lw_shared<storage_group>(std::move(new_cg));
 
         for (unsigned i = 0; i < merge_size; i++) {
@@ -2852,8 +2970,10 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
                 throw std::runtime_error(format("Unable to find sibling tablet of id for table {}", group_id, table_id));
             }
             auto& sg = it->second;
-            sg->for_each_compaction_group([&new_sg, new_tid] (const compaction_group_ptr& cg) {
+            sg->for_each_compaction_group([&new_sg, new_range, new_tid, group_id] (const compaction_group_ptr& cg) {
                 cg->update_id(new_tid);
+                tlogger.debug("Adding merging_group: sstables_repaired_at={} old_range={} new_range={} old_tid={} new_tid={} old_group_id={}",
+                        cg->get_sstables_repaired_at(), cg->token_range(), new_range, cg->group_id(), new_tid, group_id);
                 new_sg->add_merging_group(cg);
             });
             // Cannot wait for group to be closed, since it can only return after some long-running operation
@@ -2864,7 +2984,6 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
                });
             });
         }
-
         new_storage_groups[new_tid] = std::move(new_sg);
     }
     _storage_groups = std::move(new_storage_groups);
@@ -2936,6 +3055,25 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
     //  range being moved away.
     if (tablet_migrating_in || old_tablet_count != new_tablet_count) {
         refresh_mutation_source();
+    }
+}
+
+// This function is called in the topology::transition_state::tablet_resize_finalization transition which
+// guarantees there is no tablet repair. The cm.stop_and_disable_compaction() ensures no compaction is running.
+future<> table::update_repaired_at_for_merge() {
+    if (!uses_tablets()) {
+        co_return;
+    }
+    auto sgs = storage_groups();
+    for (auto& x : sgs) {
+        auto sg = x.second;
+        if (sg) {
+            auto cgs = sg->compaction_groups();
+            for (auto& cg : cgs) {
+                auto cre = co_await cg->get_compaction_manager().stop_and_disable_compaction("update_repaired_at_for_merge", cg->view_for_unrepaired_data());
+                co_await cg->update_repaired_at_for_merge();
+            }
+        }
     }
 }
 
@@ -4147,7 +4285,7 @@ compaction::compaction_group_view& compaction_group::view_for_unrepaired_data() 
 }
 
 compaction::compaction_group_view& compaction_group::view_for_sstable(const sstables::shared_sstable& sst) const {
-    switch (_repair_sstable_classifier(sst)) {
+    switch (_repair_sstable_classifier(sst, get_sstables_repaired_at())) {
         case repair_sstable_classification::unrepaired: return *_unrepaired_view;
         case repair_sstable_classification::repairing: return *_repairing_view;
         case repair_sstable_classification::repaired: return *_repaired_view;
