@@ -3061,6 +3061,22 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/raft_topology/cmd_rpc_status",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Get information about currently running topology cmd rpc",
+               "type":"string",
+               "nickname":"raft_topology_get_cmd_status",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
       }
    ],
    "models":{
