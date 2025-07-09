@@ -11,6 +11,7 @@ import re
 import time
 import locale
 import subprocess
+from collections import namedtuple
 from itertools import chain
 from functools import cached_property
 from pathlib import Path
@@ -59,7 +60,7 @@ class NodeError(Exception):
 
 
 class ToolError(Exception):
-    def __init__(self, command: str, exit_status: int, stdout: Any = None, stderr: Any = None):
+    def __init__(self, command: str | list[str], exit_status: int, stdout: Any = None, stderr: Any = None):
         self.command = command
         self.exit_status = exit_status
         self.stdout = stdout
@@ -525,6 +526,28 @@ class ScyllaNode:
         """Return the path to this node top level directory (where config/data is stored.)"""
 
         return self.cluster.manager.server_get_workdir(server_id=self.server_id)
+
+    def stress(self, stress_options: list[str], **kwargs):
+        cmd_args = ["cassandra-stress"] + stress_options
+
+        if not any(opt in cmd_args for opt in ("-d", "-node", "-cloudconf")):
+            cmd_args.extend(["-node", self.address()])
+
+        p = subprocess.Popen(
+            cmd_args,
+            stdout=kwargs.pop("stdout", subprocess.PIPE),
+            stderr=kwargs.pop("stderr", subprocess.PIPE),
+            universal_newlines=True,
+            **kwargs,
+        )
+        try:
+            stdout, stderr = p.communicate()
+            if rc := p.returncode:
+                raise ToolError(cmd_args, rc, stdout, stderr)
+            ret = namedtuple("Subprocess_Return", "stdout stderr rc")
+            return ret(stdout=stdout, stderr=stderr, rc=rc)
+        except KeyboardInterrupt:
+            pass
 
     def flush(self, ks: str | None = None, table: str | None = None, **kwargs) -> None:
         cmd = ["flush"]
