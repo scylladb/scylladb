@@ -14,6 +14,7 @@
 #include "sstables/sstable_set.hh"
 #include "compaction/compaction.hh"
 #include "replica/database.hh"
+#include "repair/incremental.hh"
 
 namespace sstables {
 
