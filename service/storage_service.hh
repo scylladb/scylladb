@@ -48,6 +48,7 @@
 #include "timestamp.hh"
 #include "utils/user_provided_param.hh"
 #include "utils/sequenced_set.hh"
+#include "service/topology_coordinator.hh"
 
 class node_ops_cmd_request;
 class node_ops_cmd_response;
@@ -873,6 +874,11 @@ private:
     std::optional<shared_future<>> _rebuild_result;
     std::unordered_map<raft::server_id, std::optional<shared_future<>>> _remove_result;
     tablet_op_registry _tablet_ops;
+    // This tracks active topology cmd rpc. There can be only one active
+    // cmd running and by inspecting this structure it can be checked which
+    // cmd is current executing and which nodes are still did not reply.
+    // Needed for debugging.
+    topology_coordinator_cmd_rpc_tracker _topology_cmd_rpc_tracker;
     struct {
         raft::term_t term{0};
         uint64_t last_index{0};
@@ -941,6 +947,10 @@ public:
     // Waits for topology state in which none of tablets has replaced_id as a replica.
     // Must be called on shard 0.
     future<> await_tablets_rebuilt(raft::server_id replaced_id);
+
+    topology_coordinator_cmd_rpc_tracker get_topology_cmd_status() {
+        return _topology_cmd_rpc_tracker;
+    }
 private:
     // Tracks progress of the upgrade to topology coordinator.
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();

@@ -111,7 +111,6 @@
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
 #include "service/topology_mutation.hh"
-#include "service/topology_coordinator.hh"
 #include "cql3/query_processor.hh"
 #include "service/qos/service_level_controller.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
@@ -1132,7 +1131,8 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _tablet_allocator.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
-                    _feature_service);
+                    _feature_service,
+                    _topology_cmd_rpc_tracker);
         }
     } catch (...) {
         rtlogger.info("raft_state_monitor_fiber aborted with {}", std::current_exception());
@@ -5746,7 +5746,7 @@ future<> storage_service::snitch_reconfigured() {
 
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
     raft_topology_cmd_result result;
-    rtlogger.debug("topology cmd rpc {} is called", cmd.cmd);
+    rtlogger.info("topology cmd rpc {} is called index={}", cmd.cmd, cmd_index);
 
     try {
         auto& raft_server = _group0->group0_server();
@@ -6076,6 +6076,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
     } catch (...) {
         rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, std::current_exception());
     }
+
+    rtlogger.info("topology cmd rpc {} completed with status={} index={}",
+        cmd.cmd, (result.status == raft_topology_cmd_result::command_status::success) ? "suceeded" : "failed", cmd_index);
     co_return result;
 }
 
