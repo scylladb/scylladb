@@ -148,3 +148,106 @@ def assert_all(
         list_res = list_to_hashed_dict(list_res)
     error = f"Expected {expected} from {query}, but got {list_res}" if print_result_on_failure else f"Actual result ({len(list_res)} rows) is not as expected ({len(expected)} rows). Query: {query}"
     assert list_res == expected, error
+
+
+def assert_almost_equal(*args, **kwargs):
+    """
+    Assert variable number of arguments all fall within a margin of error.
+    @params *args variable number of numerical arguments to check
+    @params error Optional margin of error. Default 0.16
+    @params error_message Optional error message to print. Default ''
+
+    Examples:
+    assert_almost_equal(sizes[2], init_size)
+    assert_almost_equal(ttl_session1, ttl_session2[0][0], error=0.005)
+    """
+    error = kwargs["error"] if "error" in kwargs else 0.16
+    vmax = max(args)
+    vmin = min(args)
+    error_message = "" if "error_message" not in kwargs else kwargs["error_message"]
+    assert vmin > vmax * (1.0 - error) or vmin == vmax, f"values not within {error * 100:.2f}% of the max: {args} ({error_message})"
+
+
+@retrying(num_attempts=1, sleep_time=10)
+def assert_row_count(
+        session,
+        table_name,
+        expected,
+        consistency_level=ConsistencyLevel.ONE,
+        num_attempts=1,
+        sleep_time=10,
+        timeout=None,
+):
+    """
+    Function to validate the row count expected in table_name
+    @param session Session to use
+    @param table_name Name of the table to query
+    @param expected Number of rows expected to be in table
+    @param num_attempts defines how many times to try to assert data in case failure. Used in retrying decorator
+    @param sleep_time defines how many seconds to sleep between attempts. Used in retrying decorator
+    @param timeout
+
+    Examples:
+    assert_row_count(self.session1, 'ttl_table', 1)
+    """
+    from test.cluster.dtest.tools.data import run_query_with_data_processing  # to avoid cyclic dependency
+
+    query = f"SELECT count(*) FROM {table_name}"
+    count = run_query_with_data_processing(session, query, consistency_level=consistency_level, session_timeout=timeout)
+    if isinstance(count, list):
+        count = count[0][0]
+    assert count == expected, f"Expected a row count of {expected} in table '{table_name}', but got {count}"
+
+
+@retrying(num_attempts=1, sleep_time=10)
+def assert_row_count_in_select_less(
+        session,
+        query,
+        max_rows_expected,
+        consistency_level=ConsistencyLevel.ONE,
+        num_attempts=1,
+        timeout=None,
+):
+    """
+    Function to validate the row count are returned by select
+    :param num_attempts: defines how many times to try to assert data in case failure. Used in retry_with_func_attempts decorator
+    """
+    from  test.cluster.dtest.tools.data import get_list_res
+
+    count = len(get_list_res(session, query, consistency_level, timeout=timeout))
+    assert count < max_rows_expected, f'Expected a row count < of {max_rows_expected} in query "{query}", but got {count}'
+
+
+def assert_lists_equal_ignoring_order(list1, list2, sort_key=None):
+    """
+    asserts that the contents of the two provided lists are equal
+    but ignoring the order that the items of the lists are actually in
+    :param list1: list to check if it's contents are equal to list2
+    :param list2: list to check if it's contents are equal to list1
+    :param sort_key: if the contents of the list are of type dict, the
+    key to use of each object to sort the overall object with
+    """
+    normalized_list1 = []
+    for obj in list1:
+        normalized_list1.append(obj)
+
+    normalized_list2 = []
+    for obj in list2:
+        normalized_list2.append(obj)
+
+    if not sort_key:
+        sorted_list1 = sorted(normalized_list1, key=lambda elm: elm[0])
+        sorted_list2 = sorted(normalized_list2, key=lambda elm: elm[0])
+    elif not sort_key == "id" and "id" in list1[0].keys():
+        # first always sort by "id"
+        # that way we get a two factor sort which will increase the chance of ordering lists exactly the same
+        sorted_list1 = sorted(sorted(normalized_list1, key=lambda elm: elm["id"]), key=lambda elm: elm[sort_key])
+        sorted_list2 = sorted(sorted(normalized_list2, key=lambda elm: elm["id"]), key=lambda elm: elm[sort_key])
+    elif isinstance(list1[0]["id"], int | float):
+        sorted_list1 = sorted(normalized_list1, key=lambda elm: elm[sort_key])
+        sorted_list2 = sorted(normalized_list2, key=lambda elm: elm[sort_key])
+    else:
+        sorted_list1 = sorted(normalized_list1, key=lambda elm: str(elm[sort_key]))
+        sorted_list2 = sorted(normalized_list2, key=lambda elm: str(elm[sort_key]))
+
+    assert sorted_list1 == sorted_list2
