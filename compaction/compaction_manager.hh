@@ -399,6 +399,9 @@ public:
     // Creates a compaction_state structure that can be used for submitting
     // compaction jobs of all types.
     void add(compaction::compaction_group_view& t);
+    // Adds a group with compaction temporarily disabled. Compaction is only enabled back
+    // when the compaction_reenabler returned is destroyed.
+    compaction_reenabler add_with_compaction_disabled(compaction::compaction_group_view& view);
 
     // Remove a table from the compaction manager.
     // Cancel requests on table and wait for possible ongoing compactions.
