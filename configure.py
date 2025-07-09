@@ -2134,7 +2134,6 @@ def kmip_arch():
 
 kmipc_dir = f'kmipc/kmipc-2.1.0t-{kmiplib()}_{kmip_arch()}'
 kmipc_lib = f'{kmipc_dir}/lib/libkmip.a'
-libs += ' -lboost_filesystem'
 if os.path.exists(kmipc_lib):
     libs += f' {kmipc_lib}'
     user_cflags += f' -I{kmipc_dir}/include -DHAVE_KMIP'
