@@ -1071,6 +1071,7 @@ public:
 
 public:
     service::session_id being_repaired;
+    int64_t update_repaired_at(int64_t repaired_at);
 };
 
 // Validate checksums
