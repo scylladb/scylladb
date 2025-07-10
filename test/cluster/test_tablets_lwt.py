@@ -366,3 +366,39 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
 
         with pytest.raises(WriteFailure):
             await lwt_task
+
+
+@pytest.mark.asyncio
+@skip_mode('debug', 'aarch64/debug is unpredictably slow', platform_key='aarch64')
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClient, build_mode):
+    timeout = 10000 if build_mode == 'debug' else 1000
+    config = {
+        'rf_rack_valid_keyspaces': False,
+        'write_request_timeout_in_ms': timeout,
+        'error_injections_at_startup': [
+            {
+                'name': 'raft-group-registry-fd-threshold-in-ms',
+                'value': '500'
+            }
+        ]
+    }
+
+    logger.info("Bootstrap a cluster with two nodes")
+    servers = await manager.servers_add(2, config=config)
+    cql = manager.get_cql()
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        logger.info(f"Create table {ks}.test")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Stop the second node")
+        await manager.server_stop_gracefully(servers[1].server_id)
+
+        logger.info(f"Running an LWT with timeout {timeout}")
+        with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, there is no raft quorum"):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        logger.info("Start the second node")
+        await manager.server_start(servers[1].server_id)
