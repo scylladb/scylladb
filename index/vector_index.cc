@@ -8,10 +8,12 @@
 
 
 #include "cql3/statements/index_target.hh"
+#include "cql3/util.hh"
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
 #include "index/vector_index.hh"
 #include "concrete_types.hh"
+#include "utils/managed_string.hh"
 #include <seastar/core/sstring.hh>
 
 
@@ -47,6 +49,25 @@ const static std::unordered_map<sstring, std::function<void(const sstring&)>> su
         {"construction_beam_width", validate_unsigned_option<4096>},
         {"search_beam_width", validate_unsigned_option<4096>},
     };
+
+bool vector_index::should_create_view() const {
+    return false;
+}
+
+std::optional<cql3::description> vector_index::describe(const index_metadata& im, const schema& base_schema) const {
+    fragmented_ostringstream os;
+    os << "CREATE CUSTOM INDEX " << cql3::util::maybe_quote(im.name()) << " ON "
+       << cql3::util::maybe_quote(base_schema.ks_name()) << "." << cql3::util::maybe_quote(base_schema.cf_name())
+       << "(" << cql3::util::maybe_quote(im.options().at(cql3::statements::index_target::target_option_name)) << ")"
+       << " USING 'vector_index'";
+
+    return cql3::description{
+        .keyspace = base_schema.ks_name(),
+        .type = "index",
+        .name = im.name(),
+        .create_statement = std::move(os).to_managed_string(),
+    };
+}
 
 void vector_index::validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) {
     if (targets.size() != 1) {
