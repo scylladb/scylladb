@@ -1152,8 +1152,9 @@ future<> random_schema::create_with_cql(cql_test_env& env) {
 
         auto& db = env.local_db();
 
-        replica::schema_describe_helper describe_helper{db.as_data_dictionary()};
-        auto schema_desc = _schema->describe(describe_helper, cql3::describe_option::STMTS);
+        auto schema_desc = _schema->describe(
+                replica::make_schema_describe_helper(_schema, db.as_data_dictionary()),
+                cql3::describe_option::STMTS);
 
         sstring create_statement = schema_desc.create_statement.value().linearize();
         env.execute_cql(create_statement).get();

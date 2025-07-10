@@ -482,9 +482,9 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
         const query::result_set_row& view_row = rs.row(0);
         auto base_name = view_row.get_nonnull<sstring>("base_table_name");
         auto base_schema = do_load_schema_from_schema_tables(dbcfg, scylla_data_path, keyspace, base_name);
-        return db::schema_tables::create_view_from_mutations(ctxt, muts, std::move(base_schema));
+        return db::schema_tables::create_view_from_mutations(ctxt, muts, ctxt.user_types(), std::move(base_schema));
     } else {
-        return db::schema_tables::create_table_from_mutations(ctxt, muts);
+        return db::schema_tables::create_table_from_mutations(ctxt, muts, ctxt.user_types());
     }
 }
 

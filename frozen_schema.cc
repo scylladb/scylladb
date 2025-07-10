@@ -9,6 +9,7 @@
 #include "frozen_schema.hh"
 #include "db/schema_tables.hh"
 #include "db/view/view.hh"
+#include "view_info.hh"
 #include "mutation/canonical_mutation.hh"
 #include "schema_mutations.hh"
 #include "idl/frozen_schema.dist.hh"
@@ -31,12 +32,12 @@ schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, std::optional<db
     auto sv = ser::deserialize(in, std::type_identity<ser::schema_view>());
     auto sm = sv.mutations();
     if (sm.is_view()) {
-        return db::schema_tables::create_view_from_mutations(ctxt, std::move(sm), std::move(base_info), sv.version());
+        return db::schema_tables::create_view_from_mutations(ctxt, std::move(sm), ctxt.user_types(), std::move(base_info), sv.version());
     } else {
         if (base_info) {
             throw std::runtime_error("Trying to unfreeze regular table schema with base info");
         }
-        return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), sv.version());
+        return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), sv.version());
     }
 }
 
@@ -47,4 +48,14 @@ frozen_schema::frozen_schema(bytes_ostream b)
 const bytes_ostream& frozen_schema::representation() const
 {
     return _data;
+}
+
+frozen_schema_with_base_info::frozen_schema_with_base_info(const schema_ptr& c) : frozen_schema(c) {
+    if (c->is_view()) {
+        base_info = c->view_info()->base_info();
+    }
+}
+
+schema_ptr frozen_schema_with_base_info::unfreeze(const db::schema_ctxt& ctxt) const {
+    return frozen_schema::unfreeze(ctxt, base_info);
 }
