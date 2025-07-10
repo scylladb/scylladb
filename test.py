@@ -157,7 +157,7 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="Number of jobs to use for running the tests")
     parser.add_argument('--save-log-on-success', "-s", default=False,
                         dest="save_log_on_success", action="store_true",
-                        help="Save test log output on success.")
+                        help="Save test log output on success and skip cleanup before the run.")
     parser.add_argument('--list', dest="list_tests", action="store_true", default=False,
                         help="Print list of tests instead of executing them")
     parser.add_argument('--skip',
@@ -261,7 +261,7 @@ def parse_cmd_line() -> argparse.Namespace:
         args.coverage = True
 
     args.tmpdir = os.path.abspath(args.tmpdir)
-    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics)
+    prepare_dirs(tempdir_base=pathlib.Path(args.tmpdir), modes=args.modes, gather_metrics=args.gather_metrics, save_log_on_success=args.save_log_on_success)
 
     if args.extra_scylla_cmdline_options:
         args.extra_scylla_cmdline_options = args.extra_scylla_cmdline_options.split()
