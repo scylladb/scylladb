@@ -629,7 +629,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_com
 }
 
 std::optional<gate::holder> compaction_manager::start_compaction(table_state& t) {
-    if (_state != state::enabled) {
+    if (is_disabled()) {
         return std::nullopt;
     }
 
@@ -937,7 +937,7 @@ public:
     }
 };
 
-compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
+compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm, replica::out_of_space_controller* oos_controller)
     : _task_manager_module(make_shared<task_manager_module>(tm))
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
@@ -962,7 +962,14 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(&_reconcile_history_maps) {
+    , _tombstone_gc_state(&_reconcile_history_maps)
+    , _out_of_space_subscription(oos_controller && (this_shard_id() == 0) ? oos_controller->subscribe([this] (auto critical_level_reached) {
+        if (bool(critical_level_reached)) {
+            return container().invoke_on_all([] (compaction_manager& cm) { return cm.drain(); });
+        }
+        return container().invoke_on_all([] (compaction_manager& cm) { cm.enable(); });
+    }) : replica::out_of_space_controller::subscription())
+{
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
@@ -1034,10 +1041,21 @@ void compaction_manager::register_metrics() {
 }
 
 void compaction_manager::enable() {
-    SCYLLA_ASSERT(_state == state::none || _state == state::disabled);
-    _state = state::enabled;
+    SCYLLA_ASSERT(_state == state::none || _state == state::running);
+    cmlog.info("Asked to enable");
+
+    if (_state == state::none) {
+        _state = state::running;
+        SCYLLA_ASSERT(_disabled_state_count == 0);
+    } else if (_disabled_state_count > 0 && --_disabled_state_count > 0) {
+        cmlog.debug("Compaction manager is still disabled, requires {} more call(s) to enable()", _disabled_state_count);
+        return;
+    }
+
+    _compaction_submission_timer.cancel();
     _compaction_submission_timer.arm_periodic(periodic_compaction_submission_interval());
     _waiting_reevalution = postponed_compactions_reevaluation();
+    cmlog.info("Enabled");
 }
 
 std::function<void()> compaction_manager::compaction_submission_callback() {
@@ -1055,7 +1073,7 @@ std::function<void()> compaction_manager::compaction_submission_callback() {
 future<> compaction_manager::postponed_compactions_reevaluation() {
      while (true) {
         co_await _postponed_reevaluation.when();
-        if (_state != state::enabled) {
+        if (is_disabled()) {
             _postponed.clear();
             co_return;
         }
@@ -1140,11 +1158,12 @@ future<> compaction_manager::stop_ongoing_compactions(sstring reason, table_stat
 
 future<> compaction_manager::drain() {
     cmlog.info("Asked to drain");
-    if (_state == state::enabled) {
-        // This is a drain request and not a shutdown request.
-        // Disable the state so that it can be enabled later if requested.
-        _state = state::disabled;
+    if (_state == state::none) {
+        _state = state::running;
     }
+
+    ++_disabled_state_count;
+
     _compaction_submission_timer.cancel();
     // Stop ongoing compactions, if the request has not been sent already and wait for them to stop.
     co_await stop_ongoing_compactions("drain");
@@ -1202,7 +1221,7 @@ void compaction_manager::do_stop() noexcept {
 }
 
 inline bool compaction_manager::can_proceed(table_state* t) const {
-    if (_state != state::enabled) {
+    if (is_disabled()) {
         return false;
     }
     auto found = _compaction_state.find(t);

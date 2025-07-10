@@ -2445,6 +2445,10 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
 future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_map& addr_map, locator::tablet_metadata_guard& guard, locator::global_tablet_id gid, tasks::task_info global_tablet_repair_task_info, service::frozen_topology_guard topo_guard, std::optional<locator::tablet_replica_set> rebuild_replicas) {
+    if (is_repair_tablet_rpc_disabled()) {
+        co_return coroutine::return_exception(std::runtime_error("repair_tablet rpc is disabled. No tablet repairs will be started until it's re-enabled"));
+    }
+
     auto id = _repair_module->new_repair_uniq_id();
     rlogger.debug("repair[{}]: Starting tablet repair global_tablet_id={}", id.uuid(), gid);
     auto& db = get_db().local();
@@ -2518,6 +2522,24 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
             id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
     co_return flush_time;
+}
+
+future<> repair_service::set_enable_repair_tablet_rpc(sharded<repair_service>& sharded_rs, bool enabled) {
+    return sharded_rs.invoke_on_all([enabled] (repair_service& rs) {
+        rlogger.info("Asked to {} repair_tablet rpc", enabled ? "enable" : "disable");
+        if (!enabled) {
+            ++rs._disabled_repair_tablet_count;
+            rlogger.info("repair_tablet rpc disabled");
+        } else if (rs._disabled_repair_tablet_count > 0) {
+            --rs._disabled_repair_tablet_count;
+            if (rs._disabled_repair_tablet_count > 0) {
+                rlogger.debug("repair_service::repair_tablet rpc is still disabled. Requires {} more call(s) to enabled it",
+                            rs._disabled_repair_tablet_count);
+            } else {
+                rlogger.info("repair_tablet rpc enabled");
+            }
+        }
+    });
 }
 
 tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexcept {
