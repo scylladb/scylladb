@@ -472,9 +472,9 @@ def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: arg
     cpu_available = (time.monotonic() - launch_time) * multiprocessing.cpu_count()
     utilization = cpu_used / cpu_available
     print(f"CPU utilization: {utilization*100:.1f}%")
+    total_tests = TestSuite.test_count() + total_tests_pytest
     if failed_tests or failed_pytest_tests:
         all_fails = [*failed_tests, *failed_pytest_tests]
-        total_tests = TestSuite.test_count() + total_tests_pytest
         print(f'The following test(s) have failed: {" ".join(t.name for t in all_fails)}')
         if options.verbose:
             for test in failed_tests:
@@ -484,6 +484,13 @@ def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: arg
             print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed, {cancelled_tests} cancelled")
         else:
             print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed")
+    if total_tests == 0:
+        print( palette.warn(f"No tests were run, nothing to report. Please check your test selection criteria. "
+                            f"Due to the recent changes in the test.py, if you want to run a test from one of the "
+                            f"following directories: \n"
+                            f"{'\n'.join([f'{str(item.relative_to(TOP_SRC_DIR))}' for item in PYTEST_RUNNER_DIRECTORIES])}\nPlease use the path "
+                            f"to the test file with extension, e.g. 'test/boost/memtable_test.cc' instead of "
+                            f"'boost/memtable_test'"))
 
 
 def open_log(tmpdir: str, log_file_name: str, log_level: str) -> None:
