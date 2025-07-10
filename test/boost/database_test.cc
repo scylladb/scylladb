@@ -1663,4 +1663,65 @@ SEASTAR_TEST_CASE(enable_drained_compaction_manager) {
     });
 }
 
+SEASTAR_TEST_CASE(test_drop_quarantined_sstables) {
+    return do_with_cql_env_thread([] (cql_test_env& e) -> future<> {
+        e.execute_cql("create table cf (p text PRIMARY KEY, c int)").get();
+        for (int i = 0; i < 10; i++) {
+            e.execute_cql(format("insert into cf (p, c) values ('key{}', {})", i * i, i)).get();
+             e.db().invoke_on_all([] (replica::database& db) {
+                auto& cf = db.find_column_family("ks", "cf");
+                return cf.flush();
+            }).get();
+        }
+
+        auto initial_sstable_count = co_await e.db().map_reduce0(
+            [] (replica::database& db) -> future<size_t> {
+                auto& cf = db.find_column_family("ks", "cf");
+                co_return cf.sstables_count();
+            },
+            0,
+            std::plus<size_t>{}
+        );
+        BOOST_REQUIRE_GT(initial_sstable_count, 0);
+
+        auto quarantined_count = co_await e.db().map_reduce0(
+            [] (replica::database& _db) -> future<size_t> {
+                auto& cf = _db.find_column_family("ks", "cf");
+                std::atomic<size_t> quarantined_on_shard = 0;
+                co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+                    auto sstables = in_strategy_sstables(ts);
+                    if (sstables.empty()) {
+                        co_return;
+                    }
+                    auto idx = tests::random::get_int<size_t>(0, sstables.size() - 1);
+                    quarantined_on_shard++;
+                    co_await sstables[idx]->change_state(sstables::sstable_state::quarantine);
+                });
+                co_return quarantined_on_shard;
+            },
+            size_t(0),
+            std::plus<size_t>{}
+        );
+        BOOST_REQUIRE_GT(quarantined_count, 0);
+
+        co_await e.db().invoke_on_all([] (replica::database& db) {
+            auto& cf = db.find_column_family("ks", "cf");
+            return cf.drop_quarantined_sstables();
+        });
+
+        auto remaining_quarantined = co_await e.db().map_reduce0(
+            [] (replica::database& db) -> future<size_t> {
+                auto& cf = db.find_column_family("ks", "cf");
+                auto& sstables = *cf.get_sstables();
+                co_return std::count_if(sstables.begin(), sstables.end(), [] (shared_sstable sst) {
+                    return sst->is_quarantined();
+                });
+            },
+            size_t(0),
+            std::plus<size_t>{}
+        );
+        BOOST_REQUIRE_EQUAL(remaining_quarantined, 0);
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
