@@ -2292,6 +2292,65 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
     return _sstables->select(range);
 }
 
+future<> table::drop_quarantined_sstables()
+{
+    struct removed_sstable {
+        compaction_group& cg;
+        sstables::shared_sstable sst;
+        replica::enable_backlog_tracker enable_backlog_tracker;
+    };
+    std::vector<removed_sstable> removed;
+
+    _stats.pending_sstable_deletions++;
+    auto undo_stats = defer([this] {
+        _stats.pending_sstable_deletions--;
+    });
+
+    auto permit = co_await get_sstable_list_permit();
+
+    co_await _cache.invalidate(row_cache::external_updater([this, &removed] {
+        for_each_compaction_group([&] (compaction_group& cg) {
+            auto new_main = make_lw_shared<sstables::sstable_set>(cg.make_main_sstable_set());
+            auto new_maintenance = cg.make_maintenance_sstable_set();
+
+            auto remove_quarantined = [&] (lw_shared_ptr<sstables::sstable_set>& new_set,
+                                          const lw_shared_ptr<sstables::sstable_set>& original,
+                                          replica::enable_backlog_tracker enable_backlog_tracker) mutable {
+                original->for_each_sstable([&] (const sstables::shared_sstable& sst) mutable {
+                    if (sst->is_quarantined()) {
+                        removed.emplace_back(removed_sstable{cg, sst, enable_backlog_tracker});
+                        return;
+                    }
+                    new_set->insert(sst);
+                });
+            };
+
+            remove_quarantined(new_main, cg.main_sstables(), enable_backlog_tracker::yes);
+            remove_quarantined(new_maintenance, cg.maintenance_sstables(), enable_backlog_tracker::no);
+
+            cg.set_main_sstables(std::move(new_main));
+            cg.set_maintenance_sstables(std::move(new_maintenance));
+        });
+        refresh_compound_sstable_set();
+    }));
+
+    _cache.refresh_snapshot();
+    rebuild_statistics();
+
+
+    std::vector<sstables::shared_sstable> del;
+    del.reserve(removed.size());
+    for (auto& r : removed) {
+        if (r.enable_backlog_tracker) {
+            remove_sstable_from_backlog_tracker(r.cg.get_backlog_tracker(), r.sst);
+        }
+        del.emplace_back(r.sst);
+    };
+
+    co_await delete_sstables_atomically(permit, std::move(del));
+}
+
+
 bool storage_group::no_compacted_sstable_undeleted() const {
     return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
         return cg->compacted_undeleted_sstables().empty();
