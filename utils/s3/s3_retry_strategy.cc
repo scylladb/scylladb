@@ -17,7 +17,7 @@ namespace aws {
 static logging::logger s3_retry_logger("s3_retry_strategy");
 
 s3_retry_strategy::s3_retry_strategy(credentials_refresher creds_refresher, unsigned max_retries, unsigned scale_factor)
-    : retry_strategy(max_retries, scale_factor), _creds_refresher(std::move(creds_refresher)) {
+    : default_aws_retry_strategy(max_retries, scale_factor), _creds_refresher(std::move(creds_refresher)) {
 }
 
 seastar::future<bool> s3_retry_strategy::should_retry(const aws_error& error, unsigned attempted_retries) const {
@@ -26,7 +26,7 @@ seastar::future<bool> s3_retry_strategy::should_retry(const aws_error& error, un
         co_await _creds_refresher();
         co_return true;
     }
-    co_return co_await retry_strategy::should_retry(error, attempted_retries);
+    co_return co_await default_aws_retry_strategy::should_retry(error, attempted_retries);
 }
 
 } // namespace aws

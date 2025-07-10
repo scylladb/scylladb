@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "retry_strategy.hh"
+#include "default_aws_retry_strategy.hh"
 #include "aws_error.hh"
 #include "utils/log.hh"
 
@@ -19,10 +19,10 @@ using namespace seastar::http::experimental;
 
 namespace aws {
 
-retry_strategy::retry_strategy(unsigned max_retries, unsigned scale_factor) : _max_retries(max_retries), _scale_factor(scale_factor) {
+default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, unsigned scale_factor) : _max_retries(max_retries), _scale_factor(scale_factor) {
 }
 
-seastar::future<bool> retry_strategy::should_retry(const aws_error& error, unsigned attempted_retries) const {
+seastar::future<bool> default_aws_retry_strategy::should_retry(const aws_error& error, unsigned attempted_retries) const {
     if (attempted_retries >= _max_retries) {
         rs_logger.warn("Retries exhausted. Retry# {}", attempted_retries);
         co_return false;
@@ -39,7 +39,7 @@ seastar::future<bool> retry_strategy::should_retry(const aws_error& error, unsig
     co_return should_retry;
 }
 
-std::chrono::milliseconds retry_strategy::delay_before_retry(const aws_error&, unsigned attempted_retries) const {
+std::chrono::milliseconds default_aws_retry_strategy::delay_before_retry(const aws_error&, unsigned attempted_retries) const {
     if (attempted_retries == 0) {
         return 0ms;
     }

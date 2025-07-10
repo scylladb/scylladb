@@ -88,7 +88,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::default_aws_retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -203,7 +203,7 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
+client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::default_aws_retry_strategy& retry_strategy)
     : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::retry_requests::yes, retry_strategy) {
 }
 

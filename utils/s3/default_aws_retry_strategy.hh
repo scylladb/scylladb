@@ -13,13 +13,13 @@ namespace aws {
 
 class aws_error;
 
-class retry_strategy : public seastar::http::experimental::retry_strategy<aws_error> {
+class default_aws_retry_strategy : public seastar::http::experimental::retry_strategy<aws_error> {
 protected:
     unsigned _max_retries;
     unsigned _scale_factor;
 
 public:
-    explicit retry_strategy(unsigned max_retries = 10, unsigned scale_factor = 25);
+    explicit default_aws_retry_strategy(unsigned max_retries = 10, unsigned scale_factor = 25);
 
     seastar::future<bool> should_retry(const aws_error& error, unsigned attempted_retries) const override;
 
