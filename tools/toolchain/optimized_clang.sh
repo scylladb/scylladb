@@ -101,6 +101,7 @@ SCYLLA_OPTS=(
     --compiler="${CLANG_BUILD_DIR}/build/bin/clang++"
     --build-dir="${SCYLLA_BUILD_DIR}"
     --out="${SCYLLA_NINJA_FILE}"
+    --use-profile=""
 )
 
 # Utilizing LLVM_DISTRIBUTION_COMPONENTS to avoid
