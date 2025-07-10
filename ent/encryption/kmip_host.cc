@@ -220,7 +220,7 @@ private:
     future<con_ptr> get_connection(const sstring&);
     future<> clear_connections(const sstring& host);
 
-    void release(KMIP_CMD*, con_ptr, bool retain_connection = false);
+    future<> release(KMIP_CMD*, con_ptr, bool retain_connection = false);
 
     size_t max_pooled_connections_per_host() const {
         return _options.max_pooled_connections_per_host.value_or(def_max_pooled_connections_per_host);
@@ -522,7 +522,7 @@ public:
  * can be reused by caller, otherwise it is either added to the connection pool
  * or dropped.
 */
-void kmip_host::impl::release(KMIP_CMD* cmd, con_ptr cp, bool retain_connection) {
+future<> kmip_host::impl::release(KMIP_CMD* cmd, con_ptr cp, bool retain_connection) {
     auto i = _host_connections.find(cp->host());
     userdata u;
     u.host = i->first.c_str();
@@ -531,6 +531,13 @@ void kmip_host::impl::release(KMIP_CMD* cmd, con_ptr cp, bool retain_connection)
     }
     if (!retain_connection && is_current_host(i->first) && max_pooled_connections_per_host() > i->second.size()) {
         i->second.emplace_back(std::move(cp));
+    }
+    // If we neither retain nor cache the connection, do proper close now. Ensures 
+    // TLS goodbye etc are sent and streams are flushed. The latter comes into
+    // play if we did background flush that have not yet actually happened...
+    // Should not happen since we send and wait for response, but lets be careful
+    if (cp && !retain_connection) {
+        co_await cp->close();
     }
 }
 
@@ -561,8 +568,9 @@ future<int> kmip_host::impl::do_cmd(KMIP_CMD* cmd, con_ptr cp, Func& f, bool ret
                 });
             });
         case 0:
-            release(cmd, cp, retain_connection_after_command);
-            return make_ready_future<opt_int>(res);
+            return release(cmd, cp, retain_connection_after_command).then([res] {
+                return make_ready_future<opt_int>(res);
+            });
         default:
             // error. connection is discarded. close it.
             return cp->close().then_wrapped([cp, res](auto f) {
@@ -718,7 +726,7 @@ future<> kmip_host::impl::clear_connections(const sstring& host) {
 future<> kmip_host::impl::connect() {
     return do_for_each(_options.hosts, [this](const sstring& host) {
         return get_connection(host).then([this](auto cp) {
-            release(nullptr, cp);
+            return release(nullptr, cp);
         });
     });
 }
