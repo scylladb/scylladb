@@ -432,6 +432,9 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         for i in range(1, options.repeat + 1):
             result = run_pytest(options, run_id=i)
             total_tests += result[0]
+            if total_tests == 0:
+                # no tests found, nothing to run, so breaking the loop
+                break
             failed_tests.extend(result[1])
             if len(failed_tests) >= max_failures != 0:
                 print("Too much failures, stopping")
