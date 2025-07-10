@@ -33,6 +33,7 @@
 #include "test/lib/log.hh"
 #include "cdc/cdc_extension.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/topology_builder.hh"
 
 BOOST_AUTO_TEST_SUITE(schema_change_test)
 
@@ -1294,6 +1295,128 @@ SEASTAR_TEST_CASE(metadata_id_unchanged) {
         cquery_nofail(e, "ALTER TABLE t DROP c2");
         BOOST_REQUIRE_EQUAL(initial_metadata_id, get_metadata_id(e, "t"));
     });
+}
+
+SEASTAR_TEST_CASE(test_warn_create_rf_rack_invalid) {
+    cql_test_config cfg{};
+    cfg.db_config->rf_rack_valid_keyspaces(false);
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo_builder(e);
+
+        // Setup: DC1: 3 racks, DC2: 2 racks.
+        auto dc1 = topo_builder.dc();
+        topo_builder.add_node();
+        topo_builder.start_new_rack();
+        topo_builder.add_node();
+        topo_builder.start_new_rack();
+        topo_builder.add_node();
+
+        auto [dc2, _] = topo_builder.start_new_dc();
+        topo_builder.add_node();
+        topo_builder.start_new_rack();
+        topo_builder.add_node();
+
+        auto do_create_test = [&e, &dc1, &dc2] (int rf1, int rf2, bool tablets, bool ok) {
+            constexpr std::string_view ks = "test_ks";
+            static const sstring warning = seastar::format("The keyspace '{}' you're trying to create doesn't satisfy the requirements "
+                    "to be RF-rack-valid, i.e. it uses tablets, but the replication factor in at least "
+                    "one of the data centers does not match the number of racks in that data center. "
+                    "That may result in worse availability. Consider updating the replication factors "
+                    "to satisfy that.", ks);
+
+            auto stmt = seastar::format("CREATE KEYSPACE {} WITH replication = "
+                    "{{'class': 'NetworkTopologyStrategy', '{}': {}, '{}': {}}} AND tablets = {{'enabled': {}}}",
+                    ks, dc1, rf1, dc2, rf2, tablets);
+            auto result = e.execute_cql(stmt).get();
+
+            const bool is_present = std::ranges::contains(result->warnings(), warning);
+            BOOST_REQUIRE_EQUAL(ok, !is_present);
+
+            e.execute_cql(seastar::format("DROP KEYSPACE IF EXISTS {}", ks)).get();
+        };
+
+        // All of the statements below are OK: they don't use tablets.
+        do_create_test(2, 2, false, true);
+        do_create_test(3, 3, false, true);
+        do_create_test(3, 2, false, true);
+        do_create_test(3, 1, false, true);
+        do_create_test(1, 2, false, true);
+        do_create_test(1, 1, false, true);
+
+        // BAD: the RF doesn't match the number of racks in DC1.
+        do_create_test(2, 2, true, false);
+        // BAD: the RF doesn't match the number of racks in DC2.
+        do_create_test(3, 3, true, false);
+        // OK: the RFs match the number of racks in the DCs.
+        do_create_test(3, 2, true, true);
+        // OK: RF=#racks for DC1, RF=1 is always accepted.
+        do_create_test(3, 1, true, true);
+        // OK: RF=#racks for DC2, RF=1 is always accepted.
+        do_create_test(1, 2, true, true);
+        // OK: RF=1 is always accepted.
+        do_create_test(1, 1, true, true);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_warn_alter_rf_rack_invalid) {
+    cql_test_config cfg{};
+    cfg.db_config->rf_rack_valid_keyspaces(false);
+
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo_builder(e);
+
+        // Setup: DC1: 3 racks, DC2: 2 racks.
+        auto dc1 = topo_builder.dc();
+        topo_builder.add_node();
+        topo_builder.start_new_rack();
+        topo_builder.add_node();
+        topo_builder.start_new_rack();
+        topo_builder.add_node();
+
+        auto [dc2, _] = topo_builder.start_new_dc();
+        topo_builder.add_node();
+        topo_builder.start_new_rack();
+        topo_builder.add_node();
+
+        auto do_alter_test = [&e, &dc1, &dc2] (int rf1, int rf2, bool tablets, bool ok) {
+            constexpr std::string_view ks = "test_ks";
+            static const sstring warning = seastar::format("The keyspace '{}' you're trying to alter will not satisfy the requirements "
+                        "to be RF-rack-valid after the change, i.e. it uses tablets, but the replication factor in "
+                        "at least one of the data centers does not match the number of racks in that data center. "
+                        "That may result in worse availability. Consider updating the replication factors "
+                        "to satisfy that.", ks);
+
+            e.execute_cql(seastar::format("CREATE KEYSPACE {} WITH REPLICATION = "
+                    "{{'class': 'NetworkTopologyStrategy', '{}': 3, '{}': 2}} AND tablets = {{'enabled': {}}}",
+                    ks, dc1, dc2, tablets)).get();
+
+            auto stmt = seastar::format("ALTER KEYSPACE {} WITH replication = "
+                    "{{'class': 'NetworkTopologyStrategy', '{}': {}, '{}': {}}} AND tablets = {{'enabled': {}}}",
+                    ks, dc1, rf1, dc2, rf2, tablets);
+            auto result = e.execute_cql(stmt).get();
+
+            const bool is_present = std::ranges::contains(result->warnings(), warning);
+            BOOST_REQUIRE_EQUAL(ok, !is_present);
+
+            e.execute_cql(seastar::format("DROP KEYSPACE IF EXISTS {}", ks)).get();
+        };
+
+        // All of the statements below are OK: they don't use tablets.
+        do_alter_test(2, 2, false, true);
+        do_alter_test(3, 3, false, true);
+        do_alter_test(3, 2, false, true);
+        do_alter_test(3, 1, false, true);
+
+        // BAD: the RF doesn't match the number of racks in DC1.
+        do_alter_test(2, 2, true, false);
+        // BAD: the RF doesn't match the number of racks in DC2.
+        do_alter_test(3, 3, true, false);
+        // OK: the RFs match the number of racks in the DCs.
+        do_alter_test(3, 2, true, true);
+        // OK: RF=#racks for DC1, RF=1 is always accepted.
+        do_alter_test(3, 1, true, true);
+    }, cfg);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
