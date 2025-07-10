@@ -497,6 +497,9 @@ public:
     named_value<uint16_t> redis_database_count;
     named_value<string_map> redis_keyspace_replication_strategy_options;
 
+    named_value<sstring> webshell_address;
+    named_value<uint16_t> webshell_port;
+
     named_value<bool> sanitizer_report_backtrace;
     named_value<bool> flush_schema_tables_after_modification;
 
