@@ -2001,6 +2001,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::reload_raft_topology_state.unset(r);
     ss::upgrade_to_raft_topology.unset(r);
     ss::raft_topology_upgrade_status.unset(r);
+    ss::raft_topology_get_cmd_status.unset(r);
     ss::move_tablet.unset(r);
     ss::add_tablet_replica.unset(r);
     ss::del_tablet_replica.unset(r);
