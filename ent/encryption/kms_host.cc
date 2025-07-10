@@ -160,6 +160,8 @@ public:
     ~impl() = default;
 
     future<> init();
+    future<> stop();
+
     const host_options& options() const {
         return _options;
     }
@@ -988,6 +990,11 @@ future<> encryption::kms_host::impl::init() {
     _initialized = true;
 }
 
+future<> encryption::kms_host::impl::stop() {
+    co_await _attr_cache.stop();
+    co_await _id_cache.stop();
+}
+
 future<encryption::kms_host::impl::key_and_id_type> encryption::kms_host::impl::create_key(const attr_cache_key& k) {
     auto& master_key = k.master_key;
     auto& aws_assume_role_arn = k.aws_assume_role_arn;
@@ -1148,6 +1155,10 @@ encryption::kms_host::~kms_host() = default;
 
 future<> encryption::kms_host::init() {
     return _impl->init();
+}
+
+future<> encryption::kms_host::stop() {
+    return _impl->stop();
 }
 
 const encryption::kms_host::host_options& encryption::kms_host::options() const {
