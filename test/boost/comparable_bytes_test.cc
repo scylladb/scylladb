@@ -18,6 +18,7 @@
 #include "types/types.hh"
 #include "types/comparable_bytes.hh"
 #include "utils/big_decimal.hh"
+#include "utils/fragment_range.hh"
 #include "utils/multiprecision_int.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
@@ -515,6 +516,40 @@ BOOST_AUTO_TEST_CASE(test_inet) {
     }
 
     byte_comparable_test(std::move(test_data));
+}
+
+static data_value make_random_data_value_uuid() { return data_value(utils::make_random_uuid()); }
+static data_value make_random_data_value_bytes() {
+    constexpr size_t max_bytes_size = 128 * 1024; // 128 KB
+    return data_value(tests::random::get_bytes(tests::random::get_int<size_t>(1, max_bytes_size)));
+}
+
+extern void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out);
+extern void decode_component(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
+BOOST_AUTO_TEST_CASE(test_encode_decode_component) {
+    // Verify encode and decode works
+    bytes_ostream out;
+    constexpr uint8_t NEXT_COMPONENT = 0x40;
+    for (const auto& test_value : {
+        make_random_data_value_uuid(), // data type with fixed length
+        make_random_data_value_bytes(), // data type with variable length
+    }) {
+        const auto& type = *test_value.type();
+        out.clear();
+        auto serialized_bytes = test_value.serialize_nonnull();
+        encode_component(type, managed_bytes_view(serialized_bytes), out);
+        auto comparable_bytes = std::move(out).to_managed_bytes();
+        auto comparable_bytes_view = managed_bytes_view(comparable_bytes);
+        // encoded component should begin with a NEXT_COMPONENT marker
+        BOOST_REQUIRE_EQUAL(read_simple_native<uint8_t>(comparable_bytes_view), NEXT_COMPONENT);
+        out.clear();
+        decode_component(type, comparable_bytes_view, out);
+        auto decoded_bytes = std::move(out).to_managed_bytes();
+        auto decoded_bytes_view = managed_bytes_view(decoded_bytes);
+        // decoded bytes should match the serialized form
+        BOOST_REQUIRE_EQUAL(read_simple<int32_t>(decoded_bytes_view), test_value.serialized_size());
+        BOOST_REQUIRE(decoded_bytes_view == managed_bytes_view(serialized_bytes));
+    }
 }
 
 // Test Scylla's byte-comparable encoding compatibility with Cassandra's implementation by

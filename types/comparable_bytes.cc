@@ -36,6 +36,13 @@ static constexpr uint8_t ESCAPE = 0x00;
 static constexpr uint8_t ESCAPED_0_CONT = 0xFE;
 static constexpr uint8_t ESCAPED_0_DONE = 0xFF;
 
+// Next component marker.
+static constexpr uint8_t NEXT_COMPONENT = 0x40;
+// Marker for null components in tuples, maps, sets and clustering keys.
+static constexpr uint8_t NEXT_COMPONENT_NULL = 0x3E;
+// Terminator byte in sequences.
+static constexpr uint8_t TERMINATOR = 0x38;
+
 static void read_fragmented_checked(managed_bytes_view& view, size_t bytes_to_read, bytes::value_type* out) {
     if (view.size_bytes() < bytes_to_read) {
         throw_with_backtrace<marshal_exception>(
@@ -858,6 +865,68 @@ static void unescape_zeros(managed_bytes_view& comparable_bytes_view, bytes_ostr
 // Functions are defined later in the file as they depend on to_comparable_bytes_visitor and from_comparable_bytes_visitor.
 static void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out);
 static void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
+
+// Encodes a single non-null element of a multi-component type into a byte-comparable format.
+// The element can be an item from a list, set, vector, a key or value from a map, or a field from a tuple.
+// The serialized bytes of the element are transformed into a byte-comparable representation,
+// prefixed with a `NEXT_COMPONENT` marker to delimit it from other elements, and written to the output stream.
+void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out) {
+    write_native_int(out, NEXT_COMPONENT);
+    to_comparable_bytes(type, serialized_bytes_view, out);
+}
+
+// Decodes a single non-null element of a multi-component type from its byte-comparable representation
+// into its serialized format. The serialized value is prefixed with its size in bytes.
+void decode_component(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    // Placeholder to write the size of the serialized bytes
+    auto element_size_ptr = reinterpret_cast<char*>(out.write_place_holder(sizeof(int32_t)));
+    auto curr_write_pos = out.pos();
+    // Decode the comparable bytes into serialized bytes and write it into out
+    from_comparable_bytes(type, comparable_bytes_view, out);
+    // Now write the size of the serialized bytes in big endian format
+    write_be(element_size_ptr, static_cast<int32_t>(out.written_since(curr_write_pos)));
+}
+
+// Encodes a single null element of a multi-component type into a byte-comparable format.
+[[maybe_unused]] static void encode_null_component(bytes_ostream& out) {
+    // Write the NULL component marker
+    write_native_int(out, NEXT_COMPONENT_NULL);
+}
+
+// Decodes a single null element of a multi-component type.
+[[maybe_unused]] static void decode_null_component(bytes_ostream& out) {
+    // Write -1 as length for null value encoded as 4-byte big endian.
+    static const auto null_length = [] {
+        std::array<char, 4> arr{};
+        write_be(arr.data(), int32_t(-1));
+        return arr;
+    }();
+    out.write(bytes_view(reinterpret_cast<const signed char*>(null_length.data()), null_length.size()));
+}
+
+// Decodes the next marker and the component, if available, into serialized format.
+template<bool allow_null_component_value>
+static stop_iteration decode_marker_and_component(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    switch (read_simple_native<uint8_t>(comparable_bytes_view)) {
+    case NEXT_COMPONENT:
+        decode_component(type, comparable_bytes_view, out);
+        return stop_iteration::no;
+    case TERMINATOR:
+        // End of the collection, return without writing anything
+        return stop_iteration::yes;
+    case NEXT_COMPONENT_NULL:
+        if constexpr (allow_null_component_value) {
+            decode_null_component(out);
+            return stop_iteration::no;
+        }
+        // NEXT_COMPONENT_NULL encountered when allow_null_component_value is false;
+        // Fallthrough to throw an exception
+        [[fallthrough]];
+    default:
+        // This should not happen unless the encoding scheme has changed
+        throw_with_backtrace<marshal_exception>("decode_next_component - unexpected component marker in collection");
+    }
+}
 
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
