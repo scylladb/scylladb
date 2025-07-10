@@ -50,7 +50,8 @@ set(swagger_files
   api-doc/tasks.json
   api-doc/task_manager.json
   api-doc/task_manager_test.json
-  api-doc/utils.json)
+  api-doc/utils.json
+  api-doc/vector_search.json)
 
 foreach(f ${swagger_files})
   get_filename_component(fname "${f}" NAME_WE)

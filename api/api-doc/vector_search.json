@@ -1,0 +1,20 @@
+"/vector_search/status": {
+  "get": {
+    "description": "Returns the current operational status of the Vector Search feature. It is computed based on availability of Vector Store nodes.",
+    "operationId": "get_status",
+    "produces": [
+      "application/json"
+    ],
+    "tags": [
+      "vector_search"
+    ],
+    "responses": {
+      "200": {
+        "schema" : {
+          "$ref": "#/definitions/vector_search_status"
+        },
+        "description": "Successful operation. Returns the current operational status of the Vector Search feature."
+      }
+    }
+  }
+}

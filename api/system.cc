@@ -9,6 +9,7 @@
 #include "api/api_init.hh"
 #include "api/api-doc/system.json.hh"
 #include "api/api-doc/metrics.json.hh"
+#include "api/api-doc/vector_search.json.hh"
 #include "replica/database.hh"
 #include "db/sstables-format-selector.hh"
 
@@ -30,6 +31,7 @@ using namespace seastar::httpd;
 
 namespace hs = httpd::system_json;
 namespace hm = httpd::metrics_json;
+namespace vs = httpd::vector_search_json;
 
 extern "C" void __attribute__((weak)) __llvm_profile_dump();
 extern "C" const char * __attribute__((weak)) __llvm_profile_get_filename();
@@ -102,6 +104,12 @@ void set_system(http_context& ctx, routes& r) {
                 return make_ready_future<json::json_return_type>(seastar::json::json_void());
             });
         });
+    });
+
+    vs::get_status.set(r, [](const_req req) {
+        vs::vector_search_status status;
+        status.status = vs::vector_search_status::vector_search_status_status::UNAVAILABLE;
+        return status;
     });
 
     hs::get_system_uptime.set(r, [](const_req req) {
