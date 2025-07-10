@@ -2,3 +2,4 @@
 custom_args: {}
 extra_scylla_cmdline_options:
   - '--reactor-backend linux-aio'
+  - '--rf-rack-valid-keyspaces=true'
