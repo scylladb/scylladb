@@ -64,6 +64,7 @@ namespace cql_transport { class controller; }
 
 namespace cdc {
 class generation_service;
+class metadata;
 }
 
 namespace streaming {
@@ -346,6 +347,8 @@ public:
     }
 
     bool is_raft_leader() const noexcept;
+
+    const cdc::metadata& get_cdc_metadata() const noexcept;
 
 private:
     inet_address get_broadcast_address() const noexcept {
@@ -945,6 +948,9 @@ public:
     // Must be called on shard 0.
     future<> compression_dictionary_updated_callback(std::string_view name);
     future<> compression_dictionary_updated_callback_all();
+
+    future<> load_cdc_streams();
+    future<> load_cdc_streams(std::unordered_set<table_id> changed_tables);
 
     future<> do_cluster_cleanup();
 

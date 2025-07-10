@@ -13,6 +13,10 @@
 #include "cdc/generation_id.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 
+namespace cql3 {
+class query_processor;
+}
+
 namespace db {
 class system_distributed_keyspace;
 class system_keyspace;
@@ -29,6 +33,7 @@ class abort_source;
 
 namespace locator {
 class shared_token_metadata;
+class tablet_map;
 }
 
 namespace cdc {
@@ -144,6 +149,15 @@ public:
      * Precondition: the generation was committed using group 0 and locally applied.
      */
     future<> handle_cdc_generation(cdc::generation_id_v2);
+
+    future<> load_cdc_tablet_streams();
+    future<> load_cdc_tablet_streams(std::unordered_set<table_id> changed_tables);
+
+    future<> commit_cdc_streams(std::vector<canonical_mutation>& muts, db_clock::time_point stream_ts, api::timestamp_type ts);
+    future<> close_cdc_streams(std::vector<canonical_mutation>& muts, cql3::query_processor& qp, api::timestamp_type ts);
+    future<> compact_cdc_streams(std::vector<canonical_mutation>& muts, api::timestamp_type ts);
+
+    future<std::vector<cdc::stream_id>> generate_new_streams(table_id table, const locator::tablet_map& new_tablet_map);
 
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
