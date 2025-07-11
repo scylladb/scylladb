@@ -81,20 +81,6 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
     _properties->apply_to_builder(view_prop_defs::op_type::alter, builder, std::move(schema_extensions),
             db, keyspace(), is_colocated);
 
-    if (builder.get_gc_grace_seconds() == 0) {
-        throw exceptions::invalid_request_exception(
-                "Cannot alter gc_grace_seconds of a materialized view to 0, since this "
-                "value is used to TTL undelivered updates. Setting gc_grace_seconds too "
-                "low might cause undelivered updates to expire before being replayed.");
-    }
-
-    if (builder.default_time_to_live().count() > 0) {
-        throw exceptions::invalid_request_exception(
-                "Cannot set or alter default_time_to_live for a materialized view. "
-                "Data in a materialized view always expire at the same time than "
-                "the corresponding data in the parent table.");
-    }
-
     return view_ptr(builder.build());
 }
 

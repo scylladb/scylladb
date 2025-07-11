@@ -122,23 +122,6 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
     _properties.validate_raw(view_prop_defs::op_type::create, db, keyspace(), schema_extensions);
 
-    if (_properties.use_compact_storage()) {
-        throw exceptions::invalid_request_exception(format("Cannot use 'COMPACT STORAGE' when defining a materialized view"));
-    }
-
-    if (_properties.properties()->get_cdc_options(schema_extensions)) {
-        throw exceptions::invalid_request_exception("Cannot enable CDC for a materialized view");
-    }
-
-    const auto maybe_id = _properties.properties()->get_id();
-    if (maybe_id && db.try_find_table(*maybe_id)) {
-        const auto schema_ptr = db.find_schema(*maybe_id);
-        const auto& ks_name = schema_ptr->ks_name();
-        const auto& cf_name = schema_ptr->cf_name();
-
-        throw exceptions::invalid_request_exception(seastar::format("Table with ID {} already exists: {}.{}", *maybe_id, ks_name, cf_name));
-    }
-
     // View and base tables must be in the same keyspace, to ensure that RF
     // is the same (because we assign a view replica to each base replica).
     // If a keyspace was not specified for the base table name, it is assumed
@@ -351,7 +334,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         warnings.emplace_back(std::move(warning_text));
     }
 
-    schema_builder builder{keyspace(), column_family(), maybe_id};
+    schema_builder builder{keyspace(), column_family()};
     auto add_columns = [this, &builder] (std::vector<const column_definition*>& defs, column_kind kind) mutable {
         for (auto* def : defs) {
             auto&& type = _properties.get_reversable_type(*def->column_specification->name, def->type);
@@ -399,13 +382,6 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
 
     _properties.apply_to_builder(view_prop_defs::op_type::create, builder, std::move(schema_extensions),
             db, keyspace(), is_colocated);
-
-    if (builder.default_time_to_live().count() > 0) {
-        throw exceptions::invalid_request_exception(
-                "Cannot set or alter default_time_to_live for a materialized view. "
-                "Data in a materialized view always expire at the same time than "
-                "the corresponding data in the parent table.");
-    }
 
     auto where_clause_text = util::relations_to_where_clause(_where_clause);
     builder.with_view_info(schema, included.empty(), std::move(where_clause_text));
