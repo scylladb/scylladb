@@ -81,73 +81,6 @@ static dht::shard_replica_set shards_for_writes(const schema& s, dht::token toke
     return shards;
 }
 
-future<paxos_state> paxos_state::load_and_repair_paxos_state(db::system_keyspace& sys_ks,
-        partition_key_view key, schema_ptr s, gc_clock::time_point now,
-        db::timeout_clock::time_point timeout, const dht::shard_replica_set& shards)
-{
-    auto f = futurize_invoke(std::mem_fn(&db::system_keyspace::load_paxos_state), &sys_ks, key, s, now, timeout);
-    if (shards.size() > 1) {
-        logger.debug("load_and_repair_paxos_state[{}]: two shards {}, load paxos state from both",
-            key, shards);
-
-        const auto it = std::ranges::find_if(shards, [this_shard = this_shard_id()](unsigned shard) { 
-            return shard != this_shard;
-        });
-        if (it == shards.end()) {
-            on_internal_error(paxos_state::logger,
-                format("invalid shards, this_shard_id {}, shard_for_writes {}", this_shard_id(), shards));
-        }
-        f = when_all_succeed(std::move(f),
-                smp::submit_to(*it, [&sys_ks, key, s, now, timeout] mutable {
-                    return sys_ks.load_paxos_state(key, std::move(s), now, timeout);
-                })
-            )
-            .then([&sys_ks, s, key, timeout](std::tuple<paxos_state, paxos_state> state) -> future<paxos_state> {
-                auto& [s0, s1] = state;
-
-                if (s0._promised_ballot == s1._promised_ballot &&
-                    s0._accepted_proposal == s1._accepted_proposal &&
-                    s0._most_recent_commit == s1._most_recent_commit)
-                {
-                    logger.debug("load_and_repair_paxos_state[{}]: paxos state is the same, no repair", 
-                        key);
-                    return make_ready_future<paxos_state>(std::move(s0));
-                }
-
-                const auto promised_ballot = std::max(s0._promised_ballot, s1._promised_ballot);
-                auto accepted_proposal = std::max(s0._accepted_proposal, s1._accepted_proposal);
-                auto most_recent_commit = std::max(s0._most_recent_commit, s1._most_recent_commit);
-                if (accepted_proposal < most_recent_commit) {
-                    accepted_proposal = std::nullopt;
-                }
-                logger.debug("load_and_repair_paxos_state[{}]: paxos state is different, "
-                    "repaired promised_ballot {}, accepted_proposal {}, most_recent_commit {}", 
-                        key, promised_ballot, accepted_proposal, most_recent_commit);
-
-                std::vector<future<>> futures;
-                futures.reserve(3);
-                if (accepted_proposal && s0._accepted_proposal != s1._accepted_proposal) {
-                    futures.push_back(sys_ks.save_paxos_proposal(*s, *accepted_proposal, timeout));
-                } else if (s0._promised_ballot != s1._promised_ballot) {
-                    futures.push_back(sys_ks.save_paxos_promise(*s, key, promised_ballot, timeout));
-                }
-                if (s0._most_recent_commit != s1._most_recent_commit) {
-                    futures.push_back(sys_ks.save_paxos_decision(*s, *most_recent_commit, timeout));
-                }
-                auto result = make_ready_future<paxos_state>(promised_ballot,
-                    std::move(accepted_proposal),
-                    std::move(most_recent_commit));
-                return when_all_succeed(std::move(futures))
-                    .then([result = std::move(result)] mutable {
-                        return std::move(result);
-                    });
-            });
-    } else {
-        logger.debug("load_and_repair_paxos_state[{}]: single shard {}, no repair", key, shards[0]);
-    }
-    return f;
-}
-
 future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keyspace& sys_ks, tracing::trace_state_ptr tr_state, schema_ptr schema,
         const query::read_command& cmd, const partition_key& key, utils::UUID ballot,
         bool only_digest, query::digest_algorithm da, clock_type::time_point timeout) {
@@ -173,7 +106,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, db::system_keys
     // tombstone that hides any re-submit). See CASSANDRA-12043 for details.
     auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(ballot);
 
-    paxos_state state = co_await load_and_repair_paxos_state(sys_ks, key, schema, gc_clock::time_point(now_in_sec), timeout, shards);
+    paxos_state state = co_await sys_ks.load_paxos_state(key, schema, gc_clock::time_point(now_in_sec), timeout);
     // If received ballot is newer that the one we already accepted it has to be accepted as well,
     // but we will return the previously accepted proposal so that the new coordinator will use it instead of
     // its own.
@@ -258,7 +191,7 @@ future<bool> paxos_state::accept(storage_proxy& sp, db::system_keyspace& sys_ks,
     auto guard = co_await get_replica_lock(token, timeout, shards);
 
     auto now_in_sec = utils::UUID_gen::unix_timestamp_in_sec(proposal.ballot);
-    paxos_state state = co_await load_and_repair_paxos_state(sys_ks, proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout, shards);
+    paxos_state state = co_await sys_ks.load_paxos_state(proposal.update.key(), schema, gc_clock::time_point(now_in_sec), timeout);
 
     // Accept the proposal if we promised to accept it or the proposal is newer than the one we promised.
     // Otherwise the proposal was cutoff by another Paxos proposer and has to be rejected.
