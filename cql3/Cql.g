@@ -1079,9 +1079,9 @@ alterTypeStatement returns [std::unique_ptr<alter_type_statement> expr]
  */
 alterViewStatement returns [std::unique_ptr<alter_view_statement> expr]
     @init {
-        auto props = cql3::statements::cf_prop_defs();
+        auto props = cql3::statements::view_prop_defs();
     }
-    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[props]
+    : K_ALTER K_MATERIALIZED K_VIEW cf=columnFamilyName K_WITH properties[*props.properties()]
     {
         $expr = std::make_unique<alter_view_statement>(std::move(cf), std::move(props));
     }

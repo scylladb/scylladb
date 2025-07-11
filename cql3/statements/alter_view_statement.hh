@@ -12,8 +12,8 @@
 
 #include <seastar/core/shared_ptr.hh>
 
+#include "cql3/statements/view_prop_defs.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "cql3/statements/cf_prop_defs.hh"
 #include "cql3/statements/schema_altering_statement.hh"
 
 namespace cql3 {
@@ -26,10 +26,10 @@ namespace statements {
 /** An <code>ALTER MATERIALIZED VIEW</code> parsed from a CQL query statement. */
 class alter_view_statement : public schema_altering_statement {
 private:
-    std::optional<cf_prop_defs> _properties;
+    std::optional<view_prop_defs> _properties;
     view_ptr prepare_view(data_dictionary::database db) const;
 public:
-    alter_view_statement(cf_name view_name, std::optional<cf_prop_defs> properties);
+    alter_view_statement(cf_name view_name, std::optional<view_prop_defs> properties);
 
     virtual future<> check_access(query_processor& qp, const service::client_state& state) const override;
 

@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "cql3/statements/view_prop_defs.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/assert.hh"
 #include <unordered_set>
@@ -119,7 +120,7 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     cql3::cql_warnings_vec warnings;
 
     auto schema_extensions = _properties.properties()->make_schema_extensions(db.extensions());
-    _properties.validate(db, keyspace(), schema_extensions);
+    _properties.validate_raw(view_prop_defs::op_type::create, db, keyspace(), schema_extensions);
 
     if (_properties.use_compact_storage()) {
         throw exceptions::invalid_request_exception(format("Cannot use 'COMPACT STORAGE' when defining a materialized view"));
@@ -396,7 +397,8 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         }
     }
 
-    _properties.properties()->apply_to_builder(builder, std::move(schema_extensions), db, keyspace(), !is_colocated);
+    _properties.apply_to_builder(view_prop_defs::op_type::create, builder, std::move(schema_extensions),
+            db, keyspace(), is_colocated);
 
     if (builder.default_time_to_live().count() > 0) {
         throw exceptions::invalid_request_exception(
