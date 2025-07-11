@@ -50,6 +50,8 @@ protected:
 public:
     bool has_property(const sstring& name) const;
 
+    value_type extract_property(const sstring& name);
+
     std::optional<value_type> get(const sstring& name) const;
 
     std::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
