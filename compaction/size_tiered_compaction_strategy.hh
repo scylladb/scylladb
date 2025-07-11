@@ -75,13 +75,13 @@ public:
     explicit size_tiered_compaction_strategy(const size_tiered_compaction_strategy_options& options);
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override;
+    virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const override;
 
     static int64_t estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
         int min_threshold, int max_threshold, size_tiered_compaction_strategy_options options);
-    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::size_tiered;
