@@ -28,6 +28,7 @@
 #include "replica/database.hh"
 #include "gms/feature_service.hh"
 #include <algorithm>
+#include <boost/test/tools/old/interface.hpp>
 #include <iterator>
 #include <utility>
 #include <fmt/ranges.h>
@@ -1104,6 +1105,7 @@ public:
             for (const auto& [dc, rf] : target_rf) {
                 co_await coroutine::maybe_yield();
                 auto it = current_rf.find(dc);
+                lblogger.info("BONO0: {} {} {}", dc, rf, it != current_rf.end() ? it->second : 0);
                 if (it == current_rf.end() || it->second < rf) {
                     // Get all racks in dc.
                     auto racks_it = topo.get_datacenter_racks().find(dc);
@@ -1114,9 +1116,11 @@ public:
                     auto rack_it = std::find_if(racks_it->second.begin(), racks_it->second.end(), [&topo, &dc, &tinfo] (const auto& rack_to_hosts) {
                         return std::none_of(tinfo.replicas.begin(), tinfo.replicas.end(), [&topo, &dc, &rack = rack_to_hosts.first] (const auto& replica) {
                             const auto& location = topo.get_location(replica.host);
+                            lblogger.info("BONO1: {} {} - {} {}", location.dc, location.rack, dc, rack);
                             return location.dc == dc && location.rack == rack;
                         });
                     });
+                    lblogger.info("BONO: {} {}", dc, rack_it->first);
                     if (rack_it == racks_it->second.end()) {
                         on_internal_error(lblogger, format("No free rack found in DC {} for table {}", dc, it->first));
                     }
@@ -1127,6 +1131,7 @@ public:
                 }
             }
 
+            lblogger.info("BONO: UPSI");
             // Find a replica (dc and rack) to be removed.
             for (const auto& [dc, rf] : current_rf) {
                 co_await coroutine::maybe_yield();

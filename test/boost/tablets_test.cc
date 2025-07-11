@@ -1584,7 +1584,8 @@ void do_rebalance_tablets(cql_test_env& e,
                           shared_load_stats* load_stats = nullptr,
                           std::unordered_set<host_id> skiplist = {},
                           std::function<bool(const migration_plan&)> stop = nullptr,
-                          bool auto_split = false)
+                          bool auto_split = false,
+                          std::optional<ongoing_rf_change_data> ongoing_rf_change_data = std::nullopt)
 {
     auto& talloc = e.get_tablet_allocator().local();
     auto& stm = e.shared_token_metadata().local();
@@ -1594,7 +1595,7 @@ void do_rebalance_tablets(cql_test_env& e,
     auto max_iterations = 1 + get_tablet_count(stm.get()->tablets()) * 10;
 
     for (size_t i = 0; i < max_iterations; ++i) {
-        auto plan = talloc.balance_tablets(stm.get(), std::nullopt, load_stats ? load_stats->get() : nullptr, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), std::move(ongoing_rf_change_data), load_stats ? load_stats->get() : nullptr, skiplist).get();
         if (plan.empty()) {
             return;
         }
@@ -1629,7 +1630,8 @@ void rebalance_tablets(cql_test_env& e,
                        shared_load_stats* load_stats = nullptr,
                        std::unordered_set<host_id> skiplist = {},
                        std::function<bool(const migration_plan&)> stop = nullptr,
-                       bool auto_split = true) {
+                       bool auto_split = true,
+                       std::optional<ongoing_rf_change_data> ongoing_rf_change_data = std::nullopt) {
     abort_source as;
     testlog.debug("rebalance_tablets(): start");
 
@@ -1645,7 +1647,7 @@ void rebalance_tablets(cql_test_env& e,
         load_stats = &local_stats;
     }
 
-    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split);
+    do_rebalance_tablets(e, guard, load_stats, std::move(skiplist), std::move(stop), auto_split, std::move(ongoing_rf_change_data));
     testlog.debug("rebalance_tablets(): rebalanced");
 
     // We should not introduce inconsistency between on-disk state and in-memory state
@@ -1918,6 +1920,164 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_skiplist) {
         BOOST_REQUIRE_EQUAL(load.get_load(host3), 0);
         BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
     }
+  }).get();
+}
+
+// TODO: lb should not choose a node that is down or draining
+SEASTAR_THREAD_TEST_CASE(test_rf_change_plan) {
+  do_with_cql_env_thread([] (auto& e) {
+        unsigned shard_count = 2;
+        const unsigned dc_count = 1;
+        const unsigned rack_count = 3;
+        const unsigned host_count = 1;
+
+        topology_builder topo(e);
+        sstring dcs[dc_count];
+        endpoint_dc_rack racks[dc_count][rack_count];
+        locator::host_id hosts[dc_count][rack_count][host_count];
+        for (unsigned dc = 0; dc < dc_count; ++dc) {
+            dcs[dc] = topo.dc();
+            for (unsigned rack = 0; rack < rack_count; ++rack) {
+                racks[dc][rack] = topo.rack();
+                for (unsigned host = 0; host < host_count; ++host) {
+                    hosts[dc][rack][host] = topo.add_node(node_state::normal, shard_count, racks[dc][rack]);
+                }
+                topo.start_new_rack();
+            }
+            topo.start_new_dc();
+        }
+        // auto dc1 = topo.dc(); 
+        // auto rack11 = topo.rack();
+        // auto rack12 = topo.start_new_rack();
+        // auto rack13 = topo.start_new_rack();
+        // auto dc2 = topo.start_new_dc();
+        // auto rack21 = topo.rack();
+        // auto rack22 = topo.start_new_rack();
+
+        // auto host111 = topo.add_node(node_state::normal, shard_count, rack11);
+        // auto host112 = topo.add_node(node_state::normal, shard_count, rack11);
+        // auto host121 = topo.add_node(node_state::normal, shard_count, rack12);
+        // auto host122 = topo.add_node(node_state::normal, shard_count, rack12);
+        // auto host131 = topo.add_node(node_state::normal, shard_count, rack13);
+        // auto host132 = topo.add_node(node_state::normal, shard_count, rack13);
+        
+        // auto host211 = topo.add_node(node_state::normal, shard_count, rack21);
+        // auto host212 = topo.add_node(node_state::normal, shard_count, rack21);
+        // auto host221 = topo.add_node(node_state::normal, shard_count, rack22);
+        // auto host222 = topo.add_node(node_state::normal, shard_count, rack22);
+
+        auto ks_name = add_keyspace(e, {{dcs[0], 1}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) {
+            tablet_map tmap(2);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                        tablet_replica {hosts[0][0][0], 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                    tablet_replica_set {
+                            tablet_replica {hosts[0][0][0], 1},
+                    }
+            });
+            // tid = *tmap.next_tablet(tid);
+            // tmap.set_tablet(tid, tablet_info {
+            //         tablet_replica_set {
+            //                 tablet_replica {hosts[0][0][1], 0},
+            //         }
+            // });
+            // tid = *tmap.next_tablet(tid);
+            // tmap.set_tablet(tid, tablet_info {
+            //         tablet_replica_set {
+            //                 tablet_replica {hosts[0][0][1], 1},
+            //         }
+            // });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            return make_ready_future<>();
+        });
+
+
+        // // Sanity check
+        // {
+        //     load_sketch load(stm.get());
+        //     load.populate().get();
+        //     BOOST_REQUIRE_EQUAL(load.get_load(host1), 4);
+        //     BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host1), 2);
+        //     BOOST_REQUIRE_EQUAL(load.get_load(host2), 4);
+        //     BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host2), 2);
+        //     BOOST_REQUIRE_EQUAL(load.get_load(host3), 0);
+        //     BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+        // }
+
+        ongoing_rf_change_data ongoing_rf_change_data{
+            .ks_name = ks_name,
+            .new_ks_props = {{  dcs[0], "3" }}, // RF = 3
+            .added_racks_for_dc = {},
+            .removed_racks_for_dc = {},
+            .rollback = false
+        };
+
+        auto& talloc = e.get_tablet_allocator().local();
+        auto& stm = e.shared_token_metadata().local();
+
+        // struct keyspace_rf_change_plan {
+        //     sstring ks_name;
+        //     keyspace_rf_change_state state = keyspace_rf_change_state::empty;
+        //     locator::endpoint_dc_rack replica;
+        //     removes_replica removes_replica;
+        //     std::vector<planned_replica> tablets;
+
+        //     size_t size() const { return tablets.size(); }
+        // };
+
+        auto plan = talloc.balance_tablets(stm.get(), std::move(ongoing_rf_change_data), nullptr, {}).get();
+        auto rf_change_plan = plan.rf_change_plan();
+        BOOST_REQUIRE_EQUAL(rf_change_plan.size(), 2);
+        BOOST_REQUIRE_EQUAL(rf_change_plan.ks_name, ks_name);
+        BOOST_REQUIRE(rf_change_plan.state == keyspace_rf_change_state::new_step);
+        BOOST_REQUIRE_EQUAL(rf_change_plan.replica.dc, dcs[0]);
+        testlog.info("hosts {} ; rf_change_plan.replica.dc: {}; rf_change_plan.replica.rack: {}", hosts[0][0][0], rf_change_plan.replica.dc, rf_change_plan.replica.rack);
+        BOOST_REQUIRE(rf_change_plan.replica == racks[0][1] || rf_change_plan.replica == racks[0][2]);
+        BOOST_REQUIRE(!bool{rf_change_plan.removes_replica});
+        // BOOST_REQUIRE_EQUAL(rf_change_plan.size(), 2);
+
+        // cql_test_env& e,
+        //                    shared_load_stats* load_stats = nullptr,
+        //                    std::unordered_set<host_id> skiplist = {},
+        //                    std::function<bool(const migration_plan&)> stop = nullptr,
+        //                    bool auto_split = true,
+        //                    std::optional<ongoing_rf_change_data> ongoing_rf_change_data = std::nullopt
+
+        // rebalance_tablets(e, &topo.get_shared_load_stats(), {}, nullptr, true, std::move(ongoing_rf_change_data));
+
+
+
+        // auto& stm = e.shared_token_metadata().local();
+
+        // load_sketch load(stm.get());
+        // load.populate().get();
+
+        // BOOST_REQUIRE_EQUAL(load.get_load(hosts[0][0][0]) + load.get_load(hosts[0][0][1]) + load.get_load(hosts[0][1][0]) + load.get_load(hosts[0][1][1]) + load.get_load(hosts[0][2][0]) + load.get_load(hosts[0][2][1]), 3);
+        // BOOST_REQUIRE_EQUAL(load.get_load(host2), 2);
+
+        // auto& tmap1 = stm.get()->tablets().get_tablet_map(table1);
+        // // auto& tmap2 = stm.get()->tablets().get_tablet_map(table2);
+        // // auto& tmap3 = stm.get()->tablets().get_tablet_map(table3);
+        // // auto& tmap4 = stm.get()->tablets().get_tablet_map(table4);
+        // BOOST_REQUIRE_EQUAL(tmap1.get_tablet_info(tmap1.first_tablet()).replicas.size(), 3);
+
+        // BOOST_REQUIRE_EQUAL(tmap1.get_tablet_info(tmap1.first_tablet()).replicas, tmap2.get_tablet_info(tmap2.first_tablet()).replicas);
+        // BOOST_REQUIRE_EQUAL(tmap3.get_tablet_info(tmap3.first_tablet()).replicas, tmap4.get_tablet_info(tmap4.first_tablet()).replicas);
+
+        // {
+        //     load_sketch load(stm.get());
+        //     load.populate().get();
+        //     BOOST_REQUIRE_EQUAL(load.get_load(host3), 0);
+        //     BOOST_REQUIRE_EQUAL(load.get_avg_shard_load(host3), 0);
+        // }
   }).get();
 }
 
