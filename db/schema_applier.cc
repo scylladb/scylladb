@@ -754,6 +754,8 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, con
 
 static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
 {
+    co_await utils::get_local_injector().inject("do_merge_schema_wait", utils::wait_for_message(5min));
+
     slogger.trace("do_merge_schema: {}", mutations);
     schema_ptr s = keyspaces();
     // compare before/after schemas of the affected keyspaces only

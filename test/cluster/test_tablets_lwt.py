@@ -397,3 +397,63 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClie
 
         logger.info("Start the second node")
         await manager.server_start(servers[1].server_id)
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_lwt_for_tablets_in_recovery_mode(manager: ManagerClient):
+    # This test checks that LWT for tablets works without raft in recovery mode.
+
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    config = {
+        'rf_rack_valid_keyspaces': False
+    }
+
+    servers = await manager.servers_add(2, cmdline=cmdline, config=config)
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Set group0_upgrade_state := 'recovery'")
+        await cql.run_async("UPDATE system.scylla_local SET value = 'recovery' WHERE key = 'group0_upgrade_state'",
+                            host = hosts[0])
+        await cql.run_async("UPDATE system.scylla_local SET value = 'recovery' WHERE key = 'group0_upgrade_state'",
+                            host=hosts[1])
+
+        logger.info(f"Rebooting {servers[0]} in RECOVERY mode")
+        await manager.server_restart(servers[0].server_id, wait_others=1)
+
+        logger.info(f"Rebooting {servers[1]} in RECOVERY mode")
+        await manager.server_restart(servers[1].server_id, wait_others=1)
+
+        cql = await reconnect_driver(manager)
+        logger.info("Waiting for driver")
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logger.info(f"Inject do_merge_schema_wait on {servers[1]}")
+        await inject_error_one_shot_on(manager, "do_merge_schema_wait", [servers[1]])
+
+        logger.info(f"Open log on {servers[1]}")
+        s1_log = await manager.server_open_log(servers[1].server_id)
+
+        logger.info("Run an LWT")
+        lwt_task = cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS",  host=hosts[0])
+
+        logger.info("Wait for a failed attempt to get paxos state schema")
+        await s1_log.wait_for(f"cannot obtain paxos state schema for '{ks}.test', retrying.")
+
+        logger.info("Trigger do_merge_schema_wait")
+        await manager.api.message_injection(servers[1].ip_addr, "do_merge_schema_wait")
+
+        await lwt_task
+
+        rows = await cql.run_async(f"SELECT pk, c FROM {ks}.test")
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 1
