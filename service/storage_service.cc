@@ -7688,10 +7688,12 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
 
 inet_address_vector_replica_set
 storage_service::get_natural_endpoints(const sstring& keyspace,
-        const sstring& cf, const sstring& key) const {
+        const sstring& cf,
+        const sstring& key,
+        const sstring& key_delimiter) const {
     auto& table = _db.local().find_column_family(keyspace, cf);
     const auto schema = table.schema();
-    partition_key pk = partition_key::from_nodetool_style_string(schema, key);
+    partition_key pk = partition_key::from_nodetool_style_string(schema, key, key_delimiter.empty() ? ":" : key_delimiter);
     dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
     const auto& ks = _db.local().find_keyspace(keyspace);
     host_id_vector_replica_set replicas;
