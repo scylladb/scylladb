@@ -14,6 +14,7 @@
 #include "db/view/view.hh"
 #include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
+#include "replica/database.hh"
 #include "types/types.hh"
 #include "validation.hh"
 #include "service/storage_proxy.hh"
@@ -29,6 +30,7 @@
 #include "cql3/statements/index_prop_defs.hh"
 #include "index/secondary_index_manager.hh"
 #include "mutation/mutation.hh"
+#include "db/schema_tables.hh"
 
 #include <stdexcept>
 
@@ -401,10 +403,25 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
     auto res = build_index_schema(qp.db());
 
     ::shared_ptr<event::schema_change> ret;
-    utils::chunked_vector<mutation> m;
+    utils::chunked_vector<mutation> muts;
 
     if (res) {
-        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
+        const replica::database& db = qp.proxy().local_db();
+        const auto& cf = db.find_column_family(keyspace(), column_family());
+
+        // Produce statements to update schema tables with index-specific information.
+        muts = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
+
+        // Produce the underlying view for the index.
+        if (db::schema_tables::view_should_exist(res->index)) {
+            view_ptr view = cf.get_index_manager().create_view_for_index(res->index);
+            utils::chunked_vector<mutation> view_muts = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(view), ts);
+
+            muts.reserve(muts.size() + view_muts.size());
+            for (mutation& view_mutation : view_muts) {
+                muts.push_back(std::move(view_mutation));
+            }
+        }
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
@@ -413,7 +430,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
                 column_family());
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::move(muts), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
