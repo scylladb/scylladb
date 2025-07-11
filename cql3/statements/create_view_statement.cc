@@ -129,6 +129,15 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
         throw exceptions::invalid_request_exception("Cannot enable CDC for a materialized view");
     }
 
+    const auto maybe_id = _properties.properties()->get_id();
+    if (maybe_id && db.try_find_table(*maybe_id)) {
+        const auto schema_ptr = db.find_schema(*maybe_id);
+        const auto& ks_name = schema_ptr->ks_name();
+        const auto& cf_name = schema_ptr->cf_name();
+
+        throw exceptions::invalid_request_exception(seastar::format("Table with ID {} already exists: {}.{}", *maybe_id, ks_name, cf_name));
+    }
+
     // View and base tables must be in the same keyspace, to ensure that RF
     // is the same (because we assign a view replica to each base replica).
     // If a keyspace was not specified for the base table name, it is assumed
@@ -339,15 +348,6 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
             "(true - error, warn - warning, false - silent)",
             fmt::join(invalid_not_null_column_names, ", "));
         warnings.emplace_back(std::move(warning_text));
-    }
-
-    const auto maybe_id = _properties.properties()->get_id();
-    if (maybe_id && db.try_find_table(*maybe_id)) {
-        const auto schema_ptr = db.find_schema(*maybe_id);
-        const auto& ks_name = schema_ptr->ks_name();
-        const auto& cf_name = schema_ptr->cf_name();
-
-        throw exceptions::invalid_request_exception(seastar::format("Table with ID {} already exists: {}.{}", *maybe_id, ks_name, cf_name));
     }
 
     schema_builder builder{keyspace(), column_family(), maybe_id};
