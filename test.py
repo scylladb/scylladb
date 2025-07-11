@@ -327,6 +327,8 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
     if options.pytest_arg:
         # If pytest_arg is provided, it should be a string with arguments to pass to pytest
         args.extend(shlex.split(options.pytest_arg))
+    if options.random_seed:
+        args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
     if len(expression) > 1:
