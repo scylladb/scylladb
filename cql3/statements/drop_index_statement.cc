@@ -71,10 +71,10 @@ schema_ptr drop_index_statement::make_drop_idex_schema(query_processor& qp) cons
     return builder.build();
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 drop_index_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
+    utils::chunked_vector<mutation> m;
     auto cfm = make_drop_idex_schema(qp);
 
     if (cfm) {

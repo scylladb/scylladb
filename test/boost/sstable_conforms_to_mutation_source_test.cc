@@ -30,7 +30,7 @@ static db_clock::time_point to_db_clock(gc_clock::time_point tp) {
 }
 
 static
-mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, std::vector<mutation> mutations,
+mutation_source make_sstable_mutation_source(sstables::test_env& env, schema_ptr s, sstring dir, utils::chunked_vector<mutation> mutations,
         sstable_writer_config cfg, sstables::sstable::version_types version, gc_clock::time_point query_time = gc_clock::now()) {
     auto sst = env.make_sstable(s, dir, env.new_generation(), version, sstable_format_types::big, default_sstable_buffer_size, to_db_clock(query_time));
     auto mt = make_memtable(s, mutations);
@@ -68,7 +68,7 @@ void test_cache_population_with_range_tombstone_adjacent_to_population_range(pop
     cache_mt->apply(m1);
 
     cache_tracker tracker;
-    auto ms = populate(s.schema(), std::vector<mutation>({m1}), gc_clock::now());
+    auto ms = populate(s.schema(), utils::chunked_vector<mutation>({m1}), gc_clock::now());
     row_cache cache(s.schema(), snapshot_source_from_snapshot(std::move(ms)), tracker);
 
     auto pr = dht::partition_range::make_singular(pkey);
@@ -99,7 +99,7 @@ static future<> test_sstable_conforms_to_mutation_source(sstable_version_types v
         cfg.promoted_index_block_size = index_block_size;
 
         std::vector<tmpdir> dirs;
-        auto populate = [&env, &dirs, &cfg, version] (schema_ptr s, const std::vector<mutation>& partitions,
+        auto populate = [&env, &dirs, &cfg, version] (schema_ptr s, const utils::chunked_vector<mutation>& partitions,
                                                       gc_clock::time_point query_time) -> mutation_source {
             dirs.emplace_back();
             return make_sstable_mutation_source(env, s, dirs.back().path().string(), partitions, cfg, version, query_time);
@@ -207,7 +207,7 @@ SEASTAR_THREAD_TEST_CASE(test_sstable_reversing_reader_random_schema) {
 
     auto muts = tests::generate_random_mutations(random_schema).get();
 
-    std::vector<mutation> reversed_muts;
+    utils::chunked_vector<mutation> reversed_muts;
     for (auto& m : muts) {
         reversed_muts.push_back(reverse(m));
     }

@@ -228,8 +228,8 @@ public:
 };
 
 frozen_mutation freeze(const mutation& m);
-std::vector<frozen_mutation> freeze(const std::vector<mutation>&);
-std::vector<mutation> unfreeze(const std::vector<frozen_mutation>&);
+utils::chunked_vector<frozen_mutation> freeze(const utils::chunked_vector<mutation>&);
+utils::chunked_vector<mutation> unfreeze(const utils::chunked_vector<frozen_mutation>&);
 
 struct frozen_mutation_and_schema {
     frozen_mutation fm;

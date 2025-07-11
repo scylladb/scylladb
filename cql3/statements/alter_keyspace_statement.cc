@@ -201,7 +201,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
         const auto tmptr = qp.proxy().get_token_metadata_ptr();
         const auto& feat = qp.proxy().features();
         auto ks_md_update = _attrs->as_ks_metadata_update(ks_md, *tmptr, feat);
-        std::vector<mutation> muts;
+        utils::chunked_vector<mutation> muts;
         std::vector<sstring> warnings;
         auto old_ks_options = get_old_options_flattened(ks);
         auto ks_options = get_current_options_flattened(_attrs, feat);

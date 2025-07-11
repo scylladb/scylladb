@@ -969,9 +969,9 @@ private:
     future<> _upgrade_to_topology_coordinator_fiber = make_ready_future<>();
     future<> track_upgrade_progress_to_topology_coordinator(sharded<service::storage_proxy>& proxy);
 
-    future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<std::vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
+    future<> transit_tablet(table_id, dht::token, noncopyable_function<std::tuple<utils::chunked_vector<canonical_mutation>, sstring>(const locator::tablet_map& tmap, api::timestamp_type)> prepare_mutations);
     future<service::group0_guard> get_guard_for_tablet_update();
-    future<bool> exec_tablet_update(service::group0_guard guard, std::vector<canonical_mutation> updates, sstring reason);
+    future<bool> exec_tablet_update(service::group0_guard guard, utils::chunked_vector<canonical_mutation> updates, sstring reason);
 public:
     struct all_tokens_tag {};
     future<std::unordered_map<sstring, sstring>> add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant, std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter, bool await_completion);
@@ -1009,8 +1009,8 @@ public:
     // from across the entire cluster.
     future<utils::chunked_vector<temporary_buffer<char>>> do_sample_sstables(table_id, uint64_t chunk_size, uint64_t n_chunks);
 private:
-    future<std::vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
-    future<std::vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
+    future<utils::chunked_vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
+    future<utils::chunked_vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
     struct nodes_to_notify_after_sync {
         std::vector<std::pair<gms::inet_address, locator::host_id>> left;
@@ -1035,7 +1035,7 @@ private:
     // raft_group0_client::_read_apply_mutex must be held
     future<> merge_topology_snapshot(raft_snapshot snp);
 
-    std::vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp);
+    utils::chunked_vector<canonical_mutation> build_mutation_from_join_params(const join_node_request_params& params, api::timestamp_type write_timestamp);
     std::unordered_set<raft::server_id> ignored_nodes_from_join_params(const join_node_request_params& params);
 
     future<join_node_request_result> join_node_request_handler(join_node_request_params params);

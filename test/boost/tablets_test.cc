@@ -65,7 +65,7 @@ void verify_tablet_metadata_persistence(cql_test_env& env, const tablet_metadata
 }
 
 static
-void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, std::vector<mutation> muts) {
+void verify_tablet_metadata_update(cql_test_env& env, tablet_metadata& tm, utils::chunked_vector<mutation> muts) {
     testlog.trace("verify_tablet_metadata_update(): {}", muts);
 
     auto& db = env.local_db();
@@ -601,7 +601,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
 
             const auto& tmap = tm.get_tablet_map(table2);
 
-            std::vector<mutation> muts;
+            utils::chunked_vector<mutation> muts;
             for (std::optional<tablet_id> tb = tmap.first_tablet(); tb; tb = tmap.next_tablet(*tb)) {
                 replica::tablet_mutation_builder builder(ts++, table2);
 
@@ -627,7 +627,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
 
             const auto& tmap = tm.get_tablet_map(table2);
 
-            std::vector<mutation> muts;
+            utils::chunked_vector<mutation> muts;
             for (std::optional<tablet_id> tb = tmap.first_tablet(); tb; tb = tmap.next_tablet(*tb)) {
                 replica::tablet_mutation_builder builder(ts++, table2);
 
@@ -671,7 +671,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
         tablet_metadata tm = read_tablet_metadata(e.local_qp()).get();
         auto ts = current_timestamp(e);
 
-        auto check_hint = [&] (locator::tablet_metadata_change_hint& incremental_hint, std::vector<canonical_mutation>& muts, mutation new_mut,
+        auto check_hint = [&] (locator::tablet_metadata_change_hint& incremental_hint, utils::chunked_vector<canonical_mutation>& muts, mutation new_mut,
                 const locator::tablet_metadata_change_hint& expected_hint, std::source_location sl = std::source_location::current()) {
             testlog.info("check_hint() called from {}:{}", sl.file_name(), sl.line());
 
@@ -699,7 +699,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
 
         // Unrelated mutation generates no hint
         {
-            std::vector<canonical_mutation> muts;
+            utils::chunked_vector<canonical_mutation> muts;
             locator::tablet_metadata_change_hint hint;
 
             simple_schema s;
@@ -711,7 +711,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
 
         // Incremental update of hint
         {
-            std::vector<canonical_mutation> muts;
+            utils::chunked_vector<canonical_mutation> muts;
             locator::tablet_metadata_change_hint hint;
 
             const auto& tmap = tm.get_tablet_map(table1);
@@ -740,7 +740,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_hint) {
         auto check_delete_scenario = [&] (const char* scenario, std::function<void(table_id, mutation&, api::timestamp_type)> apply_delete) {
             testlog.info("check_delete_scenario({})", scenario);
 
-            std::vector<canonical_mutation> muts;
+            utils::chunked_vector<canonical_mutation> muts;
             locator::tablet_metadata_change_hint hint;
 
             // Check that a deletion generates only a partiton hint

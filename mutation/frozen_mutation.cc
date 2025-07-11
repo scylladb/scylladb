@@ -117,16 +117,16 @@ frozen_mutation freeze(const mutation& m) {
     return frozen_mutation{ m };
 }
 
-std::vector<frozen_mutation> freeze(const std::vector<mutation>& muts) {
+utils::chunked_vector<frozen_mutation> freeze(const utils::chunked_vector<mutation>& muts) {
     return muts | std::views::transform([] (const mutation& m) {
         return freeze(m);
-    }) | std::ranges::to<std::vector<frozen_mutation>>();
+    }) | std::ranges::to<utils::chunked_vector<frozen_mutation>>();
 }
 
-std::vector<mutation> unfreeze(const std::vector<frozen_mutation>& muts) {
+utils::chunked_vector<mutation> unfreeze(const utils::chunked_vector<frozen_mutation>& muts) {
     return muts | std::views::transform([] (const frozen_mutation& fm) {
         return fm.unfreeze(local_schema_registry().get(fm.schema_version()));
-    }) | std::ranges::to<std::vector<mutation>>();
+    }) | std::ranges::to<utils::chunked_vector<mutation>>();
 }
 
 

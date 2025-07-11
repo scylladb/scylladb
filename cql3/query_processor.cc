@@ -941,7 +941,7 @@ query_processor::execute_internal(
     }
 }
 
-future<std::vector<mutation>> query_processor::get_mutations_internal(
+future<utils::chunked_vector<mutation>> query_processor::get_mutations_internal(
         const sstring query_string,
         service::query_state& query_state,
         api::timestamp_type timestamp,

@@ -3202,7 +3202,7 @@ public:
     }
 
     // Allocate tablets for multiple new tables, which may be co-located with each other, or co-located with an existing base table.
-    void allocate_tablets_for_new_tables(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, std::vector<mutation>& muts, api::timestamp_type ts) {
+    void allocate_tablets_for_new_tables(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
         auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
@@ -3247,15 +3247,15 @@ public:
         }
     }
 
-    void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         allocate_tablets_for_new_tables(ksm, cfms, muts, ts);
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         allocate_tablets_for_new_tables(ksm, {s.shared_from_this()}, muts, ts);
     }
 
-    void on_before_drop_column_family(const schema& s, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(s.ks_name());
         auto&& rs = ks.get_replication_strategy();
         if (rs.uses_tablets()) {
@@ -3265,7 +3265,7 @@ public:
         }
     }
 
-    void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         keyspace& ks = _db.find_keyspace(keyspace_name);
         auto&& rs = ks.get_replication_strategy();
         if (rs.uses_tablets()) {

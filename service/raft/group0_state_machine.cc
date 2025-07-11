@@ -81,7 +81,7 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
     _state_id_handler.run();
 }
 
-static mutation extract_history_mutation(std::vector<canonical_mutation>& muts, const data_dictionary::database db) {
+static mutation extract_history_mutation(utils::chunked_vector<canonical_mutation>& muts, const data_dictionary::database db) {
     auto s = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY);
     auto it = std::find_if(muts.begin(), muts.end(), [history_table_id = s->id()]
             (canonical_mutation& m) { return m.column_family_id() == history_table_id; });
@@ -122,8 +122,8 @@ bool should_flush_system_topology_after_applying(const mutation& mut, const data
     return false;
 }
 
-future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, std::vector<canonical_mutation> cms) {
-    std::vector<frozen_mutation_and_schema> mutations;
+future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address from, utils::chunked_vector<canonical_mutation> cms) {
+    utils::chunked_vector<frozen_mutation_and_schema> mutations;
     mutations.reserve(cms.size());
     bool need_system_topology_flush = false;
     try {
@@ -147,7 +147,7 @@ future<> write_mutations_to_database(storage_proxy& proxy, gms::inet_address fro
     }
 }
 
-group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_reload(const std::vector<canonical_mutation>& mutations) {
+group0_state_machine::modules_to_reload group0_state_machine::get_modules_to_reload(const utils::chunked_vector<canonical_mutation>& mutations) {
     modules_to_reload modules;
 
     for (auto& mut: mutations) {
@@ -225,7 +225,7 @@ future<> group0_state_machine::merge_and_apply(group0_state_machine_merger& merg
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
 static void ensure_group0_schema(const group0_command& cmd, const replica::database& db) {
-    auto validate_schema = [&db](const std::vector<canonical_mutation>& mutations) {
+    auto validate_schema = [&db](const utils::chunked_vector<canonical_mutation>& mutations) {
         for (const auto& mut : mutations) {
             // Get the schema for the column family
             auto schema = db.find_schema(mut.column_family_id());

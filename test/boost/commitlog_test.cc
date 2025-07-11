@@ -986,7 +986,7 @@ SEASTAR_TEST_CASE(test_commitlog_add_entry) {
             constexpr auto n = 10;
             for (auto fs : { force_sync(false), force_sync(true) }) {
                 std::vector<commitlog_entry_writer> writers;
-                std::vector<frozen_mutation> mutations;
+                utils::chunked_vector<frozen_mutation> mutations;
                 std::vector<replay_position> rps;
 
                 writers.reserve(n);
@@ -1048,8 +1048,8 @@ SEASTAR_TEST_CASE(test_commitlog_add_entries) {
 
             constexpr auto n = 10;
             for (auto fs : { force_sync(false), force_sync(true) }) {
-                std::vector<commitlog_entry_writer> writers;
-                std::vector<frozen_mutation> mutations;
+                utils::chunked_vector<commitlog_entry_writer> writers;
+                utils::chunked_vector<frozen_mutation> mutations;
                 std::vector<replay_position> rps;
 
                 writers.reserve(n);
@@ -1849,8 +1849,8 @@ static future<> do_test_oversized_entry(size_t max_size_mb) {
         auto log = co_await commitlog::create_commitlog(cfg);
         auto size = log.max_record_size() * 2;
 
-        std::vector<commitlog_entry_writer> writers;
-        std::vector<frozen_mutation> mutations;
+        utils::chunked_vector<commitlog_entry_writer> writers;
+        utils::chunked_vector<frozen_mutation> mutations;
 
         size_t tot = 0; 
         // generate a bunch of mutation until we have more data than allowed.

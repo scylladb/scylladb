@@ -831,7 +831,7 @@ future<> service_level_controller::migrate_to_v2(size_t nodes_count, db::system_
     
     auto guard = co_await group0_client.start_operation(as);
 
-    std::vector<mutation> migration_muts;
+    utils::chunked_vector<mutation> migration_muts;
     for (const auto& row: *rows) {
         std::vector<data_value_or_unset> values;
         for (const auto& col: schema->all_columns()) {

@@ -558,7 +558,7 @@ void group0_batch::add_mutation(mutation m, std::string_view description) {
     }
 }
 
-void group0_batch::add_mutations(std::vector<mutation> ms, std::string_view description) {
+void group0_batch::add_mutations(utils::chunked_vector<mutation> ms, std::string_view description) {
     _muts.insert(_muts.end(),
             std::make_move_iterator(ms.begin()),
             std::make_move_iterator(ms.end()));
@@ -577,7 +577,7 @@ void group0_batch::add_generator(generator_func f, std::string_view description)
 static future<> add_write_mutations_entry(
         ::service::raft_group0_client& group0_client,
         std::string_view description,
-        std::vector<canonical_mutation> muts,
+        utils::chunked_vector<canonical_mutation> muts,
         ::service::group0_guard group0_guard,
         seastar::abort_source& as,
         std::optional<::service::raft_timeout> timeout) {
@@ -614,7 +614,7 @@ future<> group0_batch::commit(::service::raft_group0_client& group0_client, seas
     // common case, don't bother with generators as we would have only 1-2 mutations,
     // when producer expects substantial number or size of mutations it should use generator
     if (_generators.size() == 0) {
-        std::vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+        utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
         co_return co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
     }
     // raft doesn't support streaming so we need to materialize all mutations in memory
@@ -622,12 +622,12 @@ future<> group0_batch::commit(::service::raft_group0_client& group0_client, seas
     if (_muts.empty()) {
         co_return;
     }
-    std::vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
+    utils::chunked_vector<canonical_mutation> cmuts = {_muts.begin(), _muts.end()};
     _muts.clear();
     co_await add_write_mutations_entry(group0_client, description, std::move(cmuts), std::move(*_guard), as, timeout);
 }
 
-future<std::pair<std::vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {
+future<std::pair<utils::chunked_vector<mutation>, ::service::group0_guard>> group0_batch::extract() && {
     co_await materialize_mutations();
     co_return std::make_pair(std::move(_muts), std::move(*_guard));
 }

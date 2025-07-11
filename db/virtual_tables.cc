@@ -75,12 +75,12 @@ public:
     }
 
     future<> execute(std::function<void(mutation)> mutation_sink) override {
-        auto muts = co_await _dist_ss.invoke_on(0, [this] (service::storage_service& ss) -> future<std::vector<frozen_mutation>> {
+        auto muts = co_await _dist_ss.invoke_on(0, [this] (service::storage_service& ss) -> future<utils::chunked_vector<frozen_mutation>> {
             auto& gossiper = _dist_gossiper.local();
             auto ownership = co_await ss.get_ownership();
             const locator::token_metadata& tm = ss.get_token_metadata();
 
-            std::vector<frozen_mutation> muts;
+            utils::chunked_vector<frozen_mutation> muts;
             muts.reserve(gossiper.num_endpoints());
 
             gossiper.for_each_endpoint_state([&] (const gms::endpoint_state& eps) {

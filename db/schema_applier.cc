@@ -752,7 +752,7 @@ static future<> merge_aggregates(distributed<service::storage_proxy>& proxy, con
     });
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, std::vector<mutation> mutations, bool reload)
+static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations, bool reload)
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_ptr s = keyspaces();
@@ -848,7 +848,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy, shar
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, std::vector<mutation> mutations, bool reload)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat, utils::chunked_vector<mutation> mutations, bool reload)
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).

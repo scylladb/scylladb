@@ -33,7 +33,7 @@ static service::group0_command create_command(utils::UUID id) {
     auto mut = canonical_mutation{mutation{db::system_keyspace::group0_history(), partition_key::make_empty()}};
 
     return service::group0_command {
-        .change{service::write_mutations{std::vector<canonical_mutation>{mut}}},
+        .change{service::write_mutations{utils::chunked_vector<canonical_mutation>{mut}}},
         .history_append{db::system_keyspace::make_group0_history_state_id_mutation(
                         id, std::nullopt, "test")},
         .new_state_id = id,
@@ -92,7 +92,7 @@ SEASTAR_TEST_CASE(test_group0_cmd_merge) {
             .creator_addr{env.db().local().get_token_metadata().get_topology().my_address()},
             .creator_id{group0.id()}
         };
-        std::vector<canonical_mutation> cms;
+        utils::chunked_vector<canonical_mutation> cms;
         size_t size = 0;
         auto muts = service::prepare_keyspace_drop_announcement(env.local_db(), "ks", api::new_timestamp()).get();
         // Maximum mutation size is 1/3 of commitlog segment size which we set

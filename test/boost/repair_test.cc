@@ -85,7 +85,7 @@ lw_shared_ptr<repair_writer> make_test_repair_writer(schema_ptr schema, reader_p
 
 repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& gen, schema_ptr s, reader_permit permit, lw_shared_ptr<replica::memtable> m) {
     repair_rows_on_wire input;
-    std::vector<mutation> muts = gen(100);
+    utils::chunked_vector<mutation> muts = gen(100);
 
     for (mutation& mut : muts) {
         partition_key pk = mut.key();

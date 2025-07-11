@@ -311,7 +311,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
             m.set_clustered_cell(c_key, *s->get_column_definition("r1"), std::move(live_cell));
             return m;
         };
-        std::vector<mutation> mutations;
+        utils::chunked_vector<mutation> mutations;
         mutations.reserve(total_keys);
 
         auto expired_keys = total_keys*expired;

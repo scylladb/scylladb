@@ -41,10 +41,10 @@ future<> drop_view_statement::check_access(query_processor& qp, const service::c
     return make_ready_future<>();
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 drop_view_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
+    utils::chunked_vector<mutation> m;
 
     try {
         m = co_await service::prepare_view_drop_announcement(qp.proxy(), keyspace(), column_family(), ts);

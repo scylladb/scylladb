@@ -125,7 +125,7 @@ static future<> test_basic_operations(app_template& app) {
 
         testlog.info("Read in {:.6f} [ms]", time_to_read.count() * 1000);
 
-        std::vector<canonical_mutation> muts;
+        utils::chunked_vector<canonical_mutation> muts;
         auto time_to_read_muts = duration_in_seconds([&] {
             muts = replica::read_tablet_mutations(e.local_qp().proxy().get_db()).get();
         });
@@ -169,7 +169,7 @@ static future<> test_basic_operations(app_template& app) {
             builder.set_stage(token, tablet_transition_stage::streaming);
             builder.set_transition(token, tablet_transition_kind::migration);
 
-            std::vector<mutation> muts;
+            utils::chunked_vector<mutation> muts;
             muts.push_back(builder.build());
             e.local_db().apply(freeze(muts), db::no_timeout).get();
             replica::update_tablet_metadata_change_hint(hint, muts.front());

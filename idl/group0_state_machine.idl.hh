@@ -8,6 +8,7 @@
 
 #include "raft/raft.hh"
 #include "gms/inet_address_serializer.hh"
+#include "utils/chunked_vector.hh"
 
 #include "idl/frozen_schema.idl.hh"
 #include "idl/uuid.idl.hh"
@@ -16,7 +17,7 @@
 namespace service {
 
 struct schema_change {
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct broadcast_table_query {
@@ -24,15 +25,15 @@ struct broadcast_table_query {
 };
 
 struct topology_change {
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct mixed_change {
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct write_mutations {
-    std::vector<canonical_mutation> mutations;
+    utils::chunked_vector<canonical_mutation> mutations;
 };
 
 struct group0_command {

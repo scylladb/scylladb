@@ -35,14 +35,14 @@ public:
     virtual const sstring& keyspace() const override;
 
 
-    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const override;
+    future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>> prepare_schema_mutations(query_processor& qp, const query_options& options, api::timestamp_type) const override;
 
     class add_or_alter;
     class renames;
 protected:
     virtual user_type make_updated_type(data_dictionary::database db, user_type to_update) const = 0;
 private:
-    future<std::vector<mutation>> prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type) const;
+    future<utils::chunked_vector<mutation>> prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type) const;
 };
 
 class alter_type_statement::add_or_alter : public alter_type_statement {

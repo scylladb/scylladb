@@ -23,7 +23,7 @@
 using namespace sstables;
 using namespace std::chrono_literals;
 
-lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const std::vector<mutation>& muts) {
+lw_shared_ptr<replica::memtable> make_memtable(schema_ptr s, const utils::chunked_vector<mutation>& muts) {
     auto mt = make_lw_shared<replica::memtable>(s);
 
     std::size_t i{0};
@@ -58,11 +58,11 @@ sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, l
     return sst;
 }
 
-sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, std::vector<mutation> muts, validate do_validate) {
+sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_sstable()> sst_factory, utils::chunked_vector<mutation> muts, validate do_validate) {
     return make_sstable_containing(sst_factory(), std::move(muts), do_validate);
 }
 
-sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, std::vector<mutation> muts, validate do_validate) {
+sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, utils::chunked_vector<mutation> muts, validate do_validate) {
     schema_ptr s = muts[0].schema();
     make_sstable_containing(sst, make_memtable(s, muts));
 

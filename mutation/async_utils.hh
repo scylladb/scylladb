@@ -42,4 +42,4 @@ future<canonical_mutation> make_canonical_mutation_gently(const mutation& m);
 future<frozen_mutation> freeze_gently(const mutation& m);
 future<mutation> unfreeze_gently(const frozen_mutation& fm, schema_ptr schema);
 // Caller is responsible for keeping the argument stable in memory
-future<std::vector<mutation>> unfreeze_gently(std::span<frozen_mutation>);
+future<utils::chunked_vector<mutation>> unfreeze_gently(const utils::chunked_vector<frozen_mutation>&);

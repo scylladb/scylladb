@@ -383,9 +383,9 @@ std::pair<view_ptr, cql3::cql_warnings_vec> create_view_statement::prepare_view(
     return std::make_pair(view_ptr(builder.build()), std::move(warnings));
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_view_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
-    std::vector<mutation> m;
+    utils::chunked_vector<mutation> m;
     auto [definition, warnings] = prepare_view(qp.db());
     try {
         m = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(definition), ts);

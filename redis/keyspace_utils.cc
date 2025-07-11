@@ -194,7 +194,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
 
         auto group0_guard = co_await mml.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
-        std::vector<mutation> mutations;
+        utils::chunked_vector<mutation> mutations;
 
         for (auto ksm: ksms) {
             if (db.has_keyspace(ksm->name())) {
@@ -206,7 +206,7 @@ future<> create_keyspace_if_not_exists_impl(seastar::sharded<service::storage_pr
         }
 
         auto table_gen = std::bind_front(
-                [] (data_dictionary::database db, service::storage_proxy& sp, std::vector<mutation>& mutations,
+                [] (data_dictionary::database db, service::storage_proxy& sp, utils::chunked_vector<mutation>& mutations,
                     api::timestamp_type ts, const keyspace_metadata& ksm, sstring cf_name, schema_ptr schema) -> future<> {
             if (db.has_schema(ksm.name(), cf_name)) {
                 co_return;

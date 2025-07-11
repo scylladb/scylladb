@@ -51,7 +51,7 @@ struct mutation_less_cmp {
         return m1.decorated_key().less_compare(*m1.schema(), m2.decorated_key());
     }
 };
-static mutation_source make_source(std::vector<mutation> mutations) {
+static mutation_source make_source(utils::chunked_vector<mutation> mutations) {
     return mutation_source([mutations = std::move(mutations)] (schema_ptr s, reader_permit permit, const dht::partition_range& range, const query::partition_slice& slice,
             tracing::trace_state_ptr, streamed_mutation::forwarding fwd, mutation_reader::forwarding fwd_mr) {
         SCYLLA_ASSERT(range.is_full()); // slicing not implemented yet
@@ -418,7 +418,7 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
         };
 
         auto make_ring = [&] (int n) {
-            std::vector<mutation> ring;
+            utils::chunked_vector<mutation> ring;
             while (n--) {
                 ring.push_back(mutation(s, new_key()));
             }
@@ -426,7 +426,7 @@ SEASTAR_TEST_CASE(test_partitions_with_only_expired_tombstones_are_dropped) {
             return ring;
         };
 
-        std::vector<mutation> ring = make_ring(4);
+        utils::chunked_vector<mutation> ring = make_ring(4);
 
         ring[0].set_clustered_cell(clustering_key::make_empty(), "v", data_value(bytes("v")), api::new_timestamp());
 
@@ -502,7 +502,7 @@ SEASTAR_TEST_CASE(test_partition_limit) {
         mutation m3(s, partition_key::from_single_value(*s, "key3"));
         m3.set_clustered_cell(clustering_key::from_single_value(*s, bytes("B")), "v1", data_value(bytes("B:v")), 1);
 
-        std::vector<mutation> muts = {m1, m2, m3};
+        utils::chunked_vector<mutation> muts = {m1, m2, m3};
         std::sort(muts.begin(), muts.end(), mutation_decorated_key_less_comparator{});
 
         auto src = make_source(muts);
@@ -547,7 +547,7 @@ static void data_query(schema_ptr s, reader_permit permit, const mutation_source
 SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
     tests::reader_concurrency_semaphore_wrapper semaphore;
     random_mutation_generator gen(random_mutation_generator::generate_counters::no);
-    std::vector<mutation> mutations = gen(1);
+    utils::chunked_vector<mutation> mutations = gen(1);
     schema_ptr s = gen.schema();
     mutation_source source = make_source(std::move(mutations));
     query::result_memory_limiter l(std::numeric_limits<ssize_t>::max());
@@ -568,7 +568,7 @@ SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {
 SEASTAR_THREAD_TEST_CASE(test_frozen_mutation_consumer) {
     random_mutation_generator gen(random_mutation_generator::generate_counters::no);
     schema_ptr s = gen.schema();
-    std::vector<mutation> mutations = gen(1);
+    utils::chunked_vector<mutation> mutations = gen(1);
     const mutation& m = mutations[0];
     frozen_mutation fm = freeze(m);
 

@@ -158,7 +158,7 @@ public:
         });
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
+    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
         if (schema.cdc_options().enabled()) {
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(schema.cf_name());
@@ -175,7 +175,7 @@ public:
         }
     }
 
-    void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
+    void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
         bool is_cdc = new_schema.cdc_options().enabled();
         bool was_cdc = old_schema.cdc_options().enabled();
 
@@ -216,7 +216,7 @@ public:
         }
     }
 
-    void on_before_drop_column_family(const schema& schema, std::vector<mutation>& mutations, api::timestamp_type timestamp) override {
+    void on_before_drop_column_family(const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
         auto logname = log_name(schema.cf_name());
         auto& db = _ctxt._proxy.get_db().local();
         auto has_cdc_log = db.has_schema(schema.ks_name(), logname);
@@ -231,15 +231,15 @@ public:
         }
     }
 
-    future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>> augment_mutation_call(
+    future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
-        std::vector<mutation>&& mutations,
+        utils::chunked_vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state,
         db::consistency_level write_cl
     );
 
     template<typename Iter>
-    future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, std::vector<mutation>&);
+    future<> append_mutations(Iter i, Iter e, schema_ptr s, lowres_clock::time_point, utils::chunked_vector<mutation>&);
 
 private:
     static void check_for_attempt_to_create_nested_cdc_log(replica::database& db, const schema& schema) {
@@ -1461,7 +1461,7 @@ private:
     row_states_map _clustering_row_states;
     cell_map _static_row_state;
 
-    std::vector<mutation> _result_mutations;
+    utils::chunked_vector<mutation> _result_mutations;
     std::optional<log_mutation_builder> _builder;
 
     // When enabled, process_change will update _clustering_row_states and _static_row_state
@@ -1591,8 +1591,8 @@ public:
 
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
     // The `transformer` object on which this method was called on should not be used anymore.
-    std::tuple<std::vector<mutation>, stats::part_type_set> finish() && {
-        return std::make_pair<std::vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
+    std::tuple<utils::chunked_vector<mutation>, stats::part_type_set> finish() && {
+        return std::make_pair<utils::chunked_vector<mutation>, stats::part_type_set>(std::move(_result_mutations), std::move(_touched_parts));
     }
 
     static db::timeout_clock::time_point default_timeout() {
@@ -1763,8 +1763,8 @@ public:
 };
 
 template <typename Func>
-future<std::vector<mutation>>
-transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_size, Func&& f) {
+future<utils::chunked_vector<mutation>>
+transform_mutations(utils::chunked_vector<mutation>& muts, decltype(muts.size()) batch_size, Func&& f) {
     return parallel_for_each(
             boost::irange(static_cast<decltype(muts.size())>(0), muts.size(), batch_size),
             std::forward<Func>(f))
@@ -1773,8 +1773,8 @@ transform_mutations(std::vector<mutation>& muts, decltype(muts.size()) batch_siz
 
 } // namespace cdc
 
-future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
+cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
@@ -1782,14 +1782,14 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     });
 
     if (i == e) {
-        return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), lw_shared_ptr<cdc::operation_result_tracker>()));
+        return make_ready_future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), lw_shared_ptr<cdc::operation_result_tracker>()));
     }
 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
     mutations.reserve(2 * mutations.size());
 
     return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
-            [this, tr_state = std::move(tr_state), write_cl] (std::vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
+            [this, tr_state = std::move(tr_state), write_cl] (utils::chunked_vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
         return transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
@@ -1849,21 +1849,21 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Generated {} log mutations from {}", generated_count, mutations[idx].decorated_key());
                 details.touched_parts.add(touched_parts);
             });
-        }).then([this, tr_state, &details](std::vector<mutation> mutations) {
+        }).then([this, tr_state, &details](utils::chunked_vector<mutation> mutations) {
             tracing::trace(tr_state, "CDC: Finished generating all log mutations");
             auto tracker = make_lw_shared<cdc::operation_result_tracker>(_ctxt._proxy.get_cdc_stats(), details);
-            return make_ready_future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), std::move(tracker)));
+            return make_ready_future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>(std::make_tuple(std::move(mutations), std::move(tracker)));
         });
     });
 }
 
-bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutations) const {
+bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations) const {
     return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
         return m.schema()->cdc_options().enabled();
     });
 }
 
-future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
+cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
     return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
 }

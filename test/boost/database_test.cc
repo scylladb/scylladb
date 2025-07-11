@@ -301,7 +301,7 @@ SEASTAR_TEST_CASE(test_querying_with_limits) {
 
 static void test_database(void (*run_tests)(populate_fn_ex, bool), unsigned cgs) {
     do_with_cql_env_and_compaction_groups_cgs(cgs, [run_tests] (cql_test_env& e) {
-        run_tests([&] (schema_ptr s, const std::vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
+        run_tests([&] (schema_ptr s, const utils::chunked_vector<mutation>& partitions, gc_clock::time_point) -> mutation_source {
             auto& mm = e.migration_manager().local();
             try {
                 auto group0_guard = mm.start_group0_operation().get();

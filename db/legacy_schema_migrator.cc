@@ -536,7 +536,7 @@ public:
         mlogger.info("Moving {} keyspaces from legacy schema tables to the new schema keyspace ({})",
                         _keyspaces.size(), db::schema_tables::v3::NAME);
 
-        std::vector<mutation> mutations;
+        utils::chunked_vector<mutation> mutations;
 
         for (auto& ks : _keyspaces) {
             auto ksm = ::make_lw_shared<keyspace_metadata>(ks.name

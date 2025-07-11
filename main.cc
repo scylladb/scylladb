@@ -1687,7 +1687,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 ~sstable_dict_deleter() {
                     _mn.unregister_listener(this).get();
                 }
-                void on_before_drop_column_family(const schema& s, std::vector<mutation>& mutations, api::timestamp_type) override {
+                void on_before_drop_column_family(const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type) override {
                     if (_feat.sstable_compression_dicts) {
                         mutations.push_back(db::system_keyspace::get_delete_dict_mutation(fmt::format("sstables/{}", s.id()), api::max_timestamp));
                     }

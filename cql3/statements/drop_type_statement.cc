@@ -124,10 +124,10 @@ const sstring& drop_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 drop_type_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     ::shared_ptr<cql_transport::event::schema_change> ret;
-    std::vector<mutation> m;
+    utils::chunked_vector<mutation> m;
 
     if (validate_while_executing(qp)) {
         data_dictionary::database db = qp.db();

@@ -14,6 +14,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
 #include "utils/atomic_vector.hh"
+#include "utils/chunked_vector.hh"
 
 namespace data_dictionary {
 class keyspace_metadata;
@@ -80,11 +81,11 @@ public:
     // of the column family's keyspace. The reason for this is that we sometimes create a keyspace
     // and its column families together. Therefore, listeners can't load the keyspace from the
     // database. Instead, they should use the `ksm` parameter if needed.
-    virtual void on_before_create_column_family(const keyspace_metadata& ksm, const schema&, std::vector<mutation>&, api::timestamp_type) {}
-    virtual void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, std::vector<mutation>& mutations, api::timestamp_type timestamp);
-    virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type) {}
-    virtual void on_before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type) {}
-    virtual void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp);
+    virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type) {}
 
     class only_view_notifications;
     class empty_listener;
@@ -147,11 +148,11 @@ public:
     future<> drop_function(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
     future<> drop_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
 
-    void before_create_column_family(const keyspace_metadata& ksm, const schema&, std::vector<mutation>&, api::timestamp_type);
-    void before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>&, std::vector<mutation>&, api::timestamp_type);
-    void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
-    void before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
-    void before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type);
+    void before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type);
 };
 
 }

@@ -29,7 +29,7 @@ schema_mutations::schema_mutations(canonical_mutation columnfamilies,
     , _scylla_tables(scylla_tables ? mutation_opt{scylla_tables.value().to_mutation(db::schema_tables::scylla_tables())} : std::nullopt)
 {}
 
-void schema_mutations::copy_to(std::vector<mutation>& dst) const {
+void schema_mutations::copy_to(utils::chunked_vector<mutation>& dst) const {
     dst.push_back(_columnfamilies);
     dst.push_back(_columns);
     if (_view_virtual_columns) {

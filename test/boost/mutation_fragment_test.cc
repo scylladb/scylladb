@@ -37,7 +37,7 @@
 SEASTAR_TEST_CASE(test_mutation_merger_conforms_to_mutation_source) {
     return seastar::async([] {
         tests::reader_concurrency_semaphore_wrapper semaphore;
-        run_mutation_source_tests([&](schema_ptr s, const std::vector<mutation>& partitions) -> mutation_source {
+        run_mutation_source_tests([&](schema_ptr s, const utils::chunked_vector<mutation>& partitions) -> mutation_source {
             // We create a mutation source which combines N memtables.
             // The input fragments are spread among the memtables according to some selection logic,
 

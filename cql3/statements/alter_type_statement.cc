@@ -46,8 +46,8 @@ const sstring& alter_type_statement::keyspace() const
     return _name.get_keyspace();
 }
 
-future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type ts) const {
-    std::vector<mutation> m;
+future<utils::chunked_vector<mutation>> alter_type_statement::prepare_announcement_mutations(service::storage_proxy& sp, api::timestamp_type ts) const {
+    utils::chunked_vector<mutation> m;
     auto&& ks = sp.data_dictionary().find_keyspace(keyspace());
     auto&& all_types = ks.metadata()->user_types().get_all_types();
     auto to_update = all_types.find(_name.get_user_type_name());
@@ -96,7 +96,7 @@ future<std::vector<mutation>> alter_type_statement::prepare_announcement_mutatio
     co_return m;
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>>
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 alter_type_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     try {
         auto m = co_await prepare_announcement_mutations(qp.proxy(), ts);

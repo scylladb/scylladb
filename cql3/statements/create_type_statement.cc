@@ -118,8 +118,8 @@ std::optional<user_type> create_type_statement::make_type(query_processor& qp) c
     return type;
 }
 
-future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector<mutation>, cql3::cql_warnings_vec>> create_type_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
-    std::vector<mutation> m;
+future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>> create_type_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
+    utils::chunked_vector<mutation> m;
     try {
         auto t = make_type(qp);
         if (t) {

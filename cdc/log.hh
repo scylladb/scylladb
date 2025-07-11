@@ -75,13 +75,13 @@ public:
     // appropriate augments to set the log entries.
     // Iff post-image is enabled for any of these, a non-empty callback is also
     // returned to be invoked post the mutation query.
-    future<std::tuple<std::vector<mutation>, lw_shared_ptr<operation_result_tracker>>> augment_mutation_call(
+    future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<operation_result_tracker>>> augment_mutation_call(
         lowres_clock::time_point timeout,
-        std::vector<mutation>&& mutations,
+        utils::chunked_vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state,
         db::consistency_level write_cl
         );
-    bool needs_cdc_augmentation(const std::vector<mutation>&) const;
+    bool needs_cdc_augmentation(const utils::chunked_vector<mutation>&) const;
 };
 
 struct db_context final {

@@ -155,7 +155,7 @@ const std::vector<batch_statement::single_statement>& batch_statement::get_state
     return _statements;
 }
 
-future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp, const query_options& options,
+future<utils::chunked_vector<mutation>> batch_statement::get_mutations(query_processor& qp, const query_options& options,
         db::timeout_clock::time_point timeout, bool local, api::timestamp_type now, service::query_state& query_state) const {
     // Do not process in parallel because operations like list append/prepend depend on execution order.
     using mutation_set_type = std::unordered_set<mutation, mutation_hash_by_key, mutation_equals_by_key>;
@@ -182,7 +182,7 @@ future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp
     }
 
     // can't use range adaptors, because we want to move
-    auto vresult = std::vector<mutation>();
+    auto vresult = utils::chunked_vector<mutation>();
     vresult.reserve(result.size());
     for (auto&& m : result) {
         vresult.push_back(std::move(m));
@@ -190,7 +190,7 @@ future<std::vector<mutation>> batch_statement::get_mutations(query_processor& qp
     co_return vresult;
 }
 
-void batch_statement::verify_batch_size(query_processor& qp, const std::vector<mutation>& mutations) {
+void batch_statement::verify_batch_size(query_processor& qp, const utils::chunked_vector<mutation>& mutations) {
     if (mutations.size() <= 1) {
         return;     // We only warn for batch spanning multiple mutations
     }
@@ -273,7 +273,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
 
     auto timeout = db::timeout_clock::now() + get_timeout(query_state.get_client_state(), options);
     return get_mutations(qp, options, timeout, local, now, query_state).then([this, &qp, &options, timeout, tr_state = query_state.get_trace_state(),
-                                                                                                                               permit = query_state.get_permit()] (std::vector<mutation> ms) mutable {
+                                                                                                                               permit = query_state.get_permit()] (utils::chunked_vector<mutation> ms) mutable {
         return execute_without_conditions(qp, std::move(ms), options.get_consistency(), timeout, std::move(tr_state), std::move(permit));
     }).then([] (coordinator_result<> res) {
         if (!res) {
@@ -287,7 +287,7 @@ future<shared_ptr<cql_transport::messages::result_message>> batch_statement::do_
 
 future<coordinator_result<>> batch_statement::execute_without_conditions(
         query_processor& qp,
-        std::vector<mutation> mutations,
+        utils::chunked_vector<mutation> mutations,
         db::consistency_level cl,
         db::timeout_clock::time_point timeout,
         tracing::trace_state_ptr tr_state,

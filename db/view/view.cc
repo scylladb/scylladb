@@ -2532,7 +2532,7 @@ static future<> announce_with_raft(
                 view_builder_query_state(),
                 timestamp,
                 values);
-        std::vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+        utils::chunked_vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
 
         auto group0_cmd = group0_client.prepare_command(
             ::service::write_mutations{
@@ -2785,7 +2785,7 @@ future<> view_builder::do_build_step() {
     });
 }
 
-future<> view_builder::generate_mutations_on_node_left(replica::database& db, db::system_keyspace& sys_ks, api::timestamp_type timestamp, locator::host_id host_id, std::vector<canonical_mutation>& muts) {
+future<> view_builder::generate_mutations_on_node_left(replica::database& db, db::system_keyspace& sys_ks, api::timestamp_type timestamp, locator::host_id host_id, utils::chunked_vector<canonical_mutation>& muts) {
     // When a node is removed, we delete all its rows from the view_build_status table together with
     // the topology update operation.
 
@@ -2859,7 +2859,7 @@ future<> view_builder::migrate_to_v2(locator::token_metadata_ptr tmptr, db::syst
         val_binders_str += ", ?";
     }
 
-    std::vector<mutation> migration_muts;
+    utils::chunked_vector<mutation> migration_muts;
     migration_muts.reserve(rows->size() + 1);
 
     // Insert all valid rows into the new table.

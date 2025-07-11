@@ -272,10 +272,10 @@ schema_ptr table_description::build_schema() const {
     return sb.build();
 }
 
-std::vector<mutation> table_description::build_mutations(schema_ptr s) const {
+utils::chunked_vector<mutation> table_description::build_mutations(schema_ptr s) const {
     auto ms = _mutations | std::views::transform([&] (const mutation_description& md) {
             return md.build(s);
-        }) | std::ranges::to<std::vector<mutation>>();
+        }) | std::ranges::to<utils::chunked_vector<mutation>>();
     std::ranges::sort(ms, mutation_decorated_key_less_comparator());
     return ms;
 }

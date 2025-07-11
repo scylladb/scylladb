@@ -284,7 +284,7 @@ SEASTAR_THREAD_TEST_CASE(test_mv_index) {
             {view_type::view, view_type::index, view_type::view, view_type::index});
 }
 
-void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_path, const std::vector<mutation>& mutations) {
+void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_path, const utils::chunked_vector<mutation>& mutations) {
     db::config dbcfg;
 
     auto schema = tools::load_schema_from_sstable(dbcfg, sst_path).get();

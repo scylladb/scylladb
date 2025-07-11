@@ -595,7 +595,7 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
                 return m;
             };
 
-            std::vector<mutation> mutations;
+            utils::chunked_vector<mutation> mutations;
             for (int i = 0; i < 1000; ++i) {
                 auto m = make_mutation();
                 cf.apply(m);
@@ -1221,7 +1221,7 @@ SEASTAR_THREAD_TEST_CASE(test_split_mutations) {
             if (max_size == 0) {
                 continue;
             }
-            std::vector<mutation> splitted;
+            utils::chunked_vector<mutation> splitted;
             split_mutation(mut, splitted, max_size / 2).get();
             BOOST_REQUIRE(!splitted.empty());
             for (const auto& m: splitted) {
@@ -2681,8 +2681,8 @@ SEASTAR_THREAD_TEST_CASE(test_row_size_is_immune_to_application_order) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_schema_changes) {
-    for_each_schema_change([] (schema_ptr base, const std::vector<mutation>& base_mutations,
-                               schema_ptr changed, const std::vector<mutation>& changed_mutations) {
+    for_each_schema_change([] (schema_ptr base, const utils::chunked_vector<mutation>& base_mutations,
+                               schema_ptr changed, const utils::chunked_vector<mutation>& changed_mutations) {
         BOOST_REQUIRE_EQUAL(base_mutations.size(), changed_mutations.size());
         for (auto bc : boost::range::combine(base_mutations, changed_mutations)) {
             auto b = boost::get<0>(bc);
@@ -2740,7 +2740,7 @@ class basic_compacted_fragments_consumer_base {
     max_purgeable_fn _get_max_purgeable;
     max_purgeable _max_purgeable;
 
-    std::vector<mutation> _mutations;
+    utils::chunked_vector<mutation> _mutations;
     mutation_rebuilder_v2 _mutation;
 
 private:
@@ -2858,7 +2858,7 @@ public:
 
         return stop_iteration::no;
     }
-    std::vector<mutation> consume_end_of_stream() {
+    utils::chunked_vector<mutation> consume_end_of_stream() {
         return _mutations;
     }
 };
@@ -2867,7 +2867,7 @@ using survived_compacted_fragments_consumer = basic_compacted_fragments_consumer
 using purged_compacted_fragments_consumer = basic_compacted_fragments_consumer_base<true>;
 
 void run_compaction_data_stream_split_test(const schema& schema, reader_permit permit, gc_clock::time_point query_time,
-        std::vector<mutation> mutations) {
+        utils::chunked_vector<mutation> mutations) {
     for (auto& mut : mutations) {
         mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
     }

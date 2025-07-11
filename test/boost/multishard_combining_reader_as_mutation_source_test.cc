@@ -40,9 +40,9 @@ public:
 };
 
 static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer) {
-    return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const std::vector<mutation>& mutations, gc_clock::time_point) mutable {
+    return [evict_paused_readers, single_fragment_buffer] (schema_ptr s, const utils::chunked_vector<mutation>& mutations, gc_clock::time_point) mutable {
         // We need to group mutations that have the same token so they land on the same shard.
-        std::map<dht::token, std::vector<frozen_mutation>> mutations_by_token;
+        std::map<dht::token, utils::chunked_vector<frozen_mutation>> mutations_by_token;
 
         for (const auto& mut : mutations) {
             mutations_by_token[mut.token()].push_back(freeze(mut));
@@ -50,18 +50,24 @@ static auto make_populate(bool evict_paused_readers, bool single_fragment_buffer
 
         dummy_sharder sharder(s->get_sharder(), mutations_by_token);
 
-        auto merged_mutations = mutations_by_token | std::views::values | std::ranges::to<std::vector>();
+        std::unordered_map<shard_id, utils::chunked_vector<frozen_mutation>> mutations_by_shard;
+        for (shard_id shard = 0; shard < sharder.shard_count(); ++shard) {
+            mutations_by_shard.emplace(shard, utils::chunked_vector<frozen_mutation>());
+        }
+        for (auto& [token, muts] : mutations_by_token) {
+            auto shard = sharder.shard_of(token);
+            std::move(std::make_move_iterator(muts.begin()), std::make_move_iterator(muts.end()),
+                    std::back_inserter(mutations_by_shard[shard]));
+        }
 
         auto remote_memtables = make_lw_shared<std::vector<foreign_ptr<lw_shared_ptr<replica::memtable>>>>();
         for (unsigned shard = 0; shard < sharder.shard_count(); ++shard) {
-            auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &merged_mutations, sharder] {
+            auto remote_mt = smp::submit_to(shard, [shard, gs = global_schema_ptr(s), &mutations_by_shard, sharder] {
                 auto s = gs.get();
                 auto mt = make_lw_shared<replica::memtable>(s);
 
-                for (unsigned i = shard; i < merged_mutations.size(); i += sharder.shard_count()) {
-                    for (auto& mut : merged_mutations[i]) {
-                        mt->apply(mut.unfreeze(s));
-                    }
+                for (auto& mut : mutations_by_shard[shard]) {
+                    mt->apply(mut.unfreeze(s));
                 }
 
                 return make_foreign(mt);
