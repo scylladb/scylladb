@@ -50,6 +50,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Specific byte limit for failure injection (random by default)")
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
                      help='Switch on gathering cgroup metrics')
+    parser.addoption('--random-seed', action="store",
+                     help="Random number generator seed to be used by boost tests")
 
     # Following option is to use with bare pytest command.
     #

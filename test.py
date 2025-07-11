@@ -321,6 +321,8 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             f'--alluredir={report_dir / f"allure_{host_id}"}',
             '-v' if options.verbose else '-q',
         ])
+    if options.random_seed:
+        args.append(f'--random-seed={options.random_seed}')
     if options.gather_metrics:
         args.append('--gather-metrics')
     if len(expression) > 1:
