@@ -14,7 +14,7 @@
 #include "index/secondary_index.hh"
 #include "exceptions/exceptions.hh"
 
-void cql3::statements::index_prop_defs::validate() {
+void cql3::statements::index_specific_prop_defs::validate() {
     static std::set<sstring> keywords({ sstring(KW_OPTIONS) });
 
     property_definitions::validate(keywords);
@@ -36,13 +36,13 @@ void cql3::statements::index_prop_defs::validate() {
 }
 
 index_options_map
-cql3::statements::index_prop_defs::get_raw_options() {
+cql3::statements::index_specific_prop_defs::get_raw_options() {
     auto options = get_map(KW_OPTIONS);
     return !options ? std::unordered_map<sstring, sstring>() : std::unordered_map<sstring, sstring>(options->begin(), options->end());
 }
 
 index_options_map
-cql3::statements::index_prop_defs::get_options() {
+cql3::statements::index_specific_prop_defs::get_options() {
     auto options = get_raw_options();
     options.emplace(db::index::secondary_index::custom_index_option_name, *custom_class);
     return options;

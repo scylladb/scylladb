@@ -133,7 +133,7 @@ void vector_index::check_cdc_options(const schema& schema) {
     }
 }
 
-void vector_index::check_index_options(cql3::statements::index_prop_defs& properties) {
+void vector_index::check_index_options(cql3::statements::index_specific_prop_defs& properties) {
     for (auto option: properties.get_raw_options()) {
         auto it = supported_options.find(option.first);
         if (it == supported_options.end()) {
@@ -143,7 +143,7 @@ void vector_index::check_index_options(cql3::statements::index_prop_defs& proper
     }
 }
 
-void vector_index::validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) {
+void vector_index::validate(const schema &schema, cql3::statements::index_specific_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) {
     check_target(schema, targets);
     check_cdc_not_explicitly_disabled(schema);
     check_cdc_options(schema);
