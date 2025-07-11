@@ -56,7 +56,9 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
         , _group0_barrier(this_shard_id() == 0 ?
             std::function<future<>()>([this] () -> future<> {
                 // This will run raft barrier and will sync schema with the leader
-                (void)co_await start_group0_operation();
+                return with_scheduling_group(_storage_proxy.get_db().local().get_gossip_scheduling_group(), [this] {
+                    return start_group0_operation().discard_result();
+                });
             }) :
             std::function<future<>()>([this] () -> future<> {
                 co_await container().invoke_on(0, [] (migration_manager& mm) -> future<> {
