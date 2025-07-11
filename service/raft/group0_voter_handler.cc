@@ -26,24 +26,24 @@ seastar::logger rvlogger("group0_voter_handler");
 // Represents the priority of nodes based on their status and role.
 //
 // The priority is used to determine the order in which nodes are selected as voters.
-// The priority values can be combined (one node might have multiple of the properties).
+// Priority values can be combined as a single node might have multiple properties.
 struct node_priority {
 
     using value_t = int;
 
-    // The priority of alive nodes.
+    // Priority for alive nodes.
     //
-    // It should be the largest priority value to prefer alive nodes over dead nodes.
+    // This should be the largest priority value to prefer alive nodes over dead nodes.
     static constexpr value_t alive = 10;
 
-    // The priority of nodes that are voters.
+    // Priority for nodes that are current voters.
     //
-    // It should be smaller than the alive node priority (to still prefer alive nodes to dead voters).
+    // This should be smaller than the alive node priority to still prefer alive nodes over dead voters.
     static constexpr value_t voter = 1;
 
-    // The priority of the current leader node.
+    // Priority for the current leader node.
     //
-    // It should be smaller than the alive node priority (to still prefer alive nodes).
+    // This should be smaller than the alive node priority to still prefer alive non-leader nodes.
     static constexpr value_t leader = 2;
 
     static constexpr value_t get_value(const group0_voter_calculator::node_descriptor& node) {
@@ -65,15 +65,15 @@ struct node_priority {
 using node_ids_t = std::vector<raft::server_id>;
 
 
-// Represents information about a rack and provides functionality to manage voter selection.
+// Manages voter selection within a single rack.
 //
-// This class is responsible for storing information about nodes within a rack and selecting voters based
-// on specific criteria.
-// It maintains a map of nodes categorized by their status (alive/dead) and role (voter/non-voter) and provides
+// This class stores information about nodes within a rack and provides functionality
+// to select voters based on priority criteria. It maintains a priority queue of nodes
+// categorized by their status (alive/dead) and role (voter/non-voter) and provides
 // methods to select the next voter and check if more candidates are available.
 //
-// The class also defines a priority comparator to determine the priority of racks based on the number of
-// assigned voters, alive nodes, and dead voters.
+// The class also defines a priority comparator to determine the priority of racks
+// based on the number of assigned voters, alive nodes, and dead voters.
 class rack_info {
 
     size_t _alive_nodes_remaining = 0;
@@ -86,7 +86,7 @@ class rack_info {
 
     struct node_info_priority_compare {
         bool operator()(const node_info_t& lhs, const node_info_t& rhs) const {
-            // First field: The priority of the node (higher has more priority)
+            // Compare by priority (higher priority has precedence)
             return std::get<0>(lhs) < std::get<0>(rhs);
         }
     };
@@ -131,7 +131,7 @@ public:
                   all_nodes, rack_nodes, _alive_nodes_remaining, _existing_alive_voters_remaining, _existing_dead_voters_remaining, _owns_alive_leader)) {
     }
 
-    // Select the "best" next voter from the rack
+    // Selects the "best" next voter from the rack.
     //
     // Returns the ID of the selected voter or `std::nullopt` if no more candidates are available.
     //
@@ -170,21 +170,22 @@ public:
         return voter_id;
     }
 
-    // Check if there are more candidates available for voter selection
+    // Checks if there are more candidates available for voter selection.
     //
     // Returns `true` if there are more candidates available, `false` otherwise.
     [[nodiscard]] bool has_more_candidates() const {
         return !_nodes.empty();
     }
 
-    // The priority comparator for the rack_info
+    // Priority comparator for rack_info objects.
+    // Used to determine which rack should be selected next for voter assignment.
     struct priority_compare {
         bool operator()(const rack_info& lhs, const rack_info& rhs) const {
             if (lhs._assigned_voters_count != rhs._assigned_voters_count) {
                 return lhs._assigned_voters_count > rhs._assigned_voters_count;
             }
-            // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
-            // its leadership and is about to be replaced by a new leader
+            // We don't consider dead leaders here (only alive leaders), as a dead leader is about to lose
+            // its leadership and be replaced by a new leader.
             if (lhs._owns_alive_leader != rhs._owns_alive_leader) {
                 return rhs._owns_alive_leader;
             }
@@ -194,19 +195,19 @@ public:
             if (lhs._alive_nodes_remaining != rhs._alive_nodes_remaining) {
                 return lhs._alive_nodes_remaining < rhs._alive_nodes_remaining;
             }
-            // We retain the dead voters in case we can't find enough alive voters.
+            // Retain dead voters as fallback if we can't find enough alive voters.
             return lhs._existing_dead_voters_remaining < rhs._existing_dead_voters_remaining;
         }
     };
 };
 
 
-// Represents information about a datacenter and provides functionality to manage voter selection.
+// Manages voter selection within a single datacenter.
 //
-// This class is responsible for storing information about nodes within a datacenter and selecting voters based
-// on specific criteria.
-// It maintains a map of nodes categorized by their status (alive/dead) and role (voter/non-voter) and provides
-// methods to select the next voter and check if more candidates are available.
+// This class stores information about nodes within a datacenter organized by racks
+// and provides functionality to select voters based on priority criteria. It maintains
+// a priority queue of racks and provides methods to select the next voter and check
+// if more candidates are available.
 //
 // The class also defines a priority comparator to determine the priority of datacenters based on the number of
 // assigned voters, alive nodes, and dead voters.
@@ -252,7 +253,7 @@ public:
         , _racks(create_racks_list(all_nodes, dc_nodes, _existing_alive_voters_remaining, _owns_alive_leader)) {
     }
 
-    // Select the "best" next voter from the datacenter
+    // Selects the "best" next voter from the datacenter.
     //
     // Returns the ID of the selected voter or `std::nullopt` if no more candidates are available.
     //
@@ -298,7 +299,7 @@ public:
         return std::nullopt;
     }
 
-    // Check if there are more candidates available for voter selection
+    // Checks if there are more candidates available for voter selection.
     //
     // Returns `true` if there are more candidates available, `false` otherwise.
     //
@@ -307,14 +308,15 @@ public:
         return _nodes_remaining > 0 && _assigned_voters_count < voters_max_per_dc;
     }
 
-    // The priority comparator for the datacenter_info
+    // Priority comparator for datacenter_info objects.
+    // Used to determine which datacenter should be selected next for voter assignment.
     struct priority_compare {
         bool operator()(const datacenter_info& lhs, const datacenter_info& rhs) const {
             if (lhs._assigned_voters_count != rhs._assigned_voters_count) {
                 return lhs._assigned_voters_count > rhs._assigned_voters_count;
             }
-            // We don't take an existing dead leader into account here (only alive leader), as a dead leader is about to lose
-            // its leadership and is about to be replaced by a new leader
+            // We don't consider dead leaders here (only alive leaders), as a dead leader is about to lose
+            // its leadership and be replaced by a new leader
             if (lhs._owns_alive_leader != rhs._owns_alive_leader) {
                 return rhs._owns_alive_leader;
             }
@@ -376,13 +378,13 @@ class calculator_impl {
             return voters_max;
         }
 
-        // If the number of DCs is greater than 2, prevent any DC taking half or more of the voters.
+        // If the number of DCs is greater than 2, prevent any DC from taking half or more of the voters.
         // The calculation is not trivial. For example, with 1 DC having 3 nodes and 2 DCs having 1 node each,
         // we can't simply take half of voters_max - 1, as that would still allow the first DC to
         // take 2 voters, thus having a majority.
         //
         // Therefore, we determine the DC with the maximal number of nodes and calculate the sum of the remaining
-        // nodes across all the other DCs - with the largest DC being forced to have less voters than the sum of
+        // nodes across all the other DCs - with the largest DC being forced to have fewer voters than the sum of
         // all the other DC nodes.
         const auto nodes_count_exclude_largest = nodes.size() - dc_largest_size;
 
@@ -408,7 +410,7 @@ class calculator_impl {
         }) | std::ranges::to<datacenters_store_t>();
     }
 
-    // Select the next voter from the datacenters
+    // Selects the next voter from the datacenters.
     //
     // Returns the ID of the selected voter or `std::nullopt` if no more candidates are available.
     //
@@ -422,7 +424,7 @@ class calculator_impl {
             const auto voter_id = dc.select_next_voter(nodes_info);
 
             if (!voter_id) {
-                // no more available voter candidates in this DC
+                // No more available voter candidates in this DC
                 continue;
             }
 
@@ -473,7 +475,7 @@ public:
 future<> group0_voter_handler::update_nodes(
         const std::unordered_set<raft::server_id>& nodes_added, const std::unordered_set<raft::server_id>& nodes_removed, abort_source& as) {
 
-    // Make sure we are not interrupted while we are calculating and modifying the voters
+    // Ensure we are not interrupted while calculating and modifying voters
     const auto lock = co_await get_units(_voter_lock, 1, as);
 
     if (!_feature_service.group0_limited_voters) {
@@ -494,7 +496,21 @@ future<> group0_voter_handler::update_nodes(
 
     group0_voter_calculator::nodes_list_t nodes;
 
-    // Helper for adding a single node
+    auto get_replica_state = [this](const raft::server_id& id, bool allow_transitioning) -> const replica_state* {
+        if (const auto it = _topology.normal_nodes.find(id); it != _topology.normal_nodes.end()) {
+            return &it->second;
+        }
+        rvlogger.debug("Node {} is not present in the normal nodes", id);
+        if (allow_transitioning) {
+            if (const auto it = _topology.transition_nodes.find(id); it != _topology.transition_nodes.end()) {
+                return &it->second;
+            }
+            rvlogger.debug("Node {} is not present in the transitioning nodes", id);
+        }
+        return nullptr;
+    };
+
+    // Helper for adding a single node to the nodes list
     auto add_node = [&nodes, &group0_config, &leader_id](const raft::server_id& id, const replica_state& rs, bool is_alive) {
         const auto is_voter = group0_config.can_vote(id);
         const auto is_leader = (id == leader_id);
@@ -507,46 +523,47 @@ future<> group0_voter_handler::update_nodes(
                           });
     };
 
-    // Helper function to add nodes from a specific list
-    auto add_nodes_from_list = [this, &add_node](const std::set<locator::host_id>& nodes_set, bool is_alive) {
+    // Helper function to add nodes from a gossiper node set
+    auto add_nodes_from_list = [&add_node, &get_replica_state, &group0_config](const std::set<locator::host_id>& nodes_set, bool is_alive) {
         for (const auto& host_id : nodes_set) {
             const raft::server_id id{host_id.uuid()};
-            const auto it = _topology.normal_nodes.find(id);
-            if (it == _topology.normal_nodes.end()) {
-                // This is expected, as the nodes present in the gossiper may not be present
-                // in the topology yet or any more.
-                rvlogger.debug("Node {} not found in the topology", id);
+            // We only allow transitioning nodes to be added if they are already voters.
+            const bool allow_transitioning = group0_config.can_vote(id);
+            const auto* node = get_replica_state(id, allow_transitioning);
+            if (!node) {
                 continue;
             }
-            add_node(id, it->second, is_alive);
+            add_node(id, *node, is_alive);
         }
     };
 
     add_nodes_from_list(nodes_alive, true);
     add_nodes_from_list(nodes_dead, false);
 
-    // Handle the added nodes
+    // Process newly added nodes
     for (const auto& id : nodes_added) {
         const auto itr = nodes.find(id);
         if (itr != nodes.end()) {
-            // This is expected
+            // This is expected - node already processed from gossiper
             rvlogger.debug("Node {} to be added is already a member", id);
             continue;
         }
-        const auto it = _topology.normal_nodes.find(id);
-        if (it == _topology.normal_nodes.end()) {
+        // When adding a node, it may not be present in normal nodes yet, but might be joining
+        // and be in the transitioning state.
+        const auto* node = get_replica_state(id, true);
+        if (!node) {
             rvlogger.warn("Node {} was not found in the topology, can't add as a voter candidate", id);
             continue;
         }
-        add_node(id, it->second, _gossiper.is_alive(locator::host_id{id.uuid()}));
+        add_node(id, *node, _gossiper.is_alive(locator::host_id{id.uuid()}));
     }
 
     std::unordered_set<raft::server_id> voters_add;
     std::unordered_set<raft::server_id> voters_del;
 
-    // Force the removal of voter status in any case
+    // Process removed nodes
     for (const auto& id : nodes_removed) {
-        // force the removal of votership in any case
+        // Force the removal of votership in any case
         voters_del.emplace(id);
         const auto itr = nodes.find(id);
         if (itr == nodes.end()) {
@@ -557,6 +574,7 @@ future<> group0_voter_handler::update_nodes(
         nodes.erase(itr);
     }
 
+    // Calculate the optimal voter distribution
     const auto& voters = _calculator.distribute_voters(nodes);
 
     // Calculate the voters diff against the current state
@@ -583,6 +601,7 @@ group0_voter_calculator::group0_voter_calculator(std::optional<size_t> voters_ma
 }
 
 group0_voter_calculator::voters_set_t group0_voter_calculator::distribute_voters(const nodes_list_t& nodes) const {
+    // Filter nodes to include only alive nodes or existing voters
     const auto& nodes_filtered = nodes | std::views::filter([](const auto& node_entry) {
         const auto& [id, node] = node_entry;
         rvlogger.debug("Node: {}, DC: {}, is_voter: {}, is_alive: {}", id, node.datacenter, node.is_voter, node.is_alive);
