@@ -11,6 +11,7 @@
 #include <ranges>
 
 #include <seastar/core/format.hh>
+#include <stdexcept>
 #include "cql3/statements/property_definitions.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/overloaded_functor.hh"
@@ -100,6 +101,18 @@ property_definitions::extended_map_type property_definitions::to_extended_map(co
 
 bool property_definitions::has_property(const sstring& name) const {
     return _properties.contains(name);
+}
+
+property_definitions::value_type property_definitions::extract_property(const sstring& name) {
+    auto it = _properties.find(name);
+
+    if (it == _properties.end()) {
+        throw std::out_of_range{std::format("No property of name '{}'", std::string_view(name))};
+    }
+
+    value_type result = std::move(it->second);
+    _properties.erase(it);
+    return result;
 }
 
 std::optional<property_definitions::value_type> property_definitions::get(const sstring& name) const {
