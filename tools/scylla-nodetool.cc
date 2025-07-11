@@ -1087,10 +1087,19 @@ void getendpoints_operation(scylla_rest_client& client, const bpo::variables_map
     if (!vm.contains("keyspace") || !vm.contains("table") || !vm.contains("key")) {
         throw std::invalid_argument("getendpoint requires keyspace, table and partition key arguments");
     }
+
+    std::unordered_map<sstring, sstring> params = {
+        {"cf", vm["table"].as<sstring>()},
+        {"key", vm["key"].as<sstring>()},
+    };
+
+    if (vm.contains("key-delimiter")) {
+        params["key_delimiter"] = vm["key-delimiter"].as<sstring>();
+    }
+
     auto res = client.get(seastar::format("/storage_service/natural_endpoints/{}",
                                           vm["keyspace"].as<sstring>()),
-                          {{"cf", vm["table"].as<sstring>()},
-                           {"key", vm["key"].as<sstring>()}});
+                                          std::move(params));
     for (auto& inet_address : res.GetArray()) {
         fmt::print("{}\n", rjson::to_string_view(inet_address));
     }
@@ -3959,6 +3968,7 @@ For more information, see: {}"
                     typed_option<sstring>("keyspace", "The keyspace to query", 1),
                     typed_option<sstring>("table", "The table to query", 1),
                     typed_option<sstring>("key", "The partition key for which we need to find the endpoint", 1),
+                    typed_option<sstring>("key-delimiter", "The key delimiter used to split the composite key into parts", 1),
                 },
             },
             {
