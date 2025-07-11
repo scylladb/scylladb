@@ -12,6 +12,7 @@
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "tasks/task_manager.hh"
+#include "repair/incremental.hh"
 
 namespace sstables {
 class sstable_directory;
@@ -628,7 +629,7 @@ private:
     std::function<bool (const sstables::shared_sstable&)> _filter;
     uint64_t& _total_shard_size;
 
-    future<> reshape_compaction_group(compaction::table_state& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info);
+    future<> reshape_compaction_group(table_state_view tsv, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info);
 public:
     shard_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,

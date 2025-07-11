@@ -8,6 +8,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/rwlock.hh>
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
@@ -17,6 +18,7 @@
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
 #include <absl/container/flat_hash_map.h>
+#include "repair/incremental.hh"
 
 #pragma once
 
@@ -132,6 +134,10 @@ public:
         return _tombstone_gc_enabled;
     }
 
+    int64_t get_sstables_repaired_at() const noexcept;
+
+    future<> update_repaired_at_for_merge();
+
     void set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept;
 
     lw_shared_ptr<memtable_list>& memtables() noexcept;
@@ -182,6 +188,10 @@ public:
 
     compaction::table_state& as_table_state() const noexcept;
 
+    table_state_view as_unrepaired_table_state_view() const noexcept;
+
+    table_state_view as_repaired_table_state_view() const noexcept;
+
     seastar::condition_variable& get_staging_done_condition() noexcept {
         return _staging_done_condition;
     }
@@ -194,6 +204,12 @@ public:
     const compaction_manager& get_compaction_manager() const noexcept;
 
     friend class storage_group;
+
+    bool needs_repaired_compaction() const noexcept;
+
+    future<seastar::rwlock::holder> get_incremental_repair_write_lock(const sstring& reason);
+
+    future<seastar::rwlock::holder> get_incremental_repair_read_lock(const sstring& reason);
 };
 
 using compaction_group_ptr = lw_shared_ptr<compaction_group>;

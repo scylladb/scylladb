@@ -75,4 +75,4 @@ class TaskManagerClient():
         tasks = await self.list_tasks(node_ip, module_name, internal=internal)
         await asyncio.gather(*(self.api.client.get(f"/task_manager/wait_task/{stats.task_id}", host=node_ip,
                                                 allow_failed=True) for stats in tasks))
-        await self.api.client.get(f"/task_manager/drain/{module_name}", host=node_ip)
+        await self.api.client.post(f"/task_manager/drain/{module_name}", host=node_ip)
