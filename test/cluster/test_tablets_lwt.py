@@ -402,3 +402,42 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClie
 
         logger.info("Start the second node")
         await manager.server_start(servers[1].server_id)
+
+
+@pytest.mark.asyncio
+async def test_lwt_for_tablets_is_not_supported_without_raft(manager: ManagerClient):
+    # This test checks that LWT for tablets requires raft-based schema management.
+
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    config = {
+        'rf_rack_valid_keyspaces': False
+    }
+
+    servers = [await manager.server_add(cmdline=cmdline, config=config)]
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        # In RECOVERY mode the node doesn't join group 0 or start the group 0 Raft server,
+        # it performs all operations as in `use_pre_raft_procedures` and doesn't attempt to
+        # perform the upgrade.
+        # We use this mode to verify the behaviour of LWT for tables when RAFT is disabled.
+        logger.info("Set group0_upgrade_state := 'recovery'")
+        await cql.run_async("UPDATE system.scylla_local SET value = 'recovery' WHERE key = 'group0_upgrade_state'",
+                            host = hosts[0])
+
+        logger.info(f"Rebooting {servers[0]} in RECOVERY mode")
+        await manager.server_restart(servers[0].server_id)
+
+        cql = await reconnect_driver(manager)
+        logger.info("Waiting for driver")
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+        logger.info("Run an LWT")
+        with pytest.raises(Exception, match=f"Cannot create paxos state table for {ks}.test because raft-based schema management is not enabled."):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
