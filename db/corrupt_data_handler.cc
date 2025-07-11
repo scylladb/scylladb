@@ -126,7 +126,9 @@ void system_table_corrupt_data_handler::unplug_system_keyspace() noexcept {
 
 future<> system_table_corrupt_data_handler::stop() noexcept {
     co_await _gate.close();
-    co_await _fragment_semaphore->stop();
+    if (_fragment_semaphore) {
+        co_await _fragment_semaphore->stop();
+    }
 }
 
 future<corrupt_data_handler::entry_id> nop_corrupt_data_handler::do_record_corrupt_clustering_row(const schema& s, const partition_key& pk,
