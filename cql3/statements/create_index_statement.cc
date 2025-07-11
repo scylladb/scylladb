@@ -16,6 +16,7 @@
 #include "prepared_statement.hh"
 #include "replica/database.hh"
 #include "types/types.hh"
+#include "utils/chunked_vector.hh"
 #include "validation.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
@@ -581,7 +582,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
 
         // Produce the underlying view for the index.
         if (should_create_view(res->index)) {
-            view_ptr view = cf.get_index_manager().create_view_for_index(res->index);
+            view_ptr view = create_view_for_index(cf.schema(), res->index);
             utils::chunked_vector<mutation> view_muts = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(view), ts);
 
             muts.reserve(muts.size() + view_muts.size());
