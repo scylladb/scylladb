@@ -25,7 +25,7 @@ public:
     ~vector_index() override = default;
     std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const override;
     bool should_create_view() const override;
-    void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) override;
+    void validate(const schema &schema, cql3::statements::index_specific_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) override;
 };
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory();
