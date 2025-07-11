@@ -10,6 +10,8 @@
 
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
+#include "concrete_types.hh"
+#include "db/tags/extension.hh"
 #include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
 #include "replica/database.hh"
@@ -390,8 +392,6 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     return base_schema_with_new_index{builder.build(), index};
 }
 
-#if 0
-
 static const data_type collection_keys_type(const abstract_type& t) {
     struct visitor {
         const data_type operator()(const abstract_type& t) {
@@ -464,11 +464,10 @@ static data_type type_for_computed_column(cql3::statements::index_target::target
     }
 }
 
-view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
-    auto schema = _cf.schema();
+view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im) const {
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
-    schema_builder builder{schema->ks_name(), index_table_name(im.name())};
-    auto target_info = target_parser::parse(schema, im);
+    schema_builder builder{schema->ks_name(), secondary_index::index_table_name(im.name())};
+    auto target_info = secondary_index::target_parser::parse(schema, im);
     const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
     auto target_type = target_info.type;
 
@@ -557,8 +556,6 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     }
     return view_ptr{builder.build()};
 }
-
-#endif
 
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_index_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
