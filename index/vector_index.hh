@@ -28,7 +28,7 @@ public:
     ~vector_index() override = default;
     std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const override;
     bool view_should_exist() const override;
-    void validate(const schema &schema, const cql3::statements::index_prop_defs &properties,
+    void validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties,
             const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs,
         const data_dictionary::database& db) const override;
     table_schema_version index_version(const schema& schema) override;
@@ -39,7 +39,7 @@ private:
     void check_uses_tablets(const schema& schema, const data_dictionary::database& db) const;
     void check_cdc_not_explicitly_disabled(const schema& schema) const;
     void check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const;
-    void check_index_options(const cql3::statements::index_prop_defs& properties) const;
+    void check_index_options(const cql3::statements::index_specific_prop_defs& properties) const;
 };
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory();

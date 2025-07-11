@@ -23,7 +23,7 @@ namespace cql3 {
 
 namespace statements {
 
-class index_prop_defs : public property_definitions {
+class index_specific_prop_defs : public property_definitions {
 public:
     static constexpr auto KW_OPTIONS = "options";
 

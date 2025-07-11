@@ -922,7 +922,7 @@ typeColumns[create_type_statement& expr]
  */
 createIndexStatement returns [std::unique_ptr<create_index_statement> expr]
     @init {
-        auto props = make_shared<index_prop_defs>();
+        auto props = make_shared<index_specific_prop_defs>();
         bool if_not_exists = false;
         auto name = ::make_shared<cql3::index_name>();
         std::vector<::shared_ptr<index_target::raw>> targets;
