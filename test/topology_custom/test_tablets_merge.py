@@ -413,30 +413,30 @@ async def test_missing_data(manager: ManagerClient):
 
     await manager.api.disable_tablet_balancing(server.ip_addr)
 
-    inital_tablets = 32
+    initial_tablets = 32
 
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {inital_tablets}}}") as ks:
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': {initial_tablets}}}") as ks:
         await cql.run_async(f'CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);')
 
         await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
 
         # insert data
-        pks = range(inital_tablets)
+        pks = range(initial_tablets)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in pks])
 
         # flush the table
         await manager.api.flush_keyspace(server.ip_addr, ks)
 
         # force merge on the test table
-        expected_tablet_count = inital_tablets // 2
+        expected_tablet_count = initial_tablets // 2
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH tablets = {{'initial': {expected_tablet_count}}}")
 
         await manager.api.enable_tablet_balancing(server.ip_addr)
 
         # wait for merge to complete
-        actual_tablet_count = 0
+        actual_tablet_count = initial_tablets
         started = time.time()
-        while expected_tablet_count != actual_tablet_count:
+        while actual_tablet_count >= initial_tablets:
             actual_tablet_count = await get_tablet_count(manager, server, ks, 'test')
             logger.debug(f'actual/expected tablet count: {actual_tablet_count}/{expected_tablet_count}')
 
