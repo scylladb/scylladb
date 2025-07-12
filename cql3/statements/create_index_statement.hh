@@ -33,7 +33,7 @@ class index_specific_prop_defs;
 class create_index_statement : public schema_altering_statement {
     const sstring _index_name;
     const std::vector<::shared_ptr<index_target::raw>> _raw_targets;
-    const ::shared_ptr<index_specific_prop_defs> _properties;
+    const ::shared_ptr<index_specific_prop_defs> _idx_properties;
     const bool _if_not_exists;
     cql_stats* _cql_stats = nullptr;
 
