@@ -69,7 +69,7 @@ std::optional<cql3::description> vector_index::describe(const index_metadata& im
     };
 }
 
-void vector_index::validate(const schema &schema, cql3::statements::index_specific_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) {
+void vector_index::validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) const {
     if (targets.size() != 1) {
         throw exceptions::invalid_request_exception("Vector index can only be created on a single column");
     }
