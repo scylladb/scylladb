@@ -77,6 +77,37 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
     }
 
     _idx_properties.validate();
+
+    // FIXME: This is ugly and can be improved.
+    const bool is_vector_index = _idx_properties.custom_class && *_idx_properties.custom_class == "vector_index";
+    const bool uses_view_properties = _view_properties.properties()->count() > 0
+            || _view_properties.use_compact_storage()
+            || _view_properties.defined_ordering().size() > 0;
+
+    if (is_vector_index && uses_view_properties) {
+        throw exceptions::invalid_request_exception("You cannot use view properties with a vector index");
+    }
+
+    const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(qp.db().extensions());
+    _view_properties.validate_raw(view_prop_defs::op_type::create, qp.db(), keyspace(), exts);
+
+    // These keywords are still accepted by other schema entities, but they don't have effect on them.
+    // Since indexes are not bound by any backward compatibility contract in this regard, let's forbid these.
+    static sstring obsolete_keywords[] = {
+        "index_interval",
+        "replicate_on_write",
+        "populate_io_cache_on_flush",
+        "read_repair_chance",
+        "dclocal_read_repair_chance",
+    };
+
+    for (const sstring& keyword : obsolete_keywords) {
+        if (_view_properties.properties()->has_property(keyword)) {
+            // We use the same type of exception and the same error message as would be thrown for
+            // an invalid property via `_view_properties.validate_raw`.
+            throw exceptions::syntax_exception(seastar::format("Unknown property '{}'", keyword));
+        }
+    }
 }
 
 std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db) const {
@@ -467,7 +498,9 @@ static data_type type_for_computed_column(cql3::statements::index_target::target
     }
 }
 
-view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im) const {
+view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im,
+        const data_dictionary::database db) const
+{
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
     schema_builder builder{schema->ks_name(), secondary_index::index_table_name(im.name())};
     auto target_info = secondary_index::target_parser::parse(schema, im);
@@ -557,6 +590,10 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
         std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
         builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
     }
+
+    const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(db.extensions());
+    _view_properties.apply_to_builder(view_prop_defs::op_type::create, builder, exts, db, keyspace());
+
     return view_ptr{builder.build()};
 }
 
@@ -585,7 +622,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
 
         // Produce the underlying view for the index.
         if (should_create_view(res->index)) {
-            view_ptr view = create_view_for_index(cf.schema(), res->index);
+            view_ptr view = create_view_for_index(cf.schema(), res->index, qp.db());
             utils::chunked_vector<mutation> view_muts = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(view), ts);
 
             muts.reserve(muts.size() + view_muts.size());
