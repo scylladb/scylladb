@@ -224,12 +224,14 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
 create_index_statement::create_index_statement(cf_name name,
                                                ::shared_ptr<index_name> index_name,
                                                std::vector<::shared_ptr<index_target::raw>> raw_targets,
-                                               ::shared_ptr<index_specific_prop_defs> properties,
+                                               ::shared_ptr<index_specific_prop_defs> idx_properties,
+                                               view_prop_defs view_properties,
                                                bool if_not_exists)
     : schema_altering_statement(name)
     , _index_name(index_name->get_idx())
     , _raw_targets(raw_targets)
-    , _idx_properties(properties)
+    , _idx_properties(std::move(idx_properties))
+    , _view_properties(std::move(view_properties))
     , _if_not_exists(if_not_exists)
 {
 }

@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "cql3/statements/index_prop_defs.hh"
+#include "cql3/statements/view_prop_defs.hh"
 #include "schema_altering_statement.hh"
 #include "index_target.hh"
 
@@ -33,14 +35,19 @@ class index_specific_prop_defs;
 class create_index_statement : public schema_altering_statement {
     const sstring _index_name;
     const std::vector<::shared_ptr<index_target::raw>> _raw_targets;
+
+    // Options specific to this index.
     const ::shared_ptr<index_specific_prop_defs> _idx_properties;
+    // Options corresponding to the underlying materialized view.
+    const view_prop_defs _view_properties;
+
     const bool _if_not_exists;
     cql_stats* _cql_stats = nullptr;
 
 public:
     create_index_statement(cf_name name, ::shared_ptr<index_name> index_name,
             std::vector<::shared_ptr<index_target::raw>> raw_targets,
-            ::shared_ptr<index_specific_prop_defs> properties, bool if_not_exists);
+            ::shared_ptr<index_specific_prop_defs> idx_properties, view_prop_defs view_properties, bool if_not_exists);
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
     void validate(query_processor&, const service::client_state& state) const override;
