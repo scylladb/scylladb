@@ -239,6 +239,14 @@ def test_create_index_compact_storage(cql, test_keyspace, scylla_only):
         with pytest.raises(InvalidRequest, match="Cannot use 'COMPACT STORAGE' when defining a materialized view"):
             cql.execute(f"CREATE INDEX {index_name} ON {table}(v) WITH COMPACT STORAGE")
 
+# Verify that indexes do not allow for specifying the clustering order, unlike materialized views.
+# FIXME: This is a temporary limitation and should be rid of.
+def test_create_index_clustering_order_by(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int") as table:
+        index_name = unique_name()
+        with pytest.raises(InvalidRequest, match="Indexes do not allow for specifying the clustering order"):
+            cql.execute(f"CREATE INDEX {index_name} ON {table}(v) WITH CLUSTERING ORDER BY (p ASC)")
+
 # Verify that we can set synchronous updates when creating an index and that it works as intended.
 # This test is an adjusted version of a similar one in `cqlpy/test_materialized_view.py`.
 def test_create_index_synchronous_updates(cql, test_keyspace, scylla_only):
