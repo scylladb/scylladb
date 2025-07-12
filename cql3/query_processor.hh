@@ -34,6 +34,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "types/types.hh"
 #include "db/auth_version.hh"
+#include "service/storage_proxy_fwd.hh"
 
 
 namespace lang { class manager; }
@@ -473,15 +474,16 @@ public:
 
     bool topology_global_queue_empty();
 
-private:
-    // Keep the holder until you stop using the `remote` services.
-    std::pair<std::reference_wrapper<remote>, gate::holder> remote();
-
     query_options make_internal_options(
             const statements::prepared_statement::checked_weak_ptr& p,
             const std::vector<data_value_or_unset>& values,
             db::consistency_level,
-            int32_t page_size = -1) const;
+            int32_t page_size = -1,
+            service::node_local_only node_local_only = service::node_local_only::no) const;
+
+private:
+    // Keep the holder until you stop using the `remote` services.
+    std::pair<std::reference_wrapper<remote>, gate::holder> remote();
 
     future<::shared_ptr<cql_transport::messages::result_message>>
     process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard);

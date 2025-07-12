@@ -132,12 +132,12 @@ public:
     //
     // Call ONLY on shard 0.
     // Requires a quorum of nodes to be available in order to finish.
-    future<group0_guard> start_group0_operation();
+    future<group0_guard> start_group0_operation(std::optional<raft_timeout> timeout = std::nullopt);
 
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
     template<typename mutation_type = schema_change>
-    future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description);
+    future<> announce(std::vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 
     void passive_announce(table_schema_version version);
 
@@ -166,7 +166,7 @@ private:
     future<> maybe_schedule_schema_pull(const table_schema_version& their_version, locator::host_id endpoint);
 
     template<typename mutation_type = schema_change>
-    future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description);
+    future<> announce_with_raft(std::vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
     future<> announce_without_raft(std::vector<mutation> schema, group0_guard);
 
 public:
@@ -193,14 +193,14 @@ public:
 };
 
 extern template
-future<> migration_manager::announce_with_raft<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce_with_raft<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
 extern template
-future<> migration_manager::announce_with_raft<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce_with_raft<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
 
 extern template
-future<> migration_manager::announce<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce<schema_change>(std::vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 extern template
-future<> migration_manager::announce<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce<topology_change>(std::vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 
 
 future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id, table_schema_version v);

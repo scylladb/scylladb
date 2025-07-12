@@ -23,12 +23,8 @@ from .util import new_test_table, random_string, full_query, unique_table_name, 
 # their argument list.
 @pytest.fixture(params=[
     [{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
-    # This enables tablets and disables LWT. It is meant as a temporary means of enabling regression tests
-    # with tablets until LWT is supported with tablets (#18068).
-    # FIXME After #18068 is resolved,
-    # 'system:write_isolation' should no longer be set and 'without LWT' part inside 'ids' should be removed.
-    [{'Key': 'experimental:initial_tablets', 'Value': '0'}, {'Key': 'system:write_isolation', 'Value': 'unsafe_rmw'}],
-], ids=["using vnodes", "using tablets without LWT"], autouse=True)
+    [{'Key': 'experimental:initial_tablets', 'Value': '0'}],
+], ids=["using vnodes", "using tablets"], autouse=True)
 def tags_param(request):
     # Set TAGS in the global namespace of this module
     global TAGS
