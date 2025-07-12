@@ -294,6 +294,11 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
             throw exceptions::syntax_exception(seastar::format("Unknown property '{}'", keyword));
         }
     }
+
+    // FIXME: This is a temporary limitation as it might deserve more attention.
+    if (!_view_properties.defined_ordering().empty()) {
+        throw exceptions::invalid_request_exception("Indexes do not allow for specifying the clustering order");
+    }
 }
 
 std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db) const {
