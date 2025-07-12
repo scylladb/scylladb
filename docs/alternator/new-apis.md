@@ -173,14 +173,6 @@ a new table with CreateTable - changing it later has no effect.
 Because the tablets support is incomplete, when tablets are enabled for an
 Alternator table, the following features will not work for this table:
 
-* The table must have one of the write isolation modes which does not
-  not use LWT, because it's not supported with tablets. The allowed write
-  isolation modes are `forbid_rmw` or `unsafe_rmw`.
-  Setting the isolation mode to `always_use_lwt` will succeed, but the writes
-  themselves will fail with an InternalServerError. At that point you can
-  still change the write isolation mode of the table to a supported mode.
-  See <https://github.com/scylladb/scylladb/issues/18068>.
-
 * Enabling Streams with CreateTable or UpdateTable doesn't work
   (results in an error).
   See <https://github.com/scylladb/scylla/issues/16317>.
