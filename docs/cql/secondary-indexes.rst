@@ -42,14 +42,23 @@ Creating a secondary index on a table uses the ``CREATE INDEX`` statement:
    
    create_index_statement: CREATE INDEX [IF NOT EXISTS] [ `index_name` ]
                          :     ON `table_name` '(' `index_identifier` ')'
-                         :     [ USING `string` [ WITH OPTIONS = `map_literal` ] ]
+                         :     [ USING `string` [ WITH `index_options` ] ]
    index_identifier: `column_name`
                    :| ( FULL ) '(' `column_name` ')'
+   index_options: OPTIONS = `map_literal`
+                :| view_options
+
+where `view_options` corresponds to the same options as :ref:`those <mv-options>` used
+by a :doc:`materialized view </features/materialized-views>`.
+
+In the presence of any materialized view options, they will be applied to the underlying
+materialized view, not the index itself.
 
 For instance::
 
     CREATE INDEX userIndex ON NerdMovies (user);
     CREATE INDEX ON Mutants (abilityId);
+    CREATE INDEX catsIndex ON Animals (cats) WITH comment = 'who doesn't like cats' AND synchronous_updates = true;
 
 The ``CREATE INDEX`` statement is used to create a new (automatic) secondary index for a given (existing) column in a
 given table. A name for the index itself can be specified before the ``ON`` keyword, if desired. If data already exists
