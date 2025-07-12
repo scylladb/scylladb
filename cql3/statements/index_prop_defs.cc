@@ -11,6 +11,7 @@
 #include <set>
 #include <seastar/core/format.hh>
 #include "index_prop_defs.hh"
+#include "cql3/statements/view_prop_defs.hh"
 #include "index/secondary_index.hh"
 #include "exceptions/exceptions.hh"
 
@@ -55,6 +56,26 @@ index_specific_prop_defs::get_options() const {
         options.emplace(db::index::secondary_index::index_version_option_name, index_version->to_sstring());
     }
     return options;
+}
+
+void index_prop_defs::extract_index_specific_properties_to(index_specific_prop_defs& target) {
+    if (properties()->has_property(index_specific_prop_defs::KW_OPTIONS)) {
+        auto value = properties()->extract_property(index_specific_prop_defs::KW_OPTIONS);
+
+        std::visit([&target] <typename T> (T&& val) {
+            target.add_property(index_specific_prop_defs::KW_OPTIONS, std::forward<T>(val));
+        }, std::move(value));
+    }
+}
+
+view_prop_defs index_prop_defs::into_view_prop_defs() && {
+    if (properties()->has_property(index_specific_prop_defs::KW_OPTIONS)) {
+        utils::on_internal_error(seastar::format(
+                "Precondition has been violated. The property '{}' is still present", index_specific_prop_defs::KW_OPTIONS));
+    }
+
+    view_prop_defs result = std::move(static_cast<view_prop_defs&>(*this));
+    return result;
 }
 
 } // namespace cql3::statements
