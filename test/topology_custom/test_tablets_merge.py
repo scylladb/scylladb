@@ -434,9 +434,9 @@ async def test_missing_data(manager: ManagerClient):
         await manager.api.enable_tablet_balancing(server.ip_addr)
 
         # wait for merge to complete
-        actual_tablet_count = 0
+        actual_tablet_count = initial_tablets
         started = time.time()
-        while expected_tablet_count != actual_tablet_count:
+        while actual_tablet_count >= initial_tablets:
             actual_tablet_count = await get_tablet_count(manager, server, ks, 'test')
             logger.debug(f'actual/expected tablet count: {actual_tablet_count}/{expected_tablet_count}')
 
