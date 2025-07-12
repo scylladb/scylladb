@@ -80,6 +80,11 @@ create_index_statement::validate(query_processor& qp, const service::client_stat
 
     const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(qp.db().extensions());
     _view_properties.validate_raw(view_prop_defs::op_type::create, qp.db(), keyspace(), exts);
+
+    // FIXME: This is a temporary limitation as it might deserve more attention.
+    if (!_view_properties.defined_ordering().empty()) {
+        throw exceptions::invalid_request_exception("Indexes do not allow for specifying the clustering order");
+    }
 }
 
 std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db) const {
