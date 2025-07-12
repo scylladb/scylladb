@@ -126,6 +126,46 @@ More on :doc:`Local Secondary Indexes </features/local-secondary-indexes>`
 .. placed within the ``keys()`` function, the index will be on the map keys, allowing you to use ``CONTAINS KEY`` in
 .. ``WHERE`` clauses. Otherwise, the index will be on the map values.
 
+.. _alter-index-statement:
+
+ALTER INDEX
+^^^^^^^^^^^
+
+Currently, there is no statement allowing to alter a secondary index itself. However, the underlying
+:doc:`materialized view </features/materialized-views>` can be altered via the ``ALTER INDEX`` statement:
+
+.. code-block::
+
+   alter_index_statement: ALTER INDEX `index_name` WITH `view_properties`
+   view_properties: view_property (AND view_property)*
+
+where `view_property` is any :ref:`property <mv-options>` that can be used when
+altering a materialized view.
+
+Example:
+
+.. code-block:: cql
+
+   CREATE TABLE ks.table (p int PRIMARY KEY, v int);
+   CREATE INDEX my_index ON ks.table (v);
+
+   -- Change the property `gc_grace_seconds` of the underlying materialized view
+   -- of the secondary index. Its name value will be 13.
+   ALTER INDEX ks.my_index WITH gc_grace_seconds = 13;
+
+   -- Enable synchronous updates for the underlying materialized view.
+   ALTER INDEX ks.my_index WITH synchronous_updates = true;
+
+View properties of a secondary index have the same limitations as those imposed by materialized views.
+For instance, it's forbidden to alter the default :ref:`Time to Live <time-to-live>`. The same holds
+for secondary indexes:
+
+Example::
+
+   -- This statement will be rejected by Scylla because it's
+   -- forbidden to alter the default Time to Live of a materialized view.
+   ALTER INDEX ks.names WITH default_time_to_live = 3600;
+
 .. _drop-index-statement:
 
 DROP INDEX
