@@ -94,6 +94,27 @@ More on :doc:`Local Secondary Indexes </features/local-secondary-indexes>`
 .. placed within the ``keys()`` function, the index will be on the map keys, allowing you to use ``CONTAINS KEY`` in
 .. ``WHERE`` clauses. Otherwise, the index will be on the map values.
 
+.. _alter-index-statement:
+
+ALTER INDEX
+^^^^^^^^^^^
+
+Altering the underlying :doc:`materialized view </features/materialized-views>` of an index uses the ``ALTER INDEX`` statement:
+
+.. code-block::
+
+   alter_index_statement: ALTER INDEX `index_name` WITH `view_options`
+
+where ``view_options`` corresponds to the same set of properties as :ref:`those <mv-options>` of a materialized view.
+
+Example:
+
+.. code-block:: cql
+
+   CREATE TABLE ks.table (p int PRIMARY KEY, v int);
+   CREATE INDEX my_index ON ks.table (v);
+   ALTER INDEX ks.my_index WITH gc_grace_seconds = 13 AND synchronous_updates = true;
+
 .. _drop-index-statement:
 
 DROP INDEX

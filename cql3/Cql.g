@@ -66,6 +66,7 @@ options {
 #include "cql3/statements/create_role_statement.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "cql3/statements/alter_index_statement.hh"
 #include "cql3/selection/raw_selector.hh"
 #include "cql3/selection/selectable-expr.hh"
 #include "cql3/dialect.hh"
@@ -386,6 +387,7 @@ cqlStatement returns [std::unique_ptr<raw::parsed_statement> stmt]
     | st48=pruneMaterializedViewStatement  { $stmt = std::move(st48); }
     | st49=describeStatement           { $stmt = std::move(st49); }
     | st50=listEffectiveServiceLevelStatement { $stmt = std::move(st50); }
+    | st51=alterIndexStatement          { $stmt = std::move(st51); }
     ;
 
 /*
@@ -1073,6 +1075,19 @@ alterTypeStatement returns [std::unique_ptr<alter_type_statement> expr]
                { $expr = std::make_unique<alter_type_statement::renames>(std::move(name)); }
                renames[{ static_cast<alter_type_statement::renames&>(*$expr) }]
           )
+    ;
+
+/**
+ * ALTER INDEX <IDX> WITH <property> = <value>;
+ */
+alterIndexStatement returns [std::unique_ptr<alter_index_statement> expr]
+    @init {
+        auto props = cql3::statements::view_prop_defs();
+    }
+    : K_ALTER K_INDEX idx=columnFamilyName K_WITH properties[*props.properties()]
+    {
+        $expr = std::make_unique<alter_index_statement>(std::move(idx), std::move(props));
+    }
     ;
 
 /**
