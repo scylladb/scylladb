@@ -50,7 +50,8 @@ Creating a secondary index on a table uses the ``CREATE INDEX`` statement:
                  :| view_property
 
 where `view_property` is any :ref:`property <mv-options>` that can be used when creating
-a :doc:`materialized view </features/materialized-views>`.
+a :doc:`materialized view </features/materialized-views>`. The only exception is `CLUSTERING ORDER BY`,
+which is not supported by secondary indexes.
 
 If the statement is provided with a materialized view property, it will not be applied to the index itself.
 Instead, it will be applied to the underlying materialized view of it.
@@ -72,6 +73,10 @@ For instance::
    -- a view property, so the underlying materialized view will be configured with
    -- `gc_grace_seconds = 13`.
    CREATE INDEX dogsIndex ON Animals (dogs) WITH gc_grace_seconds = 13;
+
+   -- The view property `CLUSTERING ORDER BY` is not supported by secondary indexes,
+   -- so this statement will be rejected by Scylla.
+   CREATE INDEX bearsIndex ON Animals (bears) WITH CLUSTERING ORDER BY (bears ASC);
 
 View properties of a secondary index have the same limitations as those imposed by materialized views.
 For instance, a materialized view cannot be created specifying ``gc_grace_seconds = 0``, so creating
