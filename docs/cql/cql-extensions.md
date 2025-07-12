@@ -193,36 +193,12 @@ important, mark the view explicitly with `synchronous_updates = true`.
 ### Synchronous global secondary indexes
 
 Synchronous updates can also be turned on for global secondary indexes.
-At the time of writing this paragraph there is no direct syntax to do that,
-but it's possible to mark the underlying materialized view of an index
-as synchronous. ScyllaDB's implementation of secondary indexes is based
-on materialized views and the generated view's name can be extracted
-from schema tables, and is generally constructed by appending `_index`
-suffix to the index name:
+You can specify it when creating an index or when altering it:
 
 ```cql
 create table main.t(id int primary key, v int);
-create index on main.t(v);
-
-select * from system_schema.indexes ;
-
- keyspace_name | table_name | index_name | kind       | options
----------------+------------+------------+------------+-----------------
-          main |          t |    t_v_idx | COMPOSITES | {'target': 'v'}
-
-(1 rows)
-
-
-select keyspace_name, view_name from system_schema.views ;
-
- keyspace_name | view_name
----------------+---------------
-          main | t_v_idx_index
-
-(1 rows)
-
-alter materialized view t_v_idx_index with synchronous_updates = true;
-
+create index on main.t(v) with synchronous_updates = false;
+alter index main.t_v_idx with synchronous_updates = true;
 ```
 
 Local secondary indexes already have synchronous updates, so there's no need
