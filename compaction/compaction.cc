@@ -139,6 +139,8 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
         const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
+        clogger.trace("get_max_purgeable_timestamp {}.{}: tombstone_gc_enabled=false, returning min_timestamp",
+                table_s.schema()->ks_name(), table_s.schema()->cf_name());
         return { .timestamp = api::min_timestamp };
     }
 
@@ -146,6 +148,8 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
     if (gc_check_only_compacting_sstables) {
         // If gc_check_only_compacting_sstables is enabled, do not
         // check memtables and other sstables not being compacted.
+        clogger.trace("get_max_purgeable_timestamp {}.{}: gc_check_only_compacting_sstables=true, returning max_timestamp",
+                table_s.schema()->ks_name(), table_s.schema()->cf_name());
         return { .timestamp = timestamp };
     }
 
@@ -167,7 +171,8 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
         // See https://github.com/scylladb/scylladb/issues/20423
         memtable_min_timestamp = table_s.min_memtable_live_timestamp();
     }
-    clogger.trace("memtable_min_timestamp={} compacting_max_timestamp={} memtable_has_key={} is_shadowable={} min_memtable_live_timestamp={} min_memtable_live_row_marker_timestamp={}",
+    clogger.trace("get_max_purgeable_timestamp {}.{}: memtable_min_timestamp={} compacting_max_timestamp={} memtable_has_key={} is_shadowable={} min_memtable_live_timestamp={} min_memtable_live_row_marker_timestamp={}",
+            table_s.schema()->ks_name(), table_s.schema()->cf_name(),
             memtable_min_timestamp, compacting_max_timestamp, table_s.memtable_has_key(dk), is_shadowable, table_s.min_memtable_live_timestamp(), table_s.min_memtable_live_row_marker_timestamp());
     // Use memtable timestamp if it contains live data older than the sstables being compacted,
     // and if the memtable also contains the key we're calculating max purgeable timestamp for.
