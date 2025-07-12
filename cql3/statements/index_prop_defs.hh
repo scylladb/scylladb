@@ -30,9 +30,9 @@ public:
     bool is_custom = false;
     std::optional<sstring> custom_class;
 
-    void validate();
-    index_options_map get_raw_options();
-    index_options_map get_options();
+    void validate() const;
+    index_options_map get_raw_options() const;
+    index_options_map get_options() const;
 };
 
 struct index_prop_defs : public view_prop_defs {

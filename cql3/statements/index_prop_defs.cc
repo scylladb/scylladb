@@ -17,7 +17,7 @@
 
 namespace cql3::statements {
 
-void index_specific_prop_defs::validate() {
+void index_specific_prop_defs::validate() const {
     static std::set<sstring> keywords({ sstring(KW_OPTIONS) });
 
     property_definitions::validate(keywords);
@@ -39,13 +39,13 @@ void index_specific_prop_defs::validate() {
 }
 
 index_options_map
-index_specific_prop_defs::get_raw_options() {
+index_specific_prop_defs::get_raw_options() const {
     auto options = get_map(KW_OPTIONS);
     return !options ? std::unordered_map<sstring, sstring>() : std::unordered_map<sstring, sstring>(options->begin(), options->end());
 }
 
 index_options_map
-index_specific_prop_defs::get_options() {
+index_specific_prop_defs::get_options() const {
     auto options = get_raw_options();
     options.emplace(db::index::secondary_index::custom_index_option_name, *custom_class);
     return options;
