@@ -106,7 +106,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
 async def test_reshape_with_tablets(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
-    server = (await manager.servers_add(1, config=cfg, cmdline=['--smp', '1']))[0]
+    server = (await manager.servers_add(1, config=cfg, cmdline=['--smp', '1', '--logger-log-level', 'compaction=debug']))[0]
 
     logger.info("Creating table")
     cql = manager.get_cql()
