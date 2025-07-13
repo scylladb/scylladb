@@ -8,6 +8,7 @@
 
 
 
+#include "utils/UUID.hh"
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <source_location>
@@ -444,6 +445,36 @@ SEASTAR_THREAD_TEST_CASE(test_invalid_colocated_tables) {
         }
     }, tablet_cql_test_config())
     .get();
+}
+
+SEASTAR_TEST_CASE(test_paused_rf_change_requests_persistence) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+
+        auto topology = e.get_system_keyspace().local().load_topology_state({}).get();
+
+        // Check scheduled_rf_change_requests.
+        std::unordered_set<utils::UUID> current_requests;
+        auto new_id1 = utils::make_random_uuid();
+        topo.pause_rf_change_request(new_id1);
+        current_requests.insert(new_id1);
+        auto new_id2 = utils::make_random_uuid();
+        topo.pause_rf_change_request(new_id2);
+        current_requests.insert(new_id2);
+        topology = e.get_system_keyspace().local().load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(current_requests.size(), topology.paused_rf_change_requests.size());
+        for (const auto& request : current_requests) {
+            BOOST_REQUIRE(topology.paused_rf_change_requests.contains(request));
+        }
+
+        topo.resume_rf_change_request(current_requests, new_id1);
+        current_requests.erase(new_id1);
+        topology = e.get_system_keyspace().local().load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(current_requests.size(), topology.paused_rf_change_requests.size());
+        for (const auto& request : current_requests) {
+            BOOST_REQUIRE(topology.paused_rf_change_requests.contains(request));
+        }
+    }, tablet_cql_test_config());
 }
 
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
