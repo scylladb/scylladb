@@ -544,17 +544,11 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
         load_and_stream_desc = "auto-enabled-for-tablets";
     }
 
-<<<<<<< HEAD
     if (load_and_stream && skip_reshape) {
         throw std::runtime_error("Skipping reshape is not possible when doing load-and-stream");
     }
     
-    if (!load_and_stream && skip_cleanup) {
-||||||| parent of bd3bd089e1 (sstables_loader: Fix load-and-stream vs skip-cleanup check)
-    if (!load_and_stream && skip_cleanup) {
-=======
     if (load_and_stream && skip_cleanup) {
->>>>>>> bd3bd089e1 (sstables_loader: Fix load-and-stream vs skip-cleanup check)
         throw std::runtime_error("Skipping cleanup is not possible when doing load-and-stream");
     }
 
