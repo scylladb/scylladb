@@ -175,7 +175,7 @@ SEASTAR_THREAD_TEST_CASE(test_table_is_attached) {
             auto sm0 = db::schema_tables::make_schema_mutations(s0, api::new_timestamp(), true);
             utils::chunked_vector<mutation> muts;
             sm0.copy_to(muts);
-            db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(),
+            db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
                                             e.get_feature_service().local(), muts).get();
         }
 
@@ -309,7 +309,7 @@ SEASTAR_THREAD_TEST_CASE(test_merge_schema_with_large_collection_of_mutations) {
 
         BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
         seastar::memory::scoped_large_allocation_warning_threshold guard((size_t(128) << 10)+1); // 128 KiB + 1 byte
-        db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(),
+        db::schema_tables::merge_schema(e.get_system_keyspace(), e.get_storage_proxy(), e.get_storage_service(),
                                         e.get_feature_service().local(), mutations).get();
         BOOST_REQUIRE(seastar::memory::stats().large_allocations() == 0);
 
