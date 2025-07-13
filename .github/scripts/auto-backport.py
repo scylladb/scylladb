@@ -112,10 +112,15 @@ def backport(repo, pr, version, commits, backport_base_branch, is_collaborator):
                     is_draft = True
                     repo_local.git.add(A=True)
                     repo_local.git.cherry_pick('--continue')
-            repo_local.git.push(fork_repo, new_branch_name, force=True)
-            create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
-                                is_draft, is_collaborator)
-
+            # Check if the branch already exists in the remote fork
+            remote_refs = repo_local.git.ls_remote('--heads', fork_repo, new_branch_name)
+            if not remote_refs:
+                # Branch does not exist, create it with a regular push
+                repo_local.git.push(fork_repo, new_branch_name)
+                create_pull_request(repo, new_branch_name, backport_base_branch, pr, backport_pr_title, commits,
+                                    is_draft, is_collaborator)
+            else:
+                logging.info(f"Remote branch {new_branch_name} already exists in fork. Skipping push.")
         except GitCommandError as e:
             logging.warning(f"GitCommandError: {e}")
 
