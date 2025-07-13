@@ -48,7 +48,7 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
                     try:
                         cql.execute(f"INSERT INTO {ks}.test(pk, v, a) VALUES({i}, {i+1}, {i+2})")
                     except InvalidRequest as e:
-                        if "Unknown identifier" in str(e) or "does not have base column" in str(e):
+                        if "Unknown identifier" in str(e):
                             pass
                         else:
                             raise

@@ -25,6 +25,7 @@
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
+#include "schema/schema_registry.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
 #include "types/tuple.hh"
@@ -962,7 +963,7 @@ public:
     void set_value(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes_view& value) {
         auto log_cdef_ptr = _log_schema.get_column_definition(log_data_column_name_bytes(base_cdef.name()));
         if (!log_cdef_ptr) {
-            throw exceptions::invalid_request_exception(format("CDC log schema for {}.{} does not have base column {}",
+            on_internal_error(cdc_log, format("CDC log schema for {}.{} does not have base column {}",
                 _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
         }
         _log_mut.set_cell(log_ck, *log_cdef_ptr, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
@@ -984,7 +985,7 @@ public:
     void set_deleted_elements(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes& deleted_elements) {
         auto log_cdef_ptr = _log_schema.get_column_definition(log_data_column_deleted_elements_name_bytes(base_cdef.name()));
         if (!log_cdef_ptr) {
-            throw exceptions::invalid_request_exception(format("CDC log schema for {}.{} does not have base column {}",
+            on_internal_error(cdc_log, format("CDC log schema for {}.{} does not have base column {}",
                 _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
         }
         auto& log_cdef = *log_cdef_ptr;
@@ -1483,7 +1484,7 @@ public:
         : _ctx(ctx)
         , _schema(std::move(s))
         , _dk(std::move(dk))
-        , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
+        , _log_schema(_schema->cdc_schema())
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
     {
     }
@@ -1805,6 +1806,12 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
             if (!s->cdc_options().enabled()) {
                 return make_ready_future<>();
+            }
+
+            if (!s->cdc_schema()) {
+                on_internal_error(cdc_log, format(
+                    "Trying to generate CDC log mutations for {}.{} but it has no CDC schema set.",
+                    s->ks_name(), s->cf_name()));
             }
 
             transformer trans(_ctxt, s, m.decorated_key());
