@@ -263,6 +263,48 @@ public:
         }
     }
 
+    void set_ongoing_rf_change_data(const service::ongoing_rf_change_data& data) {
+        abort_source as;
+        auto& client = _env.get_raft_group0_client();
+        while (true) {
+            auto guard = client.start_operation(as).get();
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            builder.set_ongoing_rf_change_data(data);
+            service::topology_change change({builder.build()});
+            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
+                                                                    "setting ongoing RF change data");
+            try {
+                client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
+                break;
+            } catch (service::group0_concurrent_modification&) {
+                testlog.warn("Concurrent modification detected, retrying");
+            }
+        }
+    }
+
+    void modify_scheduled_rf_change_requests(const std::vector<utils::UUID>& current_queue, utils::UUID new_elem) {
+        abort_source as;
+        auto& client = _env.get_raft_group0_client();
+        while (true) {
+            auto guard = client.start_operation(as).get();
+            service::topology_mutation_builder builder(guard.write_timestamp());
+            if (new_elem) {
+                builder.schedule_rf_change_request_id(current_queue, new_elem);
+            } else {
+                builder.drop_first_scheduled_rf_change_request_id(current_queue);
+            }
+            service::topology_change change({builder.build()});
+            service::group0_command g0_cmd = client.prepare_command(std::move(change), guard,
+                                                                    "setting ongoing RF change data");
+            try {
+                client.add_entry(std::move(g0_cmd), std::move(guard), as).get();
+                break;
+            } catch (service::group0_concurrent_modification&) {
+                testlog.warn("Concurrent modification detected, retrying");
+            }
+        }
+    }
+
     const std::vector<locator::host_id>& hosts() const {
         return _hosts;
     }

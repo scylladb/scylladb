@@ -8,6 +8,7 @@
 
 
 
+#include "utils/UUID.hh"
 #include <seastar/core/shard_id.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <source_location>
@@ -318,6 +319,58 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
+        }
+    }, tablet_cql_test_config());
+}
+
+SEASTAR_TEST_CASE(test_tablet_rf_change_data_persistence) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        topology_builder topo(e);
+
+        // Check ongoing_rf_change_data.
+        service::ongoing_rf_change_data data{
+            .ks_name = "ks",
+            .new_ks_props = {{"replication_factor", "3"}},
+            .added_dc_racks = {{"dc1", "rack1"}, {"dc2", "rack2"}},
+            .removed_dc_racks = {{"dc3", "rack3"}},
+            .rollback = false
+        };
+        topo.set_ongoing_rf_change_data(data);
+
+        auto topology = e.get_system_keyspace().local().load_topology_state({}).get();
+
+        BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->ks_name, data.ks_name);
+        BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->new_ks_props.size(), data.new_ks_props.size());
+        BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->new_ks_props["replication_factor"], data.new_ks_props["replication_factor"]);
+        for (size_t i = 0; i < data.added_dc_racks.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->added_dc_racks[i].dc, data.added_dc_racks[i].dc);
+            BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->added_dc_racks[i].rack, data.added_dc_racks[i].rack);
+        }
+        for (size_t i = 0; i < data.removed_dc_racks.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->removed_dc_racks[i].dc, data.removed_dc_racks[i].dc);
+            BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->removed_dc_racks[i].rack, data.removed_dc_racks[i].rack);
+        }
+        BOOST_REQUIRE_EQUAL(topology.ongoing_rf_change_data->rollback, data.rollback);
+
+        // Check scheduled_rf_change_requests.
+        std::vector<utils::UUID> current_queue;
+        auto new_id = utils::make_random_uuid();
+        topo.modify_scheduled_rf_change_requests(current_queue, new_id);
+        current_queue.push_back(new_id);
+        new_id = utils::make_random_uuid();
+        topo.modify_scheduled_rf_change_requests(current_queue, new_id);
+        current_queue.push_back(new_id);
+        topology = e.get_system_keyspace().local().load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(current_queue.size(), topology.rf_change_requests_queue.size());
+        for (size_t i = 0; i < current_queue.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(current_queue[i], topology.rf_change_requests_queue[i]);
+        }
+
+        topo.modify_scheduled_rf_change_requests(current_queue, utils::null_uuid());
+        topology = e.get_system_keyspace().local().load_topology_state({}).get();
+        BOOST_REQUIRE_EQUAL(current_queue.size(), topology.rf_change_requests_queue.size() + 1);
+        for (size_t i = 1; i < current_queue.size(); ++i) {
+            BOOST_REQUIRE_EQUAL(current_queue[i], topology.rf_change_requests_queue[i - 1]);
         }
     }, tablet_cql_test_config());
 }
