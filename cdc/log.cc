@@ -1878,7 +1878,20 @@ bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutat
     });
 }
 
+<<<<<<< HEAD
 future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+||||||| parent of 86dfa6324f (test: cdc: add test_cdc_with_alter)
+future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
+cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+=======
+future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
+cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+    if (utils::get_local_injector().enter("sleep_before_cdc_augmentation")) {
+        return seastar::sleep(std::chrono::milliseconds(100)).then([this, timeout, mutations = std::move(mutations), tr_state = std::move(tr_state), write_cl] () mutable {
+            return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
+        });
+    }
+>>>>>>> 86dfa6324f (test: cdc: add test_cdc_with_alter)
     return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
 }
