@@ -125,7 +125,8 @@ class read_context final : public enable_lw_shared_from_this<read_context> {
     tracing::trace_state_ptr _trace_state;
     mutation_reader::forwarding _fwd_mr;
     bool _range_query;
-    const tombstone_gc_state* _tombstone_gc_state;
+    // When disengaged, tombstone garbage collection is disabled altogether
+    std::optional<tombstone_gc_before_getter> _gc_before_getter;
     max_purgeable_fn _get_max_purgeable;
     // When reader enters a partition, it must be set up for reading that
     // partition from the underlying mutation source (_underlying) in one of two ways:
@@ -149,7 +150,7 @@ public:
             reader_permit permit,
             const dht::partition_range& range,
             const query::partition_slice& slice,
-            const tombstone_gc_state* gc_state,
+            std::optional<tombstone_gc_before_getter> gc_before_getter,
             max_purgeable_fn get_max_purgeable,
             tracing::trace_state_ptr trace_state,
             mutation_reader::forwarding fwd_mr)
@@ -161,7 +162,7 @@ public:
         , _trace_state(std::move(trace_state))
         , _fwd_mr(fwd_mr)
         , _range_query(!query::is_single_partition(range))
-        , _tombstone_gc_state(gc_state)
+        , _gc_before_getter(gc_before_getter)
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _underlying(_cache, *this)
     {
@@ -197,7 +198,7 @@ public:
     bool partition_exists() const { return _partition_exists; }
     void on_underlying_created() { ++_underlying_created; }
     bool digest_requested() const { return _slice.options.contains<query::partition_slice::option::with_digest>(); }
-    const tombstone_gc_state* tombstone_gc_state() const { return _tombstone_gc_state; }
+    const std::optional<tombstone_gc_before_getter>& gc_before_getter() const { return _gc_before_getter; }
     api::timestamp_type get_max_purgeable(const dht::decorated_key& dk, is_shadowable is) const { return _get_max_purgeable(dk, is).timestamp; }
 public:
     future<> ensure_underlying() {
