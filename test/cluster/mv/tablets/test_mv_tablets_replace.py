@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
+@pytest.mark.nightly
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_mv_replica_pairing_during_replace(manager: ManagerClient):
     """
