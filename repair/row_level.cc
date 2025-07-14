@@ -63,6 +63,7 @@
 #include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
+#include "utils/error_injection.hh"
 
 extern logging::logger rlogger;
 
@@ -641,6 +642,8 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
             dht::decorated_key dk = dht::decorate_key(*s, x.get_key());
             if (!(dk_ptr && dk_ptr->dk.equal(*s, dk))) {
                 dk_ptr = make_lw_shared<const decorated_key_with_hash>(*s, dk, seed);
+                // Reset last_mf only when new partition is seen
+                last_mf = {};
             }
             auto& mutation_fragments = x.get_mutation_fragments();
             if (is_master) {
@@ -660,7 +663,6 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
                     co_await coroutine::maybe_yield();
                 }
             } else {
-                last_mf = {};
                 for (auto fmfit = mutation_fragments.begin(); fmfit != mutation_fragments.end(); fmfit = mutation_fragments.erase(fmfit)) {
                     auto fmf = std::move(*fmfit);
 
@@ -767,6 +769,10 @@ private:
     bool _small_table_optimization_tm_calculated = false;
     service::frozen_topology_guard _frozen_topology_guard;
     service::topology_guard _topology_guard;
+    // Max fragments size and number are allowed in a single repair_row_on_wire
+    // which is sent as a rpc stream message
+    static constexpr size_t _max_fragments_size = 1024 * 1024;
+    static constexpr size_t _max_fragments_nr = 32 * 1024;
 public:
     std::vector<repair_node_state>& all_nodes() {
         return _all_node_states;
@@ -1443,11 +1449,28 @@ private:
     }
 
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
+        size_t max_fragments_size = _max_fragments_size;
+        size_t max_fragments_nr = _max_fragments_nr;
         lw_shared_ptr<const decorated_key_with_hash> last_dk_with_hash;
         repair_rows_on_wire rows;
         size_t row_bytes = co_await get_repair_rows_size(row_list);
         _metrics.tx_row_nr += row_list.size();
         _metrics.tx_row_bytes += row_bytes;
+        size_t fragments_size = 0;
+        size_t fragments_nr = 0;
+        sstring ks = _schema->ks_name();
+        sstring cf = _schema->cf_name();
+        auto inject_max_fragments_size = utils::get_local_injector().inject_parameter<uint32_t>("row_level_repair_max_fragments_size");
+        if (inject_max_fragments_size) {
+            max_fragments_size = *inject_max_fragments_size;
+            rlogger.info("Set inject_max_fragments_size {} for table={}.{}", max_fragments_size, ks, cf);
+        }
+        auto inject_max_fragments_nr = utils::get_local_injector().inject_parameter<uint32_t>("row_level_repair_max_fragments_nr");
+        if (inject_max_fragments_nr) {
+            max_fragments_nr = *inject_max_fragments_nr;
+            rlogger.info("Set inject_max_fragments_nr {} for table={}.{}", max_fragments_nr, ks, cf);
+        }
+        auto msg_split_feature = bool(_db.local().features().repair_msg_split);
         while (!row_list.empty()) {
             repair_row r = std::move(row_list.front());
             row_list.pop_front();
@@ -1456,15 +1479,26 @@ private:
             if (rows.empty()) {
                 auto pk = dk_with_hash->dk.key();
                 last_dk_with_hash = dk_with_hash;
+                fragments_size = r.get_frozen_mutation().representation().size();
+                fragments_nr = 1;
                 rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                rlogger.trace("New row to msg table={}.{} fragments_size={} fragments_nr={}", ks, cf, fragments_size, fragments_nr);
             } else {
                 auto& row = rows.back();
-                if (last_dk_with_hash && dk_with_hash->dk.tri_compare(*_schema, last_dk_with_hash->dk) == 0) {
+                // Avoid too many fragments in a single repair_row_on_wire which is sent as a rpc stream message
+                bool no_split = msg_split_feature ? fragments_size < max_fragments_size && fragments_nr < max_fragments_nr : true;
+                if (no_split && last_dk_with_hash && dk_with_hash->dk.tri_compare(*_schema, last_dk_with_hash->dk) == 0) {
+                    fragments_size += r.get_frozen_mutation().representation().size();
                     row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
+                    ++fragments_nr;
+                    rlogger.trace("Add row to msg table={}.{} fragments_size={} fragments_nr={}", ks, cf, fragments_size, fragments_nr);
                 } else {
                     auto pk = dk_with_hash->dk.key();
                     last_dk_with_hash = dk_with_hash;
+                    fragments_size = r.get_frozen_mutation().representation().size();
+                    fragments_nr = 1;
                     rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+                    rlogger.trace("New row to msg table={}.{} fragments_size={} fragments_nr={}", ks, cf, fragments_size, fragments_nr);
                 }
             }
             co_await coroutine::maybe_yield();
