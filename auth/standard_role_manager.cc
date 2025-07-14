@@ -321,7 +321,9 @@ future<> standard_role_manager::start() {
             }
             if (!legacy) {
                 co_await maybe_create_default_role_with_retries();
-                _superuser_created_promise.set_value();
+                if (!_superuser_created_promise.available()) {
+                    _superuser_created_promise.set_value();
+                }
             }
         };
 
