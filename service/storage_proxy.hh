@@ -841,6 +841,7 @@ public:
     }
 
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;
+    virtual void on_released(const locator::host_id& hid) override;
     virtual void on_down(const gms::inet_address& endpoint, locator::host_id hid) override;
 
     friend class abstract_read_executor;

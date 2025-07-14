@@ -650,6 +650,17 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
     }
 
+    auto nodes_to_release = t.left_nodes;
+    for (auto id: t.get_excluded_nodes()) {
+        nodes_to_release.insert(id);
+    }
+    for (const auto& id: nodes_to_release) {
+        auto host_id = locator::host_id(id.uuid());
+        if (!tmptr->get_topology().find_node(host_id)) {
+            nodes_to_notify.released.push_back(host_id);
+        }
+    }
+
     co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
 
     rtlogger.trace("End sync_raft_topology_nodes");
@@ -658,6 +669,9 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 }
 
 future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify) {
+    for (auto host_id : nodes_to_notify.released) {
+        co_await notify_released(host_id);
+    }
     for (auto [ip, host_id] : nodes_to_notify.left) {
         co_await notify_left(ip, host_id);
     }
@@ -5389,6 +5403,7 @@ future<> storage_service::excise(std::unordered_set<token> tokens, inet_address 
     co_await replicate_to_all_cores(std::move(tmptr));
     tmlock.reset();
 
+    co_await notify_released(endpoint_hid);
     co_await notify_left(endpoint_ip, endpoint_hid);
 }
 
@@ -7775,11 +7790,30 @@ future<> endpoint_lifecycle_notifier::notify_left(gms::inet_address endpoint, lo
     });
 }
 
+future<> endpoint_lifecycle_notifier::notify_released(locator::host_id hid) {
+    return seastar::async([this, hid] {
+        _subscribers.thread_for_each([hid] (endpoint_lifecycle_subscriber* subscriber) {
+            try {
+                subscriber->on_released(hid);
+            } catch (...) {
+                slogger.warn("Node released notification failed {}: {}", hid, std::current_exception());
+            }
+        });
+    });
+}
+
 future<> storage_service::notify_left(inet_address endpoint, locator::host_id hid) {
     co_await container().invoke_on_all([endpoint, hid] (auto&& ss) {
         return ss._lifecycle_notifier.notify_left(endpoint, hid);
     });
     slogger.debug("Notify node {} has left the cluster", endpoint);
+}
+
+future<> storage_service::notify_released(locator::host_id hid) {
+    co_await container().invoke_on_all([hid] (auto&& ss) {
+        return ss._lifecycle_notifier.notify_released(hid);
+    });
+    slogger.debug("Notify node {} been released from the cluster and no longer owns any tokens", hid);
 }
 
 future<> endpoint_lifecycle_notifier::notify_up(gms::inet_address endpoint, locator::host_id hid) {
