@@ -908,3 +908,89 @@ BOOST_AUTO_TEST_CASE(s3_fqn_manipulation) {
     BOOST_REQUIRE_EQUAL(bucket_name, "bucket");
     BOOST_REQUIRE_EQUAL(object_name, "prefix1/prefix2/foo.bar");
 }
+
+SEASTAR_THREAD_TEST_CASE(test_creds_expiration) {
+    const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
+    semaphore mem(16 << 20);
+
+    {
+        auto cln = make_minio_client(mem);
+        temporary_buffer<char> data = sstring("1234567890").release();
+        cln->put_object(name, std::move(data)).get();
+        cln->close().get();
+    }
+
+    s3::endpoint_config cfg = {
+        .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
+        .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
+        .region = ::getenv("AWS_DEFAULT_REGION") ?: "local",
+    };
+    struct test_creds_provider final : aws::aws_credentials_provider {
+        test_creds_provider() {
+            creds = {
+                .access_key_id = "FOO",
+                .secret_access_key = "BAR",
+                .session_token = "BAZ",
+                .expires_at = seastar::lowres_clock::now() + 61min, // Set expiration to 61 minutes in the future
+            };
+            testlog.info("test_creds_provider constructor called");
+        }
+        [[nodiscard]] const char* get_name() const override { return "test_creds_provider"; }
+
+    protected:
+        seastar::future<> reload() override {
+            testlog.info("Check if reload needed, {}. Reload count: {}", (seastar::lowres_clock::time_point::min() == creds.expires_at), count);
+            ++count;
+            if (seastar::lowres_clock::now() >= creds.expires_at /* this is how xxx_credentials_provider::is_time_to_refresh() implemented*/ && count > 0) {
+                testlog.info("Reloading");
+                creds = {
+                    .access_key_id = std::getenv("AWS_ACCESS_KEY_ID") ?: "",
+                    .secret_access_key = std::getenv("AWS_SECRET_ACCESS_KEY") ?: "",
+                    .session_token = std::getenv("AWS_SESSION_TOKEN") ?: "",
+                    .expires_at = seastar::lowres_clock::now() + 60min + 5s,
+                };
+            } else {
+                creds = {
+                    .access_key_id = "FOO",
+                    .secret_access_key = "BAR",
+                    .session_token = "BAZ",
+                    .expires_at = seastar::lowres_clock::now() + 60min + 5s,
+                };
+            }
+            co_return;
+        }
+
+    private:
+        size_t count{0};
+    };
+
+    testlog.info("Test starts");
+    auto test_chain = std::make_unique<aws::aws_credentials_provider_chain>();
+    test_chain->add_credentials_provider(std::make_unique<test_creds_provider>());
+    auto test_cln = s3::client::make(
+        tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), mem, {}, nullptr, std::move(test_chain));
+    auto close_test_client = deferred_close(*test_cln);
+
+    BOOST_REQUIRE_EXCEPTION(test_cln->get_object_size(name).get(), storage_io_error, [](const storage_io_error& e) {
+        testlog.info("Error code: {}, message: {}", e.code().value(), e.what());
+        return e.code().value() == EACCES && e.what() == "S3 request failed. Code: 116. Reason:  HTTP code: 403 Forbidden"sv;
+    });
+
+    seastar::sleep(6s).get(); // Delay to simulate credential expiration
+
+    // This highlights a flaw in the client's refresh logic—not the credentials provider:
+    // The client is configured to initiate a refresh at `creds.expires_at - 1h`, assuming credentials should be renewed early.
+    // However, the credentials provider correctly checks expiration using `seastar::lowres_clock::now() >= creds.expires_at`
+    // and returns false since the credentials haven't expired yet.
+    // This mismatch leads to a "credentials retrieval storm," where the client persistently attempts refreshes
+    // that are rejected because the credentials are still valid.
+
+    // Once this misalignment in the client's refresh schedule is resolved, the following code should behave as expected:
+    // auto size = test_cln->get_object_size(name).get();
+    // BOOST_REQUIRE_EQUAL(size, 10);
+
+    BOOST_REQUIRE_EXCEPTION(test_cln->get_object_size(name).get(), storage_io_error, [](const storage_io_error& e) {
+        testlog.info("Error code: {}, message: {}", e.code().value(), e.what());
+        return e.code().value() == EACCES && e.what() == "S3 request failed. Code: 116. Reason:  HTTP code: 403 Forbidden"sv;
+    });
+}
