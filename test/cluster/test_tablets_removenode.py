@@ -62,6 +62,7 @@ async def test_removenode_with_coordinator_restart(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
+@pytest.mark.stable_regression
 async def test_replace(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     cmdline = [

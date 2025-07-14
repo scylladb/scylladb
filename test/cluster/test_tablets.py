@@ -870,6 +870,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.asyncio
+@pytest.mark.stable_regression
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 async def test_replace_with_no_normal_token_owners_in_dc(manager: ManagerClient, with_zero_token_node: bool):
     """
@@ -1129,6 +1130,7 @@ async def test_tablet_split_finalization_with_repair(manager: ManagerClient):
     await asyncio.gather(repair(), check_repair_waits())
 
 @pytest.mark.asyncio
+@pytest.mark.stable_regression
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ManagerClient):
     injection = "repair_writer_impl_create_writer_wait"
