@@ -1224,8 +1224,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         co_await in.close();
                         if (ex) {
                             auto aws_ex = aws::aws_error::from_exception_ptr(ex);
-                            if (aws_ex.is_retryable()) {
+                            if (aws_ex.is_retryable() || aws_ex.get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                                 s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
+                                if (aws_ex.get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                                    auto units = co_await get_units(_client->_creds_sem, 1);
+                                    co_await _client->update_credentials_and_rearm();
+                                }
                                 throw filler_exception(format("{}", ex).c_str());
                             }
                             std::rethrow_exception(ex);
