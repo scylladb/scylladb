@@ -1561,6 +1561,7 @@ async def test_drop_table_and_truncate_after_migration(manager: ManagerClient, o
     await cql.run_async(f"{operation} {ks}.test")
 
 @pytest.mark.asyncio
+@pytest.mark.nightly
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_truncate_during_topology_change(manager: ManagerClient):
     """Test truncate operation during topology change."""
