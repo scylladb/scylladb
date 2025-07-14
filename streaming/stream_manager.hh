@@ -29,6 +29,7 @@ namespace db {
 class config;
 namespace view {
 class view_builder;
+class view_building_worker;
 }
 }
 
@@ -84,6 +85,7 @@ class stream_manager : public gms::i_endpoint_state_change_subscriber, public en
 private:
     sharded<replica::database>& _db;
     db::view::view_builder& _view_builder;
+    sharded<db::view::view_building_worker>& _view_building_worker;
     sharded<netw::messaging_service>& _ms;
     sharded<service::migration_manager>& _mm;
     gms::gossiper& _gossiper;
@@ -105,6 +107,7 @@ private:
 public:
     stream_manager(db::config& cfg, sharded<replica::database>& db,
             db::view::view_builder& view_builder,
+            sharded<db::view::view_building_worker>& view_building_worker,
             sharded<netw::messaging_service>& ms,
             sharded<service::migration_manager>& mm,
             gms::gossiper& gossiper, scheduling_group sg);
