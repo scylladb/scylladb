@@ -227,7 +227,9 @@ future<> password_authenticator::start() {
                 utils::get_local_injector().inject("password_authenticator_start_pause", utils::wait_for_message(5min)).get();
                 if (!legacy_mode(_qp)) {
                     maybe_create_default_password_with_retries().get();
-                    _superuser_created_promise.set_value();
+                    if (!_superuser_created_promise.available()) {
+                        _superuser_created_promise.set_value();
+                    }
                 }
             });
         });
