@@ -184,26 +184,24 @@ def test_create_index_compression(cql, test_keyspace, scylla_only):
 
 # Verify that we can set the tombstone_gc property of an index, and that it will be successfully
 # applied to the underlying materialized view. That should be reflected in `system_schema.views`.
-#
-# Commented-out until we've extended `DESC INDEX` by view properties.
-# def test_create_index_extensions(cql, test_keyspace, scylla_only):
-#     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int") as table:
-#         def do_test(property_value):
-#             index_name = unique_name()
+def test_create_index_extensions(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int") as table:
+        def do_test(property_value):
+            index_name = unique_name()
 
-#             cql.execute(f"CREATE INDEX {index_name} ON {table}(v) WITH tombstone_gc = {{{property_value}}}")
+            cql.execute(f"CREATE INDEX {index_name} ON {table}(v) WITH tombstone_gc = {{{property_value}}}")
 
-#             # Unfortunately, we need to use DESCRIBE to confirm the property has been applied.
-#             # For more context, see issue: scylladb/scylladb#9722.
-#             result = cql.execute(f"DESC INDEX {test_keyspace}.{index_name} WITH INTERNALS").one()
+            # Unfortunately, we need to use DESCRIBE to confirm the property has been applied.
+            # For more context, see issue: scylladb/scylladb#9722.
+            result = cql.execute(f"DESC INDEX {test_keyspace}.{index_name} WITH INTERNALS").one()
 
-#             assert hasattr(result, "create_statement")
-#             assert f"tombstone_gc = {{{property_value}}}" in result.create_statement
+            assert hasattr(result, "create_statement")
+            assert f"tombstone_gc = {{{property_value}}}" in result.create_statement
 
-#             cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
+            cql.execute(f"DROP INDEX {test_keyspace}.{index_name}")
 
-#         do_test("'mode': 'timeout', 'propagation_delay_in_seconds': '4200'")
-#         do_test("'mode': 'disabled', 'propagation_delay_in_seconds': '4200'")
+        do_test("'mode': 'timeout', 'propagation_delay_in_seconds': '4200'")
+        do_test("'mode': 'disabled', 'propagation_delay_in_seconds': '4200'")
 
 # Verify that we can set the ID of an index, and that it will be successfully applied to
 # the underlying materialized view. That should be reflected in `system_schema.views`.
