@@ -161,6 +161,24 @@ future<> password_authenticator::start() {
                         migrate_legacy_metadata().get();
                         return;
                     }
+<<<<<<< HEAD
+||||||| parent of a14b7f71fe (auth: fix crash when migration code runs parallel with raft upgrade)
+                    legacy_create_default_if_missing().get();
+                }
+                utils::get_local_injector().inject("password_authenticator_start_pause", utils::wait_for_message(5min)).get();
+                if (!legacy_mode(_qp)) {
+                    maybe_create_default_password_with_retries().get();
+                    _superuser_created_promise.set_value();
+=======
+                    legacy_create_default_if_missing().get();
+                }
+                utils::get_local_injector().inject("password_authenticator_start_pause", utils::wait_for_message(5min)).get();
+                if (!legacy_mode(_qp)) {
+                    maybe_create_default_password_with_retries().get();
+                    if (!_superuser_created_promise.available()) {
+                        _superuser_created_promise.set_value();
+                    }
+>>>>>>> a14b7f71fe (auth: fix crash when migration code runs parallel with raft upgrade)
                 }
                 create_default_if_missing().get();
             });

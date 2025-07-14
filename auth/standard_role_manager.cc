@@ -269,7 +269,17 @@ future<> standard_role_manager::start() {
             }
             co_await create_default_role_if_missing();
             if (!legacy) {
+<<<<<<< HEAD
                 _superuser_created_promise.set_value();
+||||||| parent of a14b7f71fe (auth: fix crash when migration code runs parallel with raft upgrade)
+                co_await maybe_create_default_role_with_retries();
+                _superuser_created_promise.set_value();
+=======
+                co_await maybe_create_default_role_with_retries();
+                if (!_superuser_created_promise.available()) {
+                    _superuser_created_promise.set_value();
+                }
+>>>>>>> a14b7f71fe (auth: fix crash when migration code runs parallel with raft upgrade)
             }
         };
 
