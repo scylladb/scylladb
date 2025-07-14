@@ -23,6 +23,7 @@ class repair_hash {
 struct partition_key_and_mutation_fragments {
     partition_key get_key();
     utils::chunked_vector<frozen_mutation_fragment> get_mutation_fragments();
+    bool use_last_partition_key() [[version 2025.4]];
 };
 
 class repair_sync_boundary {

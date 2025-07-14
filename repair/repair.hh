@@ -196,13 +196,25 @@ struct node_repair_meta_id {
 class partition_key_and_mutation_fragments {
     partition_key _key;
     utils::chunked_vector<frozen_mutation_fragment> _mfs;
+    // When this is set to true, the receiver should use the last partition_key
+    // sent by the sender and the partition_key _key will be an empty partition
+    // key. This is used as an optimization to avoid sending the same
+    // partition_key more than once.
+    bool _use_last_partition_key = false;
 public:
     partition_key_and_mutation_fragments()
         : _key(std::vector<bytes>() ) {
     }
-    partition_key_and_mutation_fragments(partition_key key, utils::chunked_vector<frozen_mutation_fragment> mfs)
+    partition_key_and_mutation_fragments(partition_key key, utils::chunked_vector<frozen_mutation_fragment> mfs, bool use_last_partition_key)
         : _key(std::move(key))
-        , _mfs(std::move(mfs)) {
+        , _mfs(std::move(mfs))
+        , _use_last_partition_key(use_last_partition_key) {
+    }
+    partition_key_and_mutation_fragments(utils::chunked_vector<frozen_mutation_fragment> mfs)
+        : partition_key_and_mutation_fragments(partition_key::make_empty(), std::move(mfs), true) {
+    }
+    partition_key_and_mutation_fragments(partition_key key, utils::chunked_vector<frozen_mutation_fragment> mfs)
+        : partition_key_and_mutation_fragments(std::move(key), std::move(mfs), false) {
     }
     const partition_key& get_key() const { return _key; }
     const utils::chunked_vector<frozen_mutation_fragment>& get_mutation_fragments() const { return _mfs; }
@@ -210,6 +222,7 @@ public:
     utils::chunked_vector<frozen_mutation_fragment>& get_mutation_fragments() { return _mfs; }
     void push_mutation_fragment(frozen_mutation_fragment mf) { _mfs.push_back(std::move(mf)); }
     future<> clear_gently() { return utils::clear_gently(_mfs); };
+    bool use_last_partition_key() const { return _use_last_partition_key; }
 };
 
 using repair_row_on_wire = partition_key_and_mutation_fragments;
