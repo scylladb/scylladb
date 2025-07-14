@@ -88,7 +88,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs , std::unique_ptr<aws::aws_credentials_provider_chain> creds_provider_chain)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -111,13 +111,16 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
                 }
             }();
         })
+        , _creds_provider_chain(std::move(creds_provider_chain))
         , _gf(std::move(gf))
         , _memory(mem)
         , _retry_strategy(std::move(rs)) {
-    _creds_provider_chain
-        .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
-        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
-        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
+    if (!_creds_provider_chain) {
+        _creds_provider_chain = std::make_unique<aws::aws_credentials_provider_chain>();
+        _creds_provider_chain->add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
+            .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
+            .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
+    }
 
     _creds_update_timer.arm(lowres_clock::now());
     if (!_retry_strategy) {
@@ -134,7 +137,7 @@ future<> client::update_config(endpoint_config_ptr cfg) {
     }
     _cfg = std::move(cfg);
     auto units = co_await get_units(_creds_sem, 1);
-    _creds_provider_chain.invalidate_credentials();
+    _creds_provider_chain->invalidate_credentials();
     _credentials = {};
     _creds_update_timer.rearm(lowres_clock::now());
 }
@@ -143,8 +146,12 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }
 
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, std::unique_ptr<aws::retry_strategy> rs, std::unique_ptr<aws::aws_credentials_provider_chain> cp_chain) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{}, std::move(rs), std::move(cp_chain));
+}
+
 future<> client::update_credentials_and_rearm() {
-    _credentials = co_await _creds_provider_chain.get_aws_credentials();
+    _credentials = co_await _creds_provider_chain->get_aws_credentials();
     _creds_invalidation_timer.rearm(_credentials.expires_at);
     _creds_update_timer.rearm(_credentials.expires_at - 1h);
 }
