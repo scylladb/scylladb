@@ -1901,11 +1901,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets) {
                 }
         });
 
-        tablet_map tmap1(tmap);
+        tablet_map tmap1 = co_await tmap.clone_gently();
         tmeta.set_tablet_map(table1, std::move(tmap1));
         co_await tmeta.set_colocated_table(table2, table1);
 
-        tablet_map tmap3(tmap);
+        tablet_map tmap3 = co_await tmap.clone_gently();
         tmeta.set_tablet_map(table3, std::move(tmap3));
         co_await tmeta.set_colocated_table(table4, table3);
     });
@@ -3049,9 +3049,9 @@ SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
                     }
             });
 
-            tablet_map tmap1(tmap);
+            tablet_map tmap1 = co_await tmap.clone_gently();
             tmeta.set_tablet_map(table1, std::move(tmap1));
-            return tmeta.set_colocated_table(table2, table1);
+            co_await tmeta.set_colocated_table(table2, table1);
         });
 
         auto& stm = e.shared_token_metadata().local();
@@ -3838,7 +3838,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         tablet_metadata tab_meta;
         auto table = s->id();
-        tab_meta.set_tablet_map(table, allocated_map);
+        tab_meta.set_tablet_map(table, std::move(allocated_map));
         tm.set_tablets(std::move(tab_meta));
         return make_ready_future<>();
     }).get();
@@ -3848,7 +3848,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         initial_rep_factor[dc] = std::stoul(shard_count);
     }
 
-    auto tablets = stm.get()->tablets().get_tablet_map(s->id());
+    auto tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
     BOOST_REQUIRE_EQUAL(tablets.tablet_count(), tablet_count);
     for (auto tb : tablets.tablet_ids()) {
         const locator::tablet_info& ti = tablets.get_tablet_info(tb);
@@ -3865,10 +3865,10 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     }
 
     try {
-        tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id());
+        tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
         locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count()};
         auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), old_tablets).get();
+        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), std::move(old_tablets)).get();
 
         auto const& ts = tmap.tablets();
         BOOST_REQUIRE_EQUAL(ts.size(), tablet_count);

@@ -636,7 +636,8 @@ struct tablet_metadata_builder {
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
                 auto tmap = tablet_map(tablet_count);
-                current = active_tablet_map{table, tmap, tmap.first_tablet()};
+                auto first_tablet = tmap.first_tablet();
+                current = active_tablet_map{table, std::move(tmap), first_tablet};
             }
 
             // Resize decision fields are static columns, so set them only once per table.
@@ -818,6 +819,15 @@ class tablet_sstable_set : public sstables::sstable_set_impl {
     uint64_t _bytes_on_disk = 0;
 
 public:
+    tablet_sstable_set(const tablet_sstable_set& o)
+        : _schema(o._schema)
+        , _tablet_map(o._tablet_map.clone())
+        , _sstable_sets(o._sstable_sets)
+        , _sstable_set_ids(o._sstable_set_ids)
+        , _size(o._size)
+        , _bytes_on_disk(o._bytes_on_disk)
+    {}
+
     tablet_sstable_set(schema_ptr s, const storage_group_manager& sgm, const locator::tablet_map& tmap)
         : _schema(std::move(s))
         , _tablet_map(tmap.tablet_count())

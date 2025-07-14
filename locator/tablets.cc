@@ -302,7 +302,7 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
     if (it == _tablets.end()) {
         throw no_such_tablet_map(id);
     }
-    auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
+    auto tablet_map_copy = make_lw_shared<tablet_map>(co_await it->second->clone_gently());
     co_await func(*tablet_map_copy);
     auto new_map_ptr = lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy));
     // share the tablet map with all co-located tables
@@ -436,6 +436,28 @@ tablet_map::tablet_map(size_t tablet_count)
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
     }
     _tablets.resize(tablet_count);
+}
+
+tablet_map tablet_map::clone() const {
+    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, _repair_scheduler_config);
+}
+
+future<tablet_map> tablet_map::clone_gently() const {
+    tablet_container tablets;
+    tablets.reserve(_tablets.size());
+    for (const auto& t : _tablets) {
+        tablets.emplace_back(t);
+        co_await coroutine::maybe_yield();
+    }
+
+    transitions_map transitions;
+    transitions.reserve(_transitions.size());
+    for (const auto& [id, trans] : _transitions) {
+        transitions.emplace(id, trans);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, _resize_task_info, _repair_scheduler_config);
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
