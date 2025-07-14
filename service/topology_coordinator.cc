@@ -957,10 +957,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             // the base table will coordinate the transition for the entire group.
                             continue;
                         }
-                        locator::tablet_map old_tablets = tmptr->tablets().get_tablet_map(table_or_mv->id());
+                        locator::tablet_map old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, old_tablets);
+                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, std::move(old_tablets));
                     } catch (const std::exception& e) {
                         error = e.what();
                         rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
