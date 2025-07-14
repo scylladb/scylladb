@@ -828,6 +828,7 @@ private:
 
     future<> notify_down(inet_address endpoint, locator::host_id hid);
     future<> notify_left(inet_address endpoint, locator::host_id hid);
+    future<> notify_released(locator::host_id hid);
     future<> notify_up(inet_address endpoint, locator::host_id hid);
     future<> notify_joined(inet_address endpoint, locator::host_id hid);
     future<> notify_cql_change(inet_address endpoint, locator::host_id hid,bool ready);
@@ -1036,6 +1037,7 @@ private:
     struct nodes_to_notify_after_sync {
         std::vector<std::pair<gms::inet_address, locator::host_id>> left;
         std::vector<std::pair<gms::inet_address, locator::host_id>> joined;
+        std::vector<locator::host_id> released;
     };
 
     using host_id_to_ip_map_t = db::system_keyspace::host_id_to_ip_map_t;

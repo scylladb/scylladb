@@ -17,6 +17,7 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.pylib.tablets import get_tablet_replicas
+from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 
 from test.cluster.conftest import skip_mode
@@ -244,6 +245,38 @@ async def test_hints_consistency_during_decommission(manager: ManagerClient):
         # Verify that no data has been lost - if the hints replay only sent the hints to the original destination (server3),
         # then they will be only present on server3 which already left the cluster
         logger.info("Verify that no data stored in hints have been lost")
+        for i in range(100):
+            assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
+
+@pytest.mark.asyncio
+async def test_hints_consistency_during_replace(manager: ManagerClient):
+    """
+    Reproducer for https://github.com/scylladb/scylladb/issues/24980
+    In this test, we stop a node, then write some data with CL=ANY and RF=1
+    to generate hints, and then replace the stopped node with a new one.
+    After completing hint replay, all rows should be present on the cluster.
+    """
+    servers = await manager.servers_add(3, config={
+        "error_injections_at_startup": ["decrease_hints_flush_period"]
+    })
+    cql = await manager.get_cql_exclusive(servers[0])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        table = f"{ks}.t"
+        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+
+        await manager.server_stop_gracefully(servers[2].server_id)
+        await manager.others_not_see_server(servers[2].ip_addr)
+
+        # Write 100 rows with CL=ANY. Some of the rows will only be stored as hints because of RF=1
+        for i in range(100):
+            await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES ({i}, {i + 1})", consistency_level=ConsistencyLevel.ANY))
+        sync_point = create_sync_point(servers[0])
+
+        await manager.server_add(replace_cfg=ReplaceConfig(replaced_id = servers[2].server_id, reuse_ip_addr = False, use_host_id = True))
+
+        assert await_sync_point(servers[0], sync_point, 30)
+        # Verify that all rows were recovered by the hint replay
         for i in range(100):
             assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = {i}")) == [(i + 1,)]
 
