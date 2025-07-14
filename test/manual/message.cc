@@ -137,7 +137,7 @@ public:
         utils::chunked_vector<gms::gossip_digest> digests;
         digests.push_back(gms::gossip_digest(ep1, gen++, ver++));
         digests.push_back(gms::gossip_digest(ep2, gen++, ver++));
-        gms::gossip_digest_syn syn("my_cluster", "my_partition", digests, utils::null_uuid());
+        gms::gossip_digest_syn syn("my_cluster", "my_partition", digests, utils::null_uuid(), utils::null_uuid());
         return ser::gossip_rpc_verbs::send_gossip_digest_syn(&ms, id, std::move(syn)).then([this] {
             test_logger.info("Sent gossip sigest syn. Waiting for digest_test_done...");
             return digest_test_done.get_future();

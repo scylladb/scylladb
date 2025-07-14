@@ -135,6 +135,8 @@ public:
     void set_group0_id(utils::UUID group0_id);
     const utils::UUID& get_group0_id() const noexcept;
 
+    const utils::UUID& get_recovery_leader() const noexcept;
+
     const sstring& get_partitioner_name() const noexcept {
         return _gcfg.partitioner;
     }
