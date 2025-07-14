@@ -751,9 +751,9 @@ sharded<locator::shared_token_metadata> token_metadata;
     // Note: we are creating this thread before app.run so that it doesn't
     // inherit Seastar's CPU affinity masks. We want this thread to be free
     // to migrate between CPUs; we think that's what makes the most sense.
-    auto rpc_dict_training_worker = utils::alien_worker(startlog, 19);
+    auto rpc_dict_training_worker = utils::alien_worker(startlog, 19, "rpc-dict");
     // niceness=10 is ~10% of normal process time
-    auto hashing_worker = utils::alien_worker(startlog, 10);
+    auto hashing_worker = utils::alien_worker(startlog, 10, "pwd-hash");
 
     return app.run(ac, av, [&] () -> future<int> {
 
