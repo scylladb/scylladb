@@ -211,6 +211,12 @@ public:
     future<> destroy();
 
 private:
+    future<> merge_keyspaces();
+    future<> merge_types();
+    future<> merge_tables_and_views();
+    future<> merge_functions();
+    future<> merge_aggregates();
+
     void commit_tables_and_views();
     future<> finalize_tables_and_views();
     void commit_on_shard(replica::database& db);
