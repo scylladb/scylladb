@@ -38,6 +38,7 @@ target_sources(db
     view/view_consumer.cc
     view/view_building_worker.cc
     view/view_building_coordinator.cc
+    view/view_building_task_mutation_builder.cc
     sstables-format-selector.cc
     snapshot-ctl.cc
     snapshot/backup_task.cc
