@@ -38,7 +38,7 @@ def task(gdb_execute):
     return task
 
 
-async def test_fiber(gdb_execute, task):
+def test_fiber(gdb_execute, task):
     gdb_execute(f"fiber {task}")
 
 

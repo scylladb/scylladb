@@ -1,4 +1,4 @@
-# Copyright 2025-present ScyllaDB
+# Copyright 2022-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 """Conftest for Scylla GDB tests"""
@@ -22,8 +22,8 @@ def scylla_pid(request, build_mode):
     if os.uname().machine != "x86_64":
         pytest.skip("Tests are skipped for non-x86_64 architectures")
 
-    if build_mode == "dev":
-        pytest.skip("Scylla executable was compiled without debugging symbols (-g). Use `release` or `debug` modes")
+    if build_mode != "release":
+        pytest.skip("Scylla executable was compiled without debugging symbols (-g). Use `release` mode")
 
     run.find_scylla(build_mode)
     pid = run.run_with_temporary_dir(run.run_scylla_cmd)

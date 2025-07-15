@@ -25,6 +25,7 @@ import logging
 import multiprocessing
 import os
 import pathlib
+import re
 import resource
 import signal
 import subprocess
