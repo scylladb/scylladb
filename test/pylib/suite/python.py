@@ -239,9 +239,6 @@ class PythonTest(Test):
             self.args.insert(0, f"--host={self.server_address}")
             self.server_log_filename = cluster.server_log_filename()
             self.args.insert(0, f"--scylla-log-filename={self.server_log_filename}")
-            self.args.insert(
-                0, f"--scylla-pid={next(iter(cluster.running.values())).cmd.pid}"
-            )
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
 

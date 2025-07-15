@@ -47,6 +47,7 @@ import re
         "timers",
         "get-config-value compaction_static_shares",
         "read-stats",
+        "prepared-statements",
     ],
 )
 def test_scylla_commands(gdb_execute, command):
