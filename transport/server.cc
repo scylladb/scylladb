@@ -675,17 +675,21 @@ thread_local cql_server::connection::execution_stage_type
         cql_server::connection::_process_request_stage{"transport", &connection::process_request_one};
 
 void cql_server::connection::handle_error(future<>&& f) {
-    try {
-        f.get();
-    } catch (const exceptions::cassandra_exception& ex) {
-        clogger.debug("{}: connection error, code {}, message [{}]", _client_state.get_remote_address(), ex.code(), ex.what());
-        try { ++_server._stats.errors[ex.code()]; } catch(...) {}
-        write_response(make_error(0, ex.code(), ex.what(), tracing::trace_state_ptr()));
-    } catch (std::exception& ex) {
-        clogger.debug("{}: connection error, message [{}]", _client_state.get_remote_address(), ex.what());
+    if (!f.failed()) {
+        return;
+    }
+
+    std::exception_ptr eptr = f.get_exception();
+
+    if (auto* ex = try_catch<exceptions::cassandra_exception>(eptr)) {
+        clogger.debug("{}: connection error, code {}, message [{}]", _client_state.get_remote_address(), ex->code(), ex->what());
+        try { ++_server._stats.errors[ex->code()]; } catch(...) {}
+        write_response(make_error(0, ex->code(), ex->what(), tracing::trace_state_ptr()));
+    } else if (auto* ex = try_catch<std::exception>(eptr)) {
+        clogger.debug("{}: connection error, message [{}]", _client_state.get_remote_address(), ex->what());
         try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
-        write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex.what(), tracing::trace_state_ptr()));
-    } catch (...) {
+        write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, ex->what(), tracing::trace_state_ptr()));
+    } else {
         clogger.debug("{}: connection error, unknown error", _client_state.get_remote_address());
         try { ++_server._stats.errors[exceptions::exception_code::SERVER_ERROR]; } catch(...) {}
         write_response(make_error(0, exceptions::exception_code::SERVER_ERROR, "unknown error", tracing::trace_state_ptr()));
