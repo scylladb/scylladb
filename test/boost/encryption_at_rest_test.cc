@@ -351,8 +351,8 @@ auth_suite=TLS1.2
 policy_path={}
 enable_tls_client_auth=False
 logging_level=DEBUG
-database_path={}/pykmip.db
-        )foo", info.cert, info.key, info.ca, tmp.path().string(), tmp.path().string());
+database_path=:memory:
+        )foo", info.cert, info.key, info.ca, tmp.path().string());
 
         auto cfgfile = fmt::format("{}/pykmip.conf", tmp.path().string());
         auto log = fmt::format("{}/pykmip.log", tmp.path().string());
