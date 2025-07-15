@@ -3988,7 +3988,7 @@ static db::consistency_level get_read_consistency(const rjson::value& request) {
     bool consistent_read = false;
     if (consistent_read_value && !consistent_read_value->IsNull()) {
         if (consistent_read_value->IsBool()) {
-            consistent_read = consistent_read_value->GetBool();
+            consistent_read = consistent_read_value->GetBool()
         } else {
             throw api_error::validation("ConsistentRead flag must be a boolean");
         }
