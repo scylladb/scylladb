@@ -29,6 +29,8 @@
 #include "mutation/frozen_mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/assert.hh"
+#include "cdc/log.hh"
+#include "cdc/cdc_partitioner.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "lang/manager.hh"
@@ -482,8 +484,8 @@ enum class schema_diff_side {
 };
 
 static schema_diff_per_shard diff_table_or_view(distributed<service::storage_proxy>& proxy,
-    const std::map<table_id, schema_mutations>& before,
-    const std::map<table_id, schema_mutations>& after,
+    std::map<table_id, schema_mutations> before,
+    std::map<table_id, schema_mutations> after,
     bool reload,
     noncopyable_function<schema_ptr (schema_mutations sm, schema_diff_side)> create_schema)
 {
@@ -579,6 +581,32 @@ in_progress_types_storage_per_shard& in_progress_types_storage::local() {
     return *shards[this_shard_id()];
 }
 
+static auto extract_cdc(
+        std::map<table_id, schema_mutations>& tables_before,
+        std::map<table_id, schema_mutations>& tables_after)
+{
+    auto extract_cdc_from_map = [](std::map<table_id, schema_mutations>& source) {
+        std::map<table_id, schema_mutations> cdc_tables;
+
+        auto it = source.begin();
+        while (it != source.end()) {
+            if (it->second.partitioner() == cdc::cdc_partitioner::classname) {
+                auto node = source.extract(it++);
+                cdc_tables.insert(std::move(node));
+            } else {
+                ++it;
+            }
+        }
+
+        return cdc_tables;
+    };
+
+    auto cdc_before = extract_cdc_from_map(tables_before);
+    auto cdc_after = extract_cdc_from_map(tables_after);
+
+    return std::make_pair(std::move(cdc_before), std::move(cdc_after));
+}
+
 // see the comments for merge_keyspaces()
 // Atomically publishes schema changes. In particular, this function ensures
 // that when a base schema and a subset of its views are modified together (i.e.,
@@ -587,10 +615,10 @@ in_progress_types_storage_per_shard& in_progress_types_storage::local() {
 static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
     distributed<service::storage_service>& ss,
     sharded<db::system_keyspace>& sys_ks,
-    const std::map<table_id, schema_mutations>& tables_before,
-    const std::map<table_id, schema_mutations>& tables_after,
-    const std::map<table_id, schema_mutations>& views_before,
-    const std::map<table_id, schema_mutations>& views_after,
+    std::map<table_id, schema_mutations> tables_before,
+    std::map<table_id, schema_mutations> tables_after,
+    std::map<table_id, schema_mutations> views_before,
+    std::map<table_id, schema_mutations> views_after,
     in_progress_types_storage& types_storage,
     bool reload,
     locator::tablet_metadata_change_hint tablet_hint,
@@ -599,14 +627,20 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     auto& user_types = types_storage.local();
     co_await diff.tables_and_views.start();
 
+    auto [cdc_before, cdc_after] = extract_cdc(tables_before, tables_after);
+
     // diffs bound to current shard
     auto& local_views = diff.tables_and_views.local().views;
     auto& local_tables = diff.tables_and_views.local().tables;
+    auto& local_cdc = diff.tables_and_views.local().cdc;
 
-    local_tables = diff_table_or_view(proxy, tables_before, tables_after, reload, [&] (schema_mutations sm, schema_diff_side) {
+    local_cdc = diff_table_or_view(proxy, std::move(cdc_before), std::move(cdc_after), reload, [&] (schema_mutations sm, schema_diff_side) {
+        return create_table_from_mutations(proxy, std::move(sm), user_types, nullptr);
+    });
+    local_tables = diff_table_or_view(proxy, std::move(tables_before), std::move(tables_after), reload, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(proxy, std::move(sm), user_types, nullptr/*TODO cdc_schema*/);
     });
-    local_views = diff_table_or_view(proxy, views_before, views_after, reload, [&] (schema_mutations sm, schema_diff_side side) {
+    local_views = diff_table_or_view(proxy, std::move(views_before), std::move(views_after), reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
         // If we don't do it we are leaving a window where write commands to this schema are illegal.
         // There are 3 possibilities:
@@ -651,11 +685,14 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
 
     // create schema_ptrs for all shards
     frozen_schema_diff tables_frozen = co_await local_tables.freeze();
+    frozen_schema_diff cdc_frozen = co_await local_cdc.freeze();
     frozen_schema_diff views_frozen = co_await local_views.freeze();
-    co_await diff.tables_and_views.invoke_on_others([&types_storage, &proxy, &tables_frozen, &views_frozen] (affected_tables_and_views_per_shard& tables_and_views) -> future<> {
+    co_await diff.tables_and_views.invoke_on_others([&types_storage, &proxy, &tables_frozen, &cdc_frozen, &views_frozen] (affected_tables_and_views_per_shard& tables_and_views) -> future<> {
         auto& db = proxy.local().get_db().local();
         tables_and_views.tables = co_await schema_diff_per_shard::copy_from(
                 db, types_storage, tables_frozen);
+        tables_and_views.cdc = co_await schema_diff_per_shard::copy_from(
+                db, types_storage, cdc_frozen);
         tables_and_views.views = co_await schema_diff_per_shard::copy_from(
                 db, types_storage, views_frozen);
     });
@@ -671,6 +708,11 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
                 co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
     });
     co_await max_concurrent_for_each(local_tables.dropped, max_concurrent, [&db, &diff] (schema_ptr& dt) -> future<> {
+        auto uuid = dt->id();
+        diff.table_shards.insert({uuid,
+                co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
+    });
+    co_await max_concurrent_for_each(local_cdc.dropped, max_concurrent, [&db, &diff] (schema_ptr& dt) -> future<> {
         auto uuid = dt->id();
         diff.table_shards.insert({uuid,
                 co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
@@ -750,16 +792,20 @@ static future<> notify_tables_and_views(service::migration_notifier& notifier, c
     };
 
     const auto& tables = diff.tables_and_views.local().tables;
+    const auto& cdc = diff.tables_and_views.local().cdc;
     const auto& views = diff.tables_and_views.local().views;
 
     // View drops are notified first, because a table can only be dropped if its views are already deleted
     co_await notify(views.dropped, [&] (auto&& dt) { return notifier.drop_view(view_ptr(dt)); });
     co_await notify(tables.dropped, [&] (auto&& dt) { return notifier.drop_column_family(dt); });
+    co_await notify(cdc.dropped, [&] (auto&& dt) { return notifier.drop_column_family(dt); });
     // Table creations are notified first, in case a view is created right after the table
     co_await notify(tables.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
+    co_await notify(cdc.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
     co_await notify(views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
     // Table altering is notified first, in case new base columns appear
     co_await notify(tables.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
+    co_await notify(cdc.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
     co_await notify(views.altered, [&] (auto&& altered) { return notifier.update_view(view_ptr(altered.new_schema), *it++); });
 }
 
@@ -904,6 +950,7 @@ void schema_applier::commit_tables_and_views() {
     auto& db = sharded_db.local();
     auto& diff = _affected_tables_and_views;
     const auto& tables = diff.tables_and_views.local().tables;
+    const auto& cdc = diff.tables_and_views.local().cdc;
     const auto& views = diff.tables_and_views.local().views;
 
     for (auto& dropped_view : views.dropped) {
@@ -913,6 +960,15 @@ void schema_applier::commit_tables_and_views() {
     for (auto& dropped_table : tables.dropped) {
         auto s = dropped_table.get();
         replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
+    }
+    for (auto& dropped_table : cdc.dropped) {
+        auto s = dropped_table.get();
+        replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
+    }
+
+    for (auto& schema : cdc.created) {
+        auto& ks = db.find_keyspace(schema->ks_name());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
     }
 
     for (auto& schema : tables.created) {
@@ -925,7 +981,11 @@ void schema_applier::commit_tables_and_views() {
         db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
     }
 
-    diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
+    diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + cdc.altered.size() + views.altered.size());
+    for (auto&& altered : cdc.altered) {
+        bool changed = db.update_column_family(altered.new_schema);
+        diff.tables_and_views.local().columns_changed.push_back(changed);
+    }
     for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
         bool changed = db.update_column_family(altered.new_schema);
         diff.tables_and_views.local().columns_changed.push_back(changed);
@@ -1000,6 +1060,10 @@ future<> schema_applier::finalize_tables_and_views() {
         auto s = dropped_table.get();
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
+    for (auto& dropped_table : diff.tables_and_views.local().cdc.dropped) {
+        auto s = dropped_table.get();
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+    }
 
     // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
     // and so that compaction groups are not destroyed altogether.
@@ -1010,7 +1074,11 @@ future<> schema_applier::finalize_tables_and_views() {
 
     co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
         const auto& tables = diff.tables_and_views.local().tables;
+        const auto& cdc = diff.tables_and_views.local().cdc;
         const auto& views = diff.tables_and_views.local().views;
+        for (auto& created_table : cdc.created) {
+            co_await db.make_column_family_directory(created_table);
+        }
         for (auto& created_table : tables.created) {
             co_await db.make_column_family_directory(created_table);
         }
