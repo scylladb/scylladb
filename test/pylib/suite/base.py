@@ -555,7 +555,7 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
     ms = MinioServer(
         tempdir_base=str(tempdir_base),
-        address="127.0.0.1",
+        address=await hosts.lease_host(),
         logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
     )
     await ms.start()
