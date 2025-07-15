@@ -823,7 +823,16 @@ public:
         case sstables::component_type::TemporaryTOC:
         case sstables::component_type::TOC:
             co_return sink;
-        default:
+        case sstables::component_type::Data:
+        case sstables::component_type::Index:
+        case sstables::component_type::CompressionInfo:
+        case sstables::component_type::Summary:
+        case sstables::component_type::Digest:
+        case sstables::component_type::CRC:
+        case sstables::component_type::Filter:
+        case sstables::component_type::Statistics:
+        case sstables::component_type::TemporaryStatistics:
+        case sstables::component_type::Unknown:
             break;
         }
         co_await wrap_writeonly(sst, type, [&sink](shared_ptr<symmetric_key> k) { 
