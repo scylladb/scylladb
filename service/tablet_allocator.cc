@@ -2521,7 +2521,7 @@ public:
         lblogger.debug("Table {} shard overcommit: {}", table, overcommit);
     }
 
-    future<migration_plan> make_internode_plan(const dc_name& dc, node_load_map& nodes,
+    future<migration_plan> make_internode_plan(const dc_name& dc, std::optional<sstring> rack_filter, node_load_map& nodes,
                                                const std::unordered_set<host_id>& nodes_to_drain,
                                                host_id target) {
         migration_plan plan;
@@ -2547,6 +2547,9 @@ public:
         };
 
         for (auto&& [host, node_load] : nodes) {
+            if (rack_filter && *rack_filter != node_load.rack()) {
+                continue;
+            }
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 shard_id shard = 0;
                 for (auto&& shard_load : node_load.shards) {
@@ -2580,7 +2583,7 @@ public:
             co_await coroutine::maybe_yield();
 
             if (nodes_by_load.empty()) {
-                lblogger.debug("No more candidate nodes");
+                lblogger.debug("No more candidate nodes in DC/rack: {}/{}", dc, rack_filter);
                 _stats.for_dc(dc).stop_no_candidates++;
                 break;
             }
@@ -2651,7 +2654,7 @@ public:
             // Pick best target node.
 
             if (nodes_by_load_dst.empty()) {
-                lblogger.debug("No more target nodes");
+                lblogger.debug("No more target nodes in DC/rack: {}/{}", dc, rack_filter);
                 _stats.for_dc(dc).stop_no_candidates++;
                 break;
             }
@@ -2688,7 +2691,7 @@ public:
                     balance_achieved = (load_delta / max_load) < _size_based_balance_threshold;
                 }
                 if (balance_achieved) {
-                    lblogger.debug("Balance achieved.");
+                    lblogger.debug("Balance achieved in DC/rack: {}/{}", dc, rack_filter);
                     _stats.for_dc(dc).stop_balance++;
                     break;
                 }
@@ -2723,7 +2726,7 @@ public:
             auto& tmap = tmeta.get_tablet_map(source_tablets.table());
             if (can_check_convergence && !check_convergence(src_node_info, target_info, source_tablets)) {
                 if (_force_capacity_based_balancing) {
-                    lblogger.debug("No more candidates. Load would be inverted.");
+                    lblogger.debug("No more candidates. Load would be inverted in DC/rack: {}/{}", dc, rack_filter);
                     _stats.for_dc(dc).stop_load_inversion++;
                     break;
                 }
@@ -3185,27 +3188,39 @@ public:
 
         // Compute load imbalance.
 
+        struct load_data {
+            load_type max_load = 0;
+            load_type min_load = 0;
+            std::optional<host_id> min_load_node;
+
+            void update(load_type load, host_id host) {
+                if (!min_load_node || load < min_load) {
+                    min_load = load;
+                    min_load_node = host;
+                }
+                if (load > max_load) {
+                    max_load = load;
+                }
+            }
+        };
+
         _total_capacity_shards = 0;
         _total_capacity_nodes = 0;
         _total_capacity_storage = 0;
-        load_type max_load = 0;
-        load_type min_load = 0;
-        std::optional<host_id> min_load_node = std::nullopt;
+        load_data dc_load;
+        std::unordered_map<sstring, load_data> rack_load;
         for (auto&& [host, load] : nodes) {
             load.update();
             _stats.for_node(dc, host).load = load.avg_load;
 
             if (!load.drained) {
-                if (!min_load_node || load.avg_load < min_load) {
-                    min_load = load.avg_load;
-                    min_load_node = host;
-                }
-                if (load.avg_load > max_load) {
-                    max_load = load.avg_load;
-                }
+                dc_load.update(load.avg_load, host);
+                rack_load[load.rack()].update(load.avg_load, host);
                 _total_capacity_shards += load.shard_count;
                 _total_capacity_nodes++;
                 _total_capacity_storage += load.dusage->capacity;
+            } else if (!rack_load.contains(load.rack())) {
+                rack_load[load.rack()] = load_data{};
             }
         }
 
@@ -3223,10 +3238,25 @@ public:
                          load.tablets_per_shard(), load.state(), load.dusage->capacity, read, write);
         }
 
-        if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
-            host_id target = *min_load_node;
-            lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
-            plan.merge(co_await make_internode_plan(dc, nodes, nodes_to_drain, target));
+        if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || dc_load.max_load != dc_load.min_load))) {
+            if (_db.get_config().rf_rack_valid_keyspaces()) {
+                for (auto& [rack, rload] : rack_load) {
+                    if (!rload.min_load_node) {
+                        throw std::runtime_error(format("There are nodes with tablets to drain but no candidate nodes in rack {} of DC {}."
+                                                        " Consider adding new nodes or reducing replication factor.", rack, dc));
+                    }
+                    host_id target = *rload.min_load_node;
+                    lblogger.info("rack {} target node: {}, avg_load: {}, max: {}", rack, target, rload.min_load, rload.max_load);
+                    std::unordered_set<host_id> drain_in_rack {nodes_to_drain
+                                                                | std::views::filter([&] (host_id host) { return nodes.at(host).rack() == rack; } )
+                                                                | std::ranges::to<std::unordered_set<host_id>>()};
+                    plan.merge(co_await make_internode_plan(dc, rack, nodes, drain_in_rack, target));
+                }
+            } else {
+                host_id target = *dc_load.min_load_node;
+                lblogger.info("target node: {}, avg_load: {}, max: {}", target, dc_load.min_load, dc_load.max_load);
+                plan.merge(co_await make_internode_plan(dc, std::nullopt, nodes, nodes_to_drain, target));
+            }
         } else {
             _stats.for_dc(dc).stop_balance++;
         }
