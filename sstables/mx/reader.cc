@@ -1525,10 +1525,7 @@ private:
                 // Even if upper bound is not near, the binary search will populate the cache with blocks
                 // which can be used to narrow down the data file range somewhat.
                 position_in_partition_view lb = get_slice_lower_bound(*_schema, _slice, key);
-                clustered_index_cursor *cur = _index_reader->current_clustered_cursor();
-                if (cur) {
-                    co_await cur->advance_to(lb);
-                }
+                co_await _index_reader->prefetch_lower_bound(lb);
             }
 
             position_in_partition_view pos = get_slice_upper_bound(*_schema, _slice, key);

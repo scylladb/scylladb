@@ -891,6 +891,22 @@ public:
         return partition_data_ready(_lower_bound);
     }
 
+    // Advances some internals lower bound (the clustered cursor),
+    // in order to warm up some caches.
+    //
+    // Does not move the lower bound, but counts as a position-changing
+    // call for the "must be called for non-decreasing positions" conditions.
+    //
+    // Must be called only after advanced to some partition and !eof().
+    // Must be called for non-decreasing positions.
+    future<> prefetch_lower_bound(position_in_partition_view pos) {
+        clustered_index_cursor *cur = current_clustered_cursor();
+        if (cur) {
+            return cur->advance_to(pos).discard_result();
+        }
+        return make_ready_future<>();
+    }
+
     // Forwards the cursor to the given position in the current partition.
     //
     // Note that the index within partition, unlike the partition index, doesn't cover all keys.
