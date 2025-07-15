@@ -1,13 +1,39 @@
 import ssl
 import sys
+import functools
+
+import sqlalchemy
+from sqlalchemy.pool import StaticPool
 
 from kmip.services import auth
 from kmip.services.server.server import build_argument_parser
 from kmip.services.server.server import KmipServer
 
-# Helper wrapper for running pykmip in scylla testing. Needed because TLS options
-# (hardcoded) in pykmip are obsolete and will not work with connecting using gnutls
-# of any modern variety.
+# Helper wrapper for running pykmip in scylla testing. Needed for the following
+# reasons:
+#
+# * TLS options (hardcoded) in pykmip are obsolete and will not work with
+#   connecting using gnutls of any modern variety.
+#
+# * We need to use an in-memory SQLite database for testing (file-based SQLite
+#   issues many fdatasync's which have been proven to reduce CI stability in
+#   some slow machines). An in-memory SQLite database is bound to a single
+#   connection. In order to share it among multiple threads, the connection
+#   itself must be shared. We achieve that with the StaticPool.
+#   https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#using-a-memory-database-in-multiple-threads
+
+
+def monkey_patch_create_engine():
+    original_create_engine = sqlalchemy.create_engine
+
+    @functools.wraps(original_create_engine)
+    def patched_create_engine(*args, **kwargs):
+        if args and isinstance(args[0], str) and args[0].startswith('sqlite:///:memory:'):
+            kwargs['poolclass'] = StaticPool
+        return original_create_engine(*args, **kwargs)
+
+    sqlalchemy.create_engine = patched_create_engine
+
 
 class TLS13AuthenticationSuite(auth.TLS12AuthenticationSuite):
     """
@@ -59,6 +85,8 @@ def main():
         kwargs['database_path'] = opts.database_path
 
     kwargs['live_policies'] = True
+
+    monkey_patch_create_engine()
 
     # Create and start the server.
     s = KmipServer(**kwargs)
