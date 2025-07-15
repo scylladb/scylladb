@@ -67,8 +67,7 @@ std::string_view prefix_for_scheme(scheme) noexcept;
 /// \throws \ref no_supported_schemes when no known hashing schemes are supported on the system.
 ///
 template <typename RandomNumberEngine>
-sstring generate_salt(RandomNumberEngine& g) {
-    static const scheme scheme = identify_best_supported_scheme();
+sstring generate_salt(RandomNumberEngine& g, scheme scheme) {
     static const sstring prefix = sstring(prefix_for_scheme(scheme));
     return prefix + generate_random_salt_bytes(g);
 }
@@ -93,8 +92,8 @@ sstring hash_with_salt(const sstring& pass, const sstring& salt);
 /// \throws \ref std::system_error when the implementation-specific implementation fails to hash the cleartext.
 ///
 template <typename RandomNumberEngine>
-sstring hash(const sstring& pass, RandomNumberEngine& g) {
-    return detail::hash_with_salt(pass, detail::generate_salt(g));
+sstring hash(const sstring& pass, RandomNumberEngine& g, scheme scheme) {
+    return detail::hash_with_salt(pass, detail::generate_salt(g, scheme));
 }
 
 ///

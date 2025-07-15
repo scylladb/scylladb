@@ -125,7 +125,7 @@ future<> password_authenticator::legacy_create_default_if_missing() {
     }
     std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
     if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, passwords::detail::identify_best_supported_scheme());
     }
     const auto query = update_row_query();
     co_await _qp.execute_internal(
@@ -172,7 +172,7 @@ future<> password_authenticator::maybe_create_default_password() {
     // Set default superuser's password.
     std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
     if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, passwords::detail::identify_best_supported_scheme());
     }
     const auto update_query = update_row_query();
     co_await collect_mutations(_qp, batch, update_query, {salted_pwd, _superuser});
@@ -315,7 +315,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
     auto maybe_hash = options.credentials.transform([&] (const auto& creds) -> sstring {
         return std::visit(make_visitor(
                 [&] (const password_option& opt) {
-                    return passwords::hash(opt.password, rng_for_salt);
+                    return passwords::hash(opt.password, rng_for_salt, passwords::detail::identify_best_supported_scheme());
                 },
                 [] (const hashed_password_option& opt) {
                     return opt.hashed_password;
@@ -358,11 +358,11 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
                 query,
                 consistency_for_user(role_name),
                 internal_distributed_query_state(),
-                {passwords::hash(password, rng_for_salt), sstring(role_name)},
+                {passwords::hash(password, rng_for_salt, passwords::detail::identify_best_supported_scheme()), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
         co_await collect_mutations(_qp, mc, query,
-                {passwords::hash(password, rng_for_salt), sstring(role_name)});
+                {passwords::hash(password, rng_for_salt, passwords::detail::identify_best_supported_scheme()), sstring(role_name)});
     }
 }
 
