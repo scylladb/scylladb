@@ -492,6 +492,16 @@ def create_table_ss(dynamodb, dynamodbstreams, type):
     yield table, arn
     table.delete()
 
+def create_table_ss_no_ck(dynamodb, dynamodbstreams, type):
+    table = create_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': type })
+    (arn, label) = wait_for_active_stream(dynamodbstreams, table, timeout=60)
+    yield table, arn
+    table.delete()
+
 @pytest.fixture(scope="function")
 def test_table_ss_keys_only(dynamodb, dynamodbstreams):
     yield from create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY')
@@ -507,6 +517,14 @@ def test_table_ss_old_image(dynamodb, dynamodbstreams):
 @pytest.fixture(scope="function")
 def test_table_ss_new_and_old_images(dynamodb, dynamodbstreams):
     yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
+
+@pytest.fixture(scope="function")
+def test_table_ss_no_ck_keys_only(dynamodb, dynamodbstreams):
+    yield from create_table_ss_no_ck(dynamodb, dynamodbstreams, 'KEYS_ONLY')
+
+@pytest.fixture(scope="function")
+def test_table_ss_no_ck_new_and_old_images(dynamodb, dynamodbstreams):
+    yield from create_table_ss_no_ck(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
 
 # Test that it is, sadly, not allowed to use UpdateTable on a table which
 # already has a stream enabled to change that stream's StreamViewType.
@@ -735,9 +753,7 @@ def do_test(test_table_ss_stream, dynamodbstreams, updatefunc, mode, p = random_
     pytest.fail('missing events in output: {}'.format(output))
 
 # Test a single PutItem of a new item. Should result in a single INSERT
-# event. Currently fails because in Alternator, PutItem - which generates a
-# tombstone to *replace* an item - generates REMOVE+MODIFY (issue #6930).
-@pytest.mark.xfail(reason="Currently fails - see issue #6930")
+# event.
 def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
@@ -745,6 +761,61 @@ def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodbstreams):
         events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
     do_test(test_table_ss_keys_only, dynamodbstreams, do_updates, 'KEYS_ONLY')
+
+def test_streams_putitem_new_item_overrides_old(test_table_ss_new_and_old_images, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.put_item(Item={'p': p, 'c': c, 'a': 1})
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': 1}])
+        table.put_item(Item={'p': p, 'c': c})
+        events.append(['INSERT', {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 1}, {'p': p, 'c': c}])
+        return events
+    do_test(test_table_ss_new_and_old_images, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+def test_streams_putitem_new_items_override_old(test_table_ss_new_and_old_images, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.put_item(Item={'p': p, 'c': c, 'a': 1})
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': 1}])
+        # The following updates' type should be MODIFY (issue #6918).
+        table.put_item(Item={'p': p, 'c': c, 'b': 2})
+        events.append(['INSERT', {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 1}, {'p': p, 'c': c, 'b': 2}])
+        table.put_item(Item={'p': p, 'c': c, 'a': 3, 'b': 4})
+        events.append(['INSERT', {'p': p, 'c': c}, {'p': p, 'c': c, 'b': 2}, {'p': p, 'c': c, 'a': 3, 'b': 4}])
+        return events
+    do_test(test_table_ss_new_and_old_images, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+def test_streams_putitem_no_ck_keys_only(test_table_ss_no_ck_keys_only, dynamodbstreams):
+    def do_updates(table, p, _):
+        events = []
+        table.put_item(Item={'p': p, 'x': 2})
+        events.append(['INSERT', {'p': p}, None, {'p': p, 'x': 2}])
+        return events
+    do_test(test_table_ss_no_ck_keys_only, dynamodbstreams, do_updates, 'KEYS_ONLY')
+
+def test_streams_putitem_no_ck_new_item_overrides_old(test_table_ss_no_ck_new_and_old_images, dynamodbstreams):
+    def do_updates(table, p, _):
+        events = []
+        table.put_item(Item={'p': p, 'a': 1})
+        events.append(['INSERT', {'p': p}, None, {'p': p, 'a': 1}])
+        table.put_item(Item={'p': p})
+        # The following update's type should be MODIFY (issue #6918).
+        events.append(['INSERT', {'p': p}, {'p': p, 'a': 1}, {'p': p}])
+        return events
+    do_test(test_table_ss_no_ck_new_and_old_images, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+def test_streams_putitem_no_ck_new_items_override_old(test_table_ss_no_ck_new_and_old_images, dynamodbstreams):
+    def do_updates(table, p, _):
+        events = []
+        table.put_item(Item={'p': p, 'a': 1})
+        events.append(['INSERT', {'p': p}, None, {'p': p, 'a': 1}])
+        table.put_item(Item={'p': p, 'b': 2})
+        # The following updates' type should be MODIFY (issue #6918).
+        events.append(['INSERT', {'p': p}, {'p': p, 'a': 1}, {'p': p, 'b': 2}])
+        table.put_item(Item={'p': p, 'a': 3, 'b': 4})
+        events.append(['INSERT', {'p': p}, {'p': p, 'b': 2}, {'p': p, 'a': 3, 'b': 4}])
+        return events
+    do_test(test_table_ss_no_ck_new_and_old_images, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Test a single UpdateItem. Should result in a single INSERT event.
 # Currently fails because Alternator generates a MODIFY event even though
