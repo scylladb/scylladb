@@ -5,9 +5,11 @@
 #
 
 from cassandra import WriteFailure
+from cassandra.auth import PlainTextAuthProvider
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest
+from cassandra import Unauthorized
 
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
 from test.pylib.manager_client import ManagerClient
@@ -22,6 +24,7 @@ import pytest
 import asyncio
 import logging
 import time
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -441,3 +444,98 @@ async def test_lwt_for_tablets_is_not_supported_without_raft(manager: ManagerCli
         logger.info("Run an LWT")
         with pytest.raises(Exception, match=f"Cannot create paxos state table for {ks}.test because raft-based schema management is not enabled."):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+
+@pytest.mark.asyncio
+async def test_paxos_state_table_permissions(manager: ManagerClient):
+    # This test checks permission handling for paxos state tables:
+    #   * Only a superuser is allowed to access a paxos state table
+    #   * Even a superuser is not allowed to run ALTER or DROP on paxos state tables
+
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    config = {
+        'rf_rack_valid_keyspaces': False,
+        'authenticator': 'PasswordAuthenticator',
+        'authorizer': 'CassandraAuthorizer'
+    }
+
+    manager.auth_provider = PlainTextAuthProvider(
+        username="cassandra", password="cassandra")
+
+    servers = [await manager.server_add(cmdline=cmdline, config=config)]
+    cql, _ = await manager.get_ready_cql(servers)
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        logger.info("Create a table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Run an LWT1")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        logger.info("Create a role_1")
+        await cql.run_async("CREATE ROLE role_1 WITH SUPERUSER = true AND PASSWORD = 'psw' AND LOGIN = true")
+
+        logger.info("Create a role_2")
+        await cql.run_async("CREATE ROLE role_2 WITH SUPERUSER = false AND PASSWORD = 'psw' AND LOGIN = true")
+
+        logger.info("Grant all permissions on test table to role_2")
+        await cql.run_async(f"GRANT ALL PERMISSIONS ON TABLE {ks}.test TO role_2")
+
+        # We don't attempt to prevent users from granting permissions on $paxos tables,
+        # for simplicity. These permissions simply won't take effect — for example,
+        # role_2 will still be denied access to the $paxos table.
+        logger.info("Grant all permissions on test$paxos table to role_2")
+        await cql.run_async(f"GRANT ALL PERMISSIONS ON TABLE \"{ks}\".\"test$paxos\" TO role_2")
+
+        logger.info("Login as role_1")
+        await manager.driver_connect(auth_provider=PlainTextAuthProvider(username="role_1", password="psw"))
+        cql = manager.get_cql()
+
+        logger.info("Run an LWT2")
+        await cql.run_async(f"UPDATE {ks}.test SET c = 2 WHERE pk = 1 IF c = 1")
+
+        logger.info("Select data after LWT2")
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1;",
+                                           consistency_level=ConsistencyLevel.SERIAL))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 2
+
+        logger.info("Select paxos state as role_1")
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.\"test$paxos\""))
+        assert len(rows) == 1
+
+        logger.info("Attempt to run DROP TABLE for paxos state table as role_1")
+        with pytest.raises(Unauthorized, match=re.escape(f"Cannot DROP <table {ks}.test$paxos>")):
+            await cql.run_async(SimpleStatement(f"DROP TABLE {ks}.\"test$paxos\""))
+
+        logger.info("Login as role_2")
+        await manager.driver_connect(auth_provider=PlainTextAuthProvider(username="role_2", password="psw"))
+        cql = manager.get_cql()
+
+        logger.info("Run an LWT3")
+        await cql.run_async(f"UPDATE {ks}.test SET c = 3 WHERE pk = 1 IF c = 2")
+
+        logger.info("Select data after LWT3")
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1;",
+                                                   consistency_level=ConsistencyLevel.SERIAL))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 3
+
+        logger.info("Select paxos state as role_2")
+        with pytest.raises(Unauthorized, match=re.escape(f"Only superusers are allowed to SELECT <table {ks}.test$paxos>")):
+            await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.\"test$paxos\""))
+
+        logger.info("Attempt to run DROP TABLE for paxos state table as role_2")
+        with pytest.raises(Unauthorized, match=re.escape(f"Cannot DROP <table {ks}.test$paxos>")):
+            await cql.run_async(SimpleStatement(f"DROP TABLE {ks}.\"test$paxos\""))
+
+        # Relogin as a default user to be able to DROP the test keyspace
+        await manager.driver_connect()
+        cql = manager.get_cql()
