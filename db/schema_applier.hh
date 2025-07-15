@@ -48,6 +48,7 @@ struct schema_persisted_state {
     std::map<table_id, schema_mutations> tables;
     schema_tables::schema_result types;
     std::map<table_id, schema_mutations> views;
+    std::map<table_id, schema_mutations> cdc;
     schema_tables::schema_result functions;
     schema_tables::schema_result aggregates;
     schema_tables::schema_result scylla_aggregates;
@@ -140,6 +141,7 @@ public:
 
 struct affected_tables_and_views_per_shard {
     schema_diff_per_shard tables;
+    schema_diff_per_shard cdc;
     schema_diff_per_shard views;
     std::vector<bool> columns_changed;
 };
