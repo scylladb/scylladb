@@ -402,7 +402,7 @@ class partition_reversing_data_source_impl final : public data_source_impl {
         FINISHED
     } _state = state::RANGE_END;
 private:
-    input_stream<char> data_stream(size_t start, size_t end) {
+    future<input_stream<char>> data_stream(size_t start, size_t end) {
         return _sst->data_stream(start, end - start, _permit, _trace_state, {});
     }
     future<temporary_buffer<char>> data_read(uint64_t start, uint64_t end) {
@@ -474,7 +474,7 @@ public:
 
     virtual future<temporary_buffer<char>> get() override {
         if (!_partition_header_context) {
-            _partition_header_context.emplace(data_stream(_partition_start, _partition_end), _partition_start, _partition_end - _partition_start, _permit);
+            _partition_header_context.emplace(co_await data_stream(_partition_start, _partition_end), _partition_start, _partition_end - _partition_start, _permit);
             co_await _partition_header_context->consume_input();
             _clustering_range_start = _partition_header_context->header_end_pos();
             co_return co_await data_read(_partition_start, _clustering_range_start);
@@ -507,7 +507,7 @@ public:
                 }
                 look_in_last_block = true;
             } else {
-                co_await emplace_row_skipping_context(data_stream(_row_start, _row_end), _row_start, _row_end);
+                co_await emplace_row_skipping_context(co_await data_stream(_row_start, _row_end), _row_start, _row_end);
                 co_await _row_skipping_context->consume_input();
                 if (_row_skipping_context->end_of_partition()) {
                     look_in_last_block = true;
@@ -526,7 +526,7 @@ public:
                     _row_start = _clustering_range_start;
                 }
                 uint64_t last_row_start = _row_start;
-                co_await emplace_row_skipping_context(data_stream(_row_start, _partition_end), _row_start, _partition_end);
+                co_await emplace_row_skipping_context(co_await data_stream(_row_start, _partition_end), _row_start, _partition_end);
                 co_await _row_skipping_context->consume_input();
                 while (!_row_skipping_context->end_of_partition()) {
                     last_row_start = _row_start;

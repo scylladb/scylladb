@@ -483,3 +483,130 @@ SEASTAR_TEST_CASE(test_encrypted_sink_data_large) {
     return test_random_data_sink({ 4096, 4096, 4096, 4096, 8192, 1232, 32, 4096, 134 });
 }
 
+static future<> test_random_data_source(std::vector<size_t> sizes) {
+    testlog.info("test_random_data_source with sizes: {} ({})", sizes, std::accumulate(sizes.begin(), sizes.end(), size_t(0), std::plus{}));
+
+    auto name = "test_rand_source";
+    std::vector<temporary_buffer<char>> bufs, srcs;
+
+    auto [dst, k] = make_filename(name);
+    using namespace std::chrono_literals;
+    std::exception_ptr ex = nullptr;
+
+    data_sink sink(make_encrypted_sink(create_memory_sink(bufs), k));
+
+    try {
+        for (size_t s : sizes) {
+            auto buf = generate_random<char>(s);
+            co_await sink.put(buf.clone()); // deep copy. encrypted sink uses "owned" data
+            srcs.emplace_back(std::move(buf));
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await sink.close();
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+
+    {
+        auto os = co_await make_file_output_stream(co_await open_file_dma(dst, open_flags::truncate|open_flags::wo | open_flags::create));
+        for (auto& buf : bufs) {
+            co_await os.write(buf.get(), buf.size());
+        }
+        co_await os.flush();
+        co_await os.close();
+    }
+
+    auto f = co_await open_file_dma(dst, open_flags::ro);
+    testlog.info("file source {}", (co_await f.stat()).st_size);
+
+    auto source = make_file_data_source(std::move(f), file_input_stream_options{});
+
+    class random_chunk_source 
+        : public data_source_impl
+    {
+        data_source _source;
+        temporary_buffer<char> _buf;
+    public:
+        random_chunk_source(data_source s)
+            : _source(std::move(s))
+        {}
+        future<temporary_buffer<char>> get() override {
+            if (!_buf.empty()) {
+                co_return std::exchange(_buf, temporary_buffer<char>{});
+            }
+            _buf = co_await _source.get();
+            if (_buf.empty()) {
+                co_return temporary_buffer<char>{};
+            }
+            auto n = tests::random::get_int(size_t(1), _buf.size());
+            auto res = _buf.share(0, n);
+            _buf.trim_front(n);
+            co_return res;
+        }
+        future<temporary_buffer<char>> skip(uint64_t n) override {
+            if (!_buf.empty()) {
+                auto m = std::min(n, _buf.size());
+                _buf.trim_front(m);
+                n -= m;
+            }
+            if (n) {
+                co_await _source.skip(n);
+            }
+            co_return temporary_buffer<char>{};
+        }
+    };
+    try {
+        auto encrypted_source = data_source(make_encrypted_source(data_source(std::make_unique<random_chunk_source>(std::move(source))), k));
+        temporary_buffer<char> unified_buff(std::accumulate(srcs.begin(), srcs.end(), 0, [](size_t acc, const auto& buf) { return acc + buf.size(); }));
+        size_t pos = 0;
+        for (const auto& src : srcs) {
+            memcpy(unified_buff.get_write() + pos, src.get(), src.size());
+            pos += src.size();
+        }
+
+        pos = 0;
+        while (auto read_buff = co_await encrypted_source.get()) {
+            auto rem = unified_buff.size() - pos;
+            BOOST_REQUIRE_LE(read_buff.size(), rem);
+            size_t size_to_compare = std::min(rem, read_buff.size());
+            auto v1 = std::string_view(read_buff.get(), size_to_compare);
+            auto v2 = std::string_view(unified_buff.get() + pos, size_to_compare);
+            BOOST_REQUIRE_EQUAL(v1, v2);
+            auto skip = unified_buff.size() - pos > 4113 ? 4097 : (unified_buff.size() - pos)/2;
+            co_await encrypted_source.skip(skip);
+            pos += size_to_compare + skip;
+        }
+        co_await encrypted_source.close();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+
+    if (ex) {
+        std::rethrow_exception(ex);
+    }
+}
+
+SEASTAR_TEST_CASE(test_encrypted_data_source_simple) {
+    std::vector<size_t> sizes({3200, 13086, 12065, 200, 11959, 12159, 12852});
+    co_await test_random_data_source(sizes);
+}
+
+
+SEASTAR_TEST_CASE(test_encrypted_data_source_fuzzy) {
+    std::mt19937_64 rand_gen(std::random_device{}());
+    for (auto i = 0; i < 1000; ++i) {
+        std::uniform_int_distribution<uint16_t> rand_dist(1, 15);
+        std::vector<size_t> sizes(rand_dist(rand_gen));
+        for (auto& s : sizes) {
+            std::uniform_int_distribution<uint16_t> buff_sizes(1, 147*100);
+            s = buff_sizes(rand_gen);
+        }
+        co_await test_random_data_source(sizes);
+    }
+
+    co_return;
+}
