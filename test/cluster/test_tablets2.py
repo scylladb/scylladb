@@ -1485,7 +1485,7 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
             if s.rack == decommision_rack:
                 logger.debug(f"Decommissioning server={s}")
                 decommision_count += 1
-                expected_error = "Unable to find new replica for tablet" if decommision_count == nodes_per_rack else None
+                expected_error = "There are nodes with tablets to drain but no candidate nodes in rack" if decommision_count == nodes_per_rack else None
                 await manager.decommission_node(s.server_id, expected_error=expected_error)
                 if not expected_error:
                     dead_servers[s.server_id] = s
