@@ -2827,7 +2827,8 @@ max_purgeable_fn table::get_max_purgeable_fn_for_cache_underlying_reader() const
         auto max_purgeable_timestamp = api::max_timestamp;
 
         sg.for_each_compaction_group([&dk, is_shadowable, &max_purgeable_timestamp] (const compaction_group_ptr& cg) {
-            max_purgeable_timestamp = std::min(cg->memtables()->min_live_timestamp(dk, is_shadowable, cg->max_seen_timestamp()), max_purgeable_timestamp);
+            auto mp = cg->memtables()->get_max_purgeable(dk, is_shadowable, cg->max_seen_timestamp());
+            max_purgeable_timestamp = std::min(mp.timestamp(), max_purgeable_timestamp);
         });
 
         return max_purgeable(max_purgeable_timestamp);
