@@ -54,13 +54,22 @@ future<tests::proc::process_fixture> tests::proc::process_fixture::create(const 
             str.reserve(off + buf.size());
             str.append(buf.begin(), buf.end());
 
-            auto i = std::find(str.begin() + off, str.end(), '\n');
-            if (i != str.end() || buf.empty()) {
-                std::string_view v(str.begin(), i);
-                auto res = co_await handler(v);
-                str.erase(str.begin(), i == str.end() ? i : i + 1);
-                co_return res;
+            auto i = buf.empty() ? str.size() : str.rfind('\n');
+            if (i == std::string::npos) {
+                co_return continue_consuming{};
             }
+
+            auto range_view = std::string_view(str.data(), i);
+            for (auto v : std::views::split(range_view, '\n')) {
+                auto res = co_await handler(std::string_view(v));
+                if (std::holds_alternative<stop_consuming<char>>(res.get())) {
+                    co_return res;
+                }
+            }
+            if (i < str.size() && str[i] == '\n') {
+                ++i;
+            }
+            str.erase(str.begin(), str.begin() + i);
             co_return continue_consuming{};
         };
     };
