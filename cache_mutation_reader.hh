@@ -123,8 +123,8 @@ class cache_mutation_reader final : public mutation_reader::impl {
     gc_clock::time_point _read_time;
     gc_clock::time_point _gc_before;
 
-    api::timestamp_type _max_purgeable_timestamp = api::missing_timestamp;
-    api::timestamp_type _max_purgeable_timestamp_shadowable = api::missing_timestamp;
+    max_purgeable _max_purgeable;
+    max_purgeable _max_purgeable_shadowable;
 
     future<> do_fill_buffer();
     future<> ensure_underlying();
@@ -211,8 +211,8 @@ class cache_mutation_reader final : public mutation_reader::impl {
     }
 
     bool can_gc(tombstone t, is_shadowable is) const {
-        const auto max_purgeable = is ? _max_purgeable_timestamp_shadowable : _max_purgeable_timestamp;
-        return t.timestamp < max_purgeable;
+        const auto& max_purgeable = is ? _max_purgeable_shadowable : _max_purgeable;
+        return t.timestamp < max_purgeable.timestamp();
     }
 
 public:
@@ -236,8 +236,8 @@ public:
         , _read_time(get_read_time())
         , _gc_before(get_gc_before(*_schema, dk, _read_time))
     {
-        _max_purgeable_timestamp = ctx.get_max_purgeable(dk, is_shadowable::no);
-        _max_purgeable_timestamp_shadowable = ctx.get_max_purgeable(dk, is_shadowable::yes);
+        _max_purgeable = ctx.get_max_purgeable(dk, is_shadowable::no);
+        _max_purgeable_shadowable = ctx.get_max_purgeable(dk, is_shadowable::yes);
 
         clogger.trace("csm {}: table={}.{}, dk={}, gc-before={}, max-purgeable-regular={}, max-purgeable-shadowable={}, reversed={}, snap={}",
                 fmt::ptr(this),
@@ -245,8 +245,8 @@ public:
                 _schema->cf_name(),
                 dk,
                 _gc_before,
-                _max_purgeable_timestamp,
-                _max_purgeable_timestamp_shadowable,
+                _max_purgeable,
+                _max_purgeable_shadowable,
                 _read_context.is_reversed(),
                 fmt::ptr(&*_snp));
         push_mutation_fragment(*_schema, _permit, partition_start(std::move(dk), _snp->partition_tombstone()));
