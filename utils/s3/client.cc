@@ -287,6 +287,8 @@ client::group_client& client::find_or_create_client() {
         }
 
         throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
+    } catch (const filler_exception&) {
+        throw;
     } catch (...) {
         auto e = std::current_exception();
         throw storage_io_error {EIO, format("S3 error ({})", e)};
@@ -1144,12 +1146,19 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                               _object_name,
                               current_range);
                 } else if (_is_contiguous_mode) {
-                    s3l.trace("Setting contiguous download mode for '{}'", _object_name);
                     current_range = _range;
+                    s3l.trace("Setting contiguous download mode for '{}', range: {}", _object_name, current_range);
                 } else {
                     // In non-contiguous mode we download the object in chunks of _max_buffers_size
-                    s3l.trace("Setting ranged download mode for '{}'", _object_name);
                     current_range = {_range.offset(), std::min(_range.length(), _max_buffers_size - _buffers_size)};
+                    s3l.trace("Setting ranged download mode for '{}', range: {}", _object_name, current_range);
+                }
+                if (current_range.length() == 0) {
+                    s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
+                    _buffers.emplace_back(temporary_buffer<char>(), co_await _client->claim_memory(0));
+                    _get_cv.signal();
+                    _is_finished = true;
+                    co_return;
                 }
                 req._headers["Range"] = current_range.to_header_string();
                 s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
@@ -1160,42 +1169,67 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
                         }
-                        if (_range == s3::full_range && reply.get_header("Content-Range").empty()) {
+                        if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
-                            s3l.trace("No range for object '{}' was provided. Setting the range to {} form the Content-Range header",
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header",
                                       _object_name,
                                       _range);
                         }
                         auto in = std::move(in_);
-                        while (_buffers_size < _max_buffers_size && !_is_finished) {
-                            auto start = s3_clock::now();
-                            s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
-                            auto buf = co_await in.read();
-                            auto buff_size = buf.size();
-                            gc.read_stats.update(buff_size, s3_clock::now() - start);
-                            _range += buff_size;
-                            _buffers_size += buff_size;
-                            if (buff_size == 0 && _range.length() == 0) {
-                                s3l.trace("Fiber for object '{}' signals EOS", _object_name);
+                        std::exception_ptr ex;
+                        try {
+                            while (_buffers_size < _max_buffers_size && !_is_finished) {
+                                utils::get_local_injector().inject("kill_s3_inflight_req", [] {
+                                    // Inject non-retryable error to emulate source failure
+                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
+                                });
+                                auto start = s3_clock::now();
+                                s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
+                                auto buf = co_await in.read();
+                                auto buff_size = buf.size();
+                                gc.read_stats.update(buff_size, s3_clock::now() - start);
+                                _range += buff_size;
+                                _buffers_size += buff_size;
+                                if (buff_size == 0 && _range.length() == 0) {
+                                    s3l.trace("Fiber for object '{}' signals EOS", _object_name);
+                                    _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
+                                    _get_cv.signal();
+                                    _is_finished = true;
+                                    break;
+                                }
+                                if (buff_size == 0) {
+                                    // The requested range is fully downloaded
+                                    break;
+                                }
+                                s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
                                 _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                                 _get_cv.signal();
-                                _is_finished = true;
-                                break;
+                                utils::get_local_injector().inject("break_s3_inflight_req", [] {
+                                    // Inject retryable error after some data was already downloaded
+                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
+                                });
                             }
-                            if (buff_size == 0) {
-                                // The requested range is fully downloaded
-                                break;
-                            }
-                            s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                            _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
-                            _get_cv.signal();
+                        } catch (...) {
+                            ex = std::current_exception();
                         }
                         co_await in.close();
+                        if (ex) {
+                            try {
+                                std::rethrow_exception(ex);
+                            } catch (const aws::aws_exception& aws_ex) {
+                                if (aws_ex.error().is_retryable()) {
+                                    throw filler_exception(format("{}", std::current_exception()).c_str());
+                                }
+                                throw;
+                            }
+                        }
                     },
                     {},
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
+            } catch (const filler_exception& ex) {
+                s3l.warn("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex);
             } catch (...) {
                 s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
                 _get_cv.broken(std::current_exception());
