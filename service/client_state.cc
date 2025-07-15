@@ -107,6 +107,22 @@ future<> service::client_state::has_schema_access(const sstring& ks_name, const 
     co_return co_await has_access(ks_name, {p, r});
 }
 
+void service::client_state::check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const {
+    static constexpr auto cdc_topology_description_forbidden_permissions = auth::permission_set::of<
+                    auth::permission::ALTER, auth::permission::DROP>();
+
+    if (cdc_topology_description_forbidden_permissions.contains(cmd.permission)) {
+        if ((ks == db::system_distributed_keyspace::NAME || ks == db::system_distributed_keyspace::NAME_EVERYWHERE)
+                && (table_name == db::system_distributed_keyspace::CDC_DESC_V2
+                || table_name == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION
+                || table_name == db::system_distributed_keyspace::CDC_TIMESTAMPS
+                || table_name == db::system_distributed_keyspace::CDC_GENERATIONS_V2)) {
+            throw exceptions::unauthorized_exception(
+                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
+        }
+    }
+}
+
 future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
@@ -169,19 +185,7 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
     if (cmd.resource.kind() == auth::resource_kind::data) {
         const auto resource_view = auth::data_resource_view(cmd.resource);
         if (resource_view.table()) {
-            static constexpr auto cdc_topology_description_forbidden_permissions = auth::permission_set::of<
-                    auth::permission::ALTER, auth::permission::DROP>();
-
-            if (cdc_topology_description_forbidden_permissions.contains(cmd.permission)) {
-                if ((ks == db::system_distributed_keyspace::NAME || ks == db::system_distributed_keyspace::NAME_EVERYWHERE)
-                        && (resource_view.table() == db::system_distributed_keyspace::CDC_DESC_V2
-                        || resource_view.table() == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION
-                        || resource_view.table() == db::system_distributed_keyspace::CDC_TIMESTAMPS
-                        || resource_view.table() == db::system_distributed_keyspace::CDC_GENERATIONS_V2)) {
-                    throw exceptions::unauthorized_exception(
-                            format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
-                }
-            }
+            check_internal_table_permissions(ks, *resource_view.table(), cmd);
         }
     }
 
