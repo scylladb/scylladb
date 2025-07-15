@@ -1856,7 +1856,8 @@ protected:
 template<typename TaskType, typename... Args>
 requires std::derived_from<TaskType, compaction_task_executor> &&
          std::derived_from<TaskType, compaction_task_impl>
-future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task_on_all_files(sstring reason, tasks::task_info info, compaction_group_view& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args) {
+future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task_on_all_files(sstring reason, tasks::task_info info, compaction_group_view& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
+                                                                                               get_candidates_func get_func, throw_if_stopping do_throw_if_stopping, Args... args) {
     auto gh = start_compaction(t);
     if (!gh) {
         co_return std::nullopt;
@@ -1884,14 +1885,14 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
     if (sstables.empty()) {
         co_return std::nullopt;
     }
-    co_return co_await perform_compaction<TaskType>(throw_if_stopping::no, info, &t, info.id, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
+    co_return co_await perform_compaction<TaskType>(do_throw_if_stopping, info, &t, info.id, std::move(options), std::move(owned_ranges_ptr), std::move(sstables), std::move(compacting), std::forward<Args>(args)...);
 }
 
 future<compaction_manager::compaction_stats_opt>
 compaction_manager::rewrite_sstables(compaction_group_view& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr,
                                      get_candidates_func get_func, tasks::task_info info, can_purge_tombstones can_purge,
                                      sstring options_desc) {
-    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>("rewrite", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), can_purge, std::move(options_desc));
+    return perform_task_on_all_files<rewrite_sstables_compaction_task_executor>("rewrite", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_func), throw_if_stopping::no, can_purge, std::move(options_desc));
 }
 
 namespace compaction {
@@ -2061,6 +2062,7 @@ private:
             std::exception_ptr ex;
             try {
                 setup_new_compaction(descriptor.run_identifier);
+                co_await utils::get_local_injector().inject("sstable_cleanup_wait", utils::wait_for_message(std::chrono::seconds(60)));
                 co_await compact_sstables_and_update_history(descriptor, _compaction_data, on_replace);
                 finish_compaction();
                 _cm.reevaluate_postponed_compactions();
@@ -2070,6 +2072,9 @@ private:
             }
 
             finish_compaction(state::failed);
+            if (_compaction_data.is_stop_requested()) {
+                throw make_compaction_stopped_exception();
+            }
             // retry current job or rethrows exception
             if ((co_await maybe_retry(std::move(ex))) == stop_iteration::yes) {
                 co_return;
@@ -2235,7 +2240,8 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
     };
 
     co_await perform_task_on_all_files<cleanup_sstables_compaction_task_executor>("cleanup", info, t, sstables::compaction_type_options::make_cleanup(), std::move(sorted_owned_ranges),
-                                                                         std::move(get_sstables));
+                                                                         std::move(get_sstables), throw_if_stopping::yes);
+
 }
 
 // Submit a table to be upgraded and wait for its termination.
@@ -2273,7 +2279,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
     owned_ranges_ptr owned_ranges_ptr = {};
     auto options = sstables::compaction_type_options::make_split(std::move(opt.classifier));
 
-    return perform_task_on_all_files<split_compaction_task_executor>("split", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables));
+    return perform_task_on_all_files<split_compaction_task_executor>("split", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables), throw_if_stopping::no);
 }
 
 future<std::vector<sstables::shared_sstable>>
