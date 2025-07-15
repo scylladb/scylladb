@@ -668,7 +668,9 @@ class load_balancer {
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     // Holds total used storage per table in the DC
-    absl::flat_hash_map<table_id, uint64_t> _disk_used_per_table;
+    absl::flat_hash_map<table_id, uint64_t> _disk_used_per_dc_per_table;
+    // Holds total used storage per table in the DC/rack
+    absl::flat_hash_map<std::pair<dc_name, sstring>, absl::flat_hash_map<table_id, uint64_t>> _disk_used_per_rack_per_table;
     dc_name _dc;
     size_t _total_capacity_shards; // Total number of non-drained shards in the balanced node set.
     size_t _total_capacity_nodes; // Total number of non-drained nodes in the balanced node set.
@@ -1714,6 +1716,25 @@ public:
         return *shard_info.candidates_all_tables.begin();
     }
 
+    uint64_t get_table_size(table_id table, const node_load& n) const {
+        if (_db.get_config().rf_rack_valid_keyspaces()) {
+            auto dc_rack = std::make_pair(n.dc(), n.rack());
+            auto dc_rack_i = _disk_used_per_rack_per_table.find(dc_rack);
+            if (dc_rack_i == _disk_used_per_rack_per_table.end()) {
+                return 0;
+            }
+
+            const auto& tables_in_rack = dc_rack_i->second;
+            auto table_i = tables_in_rack.find(table);
+            if (table_i == tables_in_rack.end()) {
+                return 0;
+            }
+
+            return table_i->second;
+        }
+        return _disk_used_per_dc_per_table.at(table);
+    }
+
     // Evaluates impact on load balance of migrating a tablet set of a given table to dst.
     migration_badness evaluate_dst_badness(node_load_map& nodes, table_id table, tablet_replica dst, uint64_t tablet_set_disk_size) {
         _stats.for_dc(_dc).candidates_evaluated++;
@@ -1721,7 +1742,7 @@ public:
         auto& node_info = nodes[dst.host];
 
         // Size of all tablet replicas of the table in bytes.
-        uint64_t table_size = _disk_used_per_table[table];
+        const uint64_t table_size = get_table_size(table, node_info);
 
         if (node_info.drained) {
             // Moving a tablet to a drained node is always bad.
@@ -1760,7 +1781,7 @@ public:
         auto& node_info = nodes[src.host];
 
         // Size of all tablet replicas of the table in bytes.
-        uint64_t table_size = _disk_used_per_table[table];
+        const uint64_t table_size = get_table_size(table, node_info);
 
         if (node_info.drained) {
             // Moving a tablet away from a drained node is always good.
@@ -2521,7 +2542,7 @@ public:
         lblogger.debug("Table {} shard overcommit: {}", table, overcommit);
     }
 
-    future<migration_plan> make_internode_plan(const dc_name& dc, node_load_map& nodes,
+    future<migration_plan> make_internode_plan(const dc_name& dc, std::optional<sstring> rack_filter, node_load_map& nodes,
                                                const std::unordered_set<host_id>& nodes_to_drain,
                                                host_id target) {
         migration_plan plan;
@@ -2547,6 +2568,9 @@ public:
         };
 
         for (auto&& [host, node_load] : nodes) {
+            if (rack_filter && *rack_filter != node_load.rack()) {
+                continue;
+            }
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 shard_id shard = 0;
                 for (auto&& shard_load : node_load.shards) {
@@ -2580,7 +2604,7 @@ public:
             co_await coroutine::maybe_yield();
 
             if (nodes_by_load.empty()) {
-                lblogger.debug("No more candidate nodes");
+                lblogger.debug("No more candidate nodes in DC/rack: {}/{}", dc, rack_filter);
                 _stats.for_dc(dc).stop_no_candidates++;
                 break;
             }
@@ -2651,7 +2675,7 @@ public:
             // Pick best target node.
 
             if (nodes_by_load_dst.empty()) {
-                lblogger.debug("No more target nodes");
+                lblogger.debug("No more target nodes in DC/rack: {}/{}", dc, rack_filter);
                 _stats.for_dc(dc).stop_no_candidates++;
                 break;
             }
@@ -2688,7 +2712,7 @@ public:
                     balance_achieved = (load_delta / max_load) < _size_based_balance_threshold;
                 }
                 if (balance_achieved) {
-                    lblogger.debug("Balance achieved.");
+                    lblogger.debug("Balance achieved in DC/rack: {}/{}", dc, rack_filter);
                     _stats.for_dc(dc).stop_balance++;
                     break;
                 }
@@ -2723,7 +2747,7 @@ public:
             auto& tmap = tmeta.get_tablet_map(source_tablets.table());
             if (can_check_convergence && !check_convergence(src_node_info, target_info, source_tablets)) {
                 if (_force_capacity_based_balancing) {
-                    lblogger.debug("No more candidates. Load would be inverted.");
+                    lblogger.debug("No more candidates. Load would be inverted in DC/rack: {}/{}", dc, rack_filter);
                     _stats.for_dc(dc).stop_load_inversion++;
                     break;
                 }
@@ -3066,7 +3090,8 @@ public:
         _load_sketch = locator::load_sketch(_tm, _table_load_stats, _force_capacity_based_balancing ? _target_tablet_size : 0);
         co_await _load_sketch->populate_dc(dc);
         _tablet_count_per_table.clear();
-        _disk_used_per_table.clear();
+        _disk_used_per_dc_per_table.clear();
+        _disk_used_per_rack_per_table.clear();
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
             const auto& tmap = _tm->tablets().get_tablet_map(table);
@@ -3159,6 +3184,8 @@ public:
                     }
                     total_tablet_count += tids.size();
                     total_tablet_sizes += tablet_sizes_sum;
+                    auto dc_rack = std::make_pair(_dc, node_load_info.rack());
+                    _disk_used_per_rack_per_table[dc_rack][table] += tablet_sizes_sum;
                     if (tmap.needs_merge() && tids.size() == 2) {
                         // Exclude both sibling tablets if either haven't finished migration yet. That's to prevent balancer from
                         // un-doing the colocation.
@@ -3180,33 +3207,45 @@ public:
 
                 return make_ready_future<>();
             });
-            _disk_used_per_table[table] = total_tablet_sizes;
+            _disk_used_per_dc_per_table[table] = total_tablet_sizes;
             _tablet_count_per_table[table] = total_tablet_count;
         }
 
         // Compute load imbalance.
 
+        struct load_data {
+            load_type max_load = 0;
+            load_type min_load = 0;
+            std::optional<host_id> min_load_node;
+
+            void update(load_type load, host_id host) {
+                if (!min_load_node || load < min_load) {
+                    min_load = load;
+                    min_load_node = host;
+                }
+                if (load > max_load) {
+                    max_load = load;
+                }
+            }
+        };
+
         _total_capacity_shards = 0;
         _total_capacity_nodes = 0;
         _total_capacity_storage = 0;
-        load_type max_load = 0;
-        load_type min_load = 0;
-        std::optional<host_id> min_load_node = std::nullopt;
+        load_data dc_load;
+        std::unordered_map<sstring, load_data> rack_load;
         for (auto&& [host, load] : nodes) {
             load.update();
             _stats.for_node(dc, host).load = load.avg_load;
 
             if (!load.drained) {
-                if (!min_load_node || load.avg_load < min_load) {
-                    min_load = load.avg_load;
-                    min_load_node = host;
-                }
-                if (load.avg_load > max_load) {
-                    max_load = load.avg_load;
-                }
+                dc_load.update(load.avg_load, host);
+                rack_load[load.rack()].update(load.avg_load, host);
                 _total_capacity_shards += load.shard_count;
                 _total_capacity_nodes++;
                 _total_capacity_storage += load.dusage->capacity;
+            } else if (!rack_load.contains(load.rack())) {
+                rack_load[load.rack()] = load_data{};
             }
         }
 
@@ -3224,10 +3263,25 @@ public:
                          load.tablets_per_shard(), load.state(), load.dusage->capacity, read, write);
         }
 
-        if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || max_load != min_load))) {
-            host_id target = *min_load_node;
-            lblogger.info("target node: {}, avg_load: {}, max: {}", target, min_load, max_load);
-            plan.merge(co_await make_internode_plan(dc, nodes, nodes_to_drain, target));
+        if (!nodes_to_drain.empty() || (_tm->tablets().balancing_enabled() && (shuffle || dc_load.max_load != dc_load.min_load))) {
+            if (_db.get_config().rf_rack_valid_keyspaces()) {
+                for (auto& [rack, rload] : rack_load) {
+                    if (!rload.min_load_node) {
+                        throw std::runtime_error(format("There are nodes with tablets to drain but no candidate nodes in rack {} of DC {}."
+                                                        " Consider adding new nodes or reducing replication factor.", rack, dc));
+                    }
+                    host_id target = *rload.min_load_node;
+                    lblogger.info("rack {} target node: {}, avg_load: {}, max: {}", rack, target, rload.min_load, rload.max_load);
+                    std::unordered_set<host_id> drain_in_rack {nodes_to_drain
+                                                                | std::views::filter([&] (host_id host) { return nodes.at(host).rack() == rack; } )
+                                                                | std::ranges::to<std::unordered_set<host_id>>()};
+                    plan.merge(co_await make_internode_plan(dc, rack, nodes, drain_in_rack, target));
+                }
+            } else {
+                host_id target = *dc_load.min_load_node;
+                lblogger.info("target node: {}, avg_load: {}, max: {}", target, dc_load.min_load, dc_load.max_load);
+                plan.merge(co_await make_internode_plan(dc, std::nullopt, nodes, nodes_to_drain, target));
+            }
         } else {
             _stats.for_dc(dc).stop_balance++;
         }
