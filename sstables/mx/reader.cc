@@ -2104,8 +2104,8 @@ future<uint64_t> validate(
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
     auto context = data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::yes);
 
-    std::optional<sstables::index_reader> idx_reader;
-    idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+    auto idx_reader = std::make_unique<index_reader>(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+    auto big_index_reader = dynamic_cast<index_reader*>(idx_reader.get());
 
     try {
         monitor.on_read_started(context->reader_position());
@@ -2117,14 +2117,17 @@ future<uint64_t> validate(
                 consumer.report_error("mismatching index/data: index is at EOF, but data file has more data");
                 co_await idx_reader->close();
                 idx_reader.reset();
+                big_index_reader = nullptr;
             }
 
             if (idx_reader) {
                 co_await idx_reader->read_partition_data();
 
-                idx_cursor = idx_reader->current_clustered_cursor();
+                if (big_index_reader) {
+                    idx_cursor = big_index_reader->current_clustered_cursor();
+                }
 
-                const auto index_pos = idx_reader->get_data_file_position();
+                const auto index_pos = idx_reader->data_file_positions().start;
                 const auto data_pos = context->position();
                 sstlog.trace("validate(): index-data position check for partition {}: {} == {}", idx_reader->get_partition_key(), data_pos, index_pos);
                 if (index_pos != data_pos) {
