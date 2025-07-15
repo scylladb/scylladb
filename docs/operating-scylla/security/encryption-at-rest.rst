@@ -292,6 +292,7 @@ If you are using AWS KMS to encrypt tables or system information, add the KMS in
              aws_region: <aws region> (optional if `endpoint` is specified)
              aws_access_key_id: <aws access key id> (optional)
              aws_secret_access_key: <aws secret access key> (optional)
+             aws_session_token: <aws session token> (optional)
              aws_profile: <aws credentials profile to use> (optional)
              aws_use_ec2_credentials: (bool : default false)
              aws_use_ec2_region: (bool : default false)
@@ -312,6 +313,7 @@ If you are using AWS KMS to encrypt tables or system information, add the KMS in
    * ``aws_region`` - An AWS region. If not provided, ``endpoint`` is used for connection.
    * ``aws_access_key_id`` - AWS access key used for authentication. If not specified, the provider reads it from your AWS credentials.
    * ``aws_secret_access_key`` - AWS secret access key used for authentication. If not specified, the provider reads it from your AWS credentials.
+   * ``aws_session_token`` - AWS session token. Used for authentication with temporary security credentials, along with access key id and secret access key.
    * ``aws_profile`` - AWS profile to use if reading credentials from file
    * ``aws_use_ec2_credentials`` - If true, KMS queries will use the credentials provided by ec2 instance role metadata as initial access key.
    * ``aws_use_ec2_region`` - If true, KMS queries will use the AWS region indicated by ec2 instance metadata.
