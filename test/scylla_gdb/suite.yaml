@@ -1,3 +1,2 @@
-type: Run
-run_in_release:
-    - run
+type: Python
+pool_size: 4

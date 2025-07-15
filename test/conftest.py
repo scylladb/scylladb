@@ -78,6 +78,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
                      help="Path to a log file of a ScyllaDB node (for suites with type: Python)")
+    parser.addoption("--scylla-pid", type=int, help="PID of the Scylla service)")
 
 
 @pytest.fixture(scope="session")

@@ -236,6 +236,9 @@ class PythonTest(Test):
             self.args.insert(0, f"--host={self.server_address}")
             self.server_log_filename = cluster.server_log_filename()
             self.args.insert(0, f"--scylla-log-filename={self.server_log_filename}")
+            self.args.insert(
+                0, f"--scylla-pid={next(iter(cluster.running.values())).cmd.pid}"
+            )
             self.is_before_test_ok = True
             cluster.take_log_savepoint()
 
@@ -269,6 +272,16 @@ class PythonTest(Test):
 def add_host_option(parser: Parser) -> None:
     parser.addoption("--host", default="localhost",
                      help="a DB server host to connect to")
+
+
+@cache
+def add_scylla_pid_option(parser: Parser) -> None:
+    """Add pytest option for the Scylla PID."""
+    parser.addoption(
+        "--scylla-pid",
+        type=int,
+        help="PID of the scylla process",
+    )
 
 
 # Use cache to execute this function once per pytest session.
