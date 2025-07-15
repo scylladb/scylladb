@@ -27,12 +27,12 @@ scheme identify_best_supported_scheme() {
     const sstring random_part_of_salt = "aaaabbbbccccdddd";
 
     for (scheme c : all_schemes) {
-        const sstring salt = sstring(prefix_for_scheme(c)) + random_part_of_salt;
-        const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
+    const sstring salt = sstring(prefix_for_scheme(c)) + random_part_of_salt;
+    const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
 
-        if (e && (e[0] != '*')) {
-            return c;
-        }
+    if (e && (e[0] != '*')) {
+        return c;
+    }
     }
 
     throw no_supported_schemes();
