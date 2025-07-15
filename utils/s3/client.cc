@@ -716,6 +716,14 @@ public:
 };
 
 sstring parse_multipart_upload_id(sstring& body) {
+    auto get_node_safe = []<typename T>(const T* node, const std::string_view node_name) {
+        auto child = node->first_node(node_name.data());
+        if (!child) {
+            throw std::runtime_error(seastar::format("'{}' node is missing in InitiateMultipartUploadResult response", node_name));
+        }
+        return child;
+    };
+
     auto doc = std::make_unique<rapidxml::xml_document<>>();
     try {
         doc->parse<0>(body.data());
@@ -725,8 +733,8 @@ sstring parse_multipart_upload_id(sstring& body) {
         // and handle the error the way it prefers
         return "";
     }
-    auto root_node = doc->first_node("InitiateMultipartUploadResult");
-    auto uploadid_node = root_node->first_node("UploadId");
+    auto root_node = get_node_safe(doc.get(), "InitiateMultipartUploadResult");
+    auto uploadid_node = get_node_safe(root_node, "UploadId");
     return uploadid_node->value();
 }
 
