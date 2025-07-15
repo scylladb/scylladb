@@ -17,6 +17,7 @@
 #include "auth/authenticator.hh"
 #include "auth/passwords.hh"
 #include "service/raft/raft_group0_client.hh"
+#include "utils/alien_worker.hh"
 
 namespace db {
     class config;
@@ -46,12 +47,13 @@ class password_authenticator : public authenticator {
     shared_promise<> _superuser_created_promise;
     // We used to also support bcrypt, SHA-256, and MD5 (ref. scylladb#24524).
     constexpr static auth::passwords::scheme _scheme = passwords::scheme::sha_512;
+    utils::alien_worker& _hashing_worker;
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);
     static std::string default_superuser(const db::config&);
 
-    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
+    password_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, utils::alien_worker&);
 
     ~password_authenticator();
 

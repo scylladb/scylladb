@@ -1087,7 +1087,10 @@ private:
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no).get();
+
+            const uint64_t niceness = 19;
+            auto hashing_worker = utils::alien_worker(startlog, niceness);
+            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());
             }).get();
