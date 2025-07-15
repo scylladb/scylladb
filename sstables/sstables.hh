@@ -63,6 +63,7 @@ class corrupt_data_handler;
 
 namespace sstables {
 
+struct abstract_index_reader;
 class sstable_directory;
 extern thread_local utils::updateable_value<bool> global_cache_index_pages;
 
@@ -1040,6 +1041,12 @@ public:
             return sst1.total_memory_reclaimed() < sst2.total_memory_reclaimed();
         }
     };
+
+    std::unique_ptr<abstract_index_reader> make_index_reader(
+        reader_permit permit,
+        tracing::trace_state_ptr trace_state = {},
+        use_caching caching = use_caching::yes,
+        bool single_partition_read = false);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use
     // a placeholder to avoid cluttering this class too much. The sstable_test class
