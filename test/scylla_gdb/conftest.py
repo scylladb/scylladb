@@ -34,6 +34,10 @@ def scylla_pid(request):
         )
 
     pid = request.config.getoption("--scylla-pid", None)
+    if not pid:
+        pid = run.run_with_temporary_dir(run.run_scylla_cmd)
+        ip = run.pid_to_ip(pid)
+        run.wait_for_services(pid, [lambda: run.check_cql(ip)])
 
     return pid
 
