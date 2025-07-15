@@ -16,6 +16,7 @@
 
 #include "cdc/cdc_partitioner.hh"
 #include "cdc/log.hh"
+#include "cdc/cdc_options.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/statements/create_keyspace_statement.hh"
 #include "cql3/statements/create_table_statement.hh"
@@ -485,7 +486,9 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
         auto base_schema = do_load_schema_from_schema_tables(dbcfg, scylla_data_path, keyspace, base_name);
         return db::schema_tables::create_view_from_mutations(ctxt, muts, ctxt.user_types(), std::move(base_schema));
     } else {
-        return db::schema_tables::create_table_from_mutations(ctxt, muts, ctxt.user_types(), nullptr/*TODO cdc_schema*/);
+        // not setting cdc_schema because the schema is mostly used for reading by tools
+        // and not for generating cdc mutations.
+        return db::schema_tables::create_table_from_mutations(ctxt, muts, ctxt.user_types(), nullptr);
     }
 }
 

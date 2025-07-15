@@ -596,11 +596,46 @@ future<> schema_applier::merge_tables_and_views()
     auto& local_tables = _affected_tables_and_views.tables_and_views.local().tables;
     auto& local_cdc = _affected_tables_and_views.tables_and_views.local().cdc;
 
+    // Create CDC tables before non-CDC base tables, because we want the base tables with CDC enabled
+    // to point to their CDC tables.
     local_cdc = diff_table_or_view(_proxy, _before.cdc, _after.cdc, _reload, [&] (schema_mutations sm, schema_diff_side) {
         return create_table_from_mutations(_proxy, std::move(sm), user_types, nullptr);
     });
-    local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, _reload, [&] (schema_mutations sm, schema_diff_side) {
-        return create_table_from_mutations(_proxy, std::move(sm), user_types, nullptr/*TODO cdc_schema*/);
+    local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, _reload, [&] (schema_mutations sm, schema_diff_side side) {
+        // If the table has CDC enabled, find the CDC schema version and set it in the table schema.
+        // If the table is created or altered with CDC enabled, then the CDC
+        // table is also created or altered in the same operation, so we can
+        // find its schema version in the CDC schemas we created above in
+        // local_cdc.
+        query::result_set rs(sm.columnfamilies_mutation());
+        const query::result_set_row& table_row = rs.row(0);
+
+        auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
+        auto cf_name = table_row.get_nonnull<sstring>("table_name");
+        auto cdc_name = cdc::log_name(cf_name);
+
+        schema_ptr cdc_schema; // optional CDC schema of this table
+
+        // we only need to set the cdc schema for created schemas and new altered schemas.
+        // old altered schemas that we create here will not be used for generating cdc mutations.
+        if (side == schema_diff_side::right) {
+            for (const auto& cdc_created : local_cdc.created) {
+                const auto& new_cdc_schema = cdc_created;
+                if (new_cdc_schema->ks_name() == ks_name && new_cdc_schema->cf_name() == cdc_name) {
+                    cdc_schema = new_cdc_schema;
+                    break;
+                }
+            }
+            for (const auto& cdc_altered : local_cdc.altered) {
+                const auto& new_cdc_schema = cdc_altered.new_schema;
+                if (new_cdc_schema->ks_name() == ks_name && new_cdc_schema->cf_name() == cdc_name) {
+                    cdc_schema = new_cdc_schema;
+                    break;
+                }
+            }
+        }
+
+        return create_table_from_mutations(_proxy, std::move(sm), user_types, cdc_schema);
     });
     local_views = diff_table_or_view(_proxy, _before.views, _after.views, _reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
