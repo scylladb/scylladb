@@ -135,7 +135,7 @@ struct reversed_context {
 // See `sstables::mx::make_partition_reversing_data_source` for documentation.
 template <typename DataConsumeRowsContext>
 inline reversed_context<DataConsumeRowsContext> data_consume_reversed_partition(
-        const schema& s, shared_sstable sst, index_reader& ir,
+        const schema& s, shared_sstable sst, abstract_index_reader& ir,
         typename DataConsumeRowsContext::consumer& consumer, sstable::disk_read_range toread) {
     auto reversing_data_source = sstables::mx::make_partition_reversing_data_source(
             s, sst, ir, toread.start, toread.end - toread.start,

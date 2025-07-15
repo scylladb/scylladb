@@ -365,7 +365,7 @@ static temporary_buffer<char> end_of_partition() {
 class partition_reversing_data_source_impl final : public data_source_impl {
     const schema& _schema;
     shared_sstable _sst;
-    index_reader& _ir;
+    abstract_index_reader& _ir;
     reader_permit _permit;
     tracing::trace_state_ptr _trace_state;
     std::optional<partition_header_context> _partition_header_context;
@@ -453,7 +453,7 @@ private:
 public:
     partition_reversing_data_source_impl(const schema& s,
             shared_sstable sst,
-            index_reader& ir,
+            abstract_index_reader& ir,
             uint64_t partition_start,
             size_t partition_len,
             reader_permit permit,
@@ -603,7 +603,7 @@ public:
     }
 };
 
-partition_reversing_data_source make_partition_reversing_data_source(const schema& s, shared_sstable sst, index_reader& ir, uint64_t pos, size_t len,
+partition_reversing_data_source make_partition_reversing_data_source(const schema& s, shared_sstable sst, abstract_index_reader& ir, uint64_t pos, size_t len,
                                                           reader_permit permit, tracing::trace_state_ptr trace_state) {
     auto source_impl = std::make_unique<partition_reversing_data_source_impl>(
             s, std::move(sst), ir, pos, len, std::move(permit), trace_state);

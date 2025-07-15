@@ -1259,7 +1259,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     bool _will_likely_slice = false;
     bool _read_enabled = true;
     std::unique_ptr<DataConsumeRowsContext> _context;
-    std::unique_ptr<index_reader> _index_reader;
+    std::unique_ptr<abstract_index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
     const dht::partition_range& _pr;
@@ -1324,7 +1324,7 @@ private:
         return (!slice.default_row_ranges().empty() && !slice.default_row_ranges()[0].is_full())
                || slice.get_specific_ranges();
     }
-    index_reader& get_index_reader() {
+    abstract_index_reader& get_index_reader() {
         if (!_index_reader) {
             auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
             _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(),
@@ -1470,7 +1470,7 @@ private:
                 });
             } else {
                 return get_index_reader().advance_to(pos).then([this] {
-                    index_reader& idx = *_index_reader;
+                    abstract_index_reader& idx = *_index_reader;
                     auto index_position = idx.data_file_positions();
                     if (index_position.start <= _context->position()) {
                         return make_ready_future<>();
