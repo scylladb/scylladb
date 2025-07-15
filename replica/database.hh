@@ -257,7 +257,7 @@ public:
     // consider that their content is more recent than any potential tombstone in
     // other mutation sources.
     // Returns api::max_timestamp if the key is not in any of the memtables.
-    api::timestamp_type min_live_timestamp(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept;
+    max_purgeable get_max_purgeable(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept;
 
     // # 8904 - this method is akin to std::set::erase(key_type), not
     // erase(iterator). Should be tolerant against non-existing.

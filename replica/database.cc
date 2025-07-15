@@ -1762,7 +1762,7 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     co_return m;
 }
 
-api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
+max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
     const auto get_min_ts = [is] (const memtable& mt) {
         // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
         return is ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
@@ -1791,7 +1791,7 @@ api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& 
         min_live_ts = std::min(min_live_ts, get_min_ts(mt));
     }
 
-    return min_live_ts;
+    return max_purgeable(min_live_ts, max_purgeable::timestamp_source::memtable_possibly_shadowing_data);
 }
 
 future<> memtable_list::flush() {
