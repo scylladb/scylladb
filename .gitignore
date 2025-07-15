@@ -20,7 +20,7 @@ CMakeLists.txt.user
 .tox
 *.egg-info
 __pycache__CMakeLists.txt.user
-.gdbinit
+/.gdbinit
 /resources
 .pytest_cache
 /expressions.tokens
