@@ -1,80 +1,95 @@
 # Copyright 2022-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
-
-# This file configures pytest for all tests in this directory, and also
-# defines common test fixtures for all of them to use. A "fixture" is some
-# setup which an individual test requires to run; The fixture has setup code
-# and teardown code, and if multiple tests require the same fixture, it can
-# be set up only once - while still allowing the user to run individual tests
-# and automatically setting up the fixtures they need.
+"""Conftest for Scylla GDB tests"""
+import os
+import subprocess
 
 import pytest
-import os
-import sys
 
-try:
-    import gdb as gdb_library
-except:
-    print('This test must be run inside gdb. Run ./run instead.')
-    exit(1)
+from test.cqlpy import run
 
 
-def pytest_addoption(parser):
-    parser.addoption('--scylla-pid', action='store', default=None,
-        help='Process ID of running Scylla to attach gdb to')
-    parser.addoption('--scylla-tmp-dir', action='store', default=None,
-        help='Temporary directory where Scylla runs')
+@pytest.fixture(scope="package")
+def scylla_pid(request, build_mode):
+    """
+    Runs Scylla and waits until it can respond to CQL queries.
 
-# Scylla's "scylla-gdb.py" does two things: It configures gdb to add new
-# "scylla" commands, and it implements a bunch of useful functions in Python.
-# Doing just the former is easy (just add "-x scylla-gdb.py" when running
-# gdb), but we also want the latter - we want to be able to use some of those
-# extra functions in the test code. For that, we need to actually import the
-# scylla-gdb.py module from the test code here - and remember the module
-# object.
-@pytest.fixture(scope="session")
-def scylla_gdb(request):
-    save_sys_path = sys.path
-    sys.path.insert(1, sys.path[0] + '/../..')
-    # Unfortunately, the file's name includes a dash which requires some
-    # funky workarounds to import.
-    import importlib
-    try:
-        mod = importlib.import_module("scylla-gdb")
-    except Exception as e:
-        pytest.exit(f'Failed to load scylla-gdb: {e}')
-    sys.path = save_sys_path
-    yield mod
+    - Skips tests if running on anything else than x86_64. Gdb tests are known to be broken on aarch64 (
+      https://sourceware.org/bugzilla/show_bug.cgi?id=27886) and untested on anything else.
+    - Skips tests if the Scylla executable lacks debugging symbols.
+    """
+    if os.uname().machine != "x86_64":
+        pytest.skip("Tests are skipped for non-x86_64 architectures")
 
-# "gdb" fixture, attaching to a running Scylla and letting the tests
-# run gdb commands on it. The fixture returns a module 
-# The gdb fixture depends on scylla_gdb, to ensure that the "scylla"
-# subcommands are loaded into gdb.
-@pytest.fixture(scope="session")
-def gdb(request, scylla_gdb):
-    try:
-        gdb_library.lookup_type('size_t')
-    except:
-        pytest.exit('ERROR: Scylla executable was compiled without debugging '
-                    'information (-g) so cannot be used to test gdb. Please '
-                    'set SCYLLA environment variable.')
+    if build_mode != "release":
+        pytest.skip("Scylla executable was compiled without debugging symbols (-g). Use `release` mode")
 
-    # The gdb tests are known to be broken on aarch64 (see
-    # https://sourceware.org/bugzilla/show_bug.cgi?id=27886) and untested
-    # on anything else. So skip them.
-    if os.uname().machine != 'x86_64':
-        pytest.skip('test/scylla-gdb/conftest.py: gdb tests skipped for non-x86_64')
-    gdb_library.execute('set python print-stack full')
-    scylla_pid = request.config.getoption('scylla_pid')
-    gdb_library.execute(f'attach {scylla_pid}')
-    # FIXME: We can start the test here, but at this point Scylla may be
-    # completely idle. To make the situation more interesting (and, e.g., have
-    # live live tasks for test_misc.py::task()), we can set a breakpoint and
-    # let Scylla run a bit more and stop in the middle of its work. However,
-    # I'm not sure where to set a break point that is actually guaranteed to
-    # happen :(
-    #gdb_library.execute('handle SIG34 SIG35 SIGUSR1 nostop noprint pass')
-    #gdb_library.execute('break sstables::compact_sstables')
-    #gdb_library.execute('continue')
-    yield gdb_library
+    run.find_scylla(build_mode)
+    pid = run.run_with_temporary_dir(run.run_scylla_cmd)
+    ip = run.pid_to_ip(pid)
+    run.wait_for_services(pid, [lambda: run.check_cql(ip)])
+
+    return pid
+
+
+@pytest.fixture(scope="package")
+def gdb_config(scylla_pid, request):
+    """
+    Prepares the GDB configuration for attaching to the Scylla process.
+    Imports scylla-gdb.py to the GDB
+    """
+    scylla_gdb_py = os.path.join(request.fspath.dirname, '..', '..', 'scylla-gdb.py')
+    args = [
+        "gdb",
+        "-batch",
+        "-n",
+        "-se",
+        run.scylla,
+        "-p",
+        str(scylla_pid),
+        "-ex",
+        "set auto-load safe-path /",
+        "-ex",
+        "set python print-stack full",
+        "-x",
+        scylla_gdb_py,
+    ]
+
+    return args
+
+
+@pytest.fixture(scope="package")
+def gdb_execute(gdb_config):
+    """
+    Executes GDB commands in the context of the configured Scylla process.
+    """
+
+    def _execute(command: str = None, args: str = None, assert_response: bool = True):
+        """
+        Args:
+            command (str, optional): A GDB command to execute.
+            args (list, optional): Additional GDB arguments.
+            assert_response (bool, optional): Assert GDB response returncode and stderr/
+        """
+        if args is None:
+            args = []
+        if command is None:
+            command = []
+        else:
+            command = ["-ex", f'python print(gdb.execute("scylla {command}"))']
+
+        args = gdb_config + args + command
+        result = subprocess.run(args, capture_output=True, text=True)
+
+        if assert_response:
+            assert (
+                result.stderr == ""
+            ), f"GDB command produced unexpected error output: {result.stderr}"
+            assert (
+                result.returncode == 0
+            ), f"GDB command failed with return code {result.returncode}"
+
+        return result
+
+    return _execute
