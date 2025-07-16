@@ -28,7 +28,7 @@ public:
     frozen_schema(const frozen_schema&) = default;
     frozen_schema& operator=(const frozen_schema&) = default;
     frozen_schema& operator=(frozen_schema&&) = default;
-    schema_ptr unfreeze(const db::schema_ctxt&, std::optional<db::view::base_dependent_view_info> base_info = {}) const;
+    schema_ptr unfreeze(const db::schema_ctxt&, schema_ptr cdc_schema, std::optional<db::view::base_dependent_view_info> base_info = {}) const;
     const bytes_ostream& representation() const;
 };
 
@@ -40,4 +40,5 @@ struct extended_frozen_schema {
 
     frozen_schema fs;
     std::optional<db::view::base_dependent_view_info> base_info; // Set only for views.
+    std::optional<frozen_schema> frozen_cdc_schema; // Set only for tables with CDC enabled.
 };
