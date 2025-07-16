@@ -28,6 +28,7 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/seastar.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/net/byteorder.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/net/byteorder.hh>
@@ -36,6 +37,7 @@
 #include <seastar/util/short_streams.hh>
 #include <seastar/core/execution_stage.hh>
 #include "utils/assert.hh"
+#include "utils/exception_container.hh"
 #include "utils/log.hh"
 #include "utils/result_try.hh"
 #include "utils/result_combinators.hh"
@@ -182,7 +184,8 @@ bool is_metadata_id_supported(const service::client_state& client_state) {
     return client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::USE_METADATA_ID);
 }
 
-event::event_type parse_event_type(const sstring& value)
+utils::result_with_exception<event::event_type, exceptions::protocol_exception>
+parse_event_type(const sstring& value)
 {
     if (value == "TOPOLOGY_CHANGE") {
         return event::event_type::TOPOLOGY_CHANGE;
@@ -191,7 +194,7 @@ event::event_type parse_event_type(const sstring& value)
     } else if (value == "SCHEMA_CHANGE") {
         return event::event_type::SCHEMA_CHANGE;
     } else {
-        throw exceptions::protocol_exception(format("Invalid value '{}' for Event.Type", value));
+        return exceptions::protocol_exception(format("Invalid value '{}' for Event.Type", value));
     }
 }
 
@@ -341,10 +344,10 @@ cql_server::connection::frame_size() const {
     return 9;
 }
 
-cql_binary_frame_v3
+utils::result_with_exception<cql_binary_frame_v3, exceptions::protocol_exception, cql_frame_error>
 cql_server::connection::parse_frame(temporary_buffer<char> buf) const {
     if (buf.size() != frame_size()) {
-        throw cql_frame_error();
+        return cql_frame_error();
     }
     cql_binary_frame_v3 v3;
     switch (_version) {
@@ -355,11 +358,10 @@ cql_server::connection::parse_frame(temporary_buffer<char> buf) const {
         break;
     }
     default:
-        throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", _version));
+        return exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", _version));
     }
     if (v3.version != _version) {
-        throw exceptions::protocol_exception(format("Invalid message version. Got {:d} but previous messages on this connection had version {:d}", v3.version, _version));
-
+        return exceptions::protocol_exception(format("Invalid message version. Got {:d} but previous messages on this connection had version {:d}", v3.version, _version));
     }
     return v3;
 }
@@ -378,23 +380,25 @@ cql_server::connection::read_frame() {
             if (_version < 3 || _version > current_version) {
                 auto client_version = _version;
                 _version = current_version;
-                throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version));
+                return make_exception_future<ret_type>(exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", client_version)));
             }
-
 
             return _read_buf.read_exactly(frame_size() - 1).then([this] (temporary_buffer<char> tail) {
                 temporary_buffer<char> full(frame_size());
                 full.get_write()[0] = _version;
                 std::copy(tail.get(), tail.get() + tail.size(), full.get_write() + 1);
                 auto frame = parse_frame(std::move(full));
+                if (!frame) {
+                    return std::move(frame).assume_error().as_exception_future<ret_type>();
+                }
                 // This is the very first frame, so reject obviously incorrect frames, to
                 // avoid allocating large amounts of memory for the message body
-                if (frame.length > 100'000) {
+                if (frame.value().length > 100'000) {
                     // The STARTUP message body is a [string map] containing just a few options,
                     // so it should be smaller that 100kB. See #4366.
-                    throw exceptions::protocol_exception(format("Initial message size too large ({:d}), rejecting as invalid", uint32_t(frame.length)));
+                    return make_exception_future<ret_type>(exceptions::protocol_exception(format("Initial message size too large ({:d}), rejecting as invalid", uint32_t(frame.value().length))));
                 }
-                return make_ready_future<ret_type>(frame);
+                return make_ready_future<ret_type>(std::move(frame).value());
             });
         });
     } else {
@@ -403,7 +407,11 @@ cql_server::connection::read_frame() {
             if (buf.empty()) {
                 return make_ready_future<ret_type>();
             }
-            return make_ready_future<ret_type>(parse_frame(std::move(buf)));
+            auto frame = parse_frame(std::move(buf));
+            if (!frame) {
+                return std::move(frame).assume_error().as_exception_future<ret_type>();
+            };
+            return make_ready_future<ret_type>(std::move(frame).value());
         });
     }
 }
@@ -453,18 +461,18 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         switch (client_state.get_auth_state()) {
             case auth_state::UNINITIALIZED:
                 if (cqlop != cql_binary_opcode::STARTUP && cqlop != cql_binary_opcode::OPTIONS) {
-                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting STARTUP or OPTIONS", int(cqlop)));
+                    return make_exception_future<result_with_foreign_response_ptr>(exceptions::protocol_exception(format("Unexpected message {:d}, expecting STARTUP or OPTIONS", int(cqlop))));
                 }
                 break;
             case auth_state::AUTHENTICATION:
                 // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
                 if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
-                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting {}", int(cqlop), "SASL_RESPONSE"));
+                    return make_exception_future<result_with_foreign_response_ptr>(exceptions::protocol_exception(format("Unexpected message {:d}, expecting {}", int(cqlop), "SASL_RESPONSE")));
                 }
                 break;
             case auth_state::READY: default:
                 if (cqlop == cql_binary_opcode::STARTUP) {
-                    throw exceptions::protocol_exception("Unexpected message STARTUP, the connection is already initialized");
+                    return make_exception_future<result_with_foreign_response_ptr>(exceptions::protocol_exception("Unexpected message STARTUP, the connection is already initialized"));
                 }
                 break;
         }
@@ -486,7 +494,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         case cql_binary_opcode::EXECUTE:       return process_execute(stream, std::move(in), client_state, std::move(permit), trace_state);
         case cql_binary_opcode::BATCH:         return process_batch(stream, std::move(in), client_state, std::move(permit), trace_state);
         case cql_binary_opcode::REGISTER:      return wrap_in_foreign(process_register(stream, std::move(in), client_state, trace_state));
-        default:                               throw exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop)));
+        default:                               return make_exception_future<result_with_foreign_response_ptr>(exceptions::protocol_exception(format("Unknown opcode {:d}", int(cqlop))));
         }
     }).then_wrapped([this, cqlop, &cql_stats, stream, &client_state, linearization_buffer = std::move(linearization_buffer), trace_state] (future<result_with_foreign_response_ptr> f) {
         auto stop_trace = defer([&] {
@@ -495,9 +503,13 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         --_server._stats.requests_serving;
 
         return seastar::futurize_invoke([&] () {
+            if (f.failed()) {
+                return make_exception_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(f).get_exception());
+            }
+
             result_with_foreign_response_ptr res = f.get();
             if (!res) {
-                res.assume_error().throw_me();
+                return std::move(res).assume_error().as_exception_future<foreign_ptr<std::unique_ptr<cql_server::response>>>();
             }
 
             auto response = std::move(res).assume_value();
@@ -517,7 +529,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
             case auth_state::AUTHENTICATION:
                 // Support both SASL auth from protocol v2 and the older style Credentials auth from v1
                 if (cqlop != cql_binary_opcode::AUTH_RESPONSE && cqlop != cql_binary_opcode::CREDENTIALS) {
-                    throw exceptions::protocol_exception(format("Unexpected message {:d}, expecting AUTH_RESPONSE or CREDENTIALS", int(cqlop)));
+                    return make_exception_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(exceptions::protocol_exception(format("Unexpected message {:d}, expecting AUTH_RESPONSE or CREDENTIALS", int(cqlop))));
                 }
                 if (res_op == cql_binary_opcode::READY || res_op == cql_binary_opcode::AUTH_SUCCESS) {
                     client_state.set_auth_state(auth_state::READY);
@@ -530,7 +542,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
             tracing::set_response_size(trace_state, response->size());
             cql_stats.response_size += response->size();
-            return response;
+            return make_ready_future<foreign_ptr<std::unique_ptr<cql_server::response>>>(std::move(response));
         }).handle_exception([this, stream, &client_state, trace_state] (std::exception_ptr eptr) {
             if (auto* exp = try_catch<exceptions::unavailable_exception>(eptr)) {
                 clogger.debug("{}: request resulted in unavailable_error, stream {}, code {}, message [{}]",
@@ -698,6 +710,10 @@ void cql_server::connection::handle_error(future<>&& f) {
 
 future<> cql_server::connection::process_request() {
     return read_frame().then_wrapped([this] (future<std::optional<cql_binary_frame_v3>>&& v) {
+        if (v.failed()) {
+            return std::move(v).discard_result();
+        }
+
         auto maybe_frame = v.get();
         if (!maybe_frame) {
             // eof
@@ -856,7 +872,7 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
     if (flags & cql_frame_flags::compression) {
         if (_compression == cql_compression::lz4) {
             if (length < 4) {
-                throw std::runtime_error(fmt::format("CQL frame truncated: expected to have at least 4 bytes, got {}", length));
+                return make_exception_future<fragmented_temporary_buffer>(std::runtime_error(fmt::format("CQL frame truncated: expected to have at least 4 bytes, got {}", length)));
             }
             return _buffer_reader.read_exactly(_read_buf, length).then([] (fragmented_temporary_buffer buf) {
                 auto input_buffer = input_buffer_guard();
@@ -864,16 +880,16 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
                 auto v = fragmented_temporary_buffer::view(buf);
                 int32_t uncomp_len = read_simple<int32_t>(v);
                 if (uncomp_len < 0) {
-                    throw std::runtime_error("CQL frame uncompressed length is negative: " + std::to_string(uncomp_len));
+                    return make_exception_future<fragmented_temporary_buffer>(std::runtime_error("CQL frame uncompressed length is negative: " + std::to_string(uncomp_len)));
                 }
                 auto in = input_buffer.get_linearized_view(v);
                 return utils::result_into_future(output_buffer.make_fragmented_temporary_buffer(uncomp_len, [&in] (bytes_mutable_view out) -> utils::result_with_exception<size_t, std::runtime_error> {
                     auto ret = LZ4_decompress_safe(reinterpret_cast<const char*>(in.data()), reinterpret_cast<char*>(out.data()), in.size(), out.size());
                     if (ret < 0) {
-                        throw std::runtime_error("CQL frame LZ4 uncompression failure");
+                        return bo::failure(std::runtime_error("CQL frame LZ4 uncompression failure"));
                     }
                     if (static_cast<size_t>(ret) != out.size()) {  // ret is known to be positive here
-                        throw std::runtime_error("Malformed CQL frame - provided uncompressed size different than real uncompressed size");
+                        return bo::failure(std::runtime_error("Malformed CQL frame - provided uncompressed size different than real uncompressed size"));
                     }
                     return bo::success(static_cast<size_t>(ret));
                 }));
@@ -885,21 +901,21 @@ future<fragmented_temporary_buffer> cql_server::connection::read_and_decompress_
                 auto in = input_buffer.get_linearized_view(fragmented_temporary_buffer::view(buf));
                 size_t uncomp_len;
                 if (snappy_uncompressed_length(reinterpret_cast<const char*>(in.data()), in.size(), &uncomp_len) != SNAPPY_OK) {
-                    throw std::runtime_error("CQL frame Snappy uncompressed size is unknown");
+                    return make_exception_future<fragmented_temporary_buffer>(std::runtime_error("CQL frame Snappy uncompressed size is unknown"));
                 }
                 return utils::result_into_future(output_buffer.make_fragmented_temporary_buffer(uncomp_len, [&in] (bytes_mutable_view out) -> utils::result_with_exception<size_t, std::runtime_error> {
                     size_t output_len = out.size();
                     if (snappy_uncompress(reinterpret_cast<const char*>(in.data()), in.size(), reinterpret_cast<char*>(out.data()), &output_len) != SNAPPY_OK) {
-                        throw std::runtime_error("CQL frame Snappy uncompression failure");
+                        return bo::failure(std::runtime_error("CQL frame Snappy uncompression failure"));
                     }
                     if (output_len != out.size()) {
-                        throw std::runtime_error("Malformed CQL frame - provided uncompressed size different than real uncompressed size");
+                        return bo::failure(std::runtime_error("Malformed CQL frame - provided uncompressed size different than real uncompressed size"));
                     }
                     return bo::success(output_len);
                 }));
             });
         } else {
-            throw exceptions::protocol_exception(format("Unknown compression algorithm"));
+            return make_exception_future<fragmented_temporary_buffer>(exceptions::protocol_exception("Unknown compression algorithm"));
         }
     }
     return _buffer_reader.read_exactly(_read_buf, length);
@@ -917,7 +933,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
          } else if (compression == "snappy") {
              _compression = cql_compression::snappy;
          } else {
-             throw exceptions::protocol_exception(format("Unknown compression algorithm: {}", compression));
+             co_return coroutine::exception(std::make_exception_ptr(exceptions::protocol_exception(format("Unknown compression algorithm: {}", compression))));
          }
     }
 
@@ -1063,8 +1079,14 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
     fragmented_temporary_buffer::istream is = in.get_stream();
 
     auto dialect = get_dialect();
-    auto msg = co_await process_fn(client_state, _server._query_processor, in, stream,
-            _version, permit, trace_state, true, {}, dialect);
+
+    auto f = co_await coroutine::as_future(process_fn(client_state, _server._query_processor, in, stream,
+            _version, permit, trace_state, true, {}, dialect));
+    if (f.failed()) {
+        co_return coroutine::exception(f.get_exception());
+    }
+    auto msg = std::move(f.get());
+
     while (auto* bounce_msg = std::get_if<result_with_bounce_to_shard>(&msg)) {
         auto shard = (*bounce_msg)->move_to_shard().value();
         auto&& cached_vals = (*bounce_msg)->take_cached_pk_function_calls();
@@ -1265,7 +1287,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
             if (!ps) {
                 ps = qp.local().get_prepared(cache_key);
                 if (!ps) {
-                    throw exceptions::prepared_query_not_found_exception(id);
+                    return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(id));
                 }
                 // authorize a particular prepared statement only once
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
@@ -1276,13 +1298,13 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
             break;
         }
         default:
-            throw exceptions::protocol_exception(
+            return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(
                     "Invalid query kind in BATCH messages. Must be 0 or 1 but got "
-                            + std::to_string(int(kind)));
+                            + std::to_string(int(kind))));
         }
 
         if (dynamic_cast<cql3::statements::modification_statement*>(ps->statement.get()) == nullptr) {
-            throw exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed.");
+            return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
         }
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         if (init_trace) {
@@ -1298,8 +1320,9 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
 
         auto stmt = ps->statement;
         if (stmt->get_bound_terms() != tmp.size()) {
-            throw exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
-                            stmt->get_bound_terms(), tmp.size()));
+            return make_exception_future<cql_server::process_fn_return_type>(
+                    exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
+                            stmt->get_bound_terms(), tmp.size())));
         }
         values.emplace_back(cql3::raw_value_view_vector_with_unset(std::move(tmp), std::move(unset)));
     }
@@ -1353,15 +1376,20 @@ cql_server::connection::process_batch(uint16_t stream, request_reader in, servic
 future<std::unique_ptr<cql_server::response>>
 cql_server::connection::process_register(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
+    using ret_type = std::unique_ptr<cql_server::response>;
+
     std::vector<sstring> event_types;
     in.read_string_list(event_types);
     for (auto&& event_type : event_types) {
-        auto et = parse_event_type(event_type);
-        _server._notifier->register_event(et, this);
+        utils::result_with_exception<event::event_type, exceptions::protocol_exception> et = parse_event_type(event_type);
+        if (!et) {
+            return std::move(et).assume_error().into_exception_future<ret_type>();
+        }
+        _server._notifier->register_event(std::move(et).value(), this);
     }
     _ready = true;
     on_connection_ready();
-    return make_ready_future<std::unique_ptr<cql_server::response>>(make_ready(stream, std::move(trace_state)));
+    return make_ready_future<ret_type>(make_ready(stream, std::move(trace_state)));
 }
 
 std::unique_ptr<cql_server::response> cql_server::connection::make_unavailable_error(int16_t stream, exceptions::exception_code err, sstring msg, db::consistency_level cl, int32_t required, int32_t alive, const tracing::trace_state_ptr& tr_state) const
@@ -1717,7 +1745,7 @@ void cql_server::response::compress_lz4()
         out.data()[3] = in.size() & 0xFF;
         auto ret = LZ4_compress_default(reinterpret_cast<const char*>(in.data()), reinterpret_cast<char*>(out.data() + 4), in.size(), out.size() - 4);
         if (ret == 0) {
-            throw std::runtime_error("CQL frame LZ4 compression failure");
+            return bo::failure(std::runtime_error("CQL frame LZ4 compression failure"));
         }
         return bo::success(static_cast<size_t>(ret) + 4);
     });
@@ -1739,7 +1767,7 @@ void cql_server::response::compress_snappy()
         const memory::scoped_large_allocation_warning_threshold slawt{256*1024};
         size_t actual_len = out.size();
         if (snappy_compress(reinterpret_cast<const char*>(in.data()), in.size(), reinterpret_cast<char*>(out.data()), &actual_len) != SNAPPY_OK) {
-            throw std::runtime_error("CQL frame Snappy compression failure");
+            return bo::failure(std::runtime_error("CQL frame Snappy compression failure"));
         }
         return bo::success(actual_len);
     });
