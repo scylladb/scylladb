@@ -871,10 +871,12 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
     std::transform(pks.begin(), pks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
     std::transform(cks.begin(), cks.end(), std::back_inserter(columns), [](auto& c) { return &c; });
+    auto regular_column_start_idx = columns.size();
+    auto regular_column_filter = std::views::filter([](const column_definition& cdef) { return cdef.name() == op_column_name || cdef.name() == eor_column_name || !cdc::is_cdc_metacolumn_name(cdef.name_as_text()); });
+    std::ranges::transform(schema->regular_columns() | regular_column_filter, std::back_inserter(columns), [](auto& c) { return &c; });
 
-    auto regular_columns = schema->regular_columns()
-        | std::views::filter([](const column_definition& cdef) { return cdef.name() == op_column_name || cdef.name() == eor_column_name || !cdc::is_cdc_metacolumn_name(cdef.name_as_text()); })
-        | std::views::transform([&] (const column_definition& cdef) { columns.emplace_back(&cdef); return cdef.id; })
+    auto regular_columns = std::ranges::subrange(columns.begin() + regular_column_start_idx, columns.end())
+        | std::views::transform(&column_definition::id)
         | std::ranges::to<query::column_id_vector>()
     ;
 
