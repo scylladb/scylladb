@@ -139,14 +139,14 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
         const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
-        return { .timestamp = api::min_timestamp };
+        return max_purgeable(api::min_timestamp);
     }
 
     auto timestamp = api::max_timestamp;
     if (gc_check_only_compacting_sstables) {
         // If gc_check_only_compacting_sstables is enabled, do not
         // check memtables and other sstables not being compacted.
-        return { .timestamp = timestamp };
+        return max_purgeable(timestamp);
     }
 
     auto source = max_purgeable::timestamp_source::none;
@@ -222,7 +222,7 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
             source = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
         }
     }
-    return { .timestamp = timestamp, .source = source };
+    return max_purgeable(timestamp, source);
 }
 
 static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& table_s, std::vector<shared_sstable> sstables) {
