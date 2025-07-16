@@ -22,17 +22,29 @@ using can_gc_fn = std::function<bool(tombstone, is_shadowable)>;
 extern can_gc_fn always_gc;
 extern can_gc_fn never_gc;
 
-struct max_purgeable {
+// A tombstone is purgeable if: tombstone.deletion_time ∈ [-inf, max_purgeable._timestamp)
+class max_purgeable {
+public:
     enum class timestamp_source {
         none,
         memtable_possibly_shadowing_data,
         other_sstables_possibly_shadowing_data
     };
 
-    operator bool() const { return timestamp != api::missing_timestamp; }
+private:
+    api::timestamp_type _timestamp { api::missing_timestamp };
+    timestamp_source _source { timestamp_source::none };
 
-    api::timestamp_type timestamp { api::missing_timestamp };
-    timestamp_source source { timestamp_source::none };
+public:
+    max_purgeable() = default;
+    explicit max_purgeable(api::timestamp_type timestamp, timestamp_source source = timestamp_source::none)
+        : _timestamp(timestamp), _source(source)
+    { }
+
+    operator bool() const { return _timestamp != api::missing_timestamp; }
+
+    api::timestamp_type timestamp() const noexcept { return _timestamp; }
+    timestamp_source source() const noexcept { return _source; }
 };
 
 using max_purgeable_fn = std::function<max_purgeable(const dht::decorated_key&, is_shadowable)>;
