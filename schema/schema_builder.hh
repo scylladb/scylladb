@@ -32,6 +32,7 @@ private:
     std::optional<raw_view_info> _view_info;
     std::optional<schema_ptr> _base_schema;
     std::optional<db::view::base_dependent_view_info> _base_info;
+    std::optional<schema_ptr> _cdc_schema;
     schema_builder(const schema::raw_schema&);
     static std::vector<static_configurator>& static_configurators();
 public:
@@ -278,6 +279,8 @@ public:
 
     schema_builder& with_view_info(schema_ptr base_schema, bool include_all_columns, sstring where_clause);
     schema_builder& with_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause, db::view::base_dependent_view_info base);
+
+    schema_builder& with_cdc_schema(schema_ptr cdc_schema);
 
     schema_builder& with_index(const index_metadata& im);
     schema_builder& without_index(const sstring& name);
