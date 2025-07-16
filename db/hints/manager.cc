@@ -539,7 +539,7 @@ future<> manager::change_host_filter(host_filter filter) {
                 "change_host_filter: cannot change the configuration because hints all hints were drained"});
     }
 
-    manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
+    manager_logger.info("change_host_filter: changing from {} to {}", _host_filter, filter);
 
     // Change the host_filter now and save the old one so that we can
     // roll back in case of failure
@@ -635,7 +635,7 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
         co_return;
     }
 
-    manager_logger.trace("Draining starts for {}", host_id);
+    manager_logger.info("Draining starts for {}", host_id);
 
     const auto holder = seastar::gate::holder{_draining_eps_gate};
     // As long as we hold on to this lock, no migration of hinted handoff to host IDs
@@ -661,7 +661,7 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
 
             return ep_man.with_file_update_mutex([&ep_man] -> future<> {
                 return remove_file(ep_man.hints_dir().native()).then([&ep_man] {
-                    manager_logger.debug("Removed hint directory for {}", ep_man.end_point_key());
+                    manager_logger.info("Removed hint directory for {}", ep_man.end_point_key());
                 });
             });
         });
@@ -722,7 +722,7 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
         manager_logger.error("Exception when draining {}: {}", host_id, eptr);
     }
 
-    manager_logger.trace("drain_for: finished draining {}", host_id);
+    manager_logger.info("drain_for: finished draining {}", host_id);
 }
 
 void manager::update_backlog(size_t backlog, size_t max_backlog) {
