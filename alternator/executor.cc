@@ -194,12 +194,14 @@ static const rjson::value::Member& get_single_member(const rjson::value& v, cons
 
 executor::executor(gms::gossiper& gossiper,
          service::storage_proxy& proxy,
+         service::storage_service& ss,
          service::migration_manager& mm,
          db::system_distributed_keyspace& sdks,
          cdc::metadata& cdc_metadata,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
     : _gossiper(gossiper),
+      _ss(ss),
       _proxy(proxy),
       _mm(mm),
       _sdks(sdks),
@@ -660,12 +662,30 @@ static future<bool> is_view_built(
 
 }
 
-static future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
+static future<> fill_table_size(rjson::value &table_description, schema_ptr schema, service::storage_service &ss, service::storage_proxy& proxy) {
+    auto &table = schema->table();
+    std::uint64_t total_size = 0;
+    if (auto val = table.table_size_in_bytes().get()) {
+        total_size = *val;
+    }
+    else {
+        total_size = co_await ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
+        auto now = table.table_size_in_bytes().set_now(total_size, std::chrono::hours{ 6 });
+        (void)proxy.get_db().invoke_on_others(
+            [cfid = schema->id(), total_size, now] (replica::database& db) {
+                db.find_column_family(cfid).table_size_in_bytes().set(total_size, now);
+            });
+    }
+    rjson::add(table_description, "TableSizeBytes", total_size);
+}
+
+static future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::storage_proxy& proxy, service::storage_service &ss, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
     auto tags_ptr = db::get_tags_of_table(schema);
 
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
+    auto fill_table_size_job = fill_table_size(table_description, schema, ss, proxy);
 
     auto creation_timestamp = get_table_creation_time(*schema);
     
@@ -779,6 +799,8 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
     executor::supplement_table_stream_info(table_description, *schema, proxy);
 
     // FIXME: still missing some response fields (issue #5026)
+    co_await std::move(fill_table_size_job);
+
     co_return table_description;
 }
 
@@ -798,7 +820,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
-    rjson::value table_description = co_await fill_table_description(schema, table_status::active, _proxy, client_state, trace_state, permit);
+    rjson::value table_description = co_await fill_table_description(schema, table_status::active, _proxy, _ss, client_state, trace_state, permit);
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
@@ -860,7 +882,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     auto& p = _proxy.container();
 
     schema_ptr schema = get_table(_proxy, request);
-    rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, _proxy, client_state, trace_state, permit);
+    rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, _proxy, _ss, client_state, trace_state, permit);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::DROP);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         size_t retries = mm.get_concurrent_ddl_retries();
