@@ -95,9 +95,9 @@ get_range_to_address_map(locator::effective_replication_map_ptr erm) {
     return get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens());
 }
 
-future<std::vector<dht::token_range_endpoints>>
+future<utils::chunked_vector<dht::token_range_endpoints>>
 describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc) {
-    std::vector<dht::token_range_endpoints> ranges;
+    utils::chunked_vector<dht::token_range_endpoints> ranges;
 
     auto erm = db.find_keyspace(keyspace).get_vnode_effective_replication_map();
     std::unordered_map<dht::token_range, host_id_vector_replica_set> range_to_address_map = co_await (

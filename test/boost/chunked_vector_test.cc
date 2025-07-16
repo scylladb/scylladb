@@ -32,7 +32,7 @@ using deque = std::deque<int>;
 
 BOOST_AUTO_TEST_CASE(test_random_walk) {
     auto rand = std::default_random_engine();
-    auto op_gen = std::uniform_int_distribution<unsigned>(0, 9);
+    auto op_gen = std::uniform_int_distribution<unsigned>(0, 12);
     auto nr_dist = std::geometric_distribution<size_t>(0.7);
     deque d;
     disk_array c;
@@ -103,6 +103,28 @@ BOOST_AUTO_TEST_CASE(test_random_walk) {
             auto nr = nr_dist(rand);
             c.resize(nr);
             d.resize(nr);
+            break;
+        }
+        case 10: {
+            auto pos = std::uniform_int_distribution<size_t>(0, d.size())(rand);
+            auto n = rand();
+            c.insert(c.begin() + pos, n);
+            d.insert(d.begin() + pos, n);
+            break;
+        }
+        case 11: {
+            if (!c.empty()) {
+                auto pos = std::uniform_int_distribution<size_t>(0, d.size() - 1)(rand);
+                c.erase(c.begin() + pos);
+                d.erase(d.begin() + pos);
+            }
+            break;
+        }
+        case 12: {
+            auto start = std::uniform_int_distribution<size_t>(0, d.size())(rand);
+            auto end = std::uniform_int_distribution<size_t>(start, d.size())(rand);
+            c.erase(c.begin() + start, c.begin() + end);
+            d.erase(d.begin() + start, d.begin() + end);
             break;
         }
         default:
@@ -466,4 +488,67 @@ BOOST_AUTO_TEST_CASE(test_value_init_ctor) {
     for (auto it = vec.begin(); it != vec.end(); ++it) {
         BOOST_REQUIRE_EQUAL(*it, v);
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_insert_single) {
+    auto vec = utils::chunked_vector<int, 8>();
+    auto r1 = vec.insert(vec.begin(), 1);
+    BOOST_REQUIRE_EQUAL(vec.size(), 1);
+    BOOST_REQUIRE_EQUAL(r1 - std::begin(vec), 0);
+    BOOST_REQUIRE_EQUAL(vec[0], 1);
+    auto r2 = vec.insert(vec.begin(), 2);
+    BOOST_REQUIRE_EQUAL(vec.size(), 2);
+    BOOST_REQUIRE_EQUAL(r2 - std::begin(vec), 0);
+    BOOST_REQUIRE_EQUAL(vec[0], 2);
+    BOOST_REQUIRE_EQUAL(vec[1], 1);
+    auto r3 = vec.insert(vec.end(), 3);
+    BOOST_REQUIRE_EQUAL(vec.size(), 3);
+    BOOST_REQUIRE_EQUAL(r3 - std::begin(vec), 2);
+    BOOST_REQUIRE_EQUAL(vec[0], 2);
+    BOOST_REQUIRE_EQUAL(vec[1], 1);
+    BOOST_REQUIRE_EQUAL(vec[2], 3);
+    auto r4 = vec.insert(vec.end() - 2, 4);
+    BOOST_REQUIRE_EQUAL(vec.size(), 4);
+    BOOST_REQUIRE_EQUAL(r4 - std::begin(vec), 1);
+    BOOST_REQUIRE_EQUAL(vec[0], 2);
+    BOOST_REQUIRE_EQUAL(vec[1], 4);
+    BOOST_REQUIRE_EQUAL(vec[2], 1);
+    BOOST_REQUIRE_EQUAL(vec[3], 3);
+    auto r5 = vec.emplace(vec.end() - 2, 6);
+    BOOST_REQUIRE_EQUAL(vec.size(), 5);
+    BOOST_REQUIRE_EQUAL(r5 - std::begin(vec), 2);
+    BOOST_REQUIRE_EQUAL(vec[0], 2);
+    BOOST_REQUIRE_EQUAL(vec[1], 4);
+    BOOST_REQUIRE_EQUAL(vec[2], 6);
+    BOOST_REQUIRE_EQUAL(vec[3], 1);
+    BOOST_REQUIRE_EQUAL(vec[4], 3);
+}
+
+BOOST_AUTO_TEST_CASE(test_erase_single) {
+    auto vec = utils::chunked_vector<int, 8>();
+    vec.push_back(1);
+    vec.push_back(2);
+    vec.push_back(3);
+    vec.push_back(4);
+    BOOST_REQUIRE_EQUAL(vec.size(), 4);
+    auto r1 = vec.erase(vec.begin());
+    BOOST_REQUIRE_EQUAL(vec.size(), 3);
+    BOOST_REQUIRE_EQUAL(r1 - std::begin(vec), 0);
+    BOOST_REQUIRE_EQUAL(vec[0], 2);
+    BOOST_REQUIRE_EQUAL(vec[1], 3);
+    BOOST_REQUIRE_EQUAL(vec[2], 4);
+    auto r2 = vec.erase(vec.begin() + 1);
+    BOOST_REQUIRE_EQUAL(vec.size(), 2);
+    BOOST_REQUIRE_EQUAL(r2 - std::begin(vec), 1);
+    BOOST_REQUIRE_EQUAL(vec[0], 2);
+    BOOST_REQUIRE_EQUAL(vec[1], 4);
+    vec.push_back(5);
+    vec.push_back(6);
+    vec.push_back(7);
+    vec.push_back(8);
+    auto r3 = vec.erase(vec.begin() + 1, vec.end() - 1);
+    BOOST_REQUIRE_EQUAL(vec.size(), 2);
+    BOOST_REQUIRE_EQUAL(r3 - std::begin(vec), 1);
+    BOOST_REQUIRE_EQUAL(vec[0], 2);
+    BOOST_REQUIRE_EQUAL(vec[1], 8);
 }
