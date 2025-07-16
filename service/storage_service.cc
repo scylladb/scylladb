@@ -12,6 +12,7 @@
 #include "storage_service.hh"
 #include "utils/chunked_vector.hh"
 #include <seastar/core/shard_id.hh>
+#include "db/view/view_building_coordinator.hh"
 #include "utils/disk_space_monitor.hh"
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
@@ -6836,6 +6837,9 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
                                                              : locator::tablet_transition_kind::migration)
             .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
             .build());
+        if (_feature_service.view_building_coordinator) {
+            db::view::abort_view_building_tasks(_view_building_state_machine, updates, write_timestamp, table, src, last_token);
+        }
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
 
@@ -6925,6 +6929,9 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
             .build());
+        if (_feature_service.view_building_coordinator) {
+            db::view::abort_view_building_tasks(_view_building_state_machine, updates, write_timestamp, table, dst, last_token);
+        }
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
 

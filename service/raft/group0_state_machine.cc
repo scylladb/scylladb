@@ -163,6 +163,7 @@ static const std::unordered_set<table_id>& get_view_building_state_tables() {
         db::system_keyspace::view_building_tasks()->id(),
         db::schema_tables::v3::views()->id(),
         db::system_keyspace::view_build_status_v2()->id(),
+        db::system_keyspace::tablets()->id(),
     };
     return ids;
 }

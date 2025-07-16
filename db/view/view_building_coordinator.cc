@@ -12,6 +12,7 @@
 #include <ranges>
 #include <seastar/core/abort_source.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/on_internal_error.hh>
 #include "db/view/view_building_coordinator.hh"
 #include "db/view/view_build_status.hh"
 #include "locator/tablets.hh"
@@ -25,6 +26,7 @@
 #include "service/topology_coordinator.hh"
 #include "db/system_keyspace.hh"
 #include "replica/database.hh"
+#include "db/view/view_building_task_mutation_builder.hh"
 #include "utils/assert.hh"
 #include "idl/view.dist.hh"
 
@@ -484,6 +486,258 @@ future<> view_building_coordinator::stop() {
     co_await coroutine::parallel_for_each(std::move(_remote_work), [] (auto&& remote_work) -> future<> {
         co_await remote_work.second.get_future();
     });
+}
+
+void view_building_coordinator::generate_tablet_migration_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, const locator::tablet_map& tmap, locator::global_tablet_id gid, const locator::tablet_transition_info& trinfo) {
+    vbc_logger.debug("Generating updates for tablet migration for table {}", gid.table);
+    
+    if (!_vb_sm.building_state.tasks_state.contains(gid.table)) {
+        vbc_logger.debug("No view building tasks for table {} - skipping tablet migration updates generation", gid.table);
+        return;
+    }
+
+    auto& tinfo = tmap.get_tablet_info(gid.tablet);
+    auto leaving_replica = locator::get_leaving_replica(tinfo, trinfo);
+
+    if (!leaving_replica && !trinfo.pending_replica) {
+        return;
+    }
+
+    auto last_token = tmap.get_last_token(gid.tablet);
+    view_building_task_mutation_builder builder(guard.write_timestamp());
+
+    auto create_task_copy_on_pending_replica = [&] (const view_building_task& task) {
+        auto new_id = builder.new_id();
+        builder.set_type(new_id, task.type)
+                .set_state(new_id, view_building_task::task_state::idle)
+                .set_base_id(new_id, task.base_id)
+                .set_last_token(new_id, task.last_token)
+                .set_replica(new_id, *trinfo.pending_replica);
+        if (task.view_id) {
+            builder.set_view_id(new_id, *task.view_id);
+        }
+    };
+
+    if (leaving_replica && trinfo.pending_replica) {
+        // tablet migration
+        auto tasks_to_migrate = _vb_sm.building_state.collect_tasks_by_last_token(gid.table, *leaving_replica)[last_token];
+        for (auto& task: tasks_to_migrate) {
+            create_task_copy_on_pending_replica(task);
+            builder.del_task(task.id);
+            vbc_logger.debug("Task {} was migrated from {} to {}.", task.id, task.replica, *trinfo.pending_replica);
+        }        
+        
+    } else if (leaving_replica) {
+        // RF decrease
+        auto tasks_to_abort = _vb_sm.building_state.collect_tasks_by_last_token(gid.table, *leaving_replica)[last_token];
+        for (auto& task: tasks_to_abort) {
+            builder.del_task(task.id);
+            vbc_logger.debug("Aborting task {} for abandoning replica {}", task.id, task.replica);
+        } 
+
+    } else if (trinfo.pending_replica) {
+        // RF increase
+        // Filter out staging tasks and group by remaining by view_id.
+        // If a view has any unfinished task for this tablet id, create a task for each new replica.
+        // TODO:
+        // This might be optimized out depending on how data on the new replicas is built.
+        // If all tablet replicas are built for the view, we're sure new view's replicas will also get correct data.
+        std::unordered_map<::table_id, std::vector<view_building_task>> tasks_per_view;
+        auto tasks_for_tablet = _vb_sm.building_state.collect_tasks_by_last_token(gid.table)[last_token];
+        for (auto& t: tasks_for_tablet | std::views::filter([] (const view_building_task& t) {
+            return t.type == view_building_task::task_type::build_range;
+        })) {
+            tasks_per_view[*t.view_id].push_back(t);
+        }
+
+        for (auto& [_, tasks_for_view]: tasks_per_view) {
+            auto task = tasks_for_view.front();
+            create_task_copy_on_pending_replica(task);
+            vbc_logger.debug("Creating new task for pending replica {}", *trinfo.pending_replica);
+        }
+    }
+
+    out.emplace_back(builder.build());
+}
+
+void view_building_coordinator::generate_tablet_resize_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+    vbc_logger.debug("Generating updates for tablet resize for table {}", table_id);
+    if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
+        vbc_logger.debug("No view building tasks for table {} - skipping tablet migration updates generation", table_id);
+        return;
+    }
+
+    if (old_tmap.tablet_count() == new_tmap.tablet_count()) {
+        vbc_logger.debug("Tablet map size wasn't changed - skipping tablet migration updates generation");
+        return;
+    }
+    bool is_split = old_tmap.tablet_count() < new_tmap.tablet_count();
+    view_building_task_mutation_builder builder(guard.write_timestamp());
+
+    auto create_task_copy = [&] (const view_building_task& task, dht::token last_token) -> utils::UUID {
+        auto new_id = builder.new_id();
+        builder.set_type(new_id, task.type)
+                .set_state(new_id, view_building_task::task_state::idle)
+                .set_base_id(new_id, task.base_id)
+                .set_last_token(new_id, last_token)
+                .set_replica(new_id, task.replica);
+        if (task.view_id) {
+            builder.set_view_id(new_id, *task.view_id);
+        }
+        return new_id;
+    };
+
+    // Task with tablet id `n` is split into 2 tasks with tablet ids `2n` and `2n+1`
+    auto split_task = [&] (const view_building_task& task) {
+        auto new_tid = locator::tablet_id{old_tmap.get_tablet_id(task.last_token).id * 2};
+
+        auto new_id = create_task_copy(task, new_tmap.get_last_token(new_tid));
+        auto new_id2 = create_task_copy(task, new_tmap.get_last_token(locator::tablet_id{new_tid.id + 1}));
+        builder.del_task(task.id);
+
+        vbc_logger.debug("Task {} was split into task {} and task {}", task.id, new_id, new_id2);
+    };
+
+    // Task with tablet id `n` is updated to new task with tablet id `n/2` (integer division).
+    // If task with tablet id `n/2` is already created (information is stored in `created_tablet_ids`), only old task is removed.
+    auto merge_task = [&] (std::unordered_set<locator::tablet_id>& created_tablet_ids, const view_building_task& task) {
+        builder.del_task(task.id);
+
+        auto new_tid = locator::tablet_id(old_tmap.get_tablet_id(task.last_token).id / 2);
+        if (!created_tablet_ids.contains(new_tid)) {
+            created_tablet_ids.insert(new_tid);
+            auto new_id = create_task_copy(task, new_tmap.get_last_token(new_tid));
+            vbc_logger.debug("Task {} was merged into task {} ", task.id, new_id);
+        } else {
+            vbc_logger.debug("Task {} was removed during tablet merge. Task ending at token {} was already created.", task.id, task.last_token);
+        }
+    };
+
+    auto resize_task_map = [&] (const task_map& task_map) {
+        std::unordered_set<locator::tablet_id> new_tasks_tablet_ids;
+        for (auto& [_, task]: task_map) {
+            if (is_split) {
+                split_task(task);
+            } else {
+                merge_task(new_tasks_tablet_ids, task);
+            }
+        }
+    };
+
+    for (auto& [_, replica_tasks]: _vb_sm.building_state.tasks_state.at(table_id)) {
+        // Resize build_range tasks
+        for (auto& [_, view_tasks]: replica_tasks.view_tasks) {
+            resize_task_map(view_tasks);
+        }
+        // Migrate process_staging tasks
+        resize_task_map(replica_tasks.staging_tasks);
+    }
+
+    out.emplace_back(builder.build());
+}
+
+void view_building_coordinator::abort_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id) {
+    if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
+        return;
+    }
+    vbc_logger.debug("Generating abort mutations for tasks for table {}", table_id);
+
+    view_building_task_mutation_builder builder(guard.write_timestamp());
+    auto abort_task_map = [&] (const task_map& task_map) {
+        for (auto& [id, _]: task_map) {
+            vbc_logger.debug("Aborting task {}", id);
+            builder.set_state(id, view_building_task::task_state::aborted);
+        }
+    };
+
+    for (auto& [_, replica_tasks]: _vb_sm.building_state.tasks_state.at(table_id)) {
+        for (auto& [_, building_task_map]: replica_tasks.view_tasks) {
+            abort_task_map(building_task_map);
+        }
+        abort_task_map(replica_tasks.staging_tasks);
+    }
+
+    out.emplace_back(builder.build());
+}
+
+void view_building_coordinator::abort_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token) {
+    return abort_view_building_tasks(_vb_sm, out, guard.write_timestamp(), table_id, replica, last_token);
+}
+
+void abort_view_building_tasks(const view_building_state_machine& vb_sm,
+        utils::chunked_vector<canonical_mutation>& out, api::timestamp_type write_timestamp, table_id table_id, const locator::tablet_replica& replica, dht::token last_token) {
+    if (!vb_sm.building_state.tasks_state.contains(table_id) || !vb_sm.building_state.tasks_state.at(table_id).contains(replica)) {
+        return;
+    }
+    vbc_logger.debug("Generating abort mutations for tasks for table {} on replica {} and last token {}", table_id, replica, last_token);
+
+    view_building_task_mutation_builder builder(write_timestamp);
+    auto abort_task_map = [&] (const task_map& task_map) {
+        for (auto& [id, task]: task_map) {
+            if (task.last_token == last_token) {
+                vbc_logger.debug("Aborting task {}", id);
+                builder.set_state(id, view_building_task::task_state::aborted);
+            }
+        }
+    };
+
+    auto& replica_tasks = vb_sm.building_state.tasks_state.at(table_id).at(replica);
+    for (auto& [_, building_task_map]: replica_tasks.view_tasks) {
+        abort_task_map(building_task_map);
+    }
+    abort_task_map(replica_tasks.staging_tasks);
+
+    out.emplace_back(builder.build());
+}
+
+static void rollback_task_map(view_building_task_mutation_builder& builder, const task_map& task_map) {
+    for (auto& [id, task]: task_map) {
+        if (task.state == view_building_task::task_state::aborted) {
+            auto new_id = builder.new_id();
+            builder.set_type(new_id, task.type)
+                .set_state(new_id, view_building_task::task_state::idle)
+                .set_base_id(new_id, task.base_id)
+                .set_last_token(new_id, task.last_token)
+                .set_replica(new_id, task.replica);
+            if (task.view_id) {
+                builder.set_view_id(new_id, *task.view_id);
+            }
+            builder.del_task(task.id);
+            vbc_logger.debug("Aborted task {} was recreated with new id {}", task.id, new_id);
+        }
+    }
+}
+
+void view_building_coordinator::rollback_aborted_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id) {
+    if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
+        return;
+    }
+
+    view_building_task_mutation_builder builder(guard.write_timestamp());
+    auto& base_tasks = _vb_sm.building_state.tasks_state.at(table_id);
+    for (auto& [_, replica_tasks]: base_tasks) {
+        for (auto& [_, building_task_map]: replica_tasks.view_tasks) {
+            rollback_task_map(builder, building_task_map);
+        }
+        rollback_task_map(builder, replica_tasks.staging_tasks);
+    }
+
+    out.emplace_back(builder.build());
+}
+
+void view_building_coordinator::rollback_aborted_tasks(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, locator::tablet_replica replica, dht::token last_token) {
+    if (!_vb_sm.building_state.tasks_state.contains(table_id) || !_vb_sm.building_state.tasks_state.at(table_id).contains(replica)) {
+        return;
+    }
+
+    view_building_task_mutation_builder builder(guard.write_timestamp());
+    auto& replica_tasks = _vb_sm.building_state.tasks_state.at(table_id).at(replica);
+    for (auto& [_, building_task_map]: replica_tasks.view_tasks) {
+        rollback_task_map(builder, building_task_map);
+    }
+    rollback_task_map(builder, replica_tasks.staging_tasks);
+
+    out.emplace_back(builder.build());
 }
 
 }

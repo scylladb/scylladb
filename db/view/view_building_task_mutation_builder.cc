@@ -7,6 +7,7 @@
  */
 
 #include "db/view/view_building_task_mutation_builder.hh"
+#include "keys/keys.hh"
 
 namespace db {
 
@@ -43,6 +44,11 @@ view_building_task_mutation_builder& view_building_task_mutation_builder::set_la
 view_building_task_mutation_builder& view_building_task_mutation_builder::set_replica(utils::UUID id, const locator::tablet_replica& replica) {
     _m.set_clustered_cell(get_ck(id), "host_id", data_value(replica.host.uuid()), _ts);
     _m.set_clustered_cell(get_ck(id), "shard", data_value(int32_t(replica.shard)), _ts);
+    return *this;
+}
+
+view_building_task_mutation_builder& view_building_task_mutation_builder::del_task(utils::UUID id) {
+    _m.partition().apply_delete(*_s, clustering_key_prefix::from_single_value(*_s, data_value(id).serialize_nonnull()), tombstone{_ts, gc_clock::now()});
     return *this;
 }
 
