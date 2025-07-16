@@ -2118,7 +2118,7 @@ future<schema_ptr> create_table_from_name(sharded<service::storage_proxy>& proxy
         co_await coroutine::return_exception(std::runtime_error(format("{}:{} not found in the schema definitions keyspace.", qn.keyspace_name, qn.table_name)));
     }
     const schema_ctxt& ctxt = proxy;
-    co_return create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types());
+    co_return create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), nullptr/*TODO cdc_schema*/);
 }
 
 // Limit concurrency of user tables to prevent stalls.
@@ -2288,7 +2288,7 @@ static void prepare_builder_from_scylla_tables_row(const schema_ctxt& ctxt, sche
     }
 }
 
-schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, std::optional<table_schema_version> version)
+schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations sm, const data_dictionary::user_types_storage& user_types, schema_ptr cdc_schema, std::optional<table_schema_version> version)
 {
     slogger.trace("create_table_from_mutations: version={}, {}", version, sm);
 
@@ -2370,6 +2370,10 @@ schema_ptr create_table_from_mutations(const schema_ctxt& ctxt, schema_mutations
         builder.with_version(*version);
     } else {
         builder.with_version(sm.digest(ctxt.features().cluster_schema_features()));
+    }
+
+    if (cdc_schema) {
+        builder.with_cdc_schema(cdc_schema);
     }
 
     if (auto partitioner = sm.partitioner()) {

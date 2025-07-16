@@ -594,7 +594,7 @@ future<> schema_applier::merge_tables_and_views()
     auto& local_tables = _affected_tables_and_views.tables_and_views.local().tables;
 
     local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, _reload, [&] (schema_mutations sm, schema_diff_side) {
-        return create_table_from_mutations(_proxy, std::move(sm), user_types);
+        return create_table_from_mutations(_proxy, std::move(sm), user_types, nullptr/*TODO cdc_schema*/);
     });
     local_views = diff_table_or_view(_proxy, _before.views, _after.views, _reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.

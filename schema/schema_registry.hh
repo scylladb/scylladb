@@ -156,7 +156,7 @@ public:
     // The schema instance pointed to by the argument will be attached to the registry
     // entry and will keep it alive.
     // If the schema refers to a view, it must have base_info set.
-    schema_ptr learn(const schema_ptr&);
+    schema_ptr learn(schema_ptr);
 
     // Removes all entries from the registry. This in turn removes all dependencies
     // on the Seastar reactor.

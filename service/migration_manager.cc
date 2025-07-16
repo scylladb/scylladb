@@ -1212,7 +1212,7 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, locator:
             // referenced by the incoming request.
             // That means the column mapping for the schema should always be inserted
             // with TTL (refresh TTL in case column mapping already existed prior to that).
-            auto us = s.unfreeze(db::schema_ctxt(proxy));
+            auto us = s.unfreeze(db::schema_ctxt(proxy), nullptr/*TODO cdc_schema*/);
             // if this is a view - sanity check that its schema doesn't need fixing.
             schema_ptr base_schema;
             if (us->is_view()) {
