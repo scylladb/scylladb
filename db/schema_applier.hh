@@ -149,8 +149,6 @@ struct affected_tables_and_views {
 
     std::unique_ptr<replica::tables_metadata_lock_on_all_shards> locks;
     std::unordered_map<table_id, replica::global_table_ptr> table_shards;
-
-    pending_token_metadata pending_token_metadata;
 };
 
 // We wrap it with pointer because change_batch needs to be constructed and destructed
@@ -170,6 +168,8 @@ class schema_applier {
 
     std::set<sstring> _keyspaces;
     std::unordered_map<keyspace_name, table_selector> _affected_tables;
+
+    locator::pending_token_metadata _pending_token_metadata;
     locator::tablet_metadata_change_hint _tablet_hint;
 
     schema_persisted_state _before;
