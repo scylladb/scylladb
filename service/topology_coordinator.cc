@@ -946,6 +946,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 auto views = ks.metadata()->views();
                 tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
                 for (const auto& table_or_mv : tables_with_mvs) {
+                    locator::tablet_map old_tablets{unimportant_init_tablet_count};
                     try {
                         if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
                             // Apply the transition only on base tables.
@@ -953,10 +954,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             // the base table will coordinate the transition for the entire group.
                             continue;
                         }
-                        locator::tablet_map old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
+                        old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, std::move(old_tablets));
+                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
                     } catch (const std::exception& e) {
                         error = e.what();
                         rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
@@ -975,6 +976,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
                                         .build()
                         ));
+
+                        // Calculate abandoning replica and abort view building tasks on them
+                        auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                        auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
+                        if (!abandoning_replicas.empty()) {
+                            if (abandoning_replicas.size() != 1) {
+                                on_internal_error(rtlogger, fmt::format("Keyspace RF abandons {} replicas for table {} and tablet id {}", abandoning_replicas.size(), table_or_mv->id(), tablet_id));
+                            }
+                            _vb_coordinator->abort_tasks(updates, guard, table_or_mv->id(), *abandoning_replicas.begin(), last_token);
+                        }
+
                         co_await coroutine::maybe_yield();
                     });
                 }
@@ -1220,6 +1232,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_transition(last_token, mig.kind)
                 .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
                 .build());
+        _vb_coordinator->abort_tasks(out, guard, mig.tablet.table, mig.src, last_token);
     }
 
     void generate_repair_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
@@ -1258,6 +1271,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 replica::tablet_mutation_builder(guard.write_timestamp(), table_id)
                     .set_resize_decision(std::move(resize_decision), _feature_service)
                     .build());
+            if (resize_decision.split_or_merge()) {
+                _vb_coordinator->abort_tasks(out, guard, table_id);
+            } else if (resize_decision.is_none() && tmap.resize_decision().split_or_merge()) {
+                // Rollback view building tasks if the resize decision was revoked
+                _vb_coordinator->rollback_aborted_tasks(out, guard, table_id);
+            }
     }
 
     future<> generate_migration_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
@@ -1587,6 +1606,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .del_transition(last_token)
                                 .del_migration_task_info(last_token, _feature_service)
                                 .build());
+                        if (trinfo.pending_replica) {
+                            _vb_coordinator->rollback_aborted_tasks(updates, guard, gid.table, *trinfo.pending_replica, last_token);
+                        }
                     }
                     break;
                 case locator::tablet_transition_stage::end_migration: {
@@ -1600,6 +1622,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .set_replicas(last_token, trinfo.next)
                                 .del_migration_task_info(last_token, _feature_service)
                                 .build());
+                        _vb_coordinator->generate_tablet_migration_updates(updates, guard, tmap, gid, trinfo);
                     }
                 }
                     break;
@@ -1805,6 +1828,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
+            _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
         }
 
         updates.emplace_back(
