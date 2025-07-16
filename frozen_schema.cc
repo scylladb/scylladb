@@ -27,7 +27,7 @@ frozen_schema::frozen_schema(const schema_ptr& s)
     }())
 { }
 
-schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, std::optional<db::view::base_dependent_view_info> base_info) const {
+schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, schema_ptr cdc_schema, std::optional<db::view::base_dependent_view_info> base_info) const {
     auto in = ser::as_input_stream(_data);
     auto sv = ser::deserialize(in, std::type_identity<ser::schema_view>());
     auto sm = sv.mutations();
@@ -37,7 +37,7 @@ schema_ptr frozen_schema::unfreeze(const db::schema_ctxt& ctxt, std::optional<db
         if (base_info) {
             throw std::runtime_error("Trying to unfreeze regular table schema with base info");
         }
-        return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), sv.version());
+        return db::schema_tables::create_table_from_mutations(ctxt, std::move(sm), ctxt.user_types(), cdc_schema, sv.version());
     }
 }
 
@@ -54,8 +54,10 @@ frozen_schema_with_base_info::frozen_schema_with_base_info(const schema_ptr& c) 
     if (c->is_view()) {
         base_info = c->view_info()->base_info();
     }
+    frozen_cdc_schema = c->cdc_schema() ? std::make_optional(frozen_schema(c->cdc_schema())) : std::nullopt;
 }
 
 schema_ptr frozen_schema_with_base_info::unfreeze(const db::schema_ctxt& ctxt) const {
-    return frozen_schema::unfreeze(ctxt, base_info);
+    auto cdc_schema = frozen_cdc_schema ? frozen_cdc_schema->unfreeze(ctxt, nullptr, {}) : nullptr;
+    return frozen_schema::unfreeze(ctxt, cdc_schema, base_info);
 }

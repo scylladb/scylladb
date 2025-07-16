@@ -25,6 +25,7 @@ class schema_registry;
 struct view_schema_and_base_info {
     frozen_schema schema;
     std::optional<db::view::base_dependent_view_info> base_info;
+    std::optional<frozen_schema> cdc_schema;
 };
 
 using async_schema_loader = std::function<future<view_schema_and_base_info>(table_schema_version)>;
@@ -67,6 +68,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
 
     std::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
     std::optional<db::view::base_dependent_view_info> _base_info;// engaged when state == LOADED for view schemas
+    std::optional<frozen_schema> _frozen_cdc_schema;
 
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
@@ -96,6 +98,7 @@ public:
     void mark_synced();
     // Can be called from other shards
     frozen_schema frozen() const;
+    std::optional<frozen_schema> frozen_cdc() const;
     // Can be called from other shards
     table_schema_version version() const { return _version; }
 
@@ -160,7 +163,7 @@ public:
     // The schema instance pointed to by the argument will be attached to the registry
     // entry and will keep it alive.
     // If the schema refers to a view, it must have base_info set.
-    schema_ptr learn(const schema_ptr&);
+    schema_ptr learn(schema_ptr);
 
     // Removes all entries from the registry. This in turn removes all dependencies
     // on the Seastar reactor.
