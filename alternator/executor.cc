@@ -2321,7 +2321,7 @@ static lw_shared_ptr<query::read_command> previous_item_read_command(service::st
     // wildcard selection...) but here we read the entire item anyway. We
     // should take the column list from selection instead of building it here.
     auto regular_columns =
-            schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            schema->regular_columns() | std::views::transform(&column_definition::id)
             |  std::ranges::to<query::column_id_vector>();
     auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
     return ::make_lw_shared<query::read_command>(schema->id(), schema->version(), partition_slice, proxy.get_max_result_size(partition_slice),
@@ -4283,7 +4283,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
 
     //TODO(sarna): It would be better to fetch only some attributes of the map, not all
     auto regular_columns =
-            schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            schema->regular_columns() | std::views::transform(&column_definition::id)
             | std::ranges::to<query::column_id_vector>();
 
     auto selection = cql3::selection::selection::wildcard(schema);
@@ -4455,7 +4455,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 }
             }
             auto regular_columns =
-                    rs.schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+                    rs.schema->regular_columns() | std::views::transform(&column_definition::id)
                     | std::ranges::to<query::column_id_vector>();
             auto selection = cql3::selection::selection::wildcard(rs.schema);
             auto partition_slice = query::partition_slice(std::move(bounds), {}, std::move(regular_columns), selection->get_query_options());
@@ -4903,10 +4903,10 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     co_await verify_permission(enforce_authorization, client_state, table_schema, auth::permission::SELECT);
 
     auto regular_columns =
-            table_schema->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            table_schema->regular_columns() | std::views::transform(&column_definition::id)
             | std::ranges::to<query::column_id_vector>();
     auto static_columns =
-            table_schema->static_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            table_schema->static_columns() | std::views::transform(&column_definition::id)
             | std::ranges::to<query::column_id_vector>();
     auto selection = cql3::selection::selection::wildcard(table_schema);
     query::partition_slice::option_set opts = selection->get_query_options();
