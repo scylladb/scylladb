@@ -54,6 +54,14 @@
 #include "replica/database.hh"
 #include "timestamp.hh"
 
+
+can_gc_fn always_gc = [] (tombstone, is_shadowable) { return true; };
+can_gc_fn never_gc = [] (tombstone, is_shadowable) { return false; };
+
+max_purgeable_fn can_always_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::max_timestamp); };
+max_purgeable_fn can_never_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::min_timestamp); };
+
+
 namespace sstables {
 
 bool is_eligible_for_compaction(const shared_sstable& sst) noexcept {
