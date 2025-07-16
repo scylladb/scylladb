@@ -1897,8 +1897,15 @@ max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_
         // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
         return is ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
     };
+    const auto get_expiry_treshold = [s = _current_schema(), &dk] (const memtable& mt) -> max_purgeable::expiry_threshold_opt {
+        if (auto* snapshot = mt.get_tombstone_gc_state_snapshot(); snapshot) {
+            return snapshot->get_gc_before_for_key(s, dk, false);
+        }
+        return std::nullopt;
+    };
 
     auto min_live_ts = api::max_timestamp;
+    max_purgeable::expiry_threshold_opt min_expiry_treshold;
 
     for (const auto& mt : _memtables) {
         const auto mt_min_live_ts = get_min_ts(*mt);
@@ -1912,6 +1919,7 @@ max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_
             continue;
         }
         min_live_ts = std::min(min_live_ts, mt_min_live_ts);
+        min_expiry_treshold = max_purgeable::combine_expiry_tresholds(min_expiry_treshold, get_expiry_treshold(*mt));
     }
 
     for (const auto& mt : _flushed_memtables_with_active_reads) {
@@ -1919,9 +1927,10 @@ max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_
         // becomes empty after the merge to cache completes, so we only use the
         // min ts metadata.
         min_live_ts = std::min(min_live_ts, get_min_ts(mt));
+        min_expiry_treshold = max_purgeable::combine_expiry_tresholds(min_expiry_treshold, get_expiry_treshold(mt));
     }
 
-    return max_purgeable(min_live_ts, max_purgeable::timestamp_source::memtable_possibly_shadowing_data);
+    return max_purgeable(min_live_ts, min_expiry_treshold, max_purgeable::timestamp_source::memtable_possibly_shadowing_data);
 }
 
 future<> memtable_list::flush() {
