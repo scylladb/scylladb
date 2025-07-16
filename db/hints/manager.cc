@@ -539,6 +539,7 @@ future<> manager::change_host_filter(host_filter filter) {
                 "change_host_filter: cannot change the configuration because hints all hints were drained"});
     }
 
+    manager_logger.info("Initiating changing the host filter");
     manager_logger.debug("change_host_filter: changing from {} to {}", _host_filter, filter);
 
     // Change the host_filter now and save the old one so that we can
@@ -611,11 +612,19 @@ future<> manager::change_host_filter(host_filter filter) {
             });
         });
     } catch (...) {
+        const sstring exception_message = eptr
+                ? seastar::format("{} + {}", eptr, std::current_exception())
+                : seastar::format("{}", std::current_exception);
+
+        manager_logger.warn("Changing the host filter has failed: {}", exception_message);
+
         if (eptr) {
             std::throw_with_nested(eptr);
         }
         throw;
     }
+
+    manager_logger.info("The host filter has been changed successfully");
 }
 
 bool manager::check_dc_for(endpoint_id ep) const noexcept {
