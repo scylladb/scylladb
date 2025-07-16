@@ -521,7 +521,7 @@ struct scan_ranges_context {
         // should be possible (and a must for issue #7751!).
         lw_shared_ptr<service::pager::paging_state> paging_state = nullptr;
         auto regular_columns =
-            s->regular_columns() | std::views::transform([] (const column_definition& cdef) { return cdef.id; })
+            s->regular_columns() | std::views::transform(&column_definition::id)
             | std::ranges::to<query::column_id_vector>();
         selection = cql3::selection::selection::wildcard(s);
         query::partition_slice::option_set opts = selection->get_query_options();
