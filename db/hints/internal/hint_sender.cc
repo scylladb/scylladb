@@ -175,14 +175,14 @@ future<> hint_sender::stop(drain should_drain) noexcept {
             //
             // The next call for send_hints_maybe() will send the last hints to the current end point and when it is
             // done there is going to be no more pending hints and the corresponding hints directory may be removed.
-            manager_logger.trace("Draining for {}: start", end_point_key());
+            manager_logger.info("Draining for {}: start", end_point_key());
             set_draining();
             send_hints_maybe();
             _ep_manager.flush_current_hints().handle_exception([] (auto e) {
                 manager_logger.error("Failed to flush pending hints: {}. Ignoring...", e);
             }).get();
             send_hints_maybe();
-            manager_logger.trace("Draining for {}: end", end_point_key());
+            manager_logger.info("Draining for {}: end", end_point_key());
         }
         // TODO: Change this log to match the class name, but first make sure no test
         //       relies on the old one.
