@@ -116,3 +116,45 @@ def test_cdc_taken_log_name(scylla_only, cql, test_keyspace):
             cql.execute(f"DROP TABLE {name}")
     finally:
         cql.execute(f"DROP TABLE {name}_scylla_cdc_log")
+
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_alter_column_of_cdc_log_table(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int", "with cdc = {'enabled': true}") as table:
+        cdc_log_table_name = f"{table}_scylla_cdc_log"
+        errmsg = "You cannot modify the set of columns of a CDC log table directly. " \
+                 "Modify the base table instead."
+
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f"ALTER TABLE {cdc_log_table_name} ADD c int")
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f"ALTER TABLE {cdc_log_table_name} DROP u")
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f'ALTER TABLE {cdc_log_table_name} DROP "cdc$stream_id"')
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f"ALTER TABLE {cdc_log_table_name} ALTER u TYPE float")
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f'ALTER TABLE {cdc_log_table_name} ALTER "cdc$stream_id" TYPE float')
+
+        cql.execute(f"ALTER TABLE {table} DROP u")
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f'ALTER TABLE {cdc_log_table_name} DROP "cdc$deleted_u"')
+
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_rename_column_of_cdc_log_table(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int", "with cdc = {'enabled': true}") as table:
+        cdc_log_table_name = f"{table}_scylla_cdc_log"
+        errmsg = "Cannot rename a column of a CDC log table."
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f"ALTER TABLE {cdc_log_table_name} RENAME u TO c")
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f'ALTER TABLE {cdc_log_table_name} RENAME "cdc$stream_id" TO c')
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f'ALTER TABLE {cdc_log_table_name} RENAME "cdc$stream_id" TO "cdc$c"')
+
+        cql.execute(f"ALTER TABLE {table} DROP u")
+        with pytest.raises(InvalidRequest, match=errmsg):
+            cql.execute(f'ALTER TABLE {cdc_log_table_name} RENAME "cdc$deleted_u" TO c')
