@@ -61,6 +61,39 @@ can_gc_fn never_gc = [] (tombstone, is_shadowable) { return false; };
 max_purgeable_fn can_always_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::max_timestamp); };
 max_purgeable_fn can_never_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::min_timestamp); };
 
+max_purgeable& max_purgeable::combine(max_purgeable other) {
+    if (!other) {
+        return *this;
+    }
+    if (!*this) {
+        *this = std::move(other);
+        return *this;
+    }
+
+    if (_timestamp > other._timestamp) {
+        _source = other._source;
+        _timestamp = other._timestamp;
+    }
+
+    if (_expiry_threshold && other._expiry_threshold) {
+        _expiry_threshold = std::min(*_expiry_threshold, *other._expiry_threshold);
+    } else {
+        _expiry_threshold = std::nullopt;
+    }
+
+    return *this;
+}
+
+max_purgeable::can_purge_result max_purgeable::can_purge(tombstone t) const {
+    if (!*this) {
+        return { };
+    }
+    return {
+        .can_purge = (t.deletion_time < _expiry_threshold.value_or(gc_clock::time_point::min()) || t.timestamp < _timestamp),
+        .timestamp_source = _source,
+    };
+}
+
 auto fmt::formatter<max_purgeable::timestamp_source>::format(max_purgeable::timestamp_source s, fmt::format_context& ctx) const -> decltype(ctx.out()) {
     switch (s) {
         case max_purgeable::timestamp_source::none:
@@ -73,7 +106,8 @@ auto fmt::formatter<max_purgeable::timestamp_source>::format(max_purgeable::time
 }
 
 auto fmt::formatter<max_purgeable>::format(max_purgeable mp, fmt::format_context& ctx) const -> decltype(ctx.out()) {
-    return format_to(ctx.out(), "max_purgeable{{timestamp={}, source={}}}", mp.timestamp(), mp.source());
+    const sstring expiry_str = mp.expiry_threshold() ? fmt::format("{}", mp.expiry_threshold()->time_since_epoch().count()) : "nullopt";
+    return format_to(ctx.out(), "max_purgeable{{timestamp={}, expiry_treshold={}, source={}}}", mp.timestamp(), expiry_str, mp.source());
 }
 
 namespace sstables {

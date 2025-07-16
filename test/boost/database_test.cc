@@ -1755,4 +1755,96 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
     BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_group0, dk, false), first_repair_time);
 }
 
+SEASTAR_TEST_CASE(test_max_purgeable_combine) {
+    const gc_clock::time_point t_pre_treshold = gc_clock::now();
+    const gc_clock::time_point t1 = t_pre_treshold + std::chrono::seconds(10);
+    const gc_clock::time_point t2 = t1 + std::chrono::seconds(10);
+    const gc_clock::time_point t_post_treshold = t2 + std::chrono::seconds(10);
+
+    auto check_tombstone = [] (const max_purgeable& mp, const max_purgeable& combined, tombstone t, bool expected_can_purge, std::source_location loc = std::source_location::current()) {
+        testlog.trace("check_tombstone({}, {}, {}, {}) @ {}:{}", mp, combined, t, expected_can_purge, loc.file_name(), loc.line());
+        BOOST_REQUIRE_EQUAL(expected_can_purge, mp.can_purge(t).can_purge);
+        if (!expected_can_purge) {
+            // The combined max_purgeable can be weaker than this input, if
+            // the other input had no expiry threshold.
+            BOOST_REQUIRE(!combined.can_purge(t).can_purge);
+        }
+    };
+    auto check_tombstones = [&] (const max_purgeable& mp, const max_purgeable& combined) {
+        if (mp) {
+            check_tombstone(mp, combined, {mp.timestamp() - 1, t_post_treshold}, true);
+            check_tombstone(mp, combined, {mp.timestamp() + 1, t_post_treshold}, false);
+            if (mp.expiry_threshold()) {
+                check_tombstone(mp, combined, {mp.timestamp() - 1, t_pre_treshold}, true);
+                check_tombstone(mp, combined, {mp.timestamp() + 1, t_pre_treshold}, true);
+            }
+        } else {
+            check_tombstone(mp, combined, {1, t_post_treshold}, true);
+        }
+    };
+
+    auto check = [&] (const max_purgeable& a, const max_purgeable& b, const max_purgeable& expected, std::source_location loc = std::source_location::current()) {
+        auto combined = a;
+        combined.combine(b);
+
+        testlog.debug("combine({}, {}) => {} == {} @ {}:{}", a, b, combined, expected, loc.file_name(), loc.line());
+
+        BOOST_REQUIRE(a || b);
+        BOOST_REQUIRE_EQUAL(combined, expected);
+
+        check_tombstones(a, combined);
+        check_tombstones(b, combined);
+    };
+
+    check({}, max_purgeable{100}, max_purgeable{100});
+    check(max_purgeable{100}, {}, max_purgeable{100});
+    check(max_purgeable{10}, max_purgeable{100}, max_purgeable{10});
+
+    const auto ts_mt = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
+    const auto ts_sst = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
+
+    check({}, max_purgeable{100, ts_mt}, max_purgeable{100, ts_mt});
+    check(max_purgeable{100, ts_mt}, {}, max_purgeable{100, ts_mt});
+    check(max_purgeable{10, ts_sst}, max_purgeable{100, ts_mt}, max_purgeable{10, ts_sst});
+
+    check({}, max_purgeable{100, t1, ts_mt}, max_purgeable{100, t1, ts_mt});
+    check(max_purgeable{10, ts_mt}, max_purgeable{100, t1, ts_sst}, max_purgeable{10, ts_mt});
+    check(max_purgeable{100, ts_mt}, max_purgeable{10, t1, ts_sst}, max_purgeable{10, ts_sst});
+    check(max_purgeable{10, t1, ts_mt}, max_purgeable{100, t2, ts_sst}, max_purgeable{10, t1, ts_mt});
+    check(max_purgeable{100, t1, ts_mt}, max_purgeable{10, t2, ts_sst}, max_purgeable{10, t1, ts_sst});
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_max_purgeable_can_purge) {
+    const gc_clock::time_point t_pre_treshold = gc_clock::now();
+    const gc_clock::time_point t1 = t_pre_treshold + std::chrono::seconds(10);
+    const gc_clock::time_point t_post_treshold = t1 + std::chrono::seconds(10);
+
+    const auto ts_mt = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
+    const auto ts_sst = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
+
+    auto check = [] (const max_purgeable& mp, tombstone t, bool expected_can_gc) {
+        const auto res = mp.can_purge(t);
+        BOOST_REQUIRE_EQUAL(res.can_purge, expected_can_gc);
+        BOOST_REQUIRE_EQUAL(res.timestamp_source, mp.source());
+    };
+
+    check({}, {100, t1}, true);
+
+    check(max_purgeable{10, ts_mt}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{100, ts_sst}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{200, ts_sst}, tombstone{100, t_post_treshold}, true);
+
+    check(max_purgeable{10, t1, ts_sst}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{100, t1, ts_sst}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{200, t1, ts_sst}, tombstone{100, t_post_treshold}, true);
+
+    check(max_purgeable{10, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
+    check(max_purgeable{100, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
+    check(max_purgeable{200, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
+
+    return make_ready_future<>();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
