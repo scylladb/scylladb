@@ -11,6 +11,7 @@
 #include "locator/snitch_base.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablets.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/log.hh"
 #include "partition_range_compat.hh"
 #include <unordered_map>
@@ -58,7 +59,7 @@ private:
 
     std::optional<topology_change_info> _topology_change_info;
 
-    std::vector<token> _sorted_tokens;
+    utils::chunked_vector<token> _sorted_tokens;
 
     tablet_metadata _tablets;
 
@@ -97,7 +98,7 @@ public:
     token_metadata_impl(token_metadata::config cfg) noexcept : _topology(std::move(cfg.topo_cfg)) {};
     token_metadata_impl(const token_metadata_impl&) = delete; // it's too huge for direct copy, use clone_async()
     token_metadata_impl(token_metadata_impl&&) noexcept = default;
-    const std::vector<token>& sorted_tokens() const;
+    const utils::chunked_vector<token>& sorted_tokens() const;
     future<> update_normal_tokens(std::unordered_set<token> tokens, host_id endpoint);
     const token& first_token(const token& start) const;
     size_t first_token_index(const token& start) const;
@@ -370,7 +371,7 @@ future<> token_metadata_impl::clear_gently() noexcept {
 }
 
 void token_metadata_impl::sort_tokens() {
-    std::vector<token> sorted;
+    utils::chunked_vector<token> sorted;
     sorted.reserve(_token_to_endpoint_map.size());
 
     for (auto&& i : _token_to_endpoint_map) {
@@ -394,7 +395,7 @@ void token_metadata::set_tablets(tablet_metadata tm) {
     _impl->set_tablets(std::move(tm));
 }
 
-const std::vector<token>& token_metadata_impl::sorted_tokens() const {
+const utils::chunked_vector<token>& token_metadata_impl::sorted_tokens() const {
     return _sorted_tokens;
 }
 
@@ -708,14 +709,12 @@ future<> token_metadata_impl::update_topology_change_info(dc_rack_fn& get_dc_rac
 
     // merge tokens from token_to_endpoint and bootstrap_tokens,
     // preserving tokens of leaving endpoints
-    auto all_tokens = std::vector<dht::token>();
+    auto all_tokens = sorted_tokens();
     all_tokens.reserve(sorted_tokens().size() + get_bootstrap_tokens().size());
-    all_tokens.resize(sorted_tokens().size());
-    std::copy(begin(sorted_tokens()), end(sorted_tokens()), begin(all_tokens));
     for (const auto& p: get_bootstrap_tokens()) {
         all_tokens.push_back(p.first);
     }
-    std::sort(begin(all_tokens), end(all_tokens));
+    std::sort(all_tokens.begin(), all_tokens.end());
 
     auto prev_value = std::move(_topology_change_info);
     _topology_change_info.emplace(make_lw_shared<token_metadata>(std::move(target_token_metadata)),
@@ -817,7 +816,7 @@ void token_metadata_impl::del_replacing_endpoint(host_id existing_node) {
 }
 
 topology_change_info::topology_change_info(lw_shared_ptr<token_metadata> target_token_metadata_,
-    std::vector<dht::token> all_tokens_,
+    utils::chunked_vector<dht::token> all_tokens_,
     token_metadata::read_new_t read_new_)
     : target_token_metadata(std::move(target_token_metadata_))
     , all_tokens(std::move(all_tokens_))
@@ -860,7 +859,7 @@ void token_metadata::set_shared_token_metadata(shared_token_metadata& stm) {
     _shared_token_metadata = &stm;
 }
 
-const std::vector<token>&
+const utils::chunked_vector<token>&
 token_metadata::sorted_tokens() const {
     return _impl->sorted_tokens();
 }

@@ -10,6 +10,7 @@
 
 #include "bytes_fwd.hh"
 #include "types/types.hh"
+#include "utils/chunked_vector.hh"
 
 #include <limits>
 #include <seastar/net/byteorder.hh>
@@ -194,7 +195,7 @@ public:
      * @param sortedtokens a sorted List of tokens
      * @return the mapping from 'token' to 'percentage of the ring owned by that token'.
      */
-    static std::map<token, float> describe_ownership(const std::vector<token>& sorted_tokens);
+    static std::map<token, float> describe_ownership(const utils::chunked_vector<token>& sorted_tokens);
 
     static data_type get_token_validator();
 

@@ -23,6 +23,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sharded.hh>
+#include "utils/chunked_vector.hh"
 #include "utils/phased_barrier.hh"
 #include "service/topology_state_machine.hh"
 
@@ -158,7 +159,7 @@ public:
         return tmp;
     }
 private:
-    std::vector<token>::const_iterator _cur_it;
+    utils::chunked_vector<token>::const_iterator _cur_it;
     size_t _remaining = 0;
     const token_metadata_impl* _token_metadata = nullptr;
 
@@ -184,7 +185,7 @@ public:
     token_metadata(token_metadata&&) noexcept; // Can't use "= default;" - hits some static_assert in unique_ptr
     token_metadata& operator=(token_metadata&&) noexcept;
     ~token_metadata();
-    const std::vector<token>& sorted_tokens() const;
+    const utils::chunked_vector<token>& sorted_tokens() const;
     const tablet_metadata& tablets() const;
     tablet_metadata& tablets();
     void set_tablets(tablet_metadata);
@@ -365,11 +366,11 @@ private:
 
 struct topology_change_info {
     lw_shared_ptr<token_metadata> target_token_metadata;
-    std::vector<dht::token> all_tokens;
+    utils::chunked_vector<dht::token> all_tokens;
     token_metadata::read_new_t read_new;
 
     topology_change_info(lw_shared_ptr<token_metadata> target_token_metadata_,
-        std::vector<dht::token> all_tokens_,
+        utils::chunked_vector<dht::token> all_tokens_,
         token_metadata::read_new_t read_new_);
     future<> clear_gently();
 };
