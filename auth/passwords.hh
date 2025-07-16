@@ -21,10 +21,11 @@ class no_supported_schemes : public std::runtime_error {
 public:
     no_supported_schemes();
 };
-
 ///
-/// Apache Cassandra uses a library to provide the bcrypt scheme. Many Linux implementations do not support bcrypt, so
-/// we support alternatives. The cost is loss of direct compatibility with Apache Cassandra system tables.
+/// Apache Cassandra uses a library to provide the bcrypt scheme. In ScyllaDB, we use SHA-512
+/// instead of bcrypt for performance and for historical reasons (see scylladb#24524).
+/// Currently, SHA-512 is always chosen as the hashing scheme for new passwords, but the other
+/// algorithms remain supported for CREATE ROLE WITH HASHED PASSWORD and backward compatibility.
 ///
 enum class scheme {
     bcrypt_y,
@@ -51,11 +52,11 @@ sstring generate_random_salt_bytes(RandomNumberEngine& g) {
 }
 
 ///
-/// Test each allowed hashing scheme and report the best supported one on the current system.
+/// Test given hashing scheme on the current system.
 ///
-/// \throws \ref no_supported_schemes when none of the known schemes is supported.
+/// \throws \ref no_supported_schemes when scheme is unsupported.
 ///
-scheme identify_best_supported_scheme();
+void verify_scheme(scheme scheme);
 
 std::string_view prefix_for_scheme(scheme) noexcept;
 
@@ -67,8 +68,7 @@ std::string_view prefix_for_scheme(scheme) noexcept;
 /// \throws \ref no_supported_schemes when no known hashing schemes are supported on the system.
 ///
 template <typename RandomNumberEngine>
-sstring generate_salt(RandomNumberEngine& g) {
-    static const scheme scheme = identify_best_supported_scheme();
+sstring generate_salt(RandomNumberEngine& g, scheme scheme) {
     static const sstring prefix = sstring(prefix_for_scheme(scheme));
     return prefix + generate_random_salt_bytes(g);
 }
@@ -93,8 +93,8 @@ sstring hash_with_salt(const sstring& pass, const sstring& salt);
 /// \throws \ref std::system_error when the implementation-specific implementation fails to hash the cleartext.
 ///
 template <typename RandomNumberEngine>
-sstring hash(const sstring& pass, RandomNumberEngine& g) {
-    return detail::hash_with_salt(pass, detail::generate_salt(g));
+sstring hash(const sstring& pass, RandomNumberEngine& g, scheme scheme) {
+    return detail::hash_with_salt(pass, detail::generate_salt(g, scheme));
 }
 
 ///
