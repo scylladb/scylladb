@@ -323,9 +323,9 @@ private:
         if (!max_purgeable) {
             max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
         }
-        auto ret = t.timestamp < max_purgeable.timestamp;
-        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, max_purgeable.timestamp, ret);
-        return std::make_pair(ret, max_purgeable.source);
+        auto ret = t.timestamp < max_purgeable.timestamp();
+        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, max_purgeable.timestamp(), ret);
+        return std::make_pair(ret, max_purgeable.source());
     };
 
 public:

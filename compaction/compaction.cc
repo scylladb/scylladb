@@ -141,7 +141,7 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         clogger.trace("get_max_purgeable_timestamp {}.{}: tombstone_gc_enabled=false, returning min_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
-        return { .timestamp = api::min_timestamp };
+        return max_purgeable(api::min_timestamp);
     }
 
     auto timestamp = api::max_timestamp;
@@ -150,7 +150,7 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
         // check memtables and other sstables not being compacted.
         clogger.trace("get_max_purgeable_timestamp {}.{}: gc_check_only_compacting_sstables=true, returning max_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
-        return { .timestamp = timestamp };
+        return max_purgeable(timestamp);
     }
 
     auto source = max_purgeable::timestamp_source::none;
@@ -227,7 +227,7 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
             source = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
         }
     }
-    return { .timestamp = timestamp, .source = source };
+    return max_purgeable(timestamp, source);
 }
 
 static std::vector<shared_sstable> get_uncompacting_sstables(const compaction_group_view& table_s, std::vector<shared_sstable> sstables) {
