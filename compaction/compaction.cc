@@ -61,6 +61,20 @@ can_gc_fn never_gc = [] (tombstone, is_shadowable) { return false; };
 max_purgeable_fn can_always_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::max_timestamp); };
 max_purgeable_fn can_never_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::min_timestamp); };
 
+auto fmt::formatter<max_purgeable::timestamp_source>::format(max_purgeable::timestamp_source s, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    switch (s) {
+        case max_purgeable::timestamp_source::none:
+            return format_to(ctx.out(), "none");
+        case max_purgeable::timestamp_source::memtable_possibly_shadowing_data:
+            return format_to(ctx.out(), "memtable_possibly_shadowing_data");
+        case max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data:
+            return format_to(ctx.out(), "other_sstables_possibly_shadowing_data");
+    }
+}
+
+auto fmt::formatter<max_purgeable>::format(max_purgeable mp, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return format_to(ctx.out(), "max_purgeable{{timestamp={}, source={}}}", mp.timestamp(), mp.source());
+}
 
 namespace sstables {
 
