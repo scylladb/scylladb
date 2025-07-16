@@ -2809,7 +2809,7 @@ max_purgeable_fn table::get_max_purgeable_fn_for_cache_underlying_reader() const
             max_purgeable_timestamp = std::min(cg->memtables()->min_live_timestamp(dk, is_shadowable, cg->max_seen_timestamp()), max_purgeable_timestamp);
         });
 
-        return { .timestamp = max_purgeable_timestamp };
+        return max_purgeable(max_purgeable_timestamp);
     };
 }
 

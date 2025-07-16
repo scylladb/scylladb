@@ -3712,7 +3712,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
 
         auto compact = [&] (std::vector<shared_sstable> all) -> std::pair<shared_sstable, shared_sstable> {
             auto max_purgeable_func = [max_purgeable_ts] (const dht::decorated_key& dk, is_shadowable) -> max_purgeable {
-                return { .timestamp = max_purgeable_ts };
+                return max_purgeable(max_purgeable_ts);
             };
 
             auto non_purged = env.make_sstable(s);
