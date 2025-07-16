@@ -10,6 +10,7 @@
 #pragma once
 
 #include "auth/authenticator.hh"
+#include "utils/alien_worker.hh"
 #include <boost/regex_fwd.hpp>  // IWYU pragma: keep
 
 namespace cql3 {
@@ -31,7 +32,7 @@ class certificate_authenticator : public authenticator {
     enum class query_source;
     std::vector<std::pair<query_source, boost::regex>> _queries;
 public:
-    certificate_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
+    certificate_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, utils::alien_worker&);
     ~certificate_authenticator();
 
     future<> start() override;

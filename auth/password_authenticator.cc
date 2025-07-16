@@ -48,14 +48,14 @@ static const class_registrator<
         password_authenticator,
         cql3::query_processor&,
         ::service::raft_group0_client&,
-        ::service::migration_manager&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
+        ::service::migration_manager&,
+        utils::alien_worker&> password_auth_reg("org.apache.cassandra.auth.PasswordAuthenticator");
 
 static thread_local auto rng_for_salt = std::default_random_engine(std::random_device{}());
 
 static std::string_view get_config_value(std::string_view value, std::string_view def) {
     return value.empty() ? def : value;
 }
-
 std::string password_authenticator::default_superuser(const db::config& cfg) {
     return std::string(get_config_value(cfg.auth_superuser_name(), DEFAULT_USER_NAME));
 }
@@ -63,12 +63,13 @@ std::string password_authenticator::default_superuser(const db::config& cfg) {
 password_authenticator::~password_authenticator() {
 }
 
-password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm)
+password_authenticator::password_authenticator(cql3::query_processor& qp, ::service::raft_group0_client& g0, ::service::migration_manager& mm, utils::alien_worker& hashing_worker)
     : _qp(qp)
     , _group0_client(g0)
     , _migration_manager(mm)
     , _stopped(make_ready_future<>()) 
     , _superuser(default_superuser(qp.db().get_config()))
+    , _hashing_worker(hashing_worker)
 {}
 
 static bool has_salted_hash(const cql3::untyped_result_set_row& row) {
@@ -125,7 +126,7 @@ future<> password_authenticator::legacy_create_default_if_missing() {
     }
     std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
     if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
     }
     const auto query = update_row_query();
     co_await _qp.execute_internal(
@@ -172,7 +173,7 @@ future<> password_authenticator::maybe_create_default_password() {
     // Set default superuser's password.
     std::string salted_pwd(get_config_value(_qp.db().get_config().auth_superuser_salted_password(), ""));
     if (salted_pwd.empty()) {
-        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt);
+        salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
     }
     const auto update_query = update_row_query();
     co_await collect_mutations(_qp, batch, update_query, {salted_pwd, _superuser});
@@ -202,6 +203,10 @@ future<> password_authenticator::maybe_create_default_password_with_retries() {
 
 future<> password_authenticator::start() {
     return once_among_shards([this] {
+        // Verify that at least one hashing scheme is supported.
+        passwords::detail::verify_scheme(_scheme);
+        plogger.info("Using password hashing scheme: {}", passwords::detail::prefix_for_scheme(_scheme));
+
         _stopped = do_after_system_ready(_as, [this] {
             return async([this] {
                 if (legacy_mode(_qp)) {
@@ -280,7 +285,13 @@ future<authenticated_user> password_authenticator::authenticate(
 
     try {
         const std::optional<sstring> salted_hash = co_await get_password_hash(username);
-        if (!salted_hash || !passwords::check(password, *salted_hash)) {
+        if (!salted_hash) {
+            throw exceptions::authentication_exception("Username and/or password are incorrect");
+        }
+        const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash = std::move(salted_hash)]{
+            return passwords::check(password, *salted_hash);
+        });
+        if (!password_match) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
         co_return username;
@@ -304,7 +315,7 @@ future<> password_authenticator::create(std::string_view role_name, const authen
     auto maybe_hash = options.credentials.transform([&] (const auto& creds) -> sstring {
         return std::visit(make_visitor(
                 [&] (const password_option& opt) {
-                    return passwords::hash(opt.password, rng_for_salt);
+                    return passwords::hash(opt.password, rng_for_salt, _scheme);
                 },
                 [] (const hashed_password_option& opt) {
                     return opt.hashed_password;
@@ -347,11 +358,11 @@ future<> password_authenticator::alter(std::string_view role_name, const authent
                 query,
                 consistency_for_user(role_name),
                 internal_distributed_query_state(),
-                {passwords::hash(password, rng_for_salt), sstring(role_name)},
+                {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)},
                 cql3::query_processor::cache_internal::no).discard_result();
     } else {
         co_await collect_mutations(_qp, mc, query,
-                {passwords::hash(password, rng_for_salt), sstring(role_name)});
+                {passwords::hash(password, rng_for_salt, _scheme), sstring(role_name)});
     }
 }
 

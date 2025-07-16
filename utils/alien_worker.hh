@@ -29,9 +29,9 @@ class alien_worker {
     // Note: initialization of _thread uses other fields, so it must be performed last.
     std::thread _thread;
 
-    std::thread spawn(seastar::logger&, int niceness);
+    std::thread spawn(seastar::logger&, int niceness, const seastar::sstring& name_suffix);
 public:
-    alien_worker(seastar::logger&, int niceness);
+    alien_worker(seastar::logger&, int niceness, const seastar::sstring& name_suffix);
     ~alien_worker();
     // The worker captures `this`, so `this` must have a stable address.
     alien_worker(const alien_worker&) = delete;
