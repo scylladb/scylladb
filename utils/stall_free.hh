@@ -177,7 +177,17 @@ future<> clear_gently(T& o) noexcept {
     return futurize_invoke(std::bind(&T::clear_gently, &o));
 }
 
-template <typename T>
+template <SharedPointer T>
+future<> clear_gently(foreign_ptr<T>& o) noexcept {
+    return smp::submit_to(o.get_owner_shard(), [&o] {
+        if (o.unwrap_on_owner_shard().use_count() == 1) {
+            return internal::clear_gently(*o);
+        }
+        return make_ready_future<>();
+    });
+}
+
+template <SmartPointer T>
 future<> clear_gently(foreign_ptr<T>& o) noexcept {
     return smp::submit_to(o.get_owner_shard(), [&o] {
         return internal::clear_gently(*o);

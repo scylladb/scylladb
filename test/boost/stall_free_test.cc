@@ -138,19 +138,52 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_unique_ptrs) {
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
-SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_ptr) {
+SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr) {
     int cleared_gently = 0;
-    foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>> p0 = smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
-        lw_shared_ptr<clear_gently_tracker<int>> p = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
-            BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
-            cleared_gently++;
-        });
-        return make_foreign<lw_shared_ptr<clear_gently_tracker<int>>>(std::move(p));
-    }).get();
+    auto make_foreign_ptr = [&cleared_gently] () {
+        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+            auto p = std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+                BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
+                cleared_gently++;
+            });
+            return make_foreign<std::unique_ptr<clear_gently_tracker<int>>>(std::move(p));
+        }).get();
+    };
+    foreign_ptr<std::unique_ptr<clear_gently_tracker<int>>> p0 = make_foreign_ptr();
 
     utils::clear_gently(p0).get();
     BOOST_CHECK(p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr) {
+    int cleared_gently = 0;
+    auto make_foreign_ptr = [&cleared_gently] () {
+        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+            auto p = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+                BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
+                cleared_gently++;
+            });
+            return make_foreign<lw_shared_ptr<clear_gently_tracker<int>>>(std::move(p));
+        }).get();
+    };
+    foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>> p0 = make_foreign_ptr();
+
+    utils::clear_gently(p0).get();
+    BOOST_CHECK(p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    p0 = make_foreign_ptr();
+    auto p1 = p0.copy().get();
+
+    utils::clear_gently(p0).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(p1).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    p0.reset();
+    utils::clear_gently(p1).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr) {
