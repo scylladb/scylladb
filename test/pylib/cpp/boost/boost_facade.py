@@ -125,6 +125,8 @@ class BoostTestFacade(CppTestFacade):
                 args.append(f"--run_test={original_name}")
         # Tests are written in the way that everything after '--' passes to the test itself rather than to the test framework
         args.append('--')
+        if self.random_seed:
+            args.append(f'--random-seed={self.random_seed}')
         args.extend(test_args)
         test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
 

@@ -47,6 +47,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Specific byte limit for failure injection (random by default)")
     parser.addoption("--gather-metrics", action=BooleanOptionalAction, default=False,
                      help='Switch on gathering cgroup metrics')
+    parser.addoption('--random-seed', action="store",
+                     help="Random number generator seed to be used by boost tests")
 
     # Following option is to use with bare pytest command.
     #
@@ -74,6 +76,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--extra-scylla-cmdline-options", default=[],
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
+    parser.addoption('--x-log2-compaction-groups', action="store", default="0", type=int,
+                     help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
 
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
