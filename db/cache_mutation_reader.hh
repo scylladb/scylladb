@@ -212,7 +212,7 @@ class cache_mutation_reader final : public mutation_reader::impl {
 
     bool can_gc(tombstone t, is_shadowable is) const {
         const auto& max_purgeable = is ? _max_purgeable_shadowable : _max_purgeable;
-        return t.timestamp < max_purgeable.timestamp();
+        return max_purgeable.can_purge(t);
     }
 
 public:
