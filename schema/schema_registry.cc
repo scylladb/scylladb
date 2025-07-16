@@ -77,9 +77,13 @@ void schema_registry::attach_table(schema_registry_entry& e) noexcept {
     }
 }
 
-schema_ptr schema_registry::learn(const schema_ptr& s) {
+schema_ptr schema_registry::learn(schema_ptr s) {
+    auto learned_cdc_schema = s->cdc_schema() ? local_schema_registry().learn(s->cdc_schema()) : nullptr;
+    if (learned_cdc_schema != s->cdc_schema()) {
+        s = s->make_with_cdc(learned_cdc_schema);
+    }
     if (s->registry_entry()) {
-        return std::move(s);
+        return s;
     }
     auto i = _entries.find(s->version());
     if (i != _entries.end()) {
