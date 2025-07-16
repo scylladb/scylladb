@@ -187,14 +187,15 @@ service::service(
         ::service::migration_notifier& mn,
         ::service::migration_manager& mm,
         const service_config& sc,
-        maintenance_socket_enabled used_by_maintenance_socket)
+        maintenance_socket_enabled used_by_maintenance_socket,
+        utils::alien_worker& hashing_worker)
             : service(
                       std::move(c),
                       qp,
                       g0,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm),
+                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, hashing_worker),
                       create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm),
                       used_by_maintenance_socket) {
 }
