@@ -510,7 +510,7 @@ public:
     std::optional<tablet_replica> maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const;
 
     /// Returns a vector of sorted last tokens for tablets.
-    future<std::vector<token>> get_sorted_tokens() const;
+    future<utils::chunked_vector<token>> get_sorted_tokens() const;
 
     /// Returns the id of the first tablet.
     tablet_id first_tablet() const {

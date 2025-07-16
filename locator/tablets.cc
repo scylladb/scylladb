@@ -537,8 +537,8 @@ std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id i
     });
 }
 
-future<std::vector<token>> tablet_map::get_sorted_tokens() const {
-    std::vector<token> tokens;
+future<utils::chunked_vector<token>> tablet_map::get_sorted_tokens() const {
+    utils::chunked_vector<token> tokens;
     tokens.reserve(tablet_count());
 
     for (auto id : tablet_ids()) {

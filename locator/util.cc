@@ -8,6 +8,7 @@
 #include "locator/util.hh"
 #include "replica/database.hh"
 #include "gms/gossiper.hh"
+#include "utils/chunked_vector.hh"
 #include <seastar/coroutine/maybe_yield.hh>
 
 namespace locator {
@@ -28,7 +29,7 @@ construct_range_to_endpoint_map(
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
 static future<dht::token_range_vector>
-get_all_ranges(const std::vector<token>& sorted_tokens) {
+get_all_ranges(const utils::chunked_vector<token>& sorted_tokens) {
     if (sorted_tokens.empty())
         co_return dht::token_range_vector();
     int size = sorted_tokens.size();
@@ -49,14 +50,14 @@ get_all_ranges(const std::vector<token>& sorted_tokens) {
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
 future<std::unordered_map<dht::token_range, host_id_vector_replica_set>>
 get_range_to_address_map(locator::effective_replication_map_ptr erm,
-        const std::vector<token>& sorted_tokens) {
+        const utils::chunked_vector<token>& sorted_tokens) {
     co_return co_await construct_range_to_endpoint_map(erm, co_await get_all_ranges(sorted_tokens));
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
-static future<std::vector<token>>
+static future<utils::chunked_vector<token>>
 get_tokens_in_local_dc(const locator::token_metadata& tm) {
-    std::vector<token> filtered_tokens;
+    utils::chunked_vector<token> filtered_tokens;
     auto local_dc_filter = tm.get_topology().get_local_dc_filter();
     for (auto token : tm.sorted_tokens()) {
         auto endpoint = tm.get_endpoint(token);
