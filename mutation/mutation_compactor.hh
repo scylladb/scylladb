@@ -293,9 +293,9 @@ private:
         if (!max_purgeable) {
             max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
         }
-        auto ret = t.timestamp < max_purgeable.timestamp();
-        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, max_purgeable.timestamp(), ret);
-        return ret;
+        auto ret = max_purgeable.can_purge(t);
+        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: can_purge={}, timestamp_source={}", t, is_shadowable, max_purgeable, ret.can_purge, ret.timestamp_source);
+        return ret.can_purge;
     };
 
 public:
