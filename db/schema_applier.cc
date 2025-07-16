@@ -604,7 +604,7 @@ static future<> merge_tables_and_views(distributed<service::storage_proxy>& prox
     auto& local_tables = diff.tables_and_views.local().tables;
 
     local_tables = diff_table_or_view(proxy, tables_before, tables_after, reload, [&] (schema_mutations sm, schema_diff_side) {
-        return create_table_from_mutations(proxy, std::move(sm), user_types);
+        return create_table_from_mutations(proxy, std::move(sm), user_types, nullptr/*TODO cdc_schema*/);
     });
     local_views = diff_table_or_view(proxy, views_before, views_after, reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.

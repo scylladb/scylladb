@@ -413,9 +413,10 @@ schema::raw_schema::raw_schema(table_id id)
     , _sharder(::get_sharder(smp::count, default_partitioner_ignore_msb))
 { }
 
-schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props, std::optional<std::variant<schema_ptr, db::view::base_dependent_view_info>> base)
+schema::schema(private_tag, const raw_schema& raw, const schema_static_props& props, schema_ptr cdc_schema, std::optional<std::variant<schema_ptr, db::view::base_dependent_view_info>> base)
     : _raw(raw)
     , _static_props(props)
+    , _cdc_schema(cdc_schema)
     , _offsets([this] {
         if (_raw._columns.size() > std::numeric_limits<column_count_type>::max()) {
             throw std::runtime_error(format("Column count limit ({:d}) overflowed: {:d}",
@@ -518,6 +519,7 @@ schema::schema(private_tag, const raw_schema& raw, const schema_static_props& pr
 schema::schema(const schema& o, const std::function<void(schema&)>& transform)
     : _raw(o._raw)
     , _static_props(o._static_props)
+    , _cdc_schema(o._cdc_schema)
     , _offsets(o._offsets)
 {
     // Do the transformation after all the raw fields are initialized, but
@@ -545,6 +547,13 @@ schema::schema(reversed_tag, const schema& o)
                 col.type = reversed(col.type);
             }
         }
+    })
+{
+}
+
+schema::schema(with_cdc_schema_tag, const schema& o, schema_ptr cdc_schema)
+    : schema(o, [cdc_schema] (schema& s) {
+        s._cdc_schema = cdc_schema;
     })
 {
 }
@@ -1302,6 +1311,10 @@ schema_builder::schema_builder(const schema_ptr s)
         _base_info = s->view_info()->base_info();
         _view_info = s->view_info()->raw();
     }
+
+    if (s->cdc_schema()) {
+        _cdc_schema = s->cdc_schema();
+    }
 }
 
 schema_builder::schema_builder(const schema::raw_schema& raw)
@@ -1549,6 +1562,13 @@ schema_builder& schema_builder::with_view_info(table_id base_id, sstring base_na
     return *this;
 }
 
+schema_builder& schema_builder::with_cdc_schema(schema_ptr cdc_schema) {
+    if (cdc_schema) {
+        _cdc_schema = std::move(cdc_schema);
+    }
+    return *this;
+}
+
 schema_builder& schema_builder::with_index(const index_metadata& im) {
     _raw._indices_by_name.emplace(im.name(), im);
     return *this;
@@ -1651,11 +1671,11 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     ), _version);
 
     if (_base_info) {
-        return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, _base_info);
+        return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, nullptr, _base_info);
     } else if (_base_schema) {
-        return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, _base_schema);
+        return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, nullptr, _base_schema);
     }
-    return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props);
+    return make_lw_shared<schema>(schema::private_tag{}, new_raw, static_props, _cdc_schema ? *_cdc_schema : nullptr);
 }
 
 auto schema_builder::static_configurators() -> std::vector<static_configurator>& {
@@ -2087,6 +2107,10 @@ schema_ptr schema::get_reversed() const {
         auto s = make_reversed();
         return extended_frozen_schema(s);
     });
+}
+
+schema_ptr schema::make_with_cdc(schema_ptr cdc_schema) const {
+    return make_lw_shared<schema>(schema::with_cdc_schema_tag{}, *this, cdc_schema);
 }
 
 raw_view_info::raw_view_info(table_id base_id, sstring base_name, bool include_all_columns, sstring where_clause)
