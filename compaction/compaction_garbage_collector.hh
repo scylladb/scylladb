@@ -47,6 +47,16 @@ public:
     timestamp_source source() const noexcept { return _source; }
 };
 
+template <>
+struct fmt::formatter<max_purgeable::timestamp_source> : fmt::formatter<string_view> {
+    auto format(max_purgeable::timestamp_source, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<max_purgeable> : fmt::formatter<string_view> {
+    auto format(max_purgeable, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
 using max_purgeable_fn = std::function<max_purgeable(const dht::decorated_key&, is_shadowable)>;
 
 extern max_purgeable_fn can_always_purge;
