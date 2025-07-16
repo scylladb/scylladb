@@ -24,6 +24,7 @@
 #include <seastar/net/tls.hh>
 #include <seastar/core/metrics_registration.hh>
 #include "utils/fragmented_temporary_buffer.hh"
+#include "utils/result.hh"
 #include "service_permit.hh"
 #include <seastar/core/sharded.hh>
 #include <seastar/core/execution_stage.hh>
@@ -35,6 +36,7 @@
 #include "transport/messages/result_message.hh"
 #include "utils/chunked_vector.hh"
 #include "exceptions/coordinator_result.hh"
+#include "exceptions/exceptions.hh"
 #include "db/operation_type.hh"
 #include "db/config.hh"
 #include "service/maintenance_mode.hh"
@@ -259,7 +261,7 @@ private:
         future<foreign_ptr<std::unique_ptr<cql_server::response>>> process_request_one(fragmented_temporary_buffer::istream buf, uint8_t op, uint16_t stream, service::client_state& client_state, tracing_request_type tracing_request, service_permit permit);
         unsigned frame_size() const;
         unsigned pick_request_cpu();
-        cql_binary_frame_v3 parse_frame(temporary_buffer<char> buf) const;
+        utils::result_with_exception<cql_binary_frame_v3, exceptions::protocol_exception, class cql_frame_error> parse_frame(temporary_buffer<char> buf) const;
         future<fragmented_temporary_buffer> read_and_decompress_frame(size_t length, uint8_t flags);
         future<std::optional<cql_binary_frame_v3>> read_frame();
         future<std::unique_ptr<cql_server::response>> process_startup(uint16_t stream, request_reader in, service::client_state& client_state, tracing::trace_state_ptr trace_state);
