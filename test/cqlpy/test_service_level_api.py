@@ -48,6 +48,17 @@ def count_opened_connections_from_table(cql):
     
     return result
 
+def wait_for_clients(cql, username, clients_num, wait_s = 1, timeout_s = 30):
+    start_time = time.time()
+    while time.time() - start_time < timeout_s:
+        result = cql.execute(f"SELECT COUNT(*) FROM system.clients WHERE username='{username}' ALLOW FILTERING")
+        if result.one()[0] == clients_num:
+            return
+        else:
+            time.sleep(wait_s)
+
+    raise RuntimeError(f"Awaiting for {clients_num} clients timed out.")
+
 def wait_until_all_connections_authenticated(cql, wait_s = 1, timeout_s = 30):
     start_time = time.time()
     while time.time() - start_time < timeout_s:
@@ -85,6 +96,7 @@ def test_count_opened_cql_connections(cql):
 
     try:
         with new_session(cql, user):
+            wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
             wait_until_all_connections_authenticated(cql)
             verify_scheduling_group_assignment(cql, user, sl, get_shard_count(cql))
 
@@ -120,6 +132,7 @@ def test_switch_tenants(cql):
 
     try:
         with new_session(cql, user) as user_session:
+            wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
             wait_until_all_connections_authenticated(cql)
             verify_scheduling_group_assignment(cql, user, sl1, shard_count)
 

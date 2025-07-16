@@ -11,6 +11,7 @@
 #pragma once
 
 #include "auth/authenticator.hh"
+#include "utils/alien_worker.hh"
 
 namespace cql3 {
 class query_processor;
@@ -28,7 +29,7 @@ namespace auth {
 class saslauthd_authenticator : public authenticator {
     sstring _socket_path; ///< Path to the domain socket on which saslauthd is listening.
 public:
-    saslauthd_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&);
+    saslauthd_authenticator(cql3::query_processor&, ::service::raft_group0_client&, ::service::migration_manager&, utils::alien_worker&);
 
     future<> start() override;
 
