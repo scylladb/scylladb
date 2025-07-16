@@ -22,14 +22,15 @@ using can_gc_fn = std::function<bool(tombstone, is_shadowable)>;
 extern can_gc_fn always_gc;
 extern can_gc_fn never_gc;
 
+enum class max_purgeable_timestamp_source {
+    none,
+    memtable_possibly_shadowing_data,
+    other_sstables_possibly_shadowing_data
+};
 
 class max_purgeable {
 public:
-    enum class timestamp_source {
-        none,
-        memtable_possibly_shadowing_data,
-        other_sstables_possibly_shadowing_data
-    };
+    using timestamp_source = max_purgeable_timestamp_source;
 
 private:
     api::timestamp_type _timestamp { api::missing_timestamp };
