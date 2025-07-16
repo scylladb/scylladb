@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "cdc/log.hh"
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include "cql3/query_options.hh"
@@ -280,6 +281,16 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
+    }
+
+    const bool is_cdc_log_table = cdc::is_log_for_some_table(db.real_database(), s->ks_name(), s->cf_name());
+    if (_column_changes.size() != 0 && is_cdc_log_table) {
+        throw exceptions::invalid_request_exception(
+                "You cannot modify the set of columns of a CDC log table directly. "
+                "Modify the base table instead.");
+    }
+    if (_renames.size() != 0 && is_cdc_log_table) {
+        throw exceptions::invalid_request_exception("Cannot rename a column of a CDC log table.");
     }
 
     auto cfm = schema_builder(s);
