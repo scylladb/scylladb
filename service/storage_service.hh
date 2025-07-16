@@ -105,6 +105,7 @@ class task_manager;
 
 namespace replica {
 class tablet_mutation_builder;
+class out_of_space_controller;
 }
 
 namespace utils {
@@ -245,7 +246,8 @@ public:
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
         std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
-        utils::disk_space_monitor* disk_space_minitor);
+        utils::disk_space_monitor* disk_space_minitor,
+        replica::out_of_space_controller* out_of_space_controller);
     ~storage_service();
 
     node_ops::task_manager_module& get_node_ops_module() noexcept;
@@ -1056,13 +1058,15 @@ private:
     std::function<future<void>(std::string_view)> _compression_dictionary_updated_callback;
     using byte_vector = std::vector<std::byte>;
     std::function<future<byte_vector>(std::vector<byte_vector>)> _train_dict;
+
+    utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
+    replica::out_of_space_controller* _out_of_space_controller; // != nullptr only on shard0.
+
 public:
     future<uint64_t> estimate_total_sstable_volume(table_id);
     future<std::vector<std::byte>> train_dict(utils::chunked_vector<temporary_buffer<char>> sample);
     future<> publish_new_sstable_dict(table_id, std::span<const std::byte>, service::raft_group0_client&);
     void set_train_dict_callback(decltype(_train_dict));
-
-    utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 
     friend class join_node_rpc_handshaker;
     friend class node_ops::node_ops_virtual_task;

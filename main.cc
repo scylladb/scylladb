@@ -119,7 +119,7 @@
 #include "utils/disk_space_monitor.hh"
 #include "utils/labels.hh"
 #include "tools/utils.hh"
-
+#include "replica/out_of_space_controller.hh"
 
 #define P11_KIT_FUTURE_UNSTABLE_API
 extern "C" {
@@ -715,6 +715,7 @@ sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
     std::optional<utils::disk_space_monitor> disk_space_monitor_shard0;
+    std::optional<replica::out_of_space_controller> out_of_space_controller_shard0;
     sharded<compaction_manager> cm;
     sharded<sstables::storage_manager> sstm;
     distributed<replica::database> db;
@@ -782,7 +783,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker,
-                &vector_store_client] {
+                &vector_store_client, &out_of_space_controller_shard0] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -1176,6 +1177,15 @@ sharded<locator::shared_token_metadata> token_metadata;
                 disk_space_monitor_shard0->stop().get();
             });
 
+            checkpoint(stop_signal, "starting out-of-space controller");
+            auto out_of_space_controller_cfg = replica::out_of_space_controller::config {
+                .critical_disk_utilization_threshold = cfg->critical_disk_utilization_level,
+            };
+            out_of_space_controller_shard0.emplace(*disk_space_monitor_shard0, std::move(out_of_space_controller_cfg), stop_signal.as_local_abort_source());
+            auto stop_streaming_controller = defer_verbose_shutdown("out-of-space controller", [&] {
+                out_of_space_controller_shard0->stop().get();
+            });
+
             checkpoint(stop_signal, "starting compaction_manager");
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
@@ -1189,7 +1199,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
-            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
+            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager), only_on_shard0(&*out_of_space_controller_shard0)).get();
             auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
                cm.stop().get();
             });
@@ -1252,6 +1262,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
                     std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), std::ref(sstable_compressor_factory),
+                    only_on_shard0(&*out_of_space_controller_shard0),
                     std::ref(stop_signal.as_sharded_abort_source()), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
@@ -1755,7 +1766,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair, only_on_shard0(&*out_of_space_controller_shard0)).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
@@ -1795,7 +1806,8 @@ sharded<locator::shared_token_metadata> token_metadata;
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
                 std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*disk_space_monitor_shard0)
+                only_on_shard0(&*disk_space_monitor_shard0),
+                only_on_shard0(&*out_of_space_controller_shard0)
             ).get();
 
             ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {

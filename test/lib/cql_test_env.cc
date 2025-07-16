@@ -72,6 +72,7 @@
 #include "init.hh"
 #include "lang/manager.hh"
 #include "utils/disk_space_monitor.hh"
+#include "replica/out_of_space_controller.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -159,6 +160,9 @@ private:
     sharded<locator::effective_replication_map_factory> _erm_factory;
     sharded<sstables::directory_semaphore> _sst_dir_semaphore;
     std::optional<utils::disk_space_monitor> _disk_space_monitor_shard0;
+    // Deliberately nullptr. We do not need the controller for the unit tests but
+    // passing _out_of_space_controller instead of nullptr directly is more readable.
+    replica::out_of_space_controller* _out_of_space_controller = nullptr;
     sharded<lang::manager> _lang_manager;
     sharded<cql3::cql_config> _cql_config;
     sharded<service::endpoint_lifecycle_notifier> _elc_notif;
@@ -631,7 +635,7 @@ private:
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
-            _cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager)).get();
+            _cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager), _out_of_space_controller).get();
             auto stop_cm = deferred_stop(_cm);
 
             _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
@@ -667,7 +671,7 @@ private:
             });
 
             _db_config = &*cfg;
-            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(_scf), std::ref(abort_sources), utils::cross_shard_barrier()).get();
+            _db.start(std::ref(*cfg), dbcfg, std::ref(_mnotifier), std::ref(_feature_service), std::ref(_token_metadata), std::ref(_cm), std::ref(_sstm), std::ref(_lang_manager), std::ref(_sst_dir_semaphore), std::ref(_scf), _out_of_space_controller, std::ref(abort_sources), utils::cross_shard_barrier()).get();
             auto stop_db = defer_verbose_shutdown("database", [this] {
                 _db.stop().get();
             });
@@ -931,7 +935,8 @@ private:
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,
-                only_on_shard0(&*_disk_space_monitor_shard0)
+                only_on_shard0(&*_disk_space_monitor_shard0),
+                _out_of_space_controller
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });
 
