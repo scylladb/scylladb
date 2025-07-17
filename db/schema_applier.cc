@@ -666,18 +666,18 @@ future<> schema_applier::merge_tables_and_views()
 future<frozen_schema_diff> schema_diff_per_shard::freeze() const {
     frozen_schema_diff result;
     for (const auto& c : created) {
-        result.created.emplace_back(frozen_schema_with_base_info(c));
+        result.created.emplace_back(extended_frozen_schema(c));
         co_await coroutine::maybe_yield();
     }
     for (const auto& a : altered) {
         result.altered.push_back(frozen_schema_diff::altered_schema{
-            .old_schema = frozen_schema_with_base_info(a.old_schema),
-            .new_schema = frozen_schema_with_base_info(a.new_schema),
+            .old_schema = extended_frozen_schema(a.old_schema),
+            .new_schema = extended_frozen_schema(a.new_schema),
         });
         co_await coroutine::maybe_yield();
     }
     for (const auto& d : dropped) {
-        result.dropped.emplace_back(frozen_schema_with_base_info(d));
+        result.dropped.emplace_back(extended_frozen_schema(d));
         co_await coroutine::maybe_yield();
     }
     co_return result;
