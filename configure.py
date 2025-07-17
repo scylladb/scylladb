@@ -602,6 +602,77 @@ scylla_tests = set([
     'test/boost/address_map_test',
 ]) | ldap_tests
 
+
+# test sources to link with combined_tests
+combined_tests_sources = set([
+    'test/boost/aggregate_fcts_test.cc',
+    'test/boost/auth_test.cc',
+    'test/boost/batchlog_manager_test.cc',
+    'test/boost/cache_algorithm_test.cc',
+    'test/boost/castas_fcts_test.cc',
+    'test/boost/cdc_test.cc',
+    'test/boost/column_mapping_test.cc',
+    'test/boost/commitlog_cleanup_test.cc',
+    'test/boost/commitlog_test.cc',
+    'test/boost/cql_auth_query_test.cc',
+    'test/boost/cql_functions_test.cc',
+    'test/boost/cql_query_group_test.cc',
+    'test/boost/cql_query_large_test.cc',
+    'test/boost/cql_query_like_test.cc',
+    'test/boost/cql_query_test.cc',
+    'test/boost/database_test.cc',
+    'test/boost/data_listeners_test.cc',
+    'test/boost/error_injection_test.cc',
+    'test/boost/extensions_test.cc',
+    'test/boost/filtering_test.cc',
+    'test/boost/group0_cmd_merge_test.cc',
+    'test/boost/group0_test.cc',
+    'test/boost/group0_voter_calculator_test.cc',
+    'test/boost/index_with_paging_test.cc',
+    'test/boost/json_cql_query_test.cc',
+    'test/boost/large_paging_state_test.cc',
+    'test/boost/loading_cache_test.cc',
+    'test/boost/memtable_test.cc',
+    'test/boost/multishard_combining_reader_as_mutation_source_test.cc',
+    'test/boost/multishard_mutation_query_test.cc',
+    'test/boost/mutation_reader_test.cc',
+    'test/boost/mutation_writer_test.cc',
+    'test/boost/network_topology_strategy_test.cc',
+    'test/boost/per_partition_rate_limit_test.cc',
+    'test/boost/pluggable_test.cc',
+    'test/boost/querier_cache_test.cc',
+    'test/boost/query_processor_test.cc',
+    'test/boost/reader_concurrency_semaphore_test.cc',
+    'test/boost/repair_test.cc',
+    'test/boost/restrictions_test.cc',
+    'test/boost/role_manager_test.cc',
+    'test/boost/row_cache_test.cc',
+    'test/boost/schema_change_test.cc',
+    'test/boost/schema_registry_test.cc',
+    'test/boost/secondary_index_test.cc',
+    'test/boost/sessions_test.cc',
+    'test/boost/sstable_compaction_test.cc',
+    'test/boost/sstable_compressor_factory_test.cc',
+    'test/boost/sstable_directory_test.cc',
+    'test/boost/sstable_set_test.cc',
+    'test/boost/statement_restrictions_test.cc',
+    'test/boost/storage_proxy_test.cc',
+    'test/boost/tablets_test.cc',
+    'test/boost/tracing_test.cc',
+    'test/boost/user_function_test.cc',
+    'test/boost/user_types_test.cc',
+    'test/boost/view_build_test.cc',
+    'test/boost/view_complex_test.cc',
+    'test/boost/view_schema_ckey_test.cc',
+    'test/boost/view_schema_pkey_test.cc',
+    'test/boost/view_schema_test.cc',
+    'test/boost/virtual_reader_test.cc',
+    'test/boost/virtual_table_test.cc',
+])
+
+# define targets to allow compiling as separated executables
+combined_tests_separated_executables = {s[:-3] for s in combined_tests_sources}
+
 perf_tests = set([
     'test/perf/perf_mutation_readers',
     'test/perf/perf_checksum',
@@ -1483,8 +1554,10 @@ for t in tests_not_using_seastar_test_framework:
     if t not in scylla_tests:
         raise Exception("Test %s not found in scylla_tests" % (t))
 
-for t in sorted(scylla_tests):
+for t in sorted(scylla_tests | combined_tests_separated_executables):
     deps[t] = [t + '.cc']
+    if t in combined_tests_separated_executables:
+        deps[t] += ['test/boost/combined_tests.cc']
     if t not in tests_not_using_seastar_test_framework:
         deps[t] += scylla_tests_dependencies
     else:
@@ -1501,70 +1574,11 @@ perf_tests_seastar_deps = [
 for t in sorted(perf_tests):
     deps[t] += perf_tests_seastar_deps
 
+deps['test/boost/mutation_reader_test'] += ['test/lib/dummy_sharder.cc' ]
+deps['test/boost/multishard_combining_reader_as_mutation_source_test'] += ['test/lib/dummy_sharder.cc' ]
+
+deps['test/boost/combined_tests'].extend(list(combined_tests_sources))
 deps['test/boost/combined_tests'] += [
-    'test/boost/aggregate_fcts_test.cc',
-    'test/boost/auth_test.cc',
-    'test/boost/batchlog_manager_test.cc',
-    'test/boost/cache_algorithm_test.cc',
-    'test/boost/castas_fcts_test.cc',
-    'test/boost/cdc_test.cc',
-    'test/boost/column_mapping_test.cc',
-    'test/boost/commitlog_cleanup_test.cc',
-    'test/boost/commitlog_test.cc',
-    'test/boost/cql_auth_query_test.cc',
-    'test/boost/cql_functions_test.cc',
-    'test/boost/cql_query_group_test.cc',
-    'test/boost/cql_query_large_test.cc',
-    'test/boost/cql_query_like_test.cc',
-    'test/boost/cql_query_test.cc',
-    'test/boost/database_test.cc',
-    'test/boost/data_listeners_test.cc',
-    'test/boost/error_injection_test.cc',
-    'test/boost/extensions_test.cc',
-    'test/boost/filtering_test.cc',
-    'test/boost/group0_cmd_merge_test.cc',
-    'test/boost/group0_test.cc',
-    'test/boost/group0_voter_calculator_test.cc',
-    'test/boost/index_with_paging_test.cc',
-    'test/boost/json_cql_query_test.cc',
-    'test/boost/large_paging_state_test.cc',
-    'test/boost/loading_cache_test.cc',
-    'test/boost/memtable_test.cc',
-    'test/boost/multishard_combining_reader_as_mutation_source_test.cc',
-    'test/boost/multishard_mutation_query_test.cc',
-    'test/boost/mutation_reader_test.cc',
-    'test/boost/mutation_writer_test.cc',
-    'test/boost/network_topology_strategy_test.cc',
-    'test/boost/per_partition_rate_limit_test.cc',
-    'test/boost/pluggable_test.cc',
-    'test/boost/querier_cache_test.cc',
-    'test/boost/query_processor_test.cc',
-    'test/boost/reader_concurrency_semaphore_test.cc',
-    'test/boost/repair_test.cc',
-    'test/boost/restrictions_test.cc',
-    'test/boost/role_manager_test.cc',
-    'test/boost/row_cache_test.cc',
-    'test/boost/schema_change_test.cc',
-    'test/boost/schema_registry_test.cc',
-    'test/boost/secondary_index_test.cc',
-    'test/boost/sessions_test.cc',
-    'test/boost/sstable_compaction_test.cc',
-    'test/boost/sstable_compressor_factory_test.cc',
-    'test/boost/sstable_directory_test.cc',
-    'test/boost/sstable_set_test.cc',
-    'test/boost/statement_restrictions_test.cc',
-    'test/boost/storage_proxy_test.cc',
-    'test/boost/tablets_test.cc',
-    'test/boost/tracing_test.cc',
-    'test/boost/user_function_test.cc',
-    'test/boost/user_types_test.cc',
-    'test/boost/view_build_test.cc',
-    'test/boost/view_complex_test.cc',
-    'test/boost/view_schema_ckey_test.cc',
-    'test/boost/view_schema_pkey_test.cc',
-    'test/boost/view_schema_test.cc',
-    'test/boost/virtual_reader_test.cc',
-    'test/boost/virtual_table_test.cc',
     'tools/schema_loader.cc',
     'tools/read_mutation.cc',
     'test/lib/expr_test_utils.cc',
@@ -1609,6 +1623,8 @@ deps['test/boost/exceptions_fallback_test'] = ['test/boost/exceptions_fallback_t
 deps['test/boost/duration_test'] += ['test/lib/exception_utils.cc']
 deps['test/boost/schema_loader_test'] += ['tools/schema_loader.cc', 'tools/read_mutation.cc']
 deps['test/boost/rust_test'] += ['rust/inc/src/lib.rs']
+
+deps['test/boost/group0_cmd_merge_test'] += ['test/lib/expr_test_utils.cc']
 
 deps['test/raft/replication_test'] = ['test/raft/replication_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
 deps['test/raft/raft_server_test'] = ['test/raft/raft_server_test.cc', 'test/raft/replication.cc', 'test/raft/helpers.cc', 'test/lib/eventually.cc'] + scylla_raft_dependencies
@@ -2398,7 +2414,7 @@ def write_build_file(f,
         # it when linking anything else.
 
         seastar_lib_ext = 'so' if modeval['build_seastar_shared_libs'] else 'a'
-        for binary in sorted(build_artifacts):
+        for binary in sorted(build_artifacts | combined_tests_separated_executables):
             if modeval['is_profile'] and binary != "scylla":
                 # Just to avoid clutter in build.ninja
                 continue
@@ -2438,7 +2454,7 @@ def write_build_file(f,
                 local_libs += ' -flto=thin -ffat-lto-objects'
             else:
                 local_libs += ' -fno-lto'
-            if binary in tests:
+            if binary in tests or binary in combined_tests_separated_executables:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
                 if binary not in tests_not_using_seastar_test_framework:

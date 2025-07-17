@@ -63,6 +63,12 @@ class BoostTestFacade(CppTestFacade):
         else:
             if not os.path.isfile(executable):
                 return True, self.combined_suites[mode][executable.stem]
+            # The executables that have an executable but also have an entry in self.combined_suites are
+            # “separated executables” that were explicitly built by the developer.
+            # Since these executables built with combined_tests.cc, the display of --list_content is the same as that of
+            # combined_test, so it is necessary to use the parsed results of self.combined_suites.
+            elif self.combined_suites and executable.stem in self.combined_suites[mode]:
+                return False, self.combined_suites[mode][executable.stem]
             args = [executable, '--list_content']
             try:
                 output = subprocess.check_output(
@@ -112,6 +118,12 @@ class BoostTestFacade(CppTestFacade):
                  ]
         if original_name != Path(executable).stem:
             if executable.stem == COMBINED_TESTS.stem:
+                args.append(f"--run_test={file_name.stem}/{original_name}")
+            # The executables that have an executable but also have an entry in self.combined_suites are
+            # “separated executables” that were explicitly built by the developer.
+            # Since these executables built with combined_tests.cc, --run_test parameter needs to be same as
+            # combined_tests.
+            elif self.combined_suites and executable.stem in self.combined_suites[mode]:
                 args.append(f"--run_test={file_name.stem}/{original_name}")
             else:
                 args.append(f"--run_test={original_name}")
