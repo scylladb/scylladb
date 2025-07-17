@@ -44,7 +44,7 @@ struct partition_reversing_data_source {
 //
 // The source must be closed before destruction unless `get()` was never called.
 partition_reversing_data_source make_partition_reversing_data_source(
-    const schema& s, shared_sstable sst, index_reader& ir, uint64_t pos, size_t len,
+    const schema& s, shared_sstable sst, abstract_index_reader& ir, uint64_t pos, size_t len,
     reader_permit permit, tracing::trace_state_ptr trace_state);
 
 }

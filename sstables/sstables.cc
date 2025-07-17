@@ -3332,6 +3332,14 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
     return res.knows_entire_range ? res.min_gc_before : gc_clock::time_point::min();
 }
 
+std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
+    reader_permit permit,
+    tracing::trace_state_ptr trace_state,
+    use_caching caching,
+    bool single_partition_read) {
+    return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read);
+}
+
 // Returns error code, 0 is success
 static future<int> remove_dir(fs::path dir, bool recursive) {
     std::exception_ptr ex;

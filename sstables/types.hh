@@ -38,6 +38,8 @@ inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 
 namespace sstables {
 
+using use_caching = bool_class<struct use_caching_tag>;
+
 template<typename T>
 concept Writer =
     requires(T& wr, const char* data, size_t size) {

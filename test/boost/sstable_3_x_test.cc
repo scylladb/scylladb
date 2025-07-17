@@ -4528,8 +4528,8 @@ static sstring get_read_index_test_path(sstring table_name) {
     return format("test/resource/sstables/3.x/uncompressed/read_{}", table_name);
 }
 
-static std::unique_ptr<index_reader> get_index_reader(shared_sstable sst, reader_permit permit) {
-    return std::make_unique<index_reader>(sst, std::move(permit));
+static std::unique_ptr<abstract_index_reader> get_index_reader(shared_sstable sst, reader_permit permit) {
+    return sst->make_index_reader(std::move(permit));
 }
 
 shared_sstable make_test_sstable(test_env& env, schema_ptr schema, const sstring& table_name) {

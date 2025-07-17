@@ -16,14 +16,14 @@
 #include "reader_concurrency_semaphore.hh"
 
 class index_reader_assertions {
-    std::unique_ptr<sstables::index_reader> _r;
+    std::unique_ptr<sstables::abstract_index_reader> _r;
 public:
     // Must be called from a seastar thread
     ~index_reader_assertions() {
         close().get();
     }
 
-    index_reader_assertions(std::unique_ptr<sstables::index_reader> r)
+    index_reader_assertions(std::unique_ptr<sstables::abstract_index_reader> r)
         : _r(std::move(r))
     { }
 
@@ -43,7 +43,8 @@ public:
 
             prev = rp;
 
-            sstables::clustered_index_cursor* cur = _r->current_clustered_cursor();
+          if (auto* r = dynamic_cast<sstables::index_reader*>(_r.get())) {
+            sstables::clustered_index_cursor* cur = r->current_clustered_cursor();
             std::optional<sstables::promoted_index_block_position> prev_end;
             while (auto ei_opt = cur->next_entry().get()) {
                 sstables::clustered_index_cursor::entry_info& ei = *ei_opt;
@@ -52,17 +53,25 @@ public:
                 }
                 prev_end = sstables::materialize(ei.end);
             }
+          } else {
+            BOOST_FAIL("Test unimplemented for this index type");
+          }
+
             _r->advance_to_next_partition().get();
         }
         return *this;
     }
 
     index_reader_assertions& is_empty(const schema& s) {
+      if (auto* r = dynamic_cast<sstables::index_reader*>(_r.get())) {
         _r->read_partition_data().get();
         while (!_r->eof()) {
-            BOOST_REQUIRE(_r->get_promoted_index_size() == 0);
+            BOOST_REQUIRE(r->get_promoted_index_size() == 0);
             _r->advance_to_next_partition().get();
         }
+      } else {
+        BOOST_FAIL("Test unimplemented for this index type");
+      }
         return *this;
     }
 
@@ -77,6 +86,6 @@ public:
 };
 
 inline
-index_reader_assertions assert_that(std::unique_ptr<sstables::index_reader> r) {
+index_reader_assertions assert_that(std::unique_ptr<sstables::abstract_index_reader> r) {
     return { std::move(r) };
 }

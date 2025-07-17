@@ -1259,7 +1259,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     bool _will_likely_slice = false;
     bool _read_enabled = true;
     std::unique_ptr<DataConsumeRowsContext> _context;
-    std::unique_ptr<index_reader> _index_reader;
+    std::unique_ptr<abstract_index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
     const dht::partition_range& _pr;
@@ -1324,7 +1324,7 @@ private:
         return (!slice.default_row_ranges().empty() && !slice.default_row_ranges()[0].is_full())
                || slice.get_specific_ranges();
     }
-    index_reader& get_index_reader() {
+    abstract_index_reader& get_index_reader() {
         if (!_index_reader) {
             auto caching = use_caching(global_cache_index_pages && !_slice.options.contains(query::partition_slice::option::bypass_cache));
             _index_reader = std::make_unique<index_reader>(_sst, _consumer.permit(),
@@ -1470,7 +1470,7 @@ private:
                 });
             } else {
                 return get_index_reader().advance_to(pos).then([this] {
-                    index_reader& idx = *_index_reader;
+                    abstract_index_reader& idx = *_index_reader;
                     auto index_position = idx.data_file_positions();
                     if (index_position.start <= _context->position()) {
                         return make_ready_future<>();
@@ -1525,10 +1525,7 @@ private:
                 // Even if upper bound is not near, the binary search will populate the cache with blocks
                 // which can be used to narrow down the data file range somewhat.
                 position_in_partition_view lb = get_slice_lower_bound(*_schema, _slice, key);
-                clustered_index_cursor *cur = _index_reader->current_clustered_cursor();
-                if (cur) {
-                    co_await cur->advance_to(lb);
-                }
+                co_await _index_reader->prefetch_lower_bound(lb);
             }
 
             position_in_partition_view pos = get_slice_upper_bound(*_schema, _slice, key);
@@ -2107,8 +2104,8 @@ future<uint64_t> validate(
     validating_consumer consumer(schema, permit, sstable, std::move(error_handler));
     auto context = co_await data_consume_rows<data_consume_rows_context_m<validating_consumer>>(*schema, sstable, consumer, integrity_check::yes);
 
-    std::optional<sstables::index_reader> idx_reader;
-    idx_reader.emplace(sstable, permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+    auto idx_reader = sstable->make_index_reader(permit, tracing::trace_state_ptr{}, sstables::use_caching::no, false);
+    auto big_index_reader = dynamic_cast<index_reader*>(idx_reader.get());
 
     try {
         monitor.on_read_started(context->reader_position());
@@ -2120,14 +2117,17 @@ future<uint64_t> validate(
                 consumer.report_error("mismatching index/data: index is at EOF, but data file has more data");
                 co_await idx_reader->close();
                 idx_reader.reset();
+                big_index_reader = nullptr;
             }
 
             if (idx_reader) {
                 co_await idx_reader->read_partition_data();
 
-                idx_cursor = idx_reader->current_clustered_cursor();
+                if (big_index_reader) {
+                    idx_cursor = big_index_reader->current_clustered_cursor();
+                }
 
-                const auto index_pos = idx_reader->get_data_file_position();
+                const auto index_pos = idx_reader->data_file_positions().start;
                 const auto data_pos = context->position();
                 sstlog.trace("validate(): index-data position check for partition {}: {} == {}", idx_reader->get_partition_key(), data_pos, index_pos);
                 if (index_pos != data_pos) {
