@@ -249,6 +249,11 @@ void schema_registry_entry::detach_schema() noexcept {
     _erase_timer.arm(_registry.grace_period());
 }
 
+extended_frozen_schema schema_registry_entry::extended_frozen() const {
+    SCYLLA_ASSERT(_state >= state::LOADED);
+    return *_extended_frozen_schema;
+}
+
 frozen_schema schema_registry_entry::frozen() const {
     SCYLLA_ASSERT(_state >= state::LOADED);
     return _extended_frozen_schema->fs;
@@ -320,18 +325,17 @@ global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     SCYLLA_ASSERT(o._cpu_of_origin == current);
     _ptr = std::move(o._ptr);
     _cpu_of_origin = current;
-    _base_info = std::move(o._base_info);
 }
 
 schema_ptr global_schema_ptr::get() const {
     if (this_shard_id() == _cpu_of_origin) {
         return _ptr;
     } else {
-        auto registered_schema = [](const schema_registry_entry& e, std::optional<db::view::base_dependent_view_info> base_info = std::nullopt) -> schema_ptr {
+        auto registered_schema = [](const schema_registry_entry& e) -> schema_ptr {
             schema_ptr ret = local_schema_registry().get_or_null(e.version());
             if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e, &base_info](table_schema_version) -> extended_frozen_schema {
-                    return extended_frozen_schema(e.frozen(), base_info);
+                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) -> extended_frozen_schema {
+                    return e.extended_frozen();
                 });
             }
             return ret;
@@ -342,7 +346,7 @@ schema_ptr global_schema_ptr::get() const {
         // that _ptr will have a registry on the foreign shard where this
         // object originated so as long as this object lives the registry entries lives too
         // and it is safe to reference them on foreign shards.
-        schema_ptr s = registered_schema(*_ptr->registry_entry(), _base_info);
+        schema_ptr s = registered_schema(*_ptr->registry_entry());
         if (_ptr->registry_entry()->is_synced()) {
             s->registry_entry()->mark_synced();
         }
@@ -366,7 +370,4 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
     };
 
     _ptr = ensure_registry_entry(ptr);
-    if (_ptr->is_view()) {
-        _base_info = _ptr->view_info()->base_info();
-    }
 }
