@@ -36,7 +36,6 @@ public:
 // with it to be used for unfreezing it.
 struct extended_frozen_schema {
     extended_frozen_schema(const schema_ptr& c);
-    extended_frozen_schema(frozen_schema fs, std::optional<db::view::base_dependent_view_info> base_info);
     schema_ptr unfreeze(const db::schema_ctxt& ctxt) const;
 
     frozen_schema fs;
