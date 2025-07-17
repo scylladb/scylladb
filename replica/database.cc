@@ -1816,7 +1816,7 @@ future<> memtable_list::flush() {
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
     return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
             _table_shared_data,
-            _table_stats, this, _compaction_scheduling_group);
+            _table_stats, this, _compaction_scheduling_group, _shared_gc_state);
 }
 
 // Synchronously swaps the active memtable with a new, empty one,
