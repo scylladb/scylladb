@@ -12,9 +12,11 @@ from test.pylib.rest_client import ScyllaMetrics
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
 from test.cluster.conftest import skip_mode
+from test.cluster.util import new_test_keyspace, reconnect_driver
 import pytest
 import logging
 import time
+import asyncio
 
 
 logger = logging.getLogger(__name__)
@@ -211,3 +213,143 @@ async def test_fence_hints(request, manager: ManagerClient):
     assert len(list(rows)) == 1
 
     random_tables.drop_all()
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_fence_lwt_during_bootstap(manager: ManagerClient):
+    """
+    Scenario:
+    1. Three nodes s0, s1 and s2 in a cluster, s0 is a topology coordinator, test table with rf=3
+    2. Set injection topology_coordinator/write_both_read_old/before_version_increment on s0
+    3. Start bootstrapping a new node s3
+    4. When topology_coordinator/write_both_read_old/before_version_increment is reached,
+       inject topology_state_load_error into s1. This means that from now on
+       s1 won't be able to apply any topology updates, including version increments.
+       The group0 on s1 will be aborted, all barriers will throw.
+    5. Wait s3 is started successfully.
+    6. Run LWT with the coordinator on s1.
+    7. Check that s1 is fenced out.
+    """
+    config = {
+        'tablets_mode_for_new_keyspaces': 'disabled',
+        'ring_delay_ms': 10  # To avoid waiting in topology_coordinator/write_both_read_new
+    }
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    property_file = {"dc": "dc1", "rack": "r1"}
+
+    # The first node is a topology_coordinator
+    logger.info("Bootstrapping the first node")
+    servers = [await manager.server_add(property_file=property_file, config=config, cmdline=cmdline)]
+
+    logger.info("Bootstrapping the second and third nodes")
+    servers += await manager.servers_add(2, property_file=property_file, config=config, cmdline=cmdline)
+
+    (cql, hosts) = await manager.get_ready_cql(servers)
+
+    logger.info("Create a test keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        logger.info("Create test table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Add the fourth server")
+        servers += [await manager.server_add(property_file=property_file,
+                                             config=config,
+                                             cmdline=cmdline,
+                                             start=False)]
+
+        logger.info("Open s0 log")
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+
+        logger.info("Enable topology_coordinator/write_both_read_old/before_version_increment injection on s0")
+        await manager.api.enable_injection(servers[0].ip_addr,
+                                           'topology_coordinator/write_both_read_old/before_version_increment', 
+                                           one_shot=True)
+
+        logger.info("Start bootstrapping a new server")
+        s3_start_task = asyncio.create_task(manager.server_start(servers[3].server_id))
+
+        logger.info(f"Waiting for 'topology_coordinator/write_both_read_old/before_version_increment' injection on {servers[0]}")
+        await s0_log.wait_for('topology_coordinator/write_both_read_old/before_version_increment: waiting for message', from_mark=s0_mark)
+
+        logger.info(f"Injecting 'topology_state_load_error' into {servers[1]}")
+        await manager.api.enable_injection(servers[1].ip_addr, 'topology_state_load_error', one_shot=False)
+
+        logger.info(f"Release 'topology_coordinator/write_both_read_old/before_version_increment' on {servers[0]}")
+        await manager.api.message_injection(servers[0].ip_addr, "topology_coordinator/write_both_read_old/before_version_increment")
+
+        logger.info(f"Waiting for {servers[3]} to finish bootstrapping")
+        await s3_start_task
+
+        logger.info("Waiting for get_ready_cql")
+        (cql, hosts) = await manager.get_ready_cql(servers)
+
+        logger.info(f"Running an LWT INSERT on a stale {hosts[1]} node")
+
+        async def fenced_out_requests():
+            metrics = await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
+            metric_name = 'scylla_storage_proxy_replica_fenced_out_requests'
+            result = 0
+            for m in metrics:
+                result += m.get(metric_name) or 0
+            return result
+
+        assert await fenced_out_requests() == 0
+        with pytest.raises(WriteFailure, match="stale topology exception"):
+            await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS", host=hosts[1])
+        # Node2 still sees node4 in a bootstrapping state because its group0 is broken.
+        # As a result, it uses an 'extended quorum' with 4 replicas, requiring 3 responses to reach quorum.
+        # An LWT fails as soon as it is certain that the quorum is unreachable. In this case, at least
+        # 2 failed responses are required to determine failure. Since we send prepare RPCs to all 4 replicas,
+        # the fourth replica may also return a failure, making the possible outcomes 2 or 3 failures.
+        assert await fenced_out_requests() in (2, 3)
+
+        logger.info(f"Restart {servers[1].ip_addr}")
+        await manager.server_restart(servers[1].server_id)
+
+        # We reconnect to the second node to force the driver's control connection to use it.
+        # This is required to verify that we do not get stuck in the following scenario:
+        #
+        # 1. Before restart, the second node observed the fourth node in a bootstrapping state.
+        #    As a result, after restart, it has a record in the system.peers table for the fourth node
+        #    that contains only its IP and host_id. The driver skips such incomplete records,
+        #    but they are necessary to handle the case where a bootstrapping node restarts
+        #    while the bootstrap process is still in progress (see issue #18927 for details).
+        #
+        # 2. The gossiper.add_saved_endpoint method is called for the fourth node,
+        #    while the second node is starting up, but without DC and rack information.
+        #
+        # 3. While the second node is catching up with the latest Raft state, topology_state_load
+        #    is invoked, which in turn calls raft_topology_update_ip. At this point, the fourth node
+        #    is already in the 'normal' state, but update_peer_info is not called because gossiper
+        #    does not yet have any information for the fourth node. Consequently,
+        #    get_gossiper_peer_info_for_update returns empty.
+        #
+        # 4. Later, the gossiper component on the second node synchronizes with the rest of the cluster,
+        #    retrieves complete information about the fourth node, and one of the ip_address_updater
+        #    methods is invoked. However, the IP address of the fourth node in gossiper matches
+        #    the address already stored in the peers table, so raft_topology_update_ip call is skipped.
+        #
+        # 5. As a result, nobody updates the system.peers entry for the fourth node, leaving it with only
+        #    the IP and host_id columns populated. Consequently, the test fails in
+        #    get_ready_cql/wait_for_cql_and_get_hosts because it waits for all nodes to appear in
+        #    cluster.metadata.all_hosts(). Node4 is skipped because its system.peers record on node2
+        #    is considered invalid by the driver.
+        manager.driver_close()
+        await manager.driver_connect(servers[1])
+        (cql, hosts) = await manager.get_ready_cql(servers)
+
+        logger.info(f"Running an LWT INSERT on an up-to-date {hosts[1]} node")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 2) IF NOT EXISTS", host=hosts[1])
+
+        logger.info(f"Run paxos SELECT on {hosts[0]} node")
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1",
+                                                   consistency_level=ConsistencyLevel.SERIAL),
+                                   host=hosts[0])
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 2
