@@ -20,7 +20,6 @@ namespace statements {
 using db::index::secondary_index;
 
 const sstring index_target::target_option_name = "target";
-const sstring index_target::custom_index_option_name = "class_name";
 const boost::regex index_target::target_regex("^(keys|entries|values|full)\\((.+)\\)$");
 
 sstring index_target::column_name() const {
