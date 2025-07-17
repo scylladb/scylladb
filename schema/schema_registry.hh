@@ -22,19 +22,8 @@ class schema_ctxt;
 
 class schema_registry;
 
-struct view_schema_and_base_info {
-    frozen_schema schema;
-    std::optional<db::view::base_dependent_view_info> base_info;
-
-    view_schema_and_base_info(frozen_schema fs, std::optional<db::view::base_dependent_view_info> base_info = std::nullopt)
-        : schema(std::move(fs)), base_info(std::move(base_info)) {}
-
-    view_schema_and_base_info(extended_frozen_schema fs)
-        : schema(std::move(fs.fs)), base_info(fs.base_info) {}
-};
-
-using async_schema_loader = std::function<future<view_schema_and_base_info>(table_schema_version)>;
-using schema_loader = std::function<view_schema_and_base_info(table_schema_version)>;
+using async_schema_loader = std::function<future<extended_frozen_schema>(table_schema_version)>;
+using schema_loader = std::function<extended_frozen_schema(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
 public:
@@ -89,7 +78,7 @@ public:
     schema_registry_entry(schema_registry_entry&&) = delete;
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
-    schema_ptr load(view_schema_and_base_info);
+    schema_ptr load(extended_frozen_schema);
     schema_ptr load(schema_ptr);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
