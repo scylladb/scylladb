@@ -268,7 +268,6 @@ struct tablet_repair_task_meta {
     dht::token_range range;
     repair_neighbors neighbors;
     locator::tablet_replica_set replicas;
-    locator::effective_replication_map_ptr erm;
 };
 
 namespace std {
