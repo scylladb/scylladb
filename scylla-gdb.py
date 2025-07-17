@@ -1021,6 +1021,8 @@ class managed_bytes_printer(gdb.printing.PrettyPrinter):
         inf = gdb.selected_inferior()
 
         def to_bytes(data, size):
+            if size == 0:
+                return b''
             return bytes(inf.read_memory(data, size))
 
         if self.val['_inline_size'] >= 0:
