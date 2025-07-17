@@ -217,7 +217,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
         rjson::add(ret, "LastEvaluatedStreamArn", *last);
     }
 
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
 struct shard_id {
@@ -491,7 +491,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
 
     if (!opts.enabled()) {
         rjson::add(ret, "StreamDescription", std::move(stream_desc));
-        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+        return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
     }
 
     // TODO: label
@@ -617,7 +617,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         rjson::add(stream_desc, "Shards", std::move(shards));
         rjson::add(ret, "StreamDescription", std::move(stream_desc));
             
-        return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+        return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
     });
 }
 
@@ -770,7 +770,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
     auto ret = rjson::empty_object();
     rjson::add(ret, "ShardIterator", iter);
 
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
 struct event_id {
@@ -1021,7 +1021,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             // will notice end end of shard and not return NextShardIterator.
             rjson::add(ret, "NextShardIterator", next_iter);
             _stats.api_operations.get_records_latency.mark(std::chrono::steady_clock::now() - start_time);
-            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+            return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
         }
 
         // ugh. figure out if we are and end-of-shard
@@ -1047,7 +1047,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
             if (is_big(ret)) {
                 return make_ready_future<executor::request_return_type>(make_streamed(std::move(ret)));
             }
-            return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+            return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
         });
     });
 }

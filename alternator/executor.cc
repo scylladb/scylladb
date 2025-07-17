@@ -38,7 +38,6 @@
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
-#include <seastar/json/json_elements.hh>
 #include "collection_mutation.hh"
 #include "schema/schema.hh"
 #include "db/tags/extension.hh"
@@ -121,47 +120,50 @@ static lw_shared_ptr<stats> get_stats_from_schema(service::storage_proxy& sp, co
     }
 }
 
-make_jsonable::make_jsonable(rjson::value&& value)
-    : _value(std::move(value))
-{}
-std::string make_jsonable::to_json() const {
-    return rjson::print(_value);
-}
-
-json::json_return_type make_streamed(rjson::value&& value) {
-    // CMH. json::json_return_type uses std::function, not noncopyable_function.
-    // Need to make a copyable version of value. Gah.
-    auto rs = make_shared<rjson::value>(std::move(value));
-    std::function<future<>(output_stream<char>&&)> func = [rs](output_stream<char>&& os) mutable -> future<> {
-        // move objects to coroutine frame.
-        auto los = std::move(os);
-        auto lrs = std::move(rs);
+executor::body_writer make_streamed(rjson::value&& value) {
+    return [value = std::move(value)](output_stream<char>&& _out) mutable -> future<> {
+        auto out = std::move(_out);
         std::exception_ptr ex;
         try {
-            co_await rjson::print(*lrs, los);
+            co_await rjson::print(value, out);
         } catch (...) {
-            // at this point, we cannot really do anything. HTTP headers and return code are
-            // already written, and quite potentially a portion of the content data.
-            // just log + rethrow. It is probably better the HTTP server closes connection
-            // abruptly or something...
             ex = std::current_exception();
-            elogger.error("Exception during streaming HTTP response: {}", ex);
         }
-        co_await los.close();
-        co_await rjson::destroy_gently(std::move(*lrs));
+        co_await out.close();
+        co_await rjson::destroy_gently(std::move(value));
         if (ex) {
             co_await coroutine::return_exception_ptr(std::move(ex));
         }
-        co_return;
     };
-    return func;
 }
 
-json_string::json_string(std::string&& value)
-    : _value(std::move(value))
-{}
-std::string json_string::to_json() const {
-    return _value;
+// make_streamed_with_extra_array() is variant of make_streamed() above, which
+// builds a streaming response (a function writing to an output stream) from a
+// JSON object (rjson::value) but adds to it at the end an additional array.
+// The extra array is given a separate chunked_vector to avoid putting it
+// inside the rjson::value - because RapidJSON does contiguous allocations for
+// arrays which we want to avoid for potentially long arrays in Query/Scan
+// responses (see #23535).
+// If we ever fix RapidJSON to avoid contiguous allocations for arrays, or
+// replace it entirely (#24458), we can remove this function and the function
+// rjson::print_with_extra_array() which it calls.
+executor::body_writer make_streamed_with_extra_array(rjson::value&& value,
+    std::string array_name, utils::chunked_vector<rjson::value>&& array) {
+    return [value = std::move(value), array_name = std::move(array_name), array = std::move(array)](output_stream<char>&& _out) mutable -> future<> {
+        auto out = std::move(_out);
+        std::exception_ptr ex;
+        try {
+            co_await rjson::print_with_extra_array(value, array_name, array, out);
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await out.close();
+        co_await rjson::destroy_gently(std::move(value));
+        // TODO: can/should we also destroy the array gently?
+        if (ex) {
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        }
+    };
 }
 
 // This function throws api_error::validation if input value is not an object.
@@ -802,7 +804,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 // Check CQL's Role-Based Access Control (RBAC) permission_to_check (MODIFY,
@@ -919,7 +921,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     rjson::value response = rjson::empty_object();
     rjson::add(response, "TableDescription", std::move(table_description));
     elogger.trace("returning {}", response);
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 static data_type parse_key_type(std::string_view type) {
@@ -1203,7 +1205,7 @@ future<executor::request_return_type> executor::tag_resource(client_state& clien
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::add_tags);
     });
-    co_return json_string("");
+    co_return ""; // empty response
 }
 
 future<executor::request_return_type> executor::untag_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -1224,7 +1226,7 @@ future<executor::request_return_type> executor::untag_resource(client_state& cli
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [tags](std::map<sstring, sstring>& tags_map) {
         update_tags_map(*tags, tags_map, update_tags_action::delete_tags);
     });
-    co_return json_string("");
+    co_return ""; // empty response
 }
 
 future<executor::request_return_type> executor::list_tags_of_resource(client_state& client_state, service_permit permit, rjson::value request) {
@@ -1250,7 +1252,7 @@ future<executor::request_return_type> executor::list_tags_of_resource(client_sta
         rjson::push_back(tags, std::move(new_entry));
     }
 
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
 struct billing_mode_type {
@@ -1707,7 +1709,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     rjson::value status = rjson::empty_object();
     executor::supplement_table_info(request, *schema, sp);
     rjson::add(status, "TableDescription", std::move(request));
-    co_return make_jsonable(std::move(status));
+    co_return rjson::print(std::move(status));
 }
 
 future<executor::request_return_type> executor::create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request) {
@@ -1986,7 +1988,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
         rjson::value status = rjson::empty_object();
         supplement_table_info(request, *schema, p.local());
         rjson::add(status, "TableDescription", std::move(request));
-        co_return make_jsonable(std::move(status));
+        co_return rjson::print(std::move(status));
     });
 }
 
@@ -2451,7 +2453,7 @@ static future<executor::request_return_type> rmw_operation_return(rjson::value&&
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(ret)));
+    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
 }
 
 static future<std::unique_ptr<rjson::value>> get_previous_item(
@@ -3057,7 +3059,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         rjson::add(ret, "ConsumedCapacity", std::move(consumed_capacity));
     }
     _stats.api_operations.batch_write_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-    co_return make_jsonable(std::move(ret));
+    co_return rjson::print(std::move(ret));
 }
 
 static const std::string_view get_item_type_string(const rjson::value& v) {
@@ -4298,18 +4300,17 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     verify_all_are_used(expression_attribute_names, used_attribute_names, "ExpressionAttributeNames", "GetItem");
     rcu_consumed_capacity_counter add_capacity(request, cl == db::consistency_level::LOCAL_QUORUM);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::SELECT);
-    co_return co_await _proxy.query(schema, std::move(command), std::move(partition_ranges), cl,
-            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state)).then(
-            [per_table_stats, this, schema, partition_slice = std::move(partition_slice), selection = std::move(selection), attrs_to_get = std::move(attrs_to_get), start_time = std::move(start_time), add_capacity=std::move(add_capacity)] (service::storage_proxy::coordinator_query_result qr) mutable {
-
-        per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-        _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
-        uint64_t rcu_half_units = 0;
-        auto res = make_ready_future<executor::request_return_type>(make_jsonable(describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units)));
-        per_table_stats->rcu_half_units_total += rcu_half_units;
-        _stats.rcu_half_units_total += rcu_half_units;
-        return res;
-    });
+    service::storage_proxy::coordinator_query_result qr =
+        co_await _proxy.query(
+            schema, std::move(command), std::move(partition_ranges), cl,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state, trace_state));
+    per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
+    uint64_t rcu_half_units = 0;
+    rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
+    per_table_stats->rcu_half_units_total += rcu_half_units;
+    _stats.rcu_half_units_total += rcu_half_units;
+    co_return rjson::print(std::move(res));
 }
 
 static void check_big_object(const rjson::value& val, int& size_left);
@@ -4554,7 +4555,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     if (is_big(response)) {
         co_return make_streamed(std::move(response));
     } else {
-        co_return make_jsonable(std::move(response));
+        co_return rjson::print(std::move(response));
     }
 }
 
@@ -4698,7 +4699,11 @@ class describe_items_visitor {
     const filter& _filter;
     typename columns_t::const_iterator _column_it;
     rjson::value _item;
-    rjson::value _items;
+    // _items is a chunked_vector<rjson::value> instead of a RapidJson array
+    // (rjson::value) because unfortunately RapidJson arrays are stored
+    // contiguously in memory, and cause large allocations when a Query/Scan
+    // returns a long list of short items (issue #23535).
+    utils::chunked_vector<rjson::value> _items;
     size_t _scanned_count;
 
 public:
@@ -4708,7 +4713,6 @@ public:
             , _filter(filter)
             , _column_it(columns.begin())
             , _item(rjson::empty_object())
-            , _items(rjson::empty_array())
             , _scanned_count(0)
     {
         // _filter.check() may need additional attributes not listed in
@@ -4787,13 +4791,13 @@ public:
                 rjson::remove_member(_item, attr);
             }
 
-            rjson::push_back(_items, std::move(_item));
+            _items.push_back(std::move(_item));
         }
         _item = rjson::empty_object();
         ++_scanned_count;
     }
 
-    rjson::value get_items() && {
+    utils::chunked_vector<rjson::value> get_items() && {
         return std::move(_items);
     }
 
@@ -4802,13 +4806,25 @@ public:
     }
 };
 
-static future<std::tuple<rjson::value, size_t>> describe_items(const cql3::selection::selection& selection, std::unique_ptr<cql3::result_set> result_set, std::optional<attrs_to_get>&& attrs_to_get, filter&& filter) {
+// describe_items() returns a JSON object that includes members "Count"
+// and "ScannedCount", but *not* "Items" - that is returned separately
+// as a chunked_vector to avoid large contiguous allocations which
+// RapidJSON does of its array. The caller should add "Items" to the
+// returned JSON object if needed, or print it separately.
+// The returned chunked_vector (the items) is std::optional<>, because
+// the user may have requested only to count items, and not return any
+// items - which is different from returning an empty list of items.
+static future<std::tuple<rjson::value, std::optional<utils::chunked_vector<rjson::value>>, size_t>> describe_items(
+        const cql3::selection::selection& selection,
+        std::unique_ptr<cql3::result_set> result_set,
+        std::optional<attrs_to_get>&& attrs_to_get,
+        filter&& filter) {
     describe_items_visitor visitor(selection.get_columns(), attrs_to_get, filter);
     co_await result_set->visit_gently(visitor);
     auto scanned_count = visitor.get_scanned_count();
-    rjson::value items = std::move(visitor).get_items();
+    utils::chunked_vector<rjson::value> items = std::move(visitor).get_items();
     rjson::value items_descr = rjson::empty_object();
-    auto size = items.Size();
+    auto size = items.size();
     rjson::add(items_descr, "Count", rjson::value(size));
     rjson::add(items_descr, "ScannedCount", rjson::value(scanned_count));
     // If attrs_to_get && attrs_to_get->empty(), this means the user asked not
@@ -4818,10 +4834,11 @@ static future<std::tuple<rjson::value, size_t>> describe_items(const cql3::selec
     // In that case, we currently build a list of empty items and here drop
     // it. We could just count the items and not bother with the empty items.
     // (However, remember that when we do have a filter, we need the items).
+    std::optional<utils::chunked_vector<rjson::value>> opt_items;
     if (!attrs_to_get || !attrs_to_get->empty()) {
-        rjson::add(items_descr, "Items", std::move(items));
+        opt_items = std::move(items);
     }
-    co_return std::tuple<rjson::value, size_t>{std::move(items_descr), size};
+    co_return std::tuple(std::move(items_descr), std::move(opt_items), size);
 }
 
 static rjson::value encode_paging_state(const schema& schema, const service::pager::paging_state& paging_state) {
@@ -4858,6 +4875,12 @@ static rjson::value encode_paging_state(const schema& schema, const service::pag
     }
     return last_evaluated_key;
 }
+
+// RapidJSON allocates arrays contiguously in memory, so we want to avoid
+// returning a large number of items as a single rapidjson array, and use
+// a chunked_vector instead. The following constant is an arbitrary cutoff
+// point for when to switch from a rapidjson array to a chunked_vector.
+static constexpr int max_items_for_rapidjson_array = 256;
 
 static future<executor::request_return_type> do_query(service::storage_proxy& proxy,
         schema_ptr table_schema,
@@ -4931,19 +4954,35 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     }
     auto paging_state = rs->get_metadata().paging_state();
     bool has_filter = filter;
-    auto [items, size] = co_await describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
+    auto [items_descr, opt_items, size] = co_await describe_items(*selection, std::move(rs), std::move(attrs_to_get), std::move(filter));
     if (paging_state) {
-        rjson::add(items, "LastEvaluatedKey", encode_paging_state(*table_schema, *paging_state));
+        rjson::add(items_descr, "LastEvaluatedKey", encode_paging_state(*table_schema, *paging_state));
     }
     if (has_filter){
         cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
         // update our "filtered_row_matched_total" for all the rows matched, despited the filter
         cql_stats.filtered_rows_matched_total += size;
     }
-    if (is_big(items)) {
-        co_return executor::request_return_type(make_streamed(std::move(items)));
+    if (opt_items) {
+        if (opt_items->size() >= max_items_for_rapidjson_array) {
+            // There are many items, better print the JSON and the array of
+            // items (opt_items) separately to avoid RapidJSON's contiguous
+            // allocation of arrays.
+            co_return make_streamed_with_extra_array(std::move(items_descr), "Items", std::move(*opt_items));
+        }
+        // There aren't many items in the chunked vector opt_items,
+        // let's just insert them into the JSON object and print the
+        // full JSON normally.
+        rjson::value items_json = rjson::empty_array();
+        for (auto& item : *opt_items) {
+            rjson::push_back(items_json, std::move(item));
+        }
+        rjson::add(items_descr, "Items", std::move(items_json));
     }
-    co_return executor::request_return_type(make_jsonable(std::move(items)));
+    if (is_big(items_descr)) {
+        co_return make_streamed(std::move(items_descr));
+    }
+    co_return rjson::print(std::move(items_descr));
 }
 
 static dht::token token_for_segment(int segment, int total_segments) {
@@ -5538,7 +5577,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
     std::string exclusive_start = exclusive_start_json ? exclusive_start_json->GetString() : "";
     int limit = limit_json ? limit_json->GetInt() : 100;
     if (limit < 1 || limit > 100) {
-        return make_ready_future<request_return_type>(api_error::validation("Limit must be greater than 0 and no greater than 100"));
+        co_return api_error::validation("Limit must be greater than 0 and no greater than 100");
     }
 
     auto tables = _proxy.data_dictionary().get_tables(); // hold on to temporary, table_names isn't a container, it's a view
@@ -5580,7 +5619,7 @@ future<executor::request_return_type> executor::list_tables(client_state& client
         rjson::add(response, "LastEvaluatedTableName", rjson::copy(last_table_name));
     }
 
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
+    co_return rjson::print(std::move(response));
 }
 
 future<executor::request_return_type> executor::describe_endpoints(client_state& client_state, service_permit permit, rjson::value request, std::string host_header) {
@@ -5591,8 +5630,8 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     if (!override.empty()) {
         if (override == "disabled") {
             _stats.unsupported_operations++;
-            return make_ready_future<request_return_type>(api_error::unknown_operation(
-                "DescribeEndpoints disabled by configuration (alternator_describe_endpoints=disabled)"));
+            co_return api_error::unknown_operation(
+                "DescribeEndpoints disabled by configuration (alternator_describe_endpoints=disabled)");
         }
         host_header = std::move(override);
     }
@@ -5604,13 +5643,13 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     // A "Host:" header includes both host name and port, exactly what we need
     // to return.
     if (host_header.empty()) {
-        return make_ready_future<request_return_type>(api_error::validation("DescribeEndpoints needs a 'Host:' header in request"));
+        co_return api_error::validation("DescribeEndpoints needs a 'Host:' header in request");
     }
     rjson::add(response, "Endpoints", rjson::empty_array());
     rjson::push_back(response["Endpoints"], rjson::empty_object());
     rjson::add(response["Endpoints"][0], "Address", rjson::from_string(host_header));
     rjson::add(response["Endpoints"][0], "CachePeriodInMinutes", rjson::value(1440));
-    return make_ready_future<executor::request_return_type>(make_jsonable(std::move(response)));
+    co_return rjson::print(std::move(response));
 }
 
 static std::map<sstring, sstring> get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
@@ -5645,7 +5684,7 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
     rjson::add(desc, "PointInTimeRecoveryDescription", std::move(pitr));
     rjson::value response = rjson::empty_object();
     rjson::add(response, "ContinuousBackupsDescription", std::move(desc));
-    co_return make_jsonable(std::move(response));
+    co_return rjson::print(std::move(response));
 }
 
 // Create the metadata for the keyspace in which we put the alternator
