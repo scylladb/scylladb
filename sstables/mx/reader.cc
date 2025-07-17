@@ -1262,7 +1262,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     std::unique_ptr<abstract_index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
-    const dht::partition_range& _pr;
+    std::reference_wrapper<const dht::partition_range> _pr;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
@@ -1501,7 +1501,7 @@ private:
 
         if (_single_partition_read) {
             _sst->get_stats().on_single_partition_read();
-            const auto& key = dht::ring_position_view(_pr.start()->value());
+            const auto& key = dht::ring_position_view(_pr.get().start()->value());
 
             const auto present = co_await get_index_reader().advance_lower_and_check_if_present(key);
 
@@ -1605,6 +1605,7 @@ public:
         }
 
         return maybe_initialize().then([this, &pr] (bool initialized) {
+            _pr = pr;
             if (!initialized) {
                 _end_of_stream = true;
                 return make_ready_future<>();
