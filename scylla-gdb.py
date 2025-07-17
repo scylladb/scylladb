@@ -976,6 +976,8 @@ class managed_bytes:
         inf = gdb.selected_inferior()
 
         def to_bytes(data, size):
+            if size == 0:
+                return b''
             return bytes(inf.read_memory(data, size))
 
         if self.is_inline():
