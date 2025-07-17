@@ -205,6 +205,7 @@ private:
     std::optional<shared_future<>> _flush_coalescing;
     seastar::scheduling_group _compaction_scheduling_group;
     replica::table_stats& _table_stats;
+    shared_tombstone_gc_state* _shared_gc_state = nullptr;
 public:
     using iterator = decltype(_memtables)::iterator;
     using const_iterator = decltype(_memtables)::const_iterator;
@@ -215,22 +216,26 @@ public:
             dirty_memory_manager* dirty_memory_manager,
             memtable_table_shared_data& table_shared_data,
             replica::table_stats& table_stats,
-            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
+            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group(),
+            shared_tombstone_gc_state* shared_gc_state = nullptr)
         : _memtables({})
         , _seal_immediate_fn(seal_immediate_fn)
         , _current_schema(cs)
         , _dirty_memory_manager(dirty_memory_manager)
         , _table_shared_data(table_shared_data)
         , _compaction_scheduling_group(compaction_scheduling_group)
-        , _table_stats(table_stats) {
+        , _table_stats(table_stats)
+        , _shared_gc_state(shared_gc_state)
+    {
         add_memtable();
     }
 
     memtable_list(std::function<schema_ptr()> cs, dirty_memory_manager* dirty_memory_manager,
             memtable_table_shared_data& table_shared_data,
             replica::table_stats& table_stats,
-            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group())
-        : memtable_list({}, std::move(cs), dirty_memory_manager, table_shared_data, table_stats, compaction_scheduling_group) {
+            seastar::scheduling_group compaction_scheduling_group = seastar::current_scheduling_group(),
+            shared_tombstone_gc_state* shared_gc_state = nullptr)
+        : memtable_list({}, std::move(cs), dirty_memory_manager, table_shared_data, table_stats, compaction_scheduling_group, shared_gc_state) {
     }
 
     bool may_flush() const noexcept {
