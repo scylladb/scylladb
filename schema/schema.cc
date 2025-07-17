@@ -2083,7 +2083,7 @@ schema_ptr schema::make_reversed() const {
 }
 
 schema_ptr schema::get_reversed() const {
-    return local_schema_registry().get_or_load(reversed(_raw._version), [this] (table_schema_version) -> view_schema_and_base_info {
+    return local_schema_registry().get_or_load(reversed(_raw._version), [this] (table_schema_version) -> extended_frozen_schema {
         auto s = make_reversed();
         return extended_frozen_schema(s);
     });
