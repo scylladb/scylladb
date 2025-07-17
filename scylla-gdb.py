@@ -951,6 +951,92 @@ class sstring:
         return self.as_hex()
 
 
+<<<<<<< HEAD
+||||||| parent of 6e0a063ce3 (gdb: handle zero-size reads in managed_bytes)
+class managed_bytes:
+    def __init__(self, val):
+        self.val = val
+
+    def is_multi_chunk(self):
+        return int(self.val['_inline_size']) < -1;
+
+    def is_single_chunk(self):
+        return int(self.val['_inline_size']) == -1;
+
+    def is_inline(self):
+        return int(self.val['_inline_size']) >= 0;
+
+    def __len__(self):
+        if self.is_multi_chunk():
+            return int(self.val['_u']['multi_chunk_ref']['size'])
+        elif self.is_single_chunk():
+            return int(self.val['_u']['single_chunk_ref']['size'])
+        else:
+            return int(self.val['_inline_size'])
+
+    def get(self):
+        inf = gdb.selected_inferior()
+
+        def to_bytes(data, size):
+            return bytes(inf.read_memory(data, size))
+
+        if self.is_inline():
+            return to_bytes(self.val['_u']['inline_data'], int(self.val['_inline_size']))
+        elif self.is_single_chunk():
+            return to_bytes(self.val['_u']['single_chunk_ref']['ptr']['data'], int(self.val['_u']['single_chunk_ref']['size']))
+        else:
+            ref = self.val['_u']['multi_chunk_ref']['ptr']
+            chunks = list()
+            while ref['ptr']:
+                chunks.append(to_bytes(ref['ptr']['data'], int(ref['ptr']['frag_size'])))
+                ref = ref['ptr']['next']
+            return b''.join(chunks)
+
+
+=======
+class managed_bytes:
+    def __init__(self, val):
+        self.val = val
+
+    def is_multi_chunk(self):
+        return int(self.val['_inline_size']) < -1;
+
+    def is_single_chunk(self):
+        return int(self.val['_inline_size']) == -1;
+
+    def is_inline(self):
+        return int(self.val['_inline_size']) >= 0;
+
+    def __len__(self):
+        if self.is_multi_chunk():
+            return int(self.val['_u']['multi_chunk_ref']['size'])
+        elif self.is_single_chunk():
+            return int(self.val['_u']['single_chunk_ref']['size'])
+        else:
+            return int(self.val['_inline_size'])
+
+    def get(self):
+        inf = gdb.selected_inferior()
+
+        def to_bytes(data, size):
+            if size == 0:
+                return b''
+            return bytes(inf.read_memory(data, size))
+
+        if self.is_inline():
+            return to_bytes(self.val['_u']['inline_data'], int(self.val['_inline_size']))
+        elif self.is_single_chunk():
+            return to_bytes(self.val['_u']['single_chunk_ref']['ptr']['data'], int(self.val['_u']['single_chunk_ref']['size']))
+        else:
+            ref = self.val['_u']['multi_chunk_ref']['ptr']
+            chunks = list()
+            while ref['ptr']:
+                chunks.append(to_bytes(ref['ptr']['data'], int(ref['ptr']['frag_size'])))
+                ref = ref['ptr']['next']
+            return b''.join(chunks)
+
+
+>>>>>>> 6e0a063ce3 (gdb: handle zero-size reads in managed_bytes)
 def uint64_t(val):
     val = int(val)
     if val < 0:
