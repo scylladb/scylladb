@@ -1633,7 +1633,9 @@ def test_create_role_with_hashed_password_authorization(cql):
 
 ###
 
-def test_desc_authorization(cql):
+# Marked as `scylla_only` because we verify `DESCRIBE SCHEMA WITH INTERNALS AND PASSWORDS`,
+# which is not present on Cassandra.
+def test_desc_authorization(cql, scylla_only):
     """
     Verify that Scylla rejects performing `DESC SCHEMA WITH INTERNALS AND PASSWORDS` if the user
     sending the request is not a superuser, even if they have all permissions to relevant system tables.
@@ -1656,7 +1658,9 @@ def test_desc_authorization(cql):
             try_describe_with_passwords(r1)
             try_describe_with_passwords(r2)
 
-def test_desc_roles_format(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_roles_format(cql, scylla_only):
     """
     Verify that the format of the output of `DESC SCHEMA WITH INTERNALS` corresponding to
     creating roles is of the expected form.
@@ -1677,7 +1681,9 @@ def test_desc_roles_format(cql):
         assert result.name == role_name
         assert result.create_statement == stmt
 
-def test_desc_roles_quotation_marks(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_roles_quotation_marks(cql, scylla_only):
     """
     Verify that statements corresponding to creating roles correctly format quotation marks.
     """
@@ -1717,7 +1723,9 @@ def test_desc_roles_quotation_marks(cql):
 
         assert set(desc_iter) == expected_result
 
-def test_desc_roles_uppercase(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_roles_uppercase(cql, scylla_only):
     """
     Verify that statements corresponding to creating roles correctly format uppercase characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -1740,7 +1748,9 @@ def test_desc_roles_uppercase(cql):
 
         assert list(desc_iter) == [f"CREATE ROLE {role} WITH LOGIN = false AND SUPERUSER = false;"]
 
-def test_desc_roles_unicode(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_roles_unicode(cql, scylla_only):
     """
     Verify that statements to creating roles can contain unicode characters.
     """
@@ -1762,7 +1772,9 @@ def test_desc_roles_unicode(cql):
 
         assert list(desc_iter) == [f"CREATE ROLE {role} WITH LOGIN = false AND SUPERUSER = false;"]
 
-def test_desc_roles(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_roles(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to creating roles
     is as expected for various different cases.
@@ -1804,7 +1816,9 @@ def test_desc_roles(cql):
 
         assert create_role_stmts == desc_create_role_stmts
 
-def test_desc_roles_with_passwords(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_roles_with_passwords(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS AND PASSWORDS` corresponding to creating roles
     is as expected for various different cases.
@@ -1833,7 +1847,9 @@ def test_desc_roles_with_passwords(cql):
 
         assert set(stmts) == set(desc_iter)
 
-def test_desc_role_grants_format(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_grants_format(cql, scylla_only):
     """
     Verify that the format of the output of `DESC SCHEMA WITH INTERNALS` corresponding to
     granting roles is of the expected form.
@@ -1858,7 +1874,9 @@ def test_desc_role_grants_format(cql):
         assert result.name == r1
         assert result.create_statement == stmt
 
-def test_desc_role_grants_quotation_marks(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_grants_quotation_marks(cql, scylla_only):
     """
     Verify that statements corresponding to granting roles correctly format quotation marks.
     """
@@ -1889,7 +1907,9 @@ def test_desc_role_grants_quotation_marks(cql):
         expected_result = f"GRANT {andrew_double_quote} TO {jane_double_quote};"
         assert [expected_result] == list(desc_iter)
 
-def test_desc_role_grants_uppercase(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_grants_uppercase(cql, scylla_only):
     """
     Verify that statements corresponding to granting roles correctly format uppercase characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -1915,7 +1935,9 @@ def test_desc_role_grants_uppercase(cql):
 
         assert list(desc_iter) == [f"GRANT {r1} TO {r2};"]
 
-def test_desc_role_grants_unicode(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_grants_unicode(cql, scylla_only):
     """
     Verify that statements corresponding to granting roles correctly format unicode characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -1941,7 +1963,9 @@ def test_desc_role_grants_unicode(cql):
 
         assert list(desc_iter) == [f"GRANT {r1} TO {r2};"]
 
-def test_desc_role_grants(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_grants(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to granting roles
     is as expected for various different cases.
@@ -1974,7 +1998,9 @@ def test_desc_role_grants(cql):
 
         assert set(expected_grants) == set(desc_grants)
 
-def test_desc_grant_permission_format(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_grant_permission_format(cql, scylla_only):
     """
     Verify that the format of the output of `DESC SCHEMA WITH INTERNALS` corresponding to
     granting permissions is of the expected form.
@@ -2000,7 +2026,9 @@ def test_desc_grant_permission_format(cql):
         assert result.name == role_name
         assert result.create_statement == stmt
 
-def test_desc_grant_permission_quotation_marks(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_grant_permission_quotation_marks(cql, scylla_only):
     """
     Verify that statements corresponding to granting permissions correctly format quotation marks.
     """
@@ -2037,7 +2065,9 @@ def test_desc_grant_permission_quotation_marks(cql):
 
         assert set(desc_iter) == expected_result
 
-def test_desc_auth_different_permissions(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_auth_different_permissions(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to granting permissions
     is as expected for various different cases. Here we test different kinds of permissions specifically.
@@ -2069,7 +2099,9 @@ def test_desc_auth_different_permissions(cql):
 
         assert set(grants) == set(desc_iter)
 
-def test_desc_data_permissions_uppercase(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_data_permissions_uppercase(cql, scylla_only):
     """
     Verify that statements corresponding to granting data permissions correctly format uppercase characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -2109,7 +2141,9 @@ def test_desc_data_permissions_uppercase(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert set(desc_iter) == stmts
 
-def test_desc_data_permissions_unicode(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_data_permissions_unicode(cql, scylla_only):
     """
     Verify that statements corresponding to granting permissions to data resources correctly format
     unicode characters, i.e. identifiers like that should be wrapped in quotation marks.
@@ -2148,7 +2182,9 @@ def test_desc_data_permissions_unicode(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert set(desc_iter) == stmts
 
-def test_desc_data_permissions(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_data_permissions(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to granting permissions
     is as expected for various different cases. Here we test data resources specifically.
@@ -2182,7 +2218,9 @@ def test_desc_data_permissions(cql):
 
         assert set(stmts) == set(desc_iter)
 
-def test_desc_role_permissions_uppercase(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_permissions_uppercase(cql, scylla_only):
     """
     Verify that statements corresponding to granting role permissions correctly format uppercase characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -2216,7 +2254,9 @@ def test_desc_role_permissions_uppercase(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert set(desc_iter) == stmts
 
-def test_desc_role_permissions_unicode(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_permissions_unicode(cql, scylla_only):
     """
     Verify that statements corresponding to granting permissions to role resources correctly format
     unicode characters, i.e. identifiers like that should be wrapped in quotation marks.
@@ -2250,7 +2290,9 @@ def test_desc_role_permissions_unicode(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert set(desc_iter) == stmts
 
-def test_desc_role_permissions(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_role_permissions(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to granting permissions
     is as expected for various different cases. Here we test role permissions specifically.
@@ -2277,7 +2319,9 @@ def test_desc_role_permissions(cql):
 
         assert set(stmts) == set(desc_iter)
 
-def test_desc_udf_permissions_uppercase(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_udf_permissions_uppercase(cql, scylla_only):
     """
     Verify that statements corresponding to granting permissions to UDFs correctly format uppercase characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -2323,7 +2367,9 @@ def test_desc_udf_permissions_uppercase(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert set(desc_iter) == stmts
 
-def test_desc_udf_permissions_unicode(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_udf_permissions_unicode(cql, scylla_only):
     """
     Verify that statements corresponding to granting permissions to UDFs correctly format
     unicode characters, i.e. identifiers like that should be wrapped in quotation marks.
@@ -2368,7 +2414,9 @@ def test_desc_udf_permissions_unicode(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert set(desc_iter) == stmts
 
-def test_desc_udf_permissions(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about auth. That's not the case in Cassandra.
+def test_desc_udf_permissions(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to granting permissions
     is as expected for various different cases. Here we test UDFs specifically.
@@ -2413,7 +2461,9 @@ def test_desc_udf_permissions(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert set(desc_iter) == stmts
 
-def test_desc_service_levels_format(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_service_levels_format(cql, scylla_only):
     """
     Verify that the format of the output of `DESC SCHEMA WITH INTERNALS` corresponding to
     creating service levels is of the expected form.
@@ -2433,7 +2483,9 @@ def test_desc_service_levels_format(cql):
         assert result.name == sl.name
         assert result.create_statement == sl.get_create_stmt(replace_default_shares=True)
 
-def test_desc_service_levels_quotation_marks(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_service_levels_quotation_marks(cql, scylla_only):
     """
     Verify that statements corresponding to creating service levels correctly format quotation marks.
     """
@@ -2466,7 +2518,9 @@ def test_desc_service_levels_quotation_marks(cql):
 
         assert set(desc_iter) == expected_result
 
-def test_desc_service_levels_uppercase(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_service_levels_uppercase(cql, scylla_only):
     """
     Verify that statements corresponding to creating service levels correctly format uppercase characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -2487,7 +2541,9 @@ def test_desc_service_levels_uppercase(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert list(desc_iter) == [sl.get_create_stmt(replace_default_shares=True)]
 
-def test_desc_service_levels_unicode(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_service_levels_unicode(cql, scylla_only):
     """
     Verify that statements corresponding to creating service levels correctly format
     unicode characters, i.e. identifiers like that should be wrapped in quotation marks.
@@ -2508,7 +2564,9 @@ def test_desc_service_levels_unicode(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert list(desc_iter) == [sl.get_create_stmt(replace_default_shares=True)]
 
-def test_desc_auth_service_levels(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_auth_service_levels(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to creating service levels
     is as expected for various different cases.
@@ -2541,7 +2599,9 @@ def test_desc_auth_service_levels(cql):
 
         assert sl_create_stmts == set(desc_iter)
 
-def test_desc_service_levels_default_shares(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_service_levels_default_shares(cql, scylla_only):
     """
     Verify that DESCRIBE handles the default value of shares correctly:
     (a) when a service level is created without specifying the number of shares,
@@ -2568,7 +2628,9 @@ def test_desc_service_levels_default_shares(cql):
         stmts[0] = f"CREATE SERVICE LEVEL sl_default WITH SHARES = {default_share_count};"
         assert stmts == list(desc_iter)
 
-def test_desc_attach_service_level_format(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_attach_service_level_format(cql, scylla_only):
     """
     Verify that the format of the output of `DESC SCHEMA WITH INTERNALS` corresponding to
     attaching service levels is of the expected form.
@@ -2594,7 +2656,9 @@ def test_desc_attach_service_level_format(cql):
         assert result.name == sl_name
         assert result.create_statement == stmt
 
-def test_desc_auth_attach_service_levels_quotation_marks(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_auth_attach_service_levels_quotation_marks(cql, scylla_only):
     """
     Verify that statements corresponding to attaching service levels correctly format quotation marks.
     """
@@ -2640,7 +2704,9 @@ def test_desc_auth_attach_service_levels_quotation_marks(cql):
 
         assert set(desc_iter) == expected_result
 
-def test_desc_auth_attach_service_levels_uppercase(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_auth_attach_service_levels_uppercase(cql, scylla_only):
     """
     Verify that statements corresponding to attaching service levels correctly format uppercase characters,
     i.e. identifiers like that should be wrapped in quotation marks.
@@ -2665,7 +2731,9 @@ def test_desc_auth_attach_service_levels_uppercase(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert list(desc_iter) == [f"ATTACH SERVICE LEVEL {sl} TO {role};"]
 
-def test_desc_attach_service_levels_unicode(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_attach_service_levels_unicode(cql, scylla_only):
     """
     Verify that statements corresponding to attaching service levels correctly format
     unicode characters, i.e. identifiers like that should be wrapped in quotation marks.
@@ -2690,7 +2758,9 @@ def test_desc_attach_service_levels_unicode(cql):
         desc_iter = extract_create_statements(desc_elements)
         assert list(desc_iter) == [f"ATTACH SERVICE LEVEL {sl} TO {role};"]
 
-def test_desc_auth_attach_service_levels(cql):
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_auth_attach_service_levels(cql, scylla_only):
     """
     Verify that the output of `DESC SCHEMA WITH INTERNALS` corresponding to attaching service levels
     is as expected for various different cases.
