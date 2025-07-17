@@ -673,6 +673,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     running = true;
 #endif
 
+    co_await utils::get_local_injector().inject("topology_state_load_error", [] {
+        return std::make_exception_ptr(std::runtime_error("topology_state_load_error"));
+    });
+
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = _topology_state_machine._topology.normal_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
 
