@@ -664,12 +664,48 @@ static future<bool> is_view_built(
 
 }
 
+void executor::notify_all_shards_of_newly_calculated_table_size(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl) {
+    auto &table = schema->table();
+    auto &describe_table_info = _describe_table_info_for_tables[&table];
+    auto now = describe_table_info.size_in_bytes.set_now(size_in_bytes, ttl);
+
+    (void)container().invoke_on_others(
+        [cfid = schema->id(), size_in_bytes, now] (executor& exec) {
+            auto& db = exec._proxy.local_db();
+            auto &table = db.find_column_family(cfid);
+            auto &describe_table_info = exec._describe_table_info_for_tables[&table];
+            describe_table_info.size_in_bytes.set(size_in_bytes, now);
+        });
+}
+
+future<> executor::fill_table_size(rjson::value &table_description, schema_ptr schema) {
+    auto &table = schema->table();
+    auto &describe_table_info = _describe_table_info_for_tables[&table];
+    std::uint64_t total_size = 0;
+    if (auto val = describe_table_info.size_in_bytes.get()) {
+        total_size = *val;
+    }
+    else {
+        total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
+
+        // Note: we don't care when the notification of other shards will finish, as long as it will be done
+        // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
+        // the size yet, so it will calculate it again) - this is not a problem, because it will call notify_all_shards_of_newly_calculated_table_size
+        // with ttl, which is extremely unlikely to be exactly the same as the previous one, all shards will keep the size coming with ttl that is bigger.
+        // In case of the same ttl, some shards will have different size, which means DescribeTable will return different values depending on the shard
+        // which is also fine, as the specification doesn't give precision guarantees of any kind.
+        (void)notify_all_shards_of_newly_calculated_table_size(schema, total_size, std::chrono::hours{ 6 });
+    }
+    rjson::add(table_description, "TableSizeBytes", total_size);
+}
+
 future<rjson::value> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
     auto tags_ptr = db::get_tags_of_table(schema);
 
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
+    auto fill_table_size_job = fill_table_size(table_description, schema);
 
     auto creation_timestamp = get_table_creation_time(*schema);
     
@@ -781,6 +817,8 @@ future<rjson::value> executor::fill_table_description(schema_ptr schema, table_s
     executor::supplement_table_stream_info(table_description, *schema, _proxy);
 
     // FIXME: still missing some response fields (issue #5026)
+    co_await std::move(fill_table_size_job);
+
     co_return table_description;
 }
 
@@ -1622,6 +1660,7 @@ future<executor::request_return_type> executor::create_table_on_shard0(service::
     co_await verify_create_permission(enforce_authorization, client_state);
 
     schema_ptr schema = builder.build();
+
     for (auto& view_builder : view_builders) {
         // Note below we don't need to add virtual columns, as all
         // base columns were copied to view. TODO: reconsider the need
