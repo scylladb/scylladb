@@ -25,6 +25,19 @@ def get_protocol_error_metrics(host) -> int:
 
     return result
 
+def get_cpp_exceptions_metrics(host) -> int:
+    result = 0
+    metrics = requests.get(f"http://{host}:9180/metrics").text
+    pattern = re.compile(r'^scylla_reactor_cpp_exceptions\{shard="\d+"\} (\d+)')
+
+    for metric_line in metrics.split('\n'):
+        match = pattern.match(metric_line)
+        if match:
+            count = int(match.group(1))
+            result += count
+
+    return result
+
 @contextmanager
 def cql_with_protocol(host_str, port, creds, protocol_version):
     try:
@@ -57,16 +70,24 @@ def test_protocol_version_mismatch(scylla_only, request):
         "password": request.config.getoption("--auth_password", "cassandra"),
     }
 
+    run_count = 100
+    cpp_exception_threshold = 10
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
 
     successful_session_count = try_connect(host, port, creds, protocol_version=4)
     assert successful_session_count == 1, "Expected to connect successfully with protocol version 4"
 
-    successful_session_count = try_connect(host, port, creds, protocol_version=42)
-    assert successful_session_count == 0, "Expected to fail connecting with protocol version 42"
+    for _ in range(run_count):
+        successful_session_count = try_connect(host, port, creds, protocol_version=42)
+        assert successful_session_count == 0, "Expected to fail connecting with protocol version 42"
 
     protocol_exception_metrics_after = get_protocol_error_metrics(host)
     assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase after the test"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase after the test"
 
 # Many protocol errors are caused by sending malformed messages.
 # It is not possible to reproduce them with the Python driver,
@@ -154,26 +175,59 @@ def no_ssl(request):
 # containing an invalid BATCH kind.
 def test_invalid_kind_in_batch_message(scylla_only, no_ssl, request):
     host = request.config.getoption("--host")
+
+    run_count = 100
+    cpp_exception_threshold = 10
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
-    _protocol_error_impl(host, trigger_bad_batch=True)
+
+    for _ in range(run_count):
+        _protocol_error_impl(host, trigger_bad_batch=True)
+
     protocol_exception_metrics_after = get_protocol_error_metrics(host)
-    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase after the test"
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
 
 # Test if the error is raised when sending an unexpected AUTH_RESPONSE
 # message during the authentication phase.
 def test_unexpected_message_during_auth(scylla_only, no_ssl, request):
     host = request.config.getoption("--host")
+
+    run_count = 100
+    cpp_exception_threshold = 10
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
-    _protocol_error_impl(host, trigger_unexpected_auth=True)
+
+    for _ in range(run_count):
+        _protocol_error_impl(host, trigger_unexpected_auth=True)
+
     protocol_exception_metrics_after = get_protocol_error_metrics(host)
-    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase after the test"
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
 
 # Test if the protocol exceptions do not decrease after running the test.
 # This is to ensure that the protocol exceptions are not cleared or reset
 # during the test execution.
 def test_no_protocol_exceptions(scylla_only, no_ssl, request):
     host = request.config.getoption("--host")
+
+    run_count = 100
+    cpp_exception_threshold = 10
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
     protocol_exception_metrics_before = get_protocol_error_metrics(host)
-    _protocol_error_impl(host)
+
+    for _ in range(run_count):
+        _protocol_error_impl(host)
+
     protocol_exception_metrics_after = get_protocol_error_metrics(host)
-    assert protocol_exception_metrics_after == protocol_exception_metrics_before, "Expected protocol errors to not increase after the test"
+    assert protocol_exception_metrics_after == protocol_exception_metrics_before, "Expected protocol errors to not increase"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
