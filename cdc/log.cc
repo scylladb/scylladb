@@ -25,6 +25,7 @@
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
+#include "schema/schema_registry.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
 #include "types/tuple.hh"
@@ -960,8 +961,12 @@ public:
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to the given value for the given row.
     void set_value(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes_view& value) {
-        auto& log_cdef = *_log_schema.get_column_definition(log_data_column_name_bytes(base_cdef.name()));
-        _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
+        auto log_cdef_ptr = _log_schema.get_column_definition(log_data_column_name_bytes(base_cdef.name()));
+        if (!log_cdef_ptr) {
+            on_internal_error(cdc_log, format("CDC log schema for {}.{} does not have base column {}",
+                _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
+        }
+        _log_mut.set_cell(log_ck, *log_cdef_ptr, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
     }
 
     // Each regular and static column in the base schema has a corresponding column in the log schema
@@ -978,7 +983,12 @@ public:
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to the given set of keys for the given row.
     void set_deleted_elements(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes& deleted_elements) {
-        auto& log_cdef = *_log_schema.get_column_definition(log_data_column_deleted_elements_name_bytes(base_cdef.name()));
+        auto log_cdef_ptr = _log_schema.get_column_definition(log_data_column_deleted_elements_name_bytes(base_cdef.name()));
+        if (!log_cdef_ptr) {
+            on_internal_error(cdc_log, format("CDC log schema for {}.{} does not have base column {}",
+                _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
+        }
+        auto& log_cdef = *log_cdef_ptr;
         _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*log_cdef.type, _ts, deleted_elements, _ttl));
     }
 
@@ -1474,7 +1484,7 @@ public:
         : _ctx(ctx)
         , _schema(std::move(s))
         , _dk(std::move(dk))
-        , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
+        , _log_schema(_schema->cdc_schema())
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
     {
     }
@@ -1798,6 +1808,12 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 return make_ready_future<>();
             }
 
+            if (!s->cdc_schema()) {
+                on_internal_error(cdc_log, format(
+                    "Trying to generate CDC log mutations for {}.{} but it has no CDC schema set.",
+                    s->ks_name(), s->cf_name()));
+            }
+
             transformer trans(_ctxt, s, m.decorated_key());
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
@@ -1865,5 +1881,10 @@ bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutati
 
 future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+    if (utils::get_local_injector().enter("sleep_before_cdc_augmentation")) {
+        return seastar::sleep(std::chrono::milliseconds(100)).then([this, timeout, mutations = std::move(mutations), tr_state = std::move(tr_state), write_cl] () mutable {
+            return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
+        });
+    }
     return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
 }

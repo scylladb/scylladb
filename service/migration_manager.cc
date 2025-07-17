@@ -1080,7 +1080,10 @@ static future<schema_ptr> get_schema_definition(table_schema_version v, locator:
             // referenced by the incoming request.
             // That means the column mapping for the schema should always be inserted
             // with TTL (refresh TTL in case column mapping already existed prior to that).
-            auto us = s.unfreeze(db::schema_ctxt(proxy));
+            // We don't set the CDC schema here because it's not included in the RPC, but with
+            // schema on raft we shouldn't get here anyway because we do a group0 barrier which
+            // should ensure the schema is added to the registry together with the CDC schema.
+            auto us = s.unfreeze(db::schema_ctxt(proxy), nullptr);
             // if this is a view - sanity check that its schema doesn't need fixing.
             schema_ptr base_schema;
             if (us->is_view()) {
