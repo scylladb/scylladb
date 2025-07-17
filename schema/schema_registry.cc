@@ -172,10 +172,7 @@ void schema_registry::clear() {
 }
 
 schema_ptr schema_registry_entry::load(view_schema_and_base_info fs) {
-    _frozen_schema = std::move(fs.schema);
-    if (fs.base_info) {
-        _base_info = std::move(fs.base_info);
-    }
+    _extended_frozen_schema = extended_frozen_schema(std::move(fs.schema), std::move(fs.base_info));
     auto s = get_schema();
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
@@ -187,10 +184,7 @@ schema_ptr schema_registry_entry::load(view_schema_and_base_info fs) {
 }
 
 schema_ptr schema_registry_entry::load(schema_ptr s) {
-    _frozen_schema = frozen_schema(s);
-    if (s->is_view()) {
-        _base_info = s->view_info()->base_info();
-    }
+    _extended_frozen_schema = extended_frozen_schema(s);
     _schema = &*s;
     _schema->_registry_entry = this;
     _erase_timer.cancel();
@@ -236,7 +230,7 @@ schema_ptr schema_registry_entry::get_schema() {
     if (!_schema) {
         slogger.trace("Activating {}", _version);
         schema_ptr s;
-        s = _frozen_schema->unfreeze(*_registry._ctxt, _base_info);
+        s = _extended_frozen_schema->unfreeze(*_registry._ctxt);
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
@@ -257,7 +251,7 @@ void schema_registry_entry::detach_schema() noexcept {
 
 frozen_schema schema_registry_entry::frozen() const {
     SCYLLA_ASSERT(_state >= state::LOADED);
-    return *_frozen_schema;
+    return _extended_frozen_schema->fs;
 }
 
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
