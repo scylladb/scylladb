@@ -687,14 +687,14 @@ future<> executor::fill_table_size(rjson::value &table_description, schema_ptr s
     }
     else {
         total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
-
+        const auto timeout = std::chrono::seconds{ _proxy.data_dictionary().get_config().alternator_describe_table_info_timeout_in_seconds() };
         // Note: we don't care when the notification of other shards will finish, as long as it will be done
         // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
         // the size yet, so it will calculate it again) - this is not a problem, because it will call notify_all_shards_of_newly_calculated_table_size
         // with ttl, which is extremely unlikely to be exactly the same as the previous one, all shards will keep the size coming with ttl that is bigger.
         // In case of the same ttl, some shards will have different size, which means DescribeTable will return different values depending on the shard
         // which is also fine, as the specification doesn't give precision guarantees of any kind.
-        (void)notify_all_shards_of_newly_calculated_table_size(schema, total_size, std::chrono::hours{ 6 });
+        (void)notify_all_shards_of_newly_calculated_table_size(schema, total_size, timeout);
     }
     rjson::add(table_description, "TableSizeBytes", total_size);
 }

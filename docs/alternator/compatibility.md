@@ -250,6 +250,11 @@ is different, or can be configured in Alternator:
   So for example, if you create a table whose name is 192 characters, you
   can't create a GSI whose name is longer than 29 characters.
 
+* DynamoDB's DescribeTable will return information about table (table's size
+  in bytes), that according to a documentation can lag behind up to 6 hours.
+  `alternator_describe_table_info_timeout_in_seconds` parameter allows
+  to change this timeout - default value in seconds is set to 21600 (6 hours).
+
 ## Experimental API features
 
 Some DynamoDB API features are supported by Alternator, but considered
