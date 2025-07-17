@@ -50,12 +50,12 @@ const bytes_ostream& frozen_schema::representation() const
     return _data;
 }
 
-frozen_schema_with_base_info::frozen_schema_with_base_info(const schema_ptr& c) : frozen_schema(c) {
+extended_frozen_schema::extended_frozen_schema(const schema_ptr& c) : fs(c) {
     if (c->is_view()) {
         base_info = c->view_info()->base_info();
     }
 }
 
-schema_ptr frozen_schema_with_base_info::unfreeze(const db::schema_ctxt& ctxt) const {
-    return frozen_schema::unfreeze(ctxt, base_info);
+schema_ptr extended_frozen_schema::unfreeze(const db::schema_ctxt& ctxt) const {
+    return fs.unfreeze(ctxt, base_info);
 }

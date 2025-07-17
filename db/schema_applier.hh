@@ -105,12 +105,12 @@ public:
 
 struct frozen_schema_diff {
     struct altered_schema {
-        frozen_schema_with_base_info old_schema;
-        frozen_schema_with_base_info new_schema;
+        extended_frozen_schema old_schema;
+        extended_frozen_schema new_schema;
     };
-    std::vector<frozen_schema_with_base_info> created;
+    std::vector<extended_frozen_schema> created;
     std::vector<altered_schema> altered;
-    std::vector<frozen_schema_with_base_info> dropped;
+    std::vector<extended_frozen_schema> dropped;
 };
 
 // schema_diff represents what is happening with tables or views during schema merge
