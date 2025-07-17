@@ -171,8 +171,8 @@ void schema_registry::clear() {
     _entries.clear();
 }
 
-schema_ptr schema_registry_entry::load(view_schema_and_base_info fs) {
-    _extended_frozen_schema = extended_frozen_schema(std::move(fs.schema), std::move(fs.base_info));
+schema_ptr schema_registry_entry::load(extended_frozen_schema fs) {
+    _extended_frozen_schema = std::move(fs);
     auto s = get_schema();
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
@@ -204,7 +204,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     _state = state::LOADING;
     slogger.trace("Loading {}", _version);
     // Move to background.
-    (void)f.then_wrapped([self = shared_from_this(), this] (future<view_schema_and_base_info>&& f) {
+    (void)f.then_wrapped([self = shared_from_this(), this] (future<extended_frozen_schema>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             slogger.trace("Loading of {} aborted", _version);
@@ -330,8 +330,8 @@ schema_ptr global_schema_ptr::get() const {
         auto registered_schema = [](const schema_registry_entry& e, std::optional<db::view::base_dependent_view_info> base_info = std::nullopt) -> schema_ptr {
             schema_ptr ret = local_schema_registry().get_or_null(e.version());
             if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e, &base_info](table_schema_version) -> view_schema_and_base_info {
-                    return {e.frozen(), base_info};
+                ret = local_schema_registry().get_or_load(e.version(), [&e, &base_info](table_schema_version) -> extended_frozen_schema {
+                    return extended_frozen_schema(e.frozen(), base_info);
                 });
             }
             return ret;
@@ -359,7 +359,7 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         if (e) {
             return s;
         } else {
-            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> view_schema_and_base_info {
+            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> extended_frozen_schema {
                 return extended_frozen_schema(s);
             });
         }
