@@ -1619,8 +1619,8 @@ def test_create_role_with_hashed_password_authorization(cql):
         r3 = "bob"
 
         for r in [r1, r2]:
-            cql.execute(f"CREATE ROLE {r} WITH PASSWORD = '{r}' AND LOGIN = true")
-        cql.execute(f"CREATE ROLE {r3} WITH PASSWORD = '{r3}' AND SUPERUSER = true AND LOGIN = true")
+            cql.execute(f"CREATE ROLE {r} WITH LOGIN = true AND PASSWORD = '{r}'")
+        cql.execute(f"CREATE ROLE {r3} WITH LOGIN = true AND PASSWORD = '{r3}' AND SUPERUSER = true")
 
         # This also grants access to system tables.
         cql.execute(f"GRANT ALL ON ALL KEYSPACES TO {r2}")
