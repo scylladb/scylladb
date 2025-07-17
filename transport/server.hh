@@ -122,6 +122,17 @@ struct cql_server_config {
     std::optional<uint16_t> shard_aware_transport_port_ssl;
     bool allow_shard_aware_drivers = true;
     smp_service_group bounce_request_smp_service_group = default_smp_service_group();
+<<<<<<< HEAD
+||||||| parent of 7334bf36a4 (transport: consmetic change, remove extra blanks.)
+    utils::updateable_value<uint32_t> max_concurrent_requests;
+    utils::updateable_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
+
+    utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
+=======
+    utils::updateable_value<uint32_t> max_concurrent_requests;
+    utils::updateable_value<bool> cql_duplicate_bind_variable_names_refer_to_same_variable;
+    utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
+>>>>>>> 7334bf36a4 (transport: consmetic change, remove extra blanks.)
 };
 
 /**

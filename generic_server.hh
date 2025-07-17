@@ -142,9 +142,9 @@ public:
     future<> shutdown();
     future<> stop();
 
-    future<> listen(socket_address addr, 
-        std::shared_ptr<seastar::tls::credentials_builder> creds, 
-        bool is_shard_aware, bool keepalive, 
+    future<> listen(socket_address addr,
+        std::shared_ptr<seastar::tls::credentials_builder> creds,
+        bool is_shard_aware, bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
         std::function<server&()> get_shard_instance = {}
         );
