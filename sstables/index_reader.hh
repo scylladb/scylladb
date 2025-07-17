@@ -123,11 +123,33 @@ public:
     virtual future<> read_partition_data() = 0;
     // Returns tombstone for the current partition,
     // if such information is available in the index.
+    //
+    // Note: it's an arbitrary decision of the writer of the index whether
+    // the the partition tombstone has been attached to a given index entry,
+    // and the user of the index reader should not assume that it has.
+    //
+    // The main use case for this information is reads which start in the
+    // middle of a large partition. The Data reader needs to know the partition
+    // header (full partition key and partition tombstone) to emit a partition,
+    // but the header is at the beginning of the partition, potentially far
+    // from the queried rows.
+    // Embedding the partition header in the index lets the Data reader skip
+    // avoid doing a separate disk read to get the header from the Data file.
+    //
+    // Thus, `partition_tombstone()` and `get_partition_key()` usually
+    // return an engaged optional at least for those partitions which have an
+    // intra-partition index (because that's when they can be used to skip
+    // a disk seek) but the reader shouldn't assume that. It should check
+    // if they are available, and if not, it should fall back to reading
+    // the partition header from the Data file.
+    //
     // Precondition: partition_data_ready()
     virtual std::optional<sstables::deletion_time> partition_tombstone() = 0;
-    // Returns the key for current partition.
+    // Returns the key for current partition of the lower bound,
+    // if available (se the comment for partition_tombstone) in the index.
+    //
     // Precondition: partition_data_ready()
-    virtual partition_key get_partition_key() = 0;
+    virtual std::optional<partition_key> get_partition_key() = 0;
     // Returns data file positions corresponding to the bounds.
     // End position may be unset
     virtual data_file_positions_range data_file_positions() const = 0;
@@ -985,7 +1007,7 @@ public:
 
     // Returns the key for current partition.
     // Can be called only when partition_data_ready().
-    partition_key get_partition_key() override {
+    std::optional<partition_key> get_partition_key() override {
         return _alloc_section(_region, [this] {
             index_entry& e = current_partition_entry(_lower_bound);
             return e.get_key().to_partition_key(*_sstable->_schema);

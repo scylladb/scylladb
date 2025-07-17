@@ -34,14 +34,15 @@ public:
         auto prev = dht::ring_position::min();
         _r->read_partition_data().get();
         while (!_r->eof()) {
-            auto k = _r->get_partition_key();
-            auto rp = dht::ring_position(dht::decorate_key(s, k));
+          if (auto k = _r->get_partition_key()) {
+            auto rp = dht::ring_position(dht::decorate_key(s, *k));
 
             if (rp_cmp(prev, rp) >= 0) {
                 BOOST_FAIL(format("Partitions have invalid order: {} >= {}", prev, rp));
             }
 
             prev = rp;
+          }
 
           if (auto* r = dynamic_cast<sstables::index_reader*>(_r.get())) {
             sstables::clustered_index_cursor* cur = r->current_clustered_cursor();

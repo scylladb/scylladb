@@ -1229,7 +1229,7 @@ private:
             return read_from_datafile();
         }
         auto pk = _index_reader->get_partition_key();
-        auto key = dht::decorate_key(*_schema, std::move(pk));
+        auto key = dht::decorate_key(*_schema, std::move(pk.value()));
         _consumer.setup_for_partition(key.key());
         on_next_partition(std::move(key), tombstone(*tomb));
         return make_ready_future<>();
