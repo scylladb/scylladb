@@ -2437,7 +2437,8 @@ const std::vector<sstables::shared_sstable>& compaction_group::compacted_undelet
 lw_shared_ptr<memtable_list>
 table::make_memory_only_memtable_list() {
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group,
+        &get_compaction_manager().get_shared_tombstone_gc_state());
 }
 
 lw_shared_ptr<memtable_list>
@@ -2447,7 +2448,8 @@ table::make_memtable_list(compaction_group& cg) {
         co_await seal_active_memtable(cg, std::move(permit));
     };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group,
+        &get_compaction_manager().get_shared_tombstone_gc_state());
 }
 
 class compaction_group::compaction_group_view : public compaction::compaction_group_view {
