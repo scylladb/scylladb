@@ -22,6 +22,7 @@
 #include "stats.hh"
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
+#include "utils/simple_value_with_expiry.hh"
 
 #include "tracing/trace_state.hh"
 
@@ -170,6 +171,13 @@ class executor : public peering_sharded_service<executor> {
     // forwarding Alternator request between shards - if necessary for LWT.
     smp_service_group _ssg;
 
+    struct DescribeTableInfo {
+        utils::simple_value_with_expiry<std::uint64_t> size_in_bytes;
+    };
+    std::unordered_map<replica::table*, DescribeTableInfo> _describe_table_info_for_tables;
+
+    void notify_all_shards_of_newly_calculated_table_size(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
+    future<> fill_table_size(rjson::value &table_description, schema_ptr schema);
 public:
     using client_state = service::client_state;
     using request_return_type = std::variant<json::json_return_type, api_error>;
