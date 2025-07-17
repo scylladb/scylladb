@@ -2817,16 +2817,29 @@ def test_desc_restore(cql):
                             WITH comment='some other comment'""")
 
         cql.execute(f"CREATE INDEX myindex ON {ks}.some_other_table (c1)")
-        cql.execute(f"CREATE INDEX custom_index ON {ks}.vector_table (v) USING 'vector_index'")
 
-        cql.execute(f"""CREATE FUNCTION {ks}.my_udf(val1 int, val2 int)
-                        RETURNS NULL ON NULL INPUT
-                        RETURNS int
-                        LANGUAGE lua
-                        AS $$ return val1 + val2 $$""")
+        # Scylla doesn't support `sai`, while Cassandra doesn't support `vector_index`.
+        vec_class = "vector_index" if is_scylla(cql) else "sai"
+        cql.execute(f"CREATE INDEX custom_index ON {ks}.vector_table (v) USING '{vec_class}'")
+
+        # Scylla supports UDFs with Lua. Cassandra supports UDFs with Java.
+        if is_scylla(cql):
+            cql.execute(f"""CREATE FUNCTION {ks}.my_udf(val1 int, val2 int)
+                            RETURNS NULL ON NULL INPUT
+                            RETURNS int
+                            LANGUAGE lua
+                            AS $$ return val1 + val2 $$""")
+        else:
+            cql.execute(f"""CREATE FUNCTION {ks}.my_udf(val1 int, val2 int)
+                            RETURNS NULL ON NULL INPUT
+                            RETURNS int
+                            LANGUAGE java
+                            AS $$ return val1 + val2; $$""")
+
         cql.execute(f"""CREATE AGGREGATE {ks}.my_aggregate(int)
-                        SFUNC my_udf
-                        STYPE int""")
+                            SFUNC my_udf
+                            STYPE int
+                            INITCOND 0""")
 
         [r1, r2, r3] = ["jack", "'b0b @nd d0b!'", "jane"]
         cql.execute(f"CREATE ROLE {r1} WITH PASSWORD = 'pass1'")
@@ -2838,19 +2851,25 @@ def test_desc_restore(cql):
 
         cql.execute(f"GRANT ALL ON ALL KEYSPACES TO {r2}")
         cql.execute(f"GRANT SELECT ON KEYSPACE {ks} TO {r3}")
-        cql.execute(f"GRANT MODIFY ON TABLE system.roles TO {r1}")
+        cql.execute(f"GRANT MODIFY ON TABLE {ks}.my_table TO {r1}")
         cql.execute(f"GRANT AUTHORIZE ON ALL ROLES TO {r1}")
         cql.execute(f"GRANT DESCRIBE ON ALL ROLES TO {r1}")
 
-        [sl1, sl2] = ["my_service_level", "'s3rv!c3 l3v3l !!!'"]
-        cql.execute(f"CREATE SERVICE LEVEL {sl1} WITH TIMEOUT = 10ms AND WORKLOAD_TYPE = 'batch'")
-        cql.execute(f"CREATE SERVICE LEVEL {sl2} WITH TIMEOUT = 100s")
+        # Only Scylla supports service levels.
+        if is_scylla(cql):
+            [sl1, sl2] = ["my_service_level", "'s3rv!c3 l3v3l !!!'"]
+            cql.execute(f"CREATE SERVICE LEVEL {sl1} WITH TIMEOUT = 10ms AND WORKLOAD_TYPE = 'batch'")
+            cql.execute(f"CREATE SERVICE LEVEL {sl2} WITH TIMEOUT = 100s")
 
-        cql.execute(f"ATTACH SERVICE LEVEL {sl1} TO {r1}")
-        cql.execute(f"ATTACH SERVICE LEVEL {sl1} TO {r2}")
-        cql.execute(f"ATTACH SERVICE LEVEL {sl2} TO {r3}")
+            cql.execute(f"ATTACH SERVICE LEVEL {sl1} TO {r1}")
+            cql.execute(f"ATTACH SERVICE LEVEL {sl1} TO {r2}")
+            cql.execute(f"ATTACH SERVICE LEVEL {sl2} TO {r3}")
 
-        restore_stmts = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
+            # Only Scylla supports the `... WITH PASSWORDS` form of `DESC SCHEMA`.
+        if is_scylla(cql):
+            restore_stmts = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
+        else:
+            restore_stmts = list(cql.execute("DESC SCHEMA WITH INTERNALS"))
 
     def remove_other_keyspaces(rows: Iterable[DescRowType]) -> Iterable[DescRowType]:
         return filter(lambda row: row.keyspace_name == ks or row.keyspace_name == None, rows)
@@ -2864,7 +2883,11 @@ def test_desc_restore(cql):
             for stmt in extract_create_statements(restore_stmts):
                 cql.execute(stmt)
 
-            res = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
+            # Only Scylla supports the `... WITH PASSWORDS` form of `DESC SCHEMA`.
+            if is_scylla(cql):
+                res = list(cql.execute("DESC SCHEMA WITH INTERNALS AND PASSWORDS"))
+            else:
+                res = list(cql.execute("DESC SCHEMA WITH INTERNALS"))
 
             # Other test cases might've created keyspaces that would be included in the result
             # of `DESC SCHEMA`, so we need to filter them out.
