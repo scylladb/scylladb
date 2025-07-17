@@ -2249,6 +2249,7 @@ static std::unordered_set<locator::host_id> get_token_owners_in_dcs(std::vector<
 
 // Repair all tablets belong to this node for the given table
 future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_name, std::vector<sstring> table_names, bool primary_replica_only, dht::token_range_vector ranges_specified, std::vector<sstring> data_centers, std::unordered_set<locator::host_id> hosts, std::unordered_set<locator::host_id> ignore_nodes, std::optional<int> ranges_parallelism) {
+    utils::chunked_vector<locator::effective_replication_map_ptr> erms;
     std::vector<tablet_repair_task_meta> task_metas;
     for (auto& table_name : table_names) {
         lw_shared_ptr<replica::table> t;
@@ -2349,6 +2350,7 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         }
 
         size_t nr = 0;
+        bool metas_added = false;
         for (auto& m : metas) {
             nr++;
             rlogger.debug("repair[{}] Collect {} out of {} tablets: table={}.{} tablet_id={} range={} replicas={} primary_replica_only={}",
@@ -2408,14 +2410,18 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
                 }
             }
             for (auto& r : intersection_ranges) {
+                metas_added = true;
                 rlogger.debug("repair[{}] Repair tablet task table={}.{} master_shard_id={} range={} neighbors={} replicas={}",
                         rid.uuid(), keyspace_name, table_name, master_shard_id, r, repair_neighbors(nodes, shards).shard_map, m.replicas);
-                task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas, erm});
+                task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, tid, master_shard_id, r, repair_neighbors(nodes, shards), m.replicas});
                 co_await coroutine::maybe_yield();
             }
         }
+        if (metas_added) {
+            erms.push_back(std::move(erm));
+        }
     }
-    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, service::default_session_id);
+    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>({}, rid, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, service::default_session_id, std::move(erms));
 }
 
 // It is called by the repair_tablet rpc verb to repair the given tablet
@@ -2478,7 +2484,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto ranges_parallelism = std::nullopt;
     auto start = std::chrono::steady_clock::now();
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, rebuild_replicas.has_value());
+    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, utils::chunked_vector<locator::effective_replication_map_ptr>{}, rebuild_replicas.has_value());
     task_impl_ptr->sched_by_scheduler = true;
     auto task = co_await _repair_module->make_task(task_impl_ptr, {});
     task->start();
@@ -2503,6 +2509,7 @@ future<> repair::tablet_repair_task_impl::release_resources() noexcept {
     _metas_size = _metas.size();
     _metas = {};
     _tables = {};
+    _erms = {};
     return make_ready_future();
 }
 
