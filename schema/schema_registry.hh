@@ -15,7 +15,7 @@
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
 #include "replica/database_fwd.hh"
-#include "db/view/base_info.hh"
+
 namespace db {
 class schema_ctxt;
 }
@@ -88,6 +88,8 @@ public:
     future<> maybe_sync(std::function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
+    // Can be called from other shards
+    extended_frozen_schema extended_frozen() const;
     // Can be called from other shards
     frozen_schema frozen() const;
     // Can be called from other shards
@@ -171,7 +173,6 @@ schema_registry& local_schema_registry();
 // chain will last.
 class global_schema_ptr {
     schema_ptr _ptr;
-    std::optional<db::view::base_dependent_view_info> _base_info;
     unsigned _cpu_of_origin;
 public:
     // Note: the schema_ptr must come from the current shard and can't be nullptr.

@@ -61,10 +61,6 @@ extended_frozen_schema::extended_frozen_schema(const schema_ptr& c)
 {
 }
 
-extended_frozen_schema::extended_frozen_schema(frozen_schema fs, std::optional<db::view::base_dependent_view_info> base_info)
-    : fs(std::move(fs)), base_info(std::move(base_info)) {
-}
-
 schema_ptr extended_frozen_schema::unfreeze(const db::schema_ctxt& ctxt) const {
     return fs.unfreeze(ctxt, base_info);
 }
