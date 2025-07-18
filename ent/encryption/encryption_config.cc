@@ -111,6 +111,19 @@ master_key is an GCP KMS key name from which all keys used for actual encryption
 This key must be pre-created with access policy allowing the above credentials Encrypt and Decrypt operations.
 
 )foo")
+		  , azure_hosts(this, "azure_hosts", value_status::Used, { },
+                                R"foo(Azure Key Vault host(s).
+
+The unique name of Azure Key Vault host that can be referenced in table schema.
+
+host.yourdomain.com={ azure_tenant_id=<the tenant hosting your service principal>, azure_client_id=<ID of your service principal>, azure_client_secret=<secret of the service principal>, azure_client_certificate_path=<path to PEM-encoded certificate and private key of the service principal>, master_key=<vault name>/<keyname>, truststore=/path/to/truststore.pem, priority_string=<tls priority string>, key_cache_expiry=<cache expiry in ms>, key_cache_refersh=<cache refresh in ms>}:...
+
+Authentication can be explicit with Service Principal credentials or by resolving default credentials (see Azure docs).
+
+master_key is a Vault key name from which all keys used for actual encryption of scylla data will be derived.
+This key must be pre-created with access policy allowing the above credentials Wrapkey and Unwrapkey operations.
+
+)foo")
         , user_info_encryption(this, "user_info_encryption", value_status::Used,
                                 { { "enabled", "false" }, { CIPHER_ALGORITHM,
                                                 "AES/CBC/PKCS5Padding" }, {
