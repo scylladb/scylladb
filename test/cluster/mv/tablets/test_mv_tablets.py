@@ -294,7 +294,7 @@ async def test_mv_tablet_split(manager: ManagerClient):
         '--target-tablet-size-in-bytes', '1024',
     ]
     servers = [await manager.server_add(config={
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }, cmdline=cmdline)]
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
