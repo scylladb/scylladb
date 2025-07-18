@@ -60,6 +60,8 @@ struct range_repair_time {
     shard_id shard;
 };
 
+class tombstone_gc_state_snapshot;
+
 class tombstone_gc_state {
     gc_time_min_source _gc_min_source;
     per_table_history_maps* _reconcile_history_maps;
@@ -103,6 +105,8 @@ public:
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const;
 
+    tombstone_gc_state_snapshot snapshot(table_id) const;
+
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
     void update_group0_refresh_time(gc_clock::time_point refresh_time);
 
@@ -111,6 +115,23 @@ public:
 
     void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
     future<> flush_pending_repair_time_update(replica::database& db);
+};
+
+// A snapshot of the tombstone gc state at a given point in time.
+// Returned expiry times are as if they were queried at the time of taking the snapshot.
+class tombstone_gc_state_snapshot {
+    table_id _table_id;
+    std::unique_ptr<per_table_history_maps> _reconcile_history_maps;
+    gc_clock::time_point _query_time;
+
+    tombstone_gc_state _state;
+
+public:
+    tombstone_gc_state_snapshot(table_id table_id, std::unique_ptr<per_table_history_maps> history_maps, gc_clock::time_point query_time) noexcept;
+    tombstone_gc_state_snapshot(tombstone_gc_state_snapshot&&) noexcept;
+    ~tombstone_gc_state_snapshot();
+
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk) const;
 };
 
 std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name);

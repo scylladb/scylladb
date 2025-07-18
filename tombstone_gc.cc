@@ -211,6 +211,42 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
     std::abort();
 }
 
+tombstone_gc_state_snapshot tombstone_gc_state::snapshot(table_id tid) const {
+    const auto query_time = gc_clock::now();
+    auto table_history_map = get_repair_history_for_table(tid);
+
+    auto new_history_maps = std::make_unique<per_table_history_maps>();
+    new_history_maps->_repair_maps.emplace(tid, make_lw_shared<repair_history_map>(*table_history_map));
+    new_history_maps->_group0_gc_time = make_lw_shared<gc_clock::time_point>(*_reconcile_history_maps->_group0_gc_time);
+
+    return tombstone_gc_state_snapshot(tid, std::move(new_history_maps), query_time);
+}
+
+tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(table_id tid, std::unique_ptr<per_table_history_maps> history_maps, gc_clock::time_point query_time) noexcept
+    : _table_id(tid)
+    , _reconcile_history_maps(std::move(history_maps))
+    , _query_time(query_time)
+    , _state(_reconcile_history_maps.get())
+{}
+
+tombstone_gc_state_snapshot::tombstone_gc_state_snapshot(tombstone_gc_state_snapshot&& o) noexcept
+    : _table_id(o._table_id)
+    , _reconcile_history_maps(std::move(o._reconcile_history_maps))
+    , _query_time(o._query_time)
+    , _state(_reconcile_history_maps.get())
+{
+}
+
+tombstone_gc_state_snapshot::~tombstone_gc_state_snapshot() {
+}
+
+gc_clock::time_point tombstone_gc_state_snapshot::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk) const {
+    if (s->id() != _table_id) {
+        on_internal_error(dblog, format("tombstone_gc_state_snapshot: get_gc_before_for_key() called for table_id={} and dk={} but snapshot is for table_id={}", s->id(), dk, _table_id));
+    }
+    return _state.get_gc_before_for_key(s, dk, _query_time);
+}
+
 void tombstone_gc_state::update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
     auto m = get_or_create_repair_history_for_table(id);
     if (!m) {

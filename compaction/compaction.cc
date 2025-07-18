@@ -54,6 +54,87 @@
 #include "replica/database.hh"
 #include "timestamp.hh"
 
+
+can_gc_fn always_gc = [] (tombstone, is_shadowable) { return true; };
+can_gc_fn never_gc = [] (tombstone, is_shadowable) { return false; };
+
+max_purgeable_fn can_always_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::max_timestamp); };
+max_purgeable_fn can_never_purge = [] (const dht::decorated_key&, is_shadowable) -> max_purgeable { return max_purgeable(api::min_timestamp); };
+
+void max_purgeable::recalculate_timestamp_and_source() {
+    for (const auto& ts : _exploded_timestamps) {
+        if (ts.timestamp > _timestamp) {
+            _timestamp = ts.timestamp;
+            _source = ts.source;
+        }
+    }
+}
+
+max_purgeable::max_purgeable(std::vector<timestamp_with_expiry> exploded_timestamps)
+    : _exploded_timestamps(std::move(exploded_timestamps))
+{
+    recalculate_timestamp_and_source();
+}
+
+max_purgeable& max_purgeable::combine(max_purgeable other) {
+    if (_exploded_timestamps.empty() && other._exploded_timestamps.empty()) {
+        if (other._timestamp > _timestamp) {
+            _timestamp = other._timestamp;
+            _source = other._source;
+        }
+        return *this;
+    }
+
+    for (max_purgeable& mp : {std::ref(*this), std::ref(other)}) {
+        if (mp._exploded_timestamps.empty()) {
+            mp._exploded_timestamps.emplace_back(mp._timestamp, mp._source);
+        }
+    }
+    _timestamp = api::missing_timestamp;
+    _source = timestamp_source::none;
+    std::ranges::move(other._exploded_timestamps, std::back_inserter(_exploded_timestamps));
+    recalculate_timestamp_and_source();
+    return *this;
+}
+
+max_purgeable::can_purge_result max_purgeable::can_purge(tombstone t, gc_clock::time_point expiry_time) const {
+    if (!*this) {
+        return { };
+    }
+    if (_exploded_timestamps.empty()) {
+        if (t.timestamp >= _timestamp) {
+            return { .can_purge = false, .timestamp_source = _source };
+        } else {
+            return { };
+        }
+    }
+
+    for (const auto& ts : _exploded_timestamps) {
+        if (!ts.expiry_threshold || ts.expiry_threshold.value() < expiry_time) {
+            if (t.timestamp >= ts.timestamp) {
+                // No point in checking further timestamps, we already know we can't purge.
+                return { .can_purge = false, .timestamp_source = ts.source };
+            }
+        }
+    }
+    return { };
+}
+
+auto fmt::formatter<max_purgeable_timestamp_source>::format(max_purgeable_timestamp_source s, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    switch (s) {
+        case max_purgeable_timestamp_source::none:
+            return format_to(ctx.out(), "none");
+        case max_purgeable_timestamp_source::memtable_possibly_shadowing_data:
+            return format_to(ctx.out(), "memtable_possibly_shadowing_data");
+        case max_purgeable_timestamp_source::other_sstables_possibly_shadowing_data:
+            return format_to(ctx.out(), "other_sstables_possibly_shadowing_data");
+    }
+}
+
+auto fmt::formatter<max_purgeable>::format(max_purgeable mp, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return format_to(ctx.out(), "max_purgeable{{timestamp={}, source={}}}", mp.timestamp(), mp.source());
+}
+
 namespace sstables {
 
 bool is_eligible_for_compaction(const shared_sstable& sst) noexcept {
@@ -141,7 +222,7 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
         clogger.trace("get_max_purgeable_timestamp {}.{}: tombstone_gc_enabled=false, returning min_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
-        return { .timestamp = api::min_timestamp };
+        return max_purgeable(api::min_timestamp);
     }
 
     auto timestamp = api::max_timestamp;
@@ -150,7 +231,7 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
         // check memtables and other sstables not being compacted.
         clogger.trace("get_max_purgeable_timestamp {}.{}: gc_check_only_compacting_sstables=true, returning max_timestamp",
                 table_s.schema()->ks_name(), table_s.schema()->cf_name());
-        return { .timestamp = timestamp };
+        return max_purgeable(timestamp);
     }
 
     auto source = max_purgeable::timestamp_source::none;
@@ -227,7 +308,7 @@ static max_purgeable get_max_purgeable_timestamp(const table_state& table_s, sst
             source = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
         }
     }
-    return { .timestamp = timestamp, .source = source };
+    return max_purgeable(timestamp, source);
 }
 
 static std::vector<shared_sstable> get_uncompacting_sstables(const table_state& table_s, std::vector<shared_sstable> sstables) {

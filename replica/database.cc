@@ -1892,13 +1892,19 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     co_return m;
 }
 
-api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
+max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
     const auto get_min_ts = [is] (const memtable& mt) {
         // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
         return is ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
     };
+    const auto get_expiry_treshold = [s = _current_schema(), &dk] (const memtable& mt) -> std::optional<gc_clock::time_point> {
+        if (auto* snapshot = mt.get_tombstone_gc_state_snapshot(); snapshot) {
+            return snapshot->get_gc_before_for_key(s, dk);
+        }
+        return std::nullopt;
+    };
 
-    auto min_live_ts = api::max_timestamp;
+    std::vector<timestamp_with_expiry> timestamps;
 
     for (const auto& mt : _memtables) {
         const auto mt_min_live_ts = get_min_ts(*mt);
@@ -1911,17 +1917,17 @@ api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& 
         if (!mt->is_merging_to_cache() && !mt->contains_partition(dk)) {
             continue;
         }
-        min_live_ts = std::min(min_live_ts, mt_min_live_ts);
+        timestamps.emplace_back(mt_min_live_ts, max_purgeable_timestamp_source::memtable_possibly_shadowing_data, get_expiry_treshold(*mt));
     }
 
     for (const auto& mt : _flushed_memtables_with_active_reads) {
         // We cannot check if the flushed memtable contains the key as it
         // becomes empty after the merge to cache completes, so we only use the
         // min ts metadata.
-        min_live_ts = std::min(min_live_ts, get_min_ts(mt));
+        timestamps.emplace_back(get_min_ts(mt), max_purgeable_timestamp_source::memtable_possibly_shadowing_data, get_expiry_treshold(mt));
     }
 
-    return min_live_ts;
+    return max_purgeable(std::move(timestamps));
 }
 
 future<> memtable_list::flush() {
@@ -1946,7 +1952,7 @@ future<> memtable_list::flush() {
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
     return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
             _table_shared_data,
-            _table_stats, this, _compaction_scheduling_group);
+            _table_stats, this, _compaction_scheduling_group, _gc_state);
 }
 
 // Synchronously swaps the active memtable with a new, empty one,
