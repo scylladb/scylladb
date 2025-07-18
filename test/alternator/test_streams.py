@@ -638,11 +638,10 @@ def compare_events(expected_events, output, mode):
         # In DynamoDB, eventSource is 'aws:dynamodb'. We decided to set it to
         # a *different* value - 'scylladb:alternator'. Issue #6931.
         assert 'eventSource' in event
-        # Alternator is missing "awsRegion", which makes little sense for it
-        # (although maybe we should have provided the DC name). Issue #6931.
-        #assert 'awsRegion' in event
-        # Alternator is also missing the "eventVersion" entry. Issue #6931.
-        #assert 'eventVersion' in event
+        # 'eventVersion' is optional, but DynamoDB always sets it, and so do
+        # we. More in issue #6931.
+        assert 'eventVersion' in event
+        assert event['eventVersion'] is not None
         # Check that eventID appears, but can't check much on what it is.
         assert 'eventID' in event
         op = event['eventName']
