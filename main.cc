@@ -1810,6 +1810,12 @@ sharded<locator::shared_token_metadata> token_metadata;
                 ss.stop().get();
             });
 
+            // Add a callback for storage service to to be able to close all remaining write requests in storage proxy
+            // after shutting down CQL servers.
+            ss.local().set_shutdown_write_handlers([&proxy]() -> future<> {
+                return proxy.invoke_on_all(&service::storage_proxy::cancel_all_write_response_handlers);
+            });
+
             api::set_server_storage_service(ctx, ss, group0_client).get();
             auto stop_ss_api = defer_verbose_shutdown("storage service API", [&ctx] {
                 api::unset_server_storage_service(ctx).get();

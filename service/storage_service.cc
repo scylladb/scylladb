@@ -2875,6 +2875,17 @@ future<> storage_service::stop_transport() {
             _stream_manager.invoke_on_all(&streaming::stream_manager::shutdown).get();
             slogger.info("Stop transport: shutdown stream_manager done");
 
+            // There may still be write handlers waiting for background writes in the storage_proxy
+            // that hold the ERM. After the transport is shut down, replies cannot be received.
+            // If any RPC commands are executing barrier_and_drain at the same time,
+            // they will get stuck waiting for these writes to complete, which will block
+            // messaging server shutdown.
+            // Therefore, all write handlers should be cancelled here.
+            if(_cancel_write_response_handlers) {
+                _cancel_write_response_handlers().get();
+            }
+            slogger.info("Stop transport: shutdown write handlers done");
+
             slogger.info("Stop transport: done");
         }).forward_to(std::move(stopped));
     }
@@ -5818,6 +5829,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
+                co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
                 if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
                     for (auto& n : _topology_state_machine._topology.transition_nodes) {
                         if (!_address_map.find(locator::host_id{n.first.uuid()})) {
