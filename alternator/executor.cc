@@ -16,6 +16,7 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "mutation/atomic_cell_or_collection.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -2269,9 +2270,10 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, std::move(c.value)));
         }
     }
+    const column_definition& attrs_col = attrs_column(*schema);
     if (!attrs_collector.empty()) {
         auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
-        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        row.cells().apply(attrs_col, std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
@@ -2282,11 +2284,18 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     // Scylla proper, to implement the operation to replace an entire
     // collection ("UPDATE .. SET x = ..") - see
     // cql3::update_parameters::make_tombstone_just_before().
-    if (use_partition_tombstone) {
-        m.partition().apply(tombstone(ts-1, gc_clock::now()));
-    } else {
-        row.apply(tombstone(ts-1, gc_clock::now()));
-    }
+    // We use cell tombstones, because they don't emit REMOVE CDC rows, whereas
+    // adding a row tombstone does. Issue #6930.
+    auto collection_tombstone = collection_mutation_description{tombstone{ts-1, gc_clock::now()}};
+    row.cells().apply(attrs_col, collection_tombstone.serialize(*attrs_col.type));
+    row.cells().for_each_cell([&](column_id id, atomic_cell_or_collection& cell) {
+        const column_definition& cdef = schema->regular_column_at(id);
+        if (cdef.type->is_multi_cell()) {
+            row.cells().apply(cdef, collection_tombstone.serialize(*cdef.type));
+        } else {
+            row.cells().apply(cdef, atomic_cell::make_dead(ts-1, gc_clock::now()));
+        }
+    });
     return m;
 }
 
