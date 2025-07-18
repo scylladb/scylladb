@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
     "use_tablets",
     [
         pytest.param(False, id="vnodes"),
-        pytest.param(True, id="tablets", marks=pytest.mark.xfail(reason="issue #20282")),
+        pytest.param(True, id="tablets", marks=[pytest.mark.xfail(reason="issue #20282"), pytest.mark.stable_regression]),
     ],
 )
 @pytest.mark.asyncio
