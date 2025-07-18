@@ -38,7 +38,7 @@ from xml.etree.ElementTree import ParseError
 
 import allure
 from pytest import Config
-from test import BUILD_DIR, COMBINED_TESTS
+from test import BUILD_DIR, COMBINED_TESTS, TEST_DIR
 from test.pylib.cpp.common_cpp_conftest import get_modes_to_run
 from test.pylib.cpp.facade import CppTestFacade, CppTestFailure
 
@@ -110,7 +110,9 @@ class BoostTestFacade(CppTestFacade):
             except IOError:
                 return ''
         root_log_dir = self.temp_dir / mode
-        log_xml = root_log_dir / f"{test_name}.{self.run_id}.xml"
+        log_xml = (root_log_dir /
+                   f"{'.'.join(file_name.relative_to(TEST_DIR).parent.parts)}"
+                   f".{file_name.stem}.{test_name}.{self.run_id}.xml")
         args = [ str(executable),
                  '--report_level=no',
                  '--output_format=XML',
