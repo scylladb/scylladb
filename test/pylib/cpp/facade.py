@@ -33,7 +33,7 @@ from typing import Sequence
 
 from pytest import Config
 
-from test import TOP_SRC_DIR
+from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.cpp.util import make_test_object
 from test.pylib.resource_gather import get_resource_gather
 
@@ -78,7 +78,9 @@ class CppTestFacade(ABC):
                     env: dict = None) -> \
             tuple[bool, Path, int]:
         root_log_dir = self.temp_dir / mode
-        stdout_file_path = root_log_dir / f"{test_name}_stdout.{self.run_id}.log"
+        stdout_file_path = (root_log_dir /
+                            f"{'.'.join(file_name.relative_to(TEST_DIR).parent.parts)}"
+                            f".{file_name.stem}.{test_name}_stdout.{self.run_id}.log")
         test = make_test_object(test_name, file_name.parent.name, self.run_id, mode, log_dir=self.temp_dir)
 
         resource_gather = get_resource_gather(self.gather_metrics, test=test)
