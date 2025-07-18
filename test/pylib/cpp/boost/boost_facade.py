@@ -140,7 +140,7 @@ class BoostTestFacade(CppTestFacade):
             )
             failure = CppTestFailure(
                 file_name.name,
-                line_num=results[0].line_num if results is not None else -1,
+                line_num=results[0].line_num if results else -1,
                 contents=msg
             )
             return [failure], ''
