@@ -12,17 +12,10 @@ from allure_pytest.utils import get_pytest_report_status
 
 class ReportPlugin:
     config = None
-    build_mode = None
-    run_id = None
 
-    # Pytest hook to modify test name to include mode and run_id
+    # Pytest hook to attach logs to the Allure report only when the test fails.
     def pytest_configure(self, config):
-        # getting build_mode in two steps is needed for the cases when no mode parameter is provided
-        self.build_mode = config.getoption("modes")
-        if self.build_mode:
-            self.build_mode = self.build_mode[0]
         self.config = config
-        self.run_id = config.getoption("run_id")
 
     @pytest.hookimpl(hookwrapper=True)
     def pytest_runtest_makereport(self):
@@ -38,14 +31,3 @@ class ReportPlugin:
                 allure.attach(report.capstdout, "stdout", allure.attachment_type.TEXT, None)
             if report.capstderr:
                 allure.attach(report.capstderr, "stderr", allure.attachment_type.TEXT, None)
-
-    @pytest.fixture(scope="function", autouse=True)
-    def allure_set_mode(self, request):
-        """
-        Add mode tag to be able to search by it.
-        Add parameters to make allure distinguish them and not put them to retries.
-        """
-        if self.build_mode is not None or self.run_id is not None:
-            allure.dynamic.tag(self.build_mode)
-            allure.dynamic.parameter('mode', self.build_mode)
-            allure.dynamic.parameter('run_id', self.run_id)

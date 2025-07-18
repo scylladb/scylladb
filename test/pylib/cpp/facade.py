@@ -62,7 +62,6 @@ class CppTestFailureList(Exception):
 class CppTestFacade(ABC):
     def __init__(self, config: Config, combined_tests: dict[str, list[str]] = None):
         self.temp_dir: Path = Path(config.getoption('tmpdir'))
-        self.run_id: int = config.getoption('run_id') or 1
         self.gather_metrics: bool = config.getoption('gather_metrics')
         self.save_log_on_success: bool = config.getoption('save_log_on_success')
         self.random_seed: int = config.getoption('random_seed')
@@ -72,17 +71,16 @@ class CppTestFacade(ABC):
         raise NotImplementedError
 
     def run_test(self, executable: Path, original_name: str, test_id: str, mode: str, file_name: Path,
-                 test_args: Sequence[str] = (), env: dict = None) -> tuple[Sequence[CppTestFailure] | None, str]:
+                 test_args: Sequence[str] = (), env: dict = None, run_id: int = 1) -> tuple[Sequence[CppTestFailure] | None, str]:
          raise NotImplementedError
 
     def run_process(self, test_name: str, mode: str, file_name: Path, args: list[str] = (),
-                    env: dict = None) -> \
-            tuple[bool, Path, int]:
+                    env: dict = None, run_id: int = 1) -> tuple[bool, Path, int]:
         root_log_dir = self.temp_dir / mode
         stdout_file_path = (root_log_dir /
                             f"{'.'.join(file_name.relative_to(TEST_DIR).parent.parts)}"
-                            f".{file_name.stem}.{test_name}_stdout.{self.run_id}.log")
-        test = make_test_object(test_name, file_name.parent.name, self.run_id, mode, log_dir=self.temp_dir)
+                            f".{file_name.stem}.{test_name}_stdout.{run_id}.log")
+        test = make_test_object(test_name, file_name.parent.name, run_id, mode, log_dir=self.temp_dir)
 
         resource_gather = get_resource_gather(self.gather_metrics, test=test)
         resource_gather.make_cgroup()
