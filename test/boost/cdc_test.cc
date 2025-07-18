@@ -30,6 +30,7 @@
 #include "types/list.hh"
 #include "types/set.hh"
 #include "types/user.hh"
+#include "types/vector.hh"
 
 #include "cql3/column_identifier.hh"
 
@@ -203,6 +204,16 @@ SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_cdc_log_table_with_existing_
     }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_detecting_conflict_of_vsc_log_table_with_existing_table) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        // Conflict on CREATE which enables vsc log
+        e.execute_cql("CREATE TABLE ks.tbl_scylla_vsc_log (a int PRIMARY KEY, v vector<float, 3>)").get();
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY, v vector<float, 3>)").get();
+        BOOST_REQUIRE_THROW(e.execute_cql("CREATE INDEX ON ks.tbl (v) USING 'vector_index'").get(), exceptions::invalid_request_exception);
+        BOOST_REQUIRE(!e.local_db().has_schema("ks", "tbl_v_idx"));
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
     do_with_cql_env_thread([] (cql_test_env& e) {
         auto assert_unauthorized = [&e] (const sstring& stmt) {
@@ -215,6 +226,43 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
 
         // Allow MODIFY, SELECT, ALTER
         auto log_table = "ks." + cdc::log_name("tbl");
+        auto stream_id = cdc::log_meta_column_name("stream_id");
+        auto time = cdc::log_meta_column_name("time");
+        auto batch_seq_no = cdc::log_meta_column_name("batch_seq_no");
+        auto ttl = cdc::log_meta_column_name("ttl");
+
+        e.execute_cql(format("INSERT INTO {} (\"{}\", \"{}\", \"{}\") VALUES (0x00000000000000000000000000000000, now(), 0)",
+            log_table, stream_id, time, batch_seq_no
+        )).get();
+        e.execute_cql(format("UPDATE {} SET \"{}\"= 100 WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
+            log_table, ttl, stream_id, time, batch_seq_no
+        )).get();
+        e.execute_cql(format("DELETE FROM {} WHERE \"{}\" = 0x00000000000000000000000000000000 AND \"{}\" = now() AND \"{}\" = 0",
+            log_table, stream_id, time, batch_seq_no
+        )).get();
+        e.execute_cql("SELECT * FROM " + log_table).get();
+        e.execute_cql("ALTER TABLE " + log_table + " ALTER \"" + ttl + "\" TYPE blob").get();
+
+        // Disallow DROP
+        assert_unauthorized("DROP TABLE " + log_table);
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_permissions_of_vsc_log_table) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        auto assert_unauthorized = [&e] (const sstring& stmt) {
+            testlog.info("Must throw unauthorized_exception: {}", stmt);
+            BOOST_REQUIRE_THROW(e.execute_cql(stmt).get(), exceptions::unauthorized_exception);
+        };
+
+        e.execute_cql("CREATE TABLE ks.tbl (a int PRIMARY KEY, v vector<float, 3>)").get();
+        BOOST_REQUIRE(e.local_db().has_schema("ks", "tbl"));
+
+        // Enable VSC
+        e.execute_cql("CREATE INDEX ON ks.tbl (v) USING 'vector_index'").get();
+
+        // Allow MODIFY, SELECT, ALTER
+        auto log_table = "ks." + cdc::vsc_log_name("tbl");
         auto stream_id = cdc::log_meta_column_name("stream_id");
         auto time = cdc::log_meta_column_name("time");
         auto batch_seq_no = cdc::log_meta_column_name("batch_seq_no");
@@ -298,7 +346,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
         const auto base_tbl_name = "tbl";
         e.execute_cql("CREATE TYPE typ (x int)").get();
         e.execute_cql(format("CREATE TABLE {} (pk int, ck int, s int static, c int, "
-                "c_list list<int>, c_map map<int, int>, c_set set<int>, c_typ typ,"
+                "c_list list<int>, c_map map<int, int>, c_set set<int>, c_typ typ, c_vec vector<int, 3>,"
                 "PRIMARY KEY (pk, ck)) WITH cdc = {{'enabled': 'true'}}", base_tbl_name)).get();
         const auto log_schema = e.local_db().find_schema("ks", cdc::log_name(base_tbl_name));
 
@@ -371,6 +419,78 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_log_schema) {
         assert_has_column(cdc::log_data_column_name("c_typ"), c_typ_frozen);
         assert_has_column(cdc::log_data_column_deleted_name("c_typ"), boolean_type);
         assert_has_column(cdc::log_data_column_deleted_elements_name("c_typ"), set_type_impl::get_instance(short_type, false));
+
+        // clustering row, vector
+        assert_has_column(cdc::log_data_column_name("c_vec"), vector_type_impl::get_instance(int32_type, 3));
+        assert_has_column(cdc::log_data_column_deleted_name("c_vec"), boolean_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("c_vec"));
+
+        // Check if we missed something
+        BOOST_REQUIRE_EQUAL(required_column_count, log_schema->all_columns_count());
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_vsc_log_schema) {
+    do_with_cql_env_thread([] (cql_test_env& e) {
+        int required_column_count = 0;
+
+        const auto base_tbl_name = "tbl";
+        e.execute_cql(format("CREATE TABLE {} (pk int, ck int, c int, c_vec vector<float, 3>,"
+                "PRIMARY KEY (pk, ck))", base_tbl_name)).get();
+
+        // Enable VSC
+        e.execute_cql(format("CREATE INDEX ON {} (c_vec) USING 'vector_index'", base_tbl_name)).get();
+
+        const auto log_schema = e.local_db().find_schema("ks", cdc::vsc_log_name(base_tbl_name));
+
+        auto assert_has_column = [&] (sstring column_name, data_type type, column_kind kind = column_kind::regular_column) {
+            BOOST_TEST_MESSAGE(format("Checking that column {} exists", column_name));
+            const auto cdef = log_schema->get_column_definition(to_bytes(column_name));
+            BOOST_REQUIRE_NE(cdef, nullptr);
+            BOOST_TEST_MESSAGE(format("Want kind {}, has {}", (int)kind, (int)cdef->kind));
+            BOOST_REQUIRE(cdef->kind == kind);
+            BOOST_TEST_MESSAGE(format("Want type {}, has {}", type->name(), cdef->type->name()));
+            BOOST_REQUIRE(*cdef->type == *type);
+            required_column_count++;
+        };
+
+        auto assert_does_not_have_column = [&] (sstring column_name) {
+            BOOST_TEST_MESSAGE(format("Checking that column {} does not exist", column_name));
+            const auto cdef = log_schema->get_column_definition(to_bytes(column_name));
+            BOOST_REQUIRE_EQUAL(cdef, nullptr);
+        };
+
+        BOOST_TEST_MESSAGE(format("Schema of the vsc log table is: {}", log_schema));
+
+        // vsc log partition key
+        assert_has_column(cdc::log_meta_column_name("stream_id"), bytes_type, column_kind::partition_key);
+        assert_has_column(cdc::log_meta_column_name("time"), timeuuid_type, column_kind::clustering_key);
+        assert_has_column(cdc::log_meta_column_name("batch_seq_no"), int32_type, column_kind::clustering_key);
+
+        // vsc log clustering key
+        assert_has_column(cdc::log_meta_column_name("operation"), byte_type);
+        assert_has_column(cdc::log_meta_column_name("ttl"), long_type);
+        assert_has_column(cdc::log_meta_column_name("end_of_batch"), boolean_type);
+
+        // pk
+        assert_has_column(cdc::log_data_column_name("pk"), int32_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_name("pk"));
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("pk"));
+
+        // ck
+        assert_has_column(cdc::log_data_column_name("ck"), int32_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_name("ck"));
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("ck"));
+
+        // clustering row, atomic
+        assert_does_not_have_column(cdc::log_data_column_name("c"));
+        assert_does_not_have_column(cdc::log_data_column_deleted_name("c"));
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("c"));
+
+        // clustering row, vector
+        assert_has_column(cdc::log_data_column_name("c_vec"), vector_type_impl::get_instance(float_type, 3));
+        assert_has_column(cdc::log_data_column_deleted_name("c_vec"), boolean_type);
+        assert_does_not_have_column(cdc::log_data_column_deleted_elements_name("c_vec"));
 
         // Check if we missed something
         BOOST_REQUIRE_EQUAL(required_column_count, log_schema->all_columns_count());

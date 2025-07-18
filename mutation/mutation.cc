@@ -77,7 +77,7 @@ void mutation::set_cell(const clustering_key_prefix& prefix, const bytes& name, 
         api::timestamp_type timestamp, ttl_opt ttl) {
     auto column_def = schema()->get_column_definition(name);
     if (!column_def) {
-        throw std::runtime_error(format("no column definition found for '{}'", name));
+        return;
     }
     return set_cell(prefix, *column_def, atomic_cell::make_live(*column_def->type, timestamp, column_def->type->decompose(value), ttl));
 }

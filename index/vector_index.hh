@@ -26,8 +26,10 @@ public:
     std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const override;
     bool should_create_view() const override;
     void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) override;
+    bool is_vector_index() const override;
 };
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory();
-
+bool has_vector_index(const schema& s);
+std::unordered_set<sstring> get_vector_indexed_columns(const schema& s);
 }

@@ -30,6 +30,12 @@ CDC_LOG_TABLE_DESC_PREFIX =                                                     
                 "   A CDC log table is created automatically when the base is created.\n"   \
                 "\n"
 CDC_LOG_TABLE_DESC_SUFFIX = "\n*/"
+VSC_LOG_TABLE_DESC_PREFIX =                                                                 \
+                "/* Do NOT execute this statement! It's only for informational purposes.\n" \
+                "   A VSC log table is created automatically when the index is created.\n"  \
+                "\n"
+VSC_LOG_TABLE_DESC_SUFFIX = "\n*/"
+
 
 def filter_non_default_user(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.name != DEFAULT_SUPERUSER, desc_result_iter)
@@ -1035,6 +1041,56 @@ def test_hide_cdc_table(scylla_only, cql, test_keyspace):
         for row in ks_tables:
             assert row.table_name == t_name or row.table_name == cdc_log_name
 
+# We need to hide VSC log tables (more precisely, their CREATE statements and/or names)
+# but we are attaching `ALTER TABLE <VSC log table name> WITH <all table's properties>` to description of base table
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_hide_vsc_table(scylla_only, cql, test_keyspace):
+    vsc_table_suffix = "_scylla_vsc_log"
+
+    with new_test_table(cql, test_keyspace, "a int primary key, b vector<float, 3>") as t:
+        t_name = t.split('.')[1]
+        vsc_log_name = t_name + vsc_table_suffix
+
+        # Create vector index to enable VSC
+        cql.execute(f"CREATE INDEX ON {t}(b) USING 'vector_index'")
+
+        # Check if the log table exists
+        vsc_log_table_entry = cql.execute(f"SELECT * FROM system_schema.tables WHERE keyspace_name='{test_keyspace}' AND table_name='{vsc_log_name}'").all()
+        assert len(vsc_log_table_entry) == 1
+
+        # DESC TABLES
+        desc_tables = cql.execute("DESC TABLES")
+        assert vsc_log_name not in [r.name for r in desc_tables]
+
+        # DESC KEYSPACE ks
+        desc_keyspace = cql.execute(f"DESC KEYSPACE {test_keyspace}").all()
+        for row in desc_keyspace:
+            if row.name == vsc_log_name:
+                assert f"ALTER TABLE {test_keyspace}.{vsc_log_name} WITH" in row.create_statement
+
+        #  DESC SCHEMA
+        desc_schema = cql.execute("DESC SCHEMA")
+        for row in desc_schema:
+            if row.name == vsc_log_name:
+                assert f"ALTER TABLE {test_keyspace}.{vsc_log_name} WITH" in row.create_statement
+
+        # Check base table description contains ALTER TABLE statement for VSC log table
+        desc_base_table = cql.execute(f"DESC TABLE {t}").all()
+        assert f"ALTER TABLE {test_keyspace}.{vsc_log_name} WITH" in desc_base_table[2].create_statement
+
+        # Drop current VSC base table and try to recreate it with describe output
+        cql.execute(f"DROP TABLE {t}")
+        for row in desc_keyspace[1:]: # [1:] because we want to skip first row (keyspace's CREATE STATEMENT)
+            cql.execute(row.create_statement)
+
+        # Check if base and log tables were recreated
+        ks_tables = cql.execute(f"SELECT * FROM system_schema.tables WHERE keyspace_name='{test_keyspace}'").all()
+        assert len(ks_tables) == 2
+        for row in ks_tables:
+            assert row.table_name == t_name or row.table_name == vsc_log_name
+
 # Verify that the format of the result of `DESC TABLE` targeting a CDC log table
 # has the expected format.
 @pytest.mark.parametrize("test_keyspace",
@@ -1058,6 +1114,33 @@ def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace):
         # the user that they shouldn't attempt to restore a CDC log table with the returned statement.
         assert create_statement.startswith(CDC_LOG_TABLE_DESC_PREFIX)
         assert create_statement.endswith(CDC_LOG_TABLE_DESC_SUFFIX)
+
+# Verify that the format of the result of `DESC TABLE` targeting a VSC log table
+# has the expected format.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_describe_vsc_log_table_format(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
+        log_table = f"{table}_scylla_vsc_log"
+        _, log_table_name = log_table.split(".")
+
+        # Create vector index to enable VSC
+        cql.execute(f"CREATE INDEX ON {table}(v) USING 'vector_index'")
+
+        [row] = cql.execute(f"DESC TABLE {log_table}")
+
+        assert row.keyspace_name == test_keyspace
+        assert row.type == "table"
+        assert row.name == log_table_name
+
+        create_statement = row.create_statement
+
+        # The actual content of `row.create_statement` is tested separately in `test_describe_vsc_log_table_create_statement`.
+        # We only want to confirm here that the statement is wrapped in CQL comment markers and that it informs
+        # the user that they shouldn't attempt to restore a VSC log table with the returned statement.
+        assert create_statement.startswith(VSC_LOG_TABLE_DESC_PREFIX)
+        assert create_statement.endswith(VSC_LOG_TABLE_DESC_SUFFIX)
 
 # Verify that the create statement returned by `DESC TABLE` targeting a CDC log table
 # is correct and as expected.
@@ -1113,6 +1196,65 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
 
         assert create_statement == expected
 
+# Verify that the create statement returned by `DESC TABLE` targeting a VSC log table
+# is correct and as expected.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_describe_vsc_log_table_create_statement(scylla_only, cql, test_keyspace):
+    def format_create_statement(stmt: str) -> str:
+        stmt = " ".join(stmt.split("\n"))
+        stmt = " ".join(stmt.split())
+        stmt = stmt.strip()
+        return stmt
+
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
+        log_table = f"{table}_scylla_vsc_log"
+
+        # Create vector index to enable VSC
+        cql.execute(f"CREATE INDEX ON {table}(v) USING 'vector_index'")
+
+        [row] = cql.execute(f"DESC TABLE {log_table}")
+        create_statement = row.create_statement
+
+        # We want to get rid of the CQL comment markers: "/*" and "*/", as well as the warning
+        # for the user that informs them that they shouldn't restore a VSC log table using the
+        # returned statement.
+        create_statement = create_statement.removeprefix(VSC_LOG_TABLE_DESC_PREFIX)
+        create_statement = create_statement.removesuffix(VSC_LOG_TABLE_DESC_SUFFIX)
+
+        create_statement = format_create_statement(create_statement)
+
+        expected = f"""\
+            CREATE TABLE {log_table} (
+                "cdc$stream_id" blob,
+                "cdc$time" timeuuid,
+                "cdc$batch_seq_no" int,
+                "cdc$deleted_v" boolean,
+                "cdc$end_of_batch" boolean,
+                "cdc$operation" tinyint,
+                "cdc$ttl" bigint,
+                p int,
+                v vector<float, 3>,
+                PRIMARY KEY ("cdc$stream_id", "cdc$time", "cdc$batch_seq_no")
+            ) WITH CLUSTERING ORDER BY ("cdc$time" ASC, "cdc$batch_seq_no" ASC)
+                AND bloom_filter_fp_chance = 0.01
+                AND caching = {{'enabled': 'false', 'keys': 'NONE', 'rows_per_partition': 'NONE'}}
+                AND comment = 'VSC log for {table}'
+                AND compaction = {{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '60', 'compaction_window_unit': 'MINUTES', 'expired_sstable_check_frequency_seconds': '1800'}}
+                AND compression = {{'sstable_compression': 'org.apache.cassandra.io.compress.LZ4Compressor'}}
+                AND crc_check_chance = 1
+                AND default_time_to_live = 0
+                AND gc_grace_seconds = 0
+                AND max_index_interval = 2048
+                AND memtable_flush_period_in_ms = 0
+                AND min_index_interval = 128
+                AND speculative_retry = '99.0PERCENTILE';
+            """
+        expected = format_create_statement(expected)
+
+        assert create_statement == expected
+
 # Verify that the options of a CDC log table specified by the create statement
 # returned by `DESC TABLE` reflect the reality and are present.
 @pytest.mark.parametrize("test_keyspace",
@@ -1149,6 +1291,63 @@ def test_describe_cdc_log_table_opts(scylla_only, cql, test_keyspace):
             opts = [" ".join(opt.strip().split()) for opt in opts]
 
             assert altered_cdc_log_table_opt in opts
+
+    test_config("bloom_filter_fp_chance = 0.5")
+    test_config("caching = {'keys': 'NONE', 'rows_per_partition': 'NONE'}")
+    test_config("comment = 'some custom comment haha'")
+    test_config("compaction = {'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '30', 'compaction_window_unit': 'HOURS', 'expired_sstable_check_frequency_seconds': '1200'}")
+    test_config("compression = {'sstable_compression': 'org.apache.cassandra.io.compress.SnappyCompressor'}")
+
+    # FIXME: Once scylladb/scylladb#2431 is resolved, change this to a custom value.
+    test_config("crc_check_chance = 1")
+
+    test_config("default_time_to_live = 11")
+    test_config("gc_grace_seconds = 31")
+    test_config("max_index_interval = 1234")
+    test_config("memtable_flush_period_in_ms = 61234")
+    test_config("min_index_interval = 17")
+    test_config("speculative_retry = '17.0PERCENTILE'")
+    test_config("tombstone_gc = {'mode': 'immediate', 'propagation_delay_in_seconds': '17'}")
+
+# Verify that the options of a VSC log table specified by the create statement
+# returned by `DESC TABLE` reflect the reality and are present.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_describe_vsc_log_table_opts(scylla_only, cql, test_keyspace):
+    def test_config(altered_vsc_log_table_opt):
+        with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
+            log_table = f"{table}_scylla_vsc_log"
+
+            # Create vector index to enable VSC
+            cql.execute(f"CREATE INDEX ON {table}(v) USING 'vector_index'")
+
+            cql.execute(f"ALTER TABLE {log_table} WITH {altered_vsc_log_table_opt}")
+
+            [row] = list(cql.execute(f"DESCRIBE TABLE {log_table} WITH INTERNALS"))
+            create_statement = row.create_statement
+
+            # We extract the options of the log table, e.g.
+            #   ["bloom_filter_fp_chance = 0.01", "caching = {'enabled': 'false', 'keys': 'NONE', 'rows_per_partition': 'NONE'}", ...]
+            # We want to get rid of unnecessary lines as well as the keywords "WITH" and "AND".
+            # All of that for the convenience of comparing the strings later on.
+
+            # We want to get rid of the CQL comment markers: "/*" and "*/", as well as the warning
+            # for the user that informs them that they shouldn't restore a VSC log table using the
+            # returned statement.
+            create_statement = create_statement.removeprefix(VSC_LOG_TABLE_DESC_PREFIX)
+            create_statement = create_statement.removesuffix(VSC_LOG_TABLE_DESC_SUFFIX)
+
+            # We get rid of the trailing semicolon to not interfere with the last option.
+            create_statement = create_statement.replace(";", "")
+
+            # We rely on the assumption that `WITH CLUSTERING ORDER` is the first option.
+            # That means that all relevant options for this tests start with "AND".
+            # We discard the prefix and take all of those options here.
+            opts = create_statement.split("AND")[1:]
+            opts = [" ".join(opt.strip().split()) for opt in opts]
+
+            assert altered_vsc_log_table_opt in opts
 
     test_config("bloom_filter_fp_chance = 0.5")
     test_config("caching = {'keys': 'NONE', 'rows_per_partition': 'NONE'}")
