@@ -12,6 +12,7 @@
 #include "simple_strategy.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/class_registrator.hh"
 #include <boost/algorithm/string.hpp>
 
@@ -31,7 +32,7 @@ simple_strategy::simple_strategy(replication_strategy_params params) :
 }
 
 future<host_id_set> simple_strategy::calculate_natural_endpoints(const token& t, const token_metadata& tm) const {
-    const std::vector<token>& tokens = tm.sorted_tokens();
+    const utils::chunked_vector<token>& tokens = tm.sorted_tokens();
 
     if (tokens.empty()) {
         co_return host_id_set{};

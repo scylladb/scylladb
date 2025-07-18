@@ -78,7 +78,7 @@ static float ratio_helper(int64_t a, int64_t b) {
 }
 
 std::map<token, float>
-token::describe_ownership(const std::vector<token>& sorted_tokens) {
+token::describe_ownership(const utils::chunked_vector<token>& sorted_tokens) {
     std::map<token, float> ownerships;
     auto i = sorted_tokens.begin();
 
