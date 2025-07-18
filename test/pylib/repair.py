@@ -75,3 +75,18 @@ async def get_tablet_task_id(cql, host, table_id, token):
             else:
                 return str(row.repair_task_info.tablet_task_id)
     return None
+
+async def create_table_insert_data_for_repair_multiple_rows(manager, rf = 3 , tablets = 8, cmdline = None):
+    assert rf <= 3, "A keyspace with RF > 3 will be RF-rack-invalid if there are fewer racks than the RF"
+    config = {}
+
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline,
+                                        property_file=[{"dc": "dc1", "rack": f"r{i % rf}"} for i in range(rf)])
+    cql = manager.get_cql()
+    ks = await create_new_test_keyspace(cql, "WITH replication = {{'class': 'NetworkTopologyStrategy', "
+                  "'replication_factor': {}}} AND tablets = {{'initial': {}}};".format(rf, tablets))
+    create_table_cql = f"CREATE TABLE IF NOT EXISTS {ks}.test ( pk int, ck int, data int, PRIMARY KEY (pk, ck)) WITH tombstone_gc = {{'mode':'repair'}};"
+    await cql.run_async(create_table_cql)
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    table_id = await manager.get_table_id(ks, "test")
+    return (servers, cql, hosts, ks, table_id)
