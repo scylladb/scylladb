@@ -900,7 +900,11 @@ future<> storage_service::merge_topology_snapshot(raft_snapshot snp) {
 
 future<> storage_service::update_service_levels_cache(qos::update_both_cache_levels update_only_effective_cache, qos::query_context ctx) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    co_await _sl_controller.local().update_cache(update_only_effective_cache, ctx);
+    try {
+        co_await _sl_controller.local().update_cache(update_only_effective_cache, ctx);
+    } catch (const exceptions::read_timeout_exception& e) {
+        slogger.warn("Failed to update service levels cache: {}", e);
+    }
 }
 
 future<> storage_service::compression_dictionary_updated_callback_all() {
