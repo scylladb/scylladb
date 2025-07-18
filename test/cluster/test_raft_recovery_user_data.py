@@ -100,12 +100,12 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # migration could change the group 0 state just before losing the majority. Then, node 0 could be an incorrect
     # recovery leader because there could be another node in dc1 with a newer group 0 state.
     recovery_leader_id = await manager.get_host_id(live_servers[0].server_id)
-    logging.info(f'Setting recovery leader to {live_servers[0].server_id} on {live_servers}')
-    for srv in live_servers:
+
+    async def set_recovery_leader(srv: ServerInfo):
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
-    logging.info(f'Restarting {live_servers}')
-    await manager.rolling_restart(live_servers)
+    logging.info(f'Restarting {live_servers} with recovery leader {live_servers[0].server_id}')
+    await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
 
     # We reconnect the driver before we send ALTER KEYSPACE requests below (if remove_dead_nodes_with == "remove") due
     # to https://github.com/scylladb/python-driver/issues/295. We must finish sending writes before reconnecting.
