@@ -64,7 +64,8 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
                                      AND tablets = {{ 'enabled': true }}""")
         ks_names.append(ks_name)
         try:
-            await dc2_cql.run_async(f'CREATE TABLE {ks_names[rf]}.tbl (pk int PRIMARY KEY, v int)')
+            await dc2_cql.run_async(
+                f'CREATE TABLE {ks_names[rf]}.tbl (cl int, zero_token boolean, v int, PRIMARY KEY (cl, zero_token))')
         except Exception:
             failed = True
         assert failed == (rf > normal_nodes_in_dc2)
@@ -83,16 +84,32 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
             cls.append(ConsistencyLevel.LOCAL_ONE)
 
         for cl in cls:
-            insert_query = SimpleStatement(f'INSERT INTO {ks_names[rf]}.tbl (pk, v) VALUES (1, 1)',
-                                           consistency_level=cl)
-            await dc1_cql.run_async(insert_query)
-            await dc2_cql.run_async(insert_query)
+            logging.info('Testing with rf=%s, consistency_level=%s', rf, cl)
+
+            insert_queries = [
+                SimpleStatement(
+                    f'INSERT INTO {ks_names[rf]}.tbl (cl, zero_token, v) VALUES ({cl}, {zero_token_coordinator}, {cl})',
+                    consistency_level=cl
+                ) for zero_token_coordinator in [False, True]
+            ]
+            await dc1_cql.run_async(insert_queries[0])
+            await dc2_cql.run_async(insert_queries[1])
 
             if cl == ConsistencyLevel.EACH_QUORUM:
                 continue  # EACH_QUORUM is supported only for writes
 
-            select_query = SimpleStatement(f'SELECT * FROM {ks_names[rf]}.tbl', consistency_level=cl)
-            dc1_result = list((await dc1_cql.run_async(select_query))[0])
-            dc2_result = list((await dc2_cql.run_async(select_query))[0])
-            assert dc1_result == [1, 1]
-            assert dc2_result == [1, 1]
+            select_queries = [
+                SimpleStatement(
+                    f'SELECT * FROM {ks_names[rf]}.tbl WHERE cl = {cl} AND zero_token = {zero_token_coordinator}',
+                    consistency_level=cl
+                ) for zero_token_coordinator in [False, True]
+            ]
+            dc1_result_set = await dc1_cql.run_async(select_queries[0])
+            dc2_result_set = await dc2_cql.run_async(select_queries[1])
+            # With CL=ONE we don't have a guarantee that the replicas written to and read from have a non-empty
+            # intersection. Hence, reads could miss the written rows.
+            assert cl == ConsistencyLevel.ONE or (dc1_result_set and dc2_result_set)
+            if dc1_result_set:
+                assert list(dc1_result_set[0]) == [cl, False, cl]
+            if dc2_result_set:
+                assert list(dc2_result_set[0]) == [cl, True, cl]
