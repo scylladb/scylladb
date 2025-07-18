@@ -11,6 +11,7 @@
 #include <seastar/core/coroutine.hh>
 #include "cql3/statements/alter_view_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
+#include "cql3/statements/view_prop_defs.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "validation.hh"
@@ -22,7 +23,7 @@ namespace cql3 {
 
 namespace statements {
 
-alter_view_statement::alter_view_statement(cf_name view_name, std::optional<cf_prop_defs> properties)
+alter_view_statement::alter_view_statement(cf_name view_name, std::optional<view_prop_defs> properties)
         : schema_altering_statement{std::move(view_name)}
         , _properties{std::move(properties)}
 {
@@ -52,25 +53,11 @@ view_ptr alter_view_statement::prepare_view(data_dictionary::database db) const 
         throw exceptions::invalid_request_exception("ALTER MATERIALIZED VIEW WITH invoked, but no parameters found");
     }
 
-    auto schema_extensions = _properties->make_schema_extensions(db.extensions());
-    _properties->validate(db, keyspace(), schema_extensions);
+    auto schema_extensions = _properties->properties()->make_schema_extensions(db.extensions());
+    _properties->validate_raw(view_prop_defs::op_type::alter, db, keyspace(), schema_extensions);
 
     auto builder = schema_builder(schema);
-    _properties->apply_to_builder(builder, std::move(schema_extensions), db, keyspace());
-
-    if (builder.get_gc_grace_seconds() == 0) {
-        throw exceptions::invalid_request_exception(
-                "Cannot alter gc_grace_seconds of a materialized view to 0, since this "
-                "value is used to TTL undelivered updates. Setting gc_grace_seconds too "
-                "low might cause undelivered updates to expire before being replayed.");
-    }
-
-    if (builder.default_time_to_live().count() > 0) {
-        throw exceptions::invalid_request_exception(
-                "Cannot set or alter default_time_to_live for a materialized view. "
-                "Data in a materialized view always expire at the same time than "
-                "the corresponding data in the parent table.");
-    }
+    _properties->apply_to_builder(view_prop_defs::op_type::alter, builder, std::move(schema_extensions), db, keyspace());
 
     return view_ptr(builder.build());
 }
