@@ -762,6 +762,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
                     [[fallthrough]];
                 case topology::transition_state::commit_cdc_generation:
                     [[fallthrough]];
+                case topology::transition_state::commit_cdc_streams:
+                    [[fallthrough]];
+                case topology::transition_state::close_cdc_streams:
+                    [[fallthrough]];
                 case topology::transition_state::tablet_draining:
                     [[fallthrough]];
                 case topology::transition_state::write_both_read_old:
@@ -913,6 +917,14 @@ future<> storage_service::compression_dictionary_updated_callback_all() {
 future<> storage_service::compression_dictionary_updated_callback(std::string_view name) {
     assert(this_shard_id() == 0);
     return _compression_dictionary_updated_callback(name);
+}
+
+future<> storage_service::load_cdc_streams() {
+    co_await _cdc_gens.local().load_cdc_tablet_streams();
+}
+
+future<> storage_service::load_cdc_streams(std::unordered_set<table_id> changed_tables) {
+    co_await _cdc_gens.local().load_cdc_tablet_streams(std::move(changed_tables));
 }
 
 // Moves the coroutine lambda onto the heap and extends its
@@ -1129,6 +1141,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
+                    _cdc_gens.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service,
@@ -6080,6 +6093,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
         rtlogger.error("raft_topology_cmd {} failed with: {}", cmd.cmd, std::current_exception());
     }
 
+    result.local_time = db_clock::now();
+
     rtlogger.info("topology cmd rpc {} completed with status={} index={}",
         cmd.cmd, (result.status == raft_topology_cmd_result::command_status::success) ? "suceeded" : "failed", cmd_index);
     co_return result;
@@ -7428,6 +7443,11 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.compression_dicts) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
+                if (ss._feature_service.cdc_with_tablets) {
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_pending_streams()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
@@ -8047,6 +8067,10 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
     if (start_instantly) {
         co_await server.start_server();
     }
+}
+
+const cdc::metadata& storage_service::get_cdc_metadata() const noexcept {
+    return _cdc_gens.local().get_cdc_metadata();
 }
 
 } // namespace service
