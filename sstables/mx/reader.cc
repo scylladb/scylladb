@@ -1646,8 +1646,18 @@ public:
             });
         }
         return do_until([this] { return is_end_of_stream() || is_buffer_full(); }, [this] {
+            if (utils::get_local_injector().enter("sstables_mx_reader_fill_buffer_timeout")) {
+                const sstring table_name = utils::get_local_injector().get_injection_parameters("sstables_mx_reader_fill_buffer_timeout")["table"];
+                const sstring this_table_name = format("{}.{}", _schema->ks_name(), _schema->cf_name());
+                // Repeat the sleep until the permit is aborted due to timeout.
+                if (table_name == this_table_name && !_permit.get_exception()) {
+                    return seastar::sleep(std::chrono::milliseconds(10));
+                }
+            }
             if (_partition_finished) {
-                check_abort();
+                if (auto ex = _permit.get_exception(); ex) {
+                    return make_exception_future<>(std::move(ex));
+                }
                 if (_before_partition) {
                     return read_partition();
                 } else {
@@ -1659,7 +1669,9 @@ public:
                     if (is_buffer_full() || _partition_finished || _end_of_stream) {
                         return make_ready_future<>();
                     }
-                    check_abort();
+                    if (auto ex = _permit.get_exception(); ex) {
+                        return make_exception_future<>(std::move(ex));
+                    }
                     return advance_context(_consumer.maybe_skip()).then([this] {
                         return _context->consume_input();
                     });
