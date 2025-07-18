@@ -113,7 +113,7 @@ class client : public enable_shared_from_this<client> {
     timer<seastar::lowres_clock> _creds_invalidation_timer;
     timer<seastar::lowres_clock> _creds_update_timer;
     aws_credentials _credentials;
-    aws::aws_credentials_provider_chain _creds_provider_chain;
+    std::unique_ptr<aws::aws_credentials_provider_chain> _creds_provider_chain;
 
     struct io_stats {
         uint64_t ops = 0;
@@ -152,9 +152,20 @@ class client : public enable_shared_from_this<client> {
     future<> make_request(http::request req, reply_handler_ext handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
-
-    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs = nullptr);
+    client(std::string host,
+           endpoint_config_ptr cfg,
+           semaphore& mem,
+           global_factory gf,
+           private_tag,
+           std::unique_ptr<aws::retry_strategy> rs = nullptr,
+           std::unique_ptr<aws::aws_credentials_provider_chain> creds_provider_chain = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
+    static shared_ptr<client> make(std::string endpoint,
+                                   endpoint_config_ptr cfg,
+                                   semaphore& mem,
+                                   global_factory gf,
+                                   std::unique_ptr<aws::retry_strategy> rs,
+                                   std::unique_ptr<aws::aws_credentials_provider_chain> cp_chain);
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
     future<stats> get_object_stats(sstring object_name, seastar::abort_source* = nullptr);

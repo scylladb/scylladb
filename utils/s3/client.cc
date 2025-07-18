@@ -88,7 +88,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs , std::unique_ptr<aws::aws_credentials_provider_chain> creds_provider_chain)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -111,13 +111,16 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
                 }
             }();
         })
+        , _creds_provider_chain(std::move(creds_provider_chain))
         , _gf(std::move(gf))
         , _memory(mem)
         , _retry_strategy(std::move(rs)) {
-    _creds_provider_chain
-        .add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
-        .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
-        .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
+    if (!_creds_provider_chain) {
+        _creds_provider_chain = std::make_unique<aws::aws_credentials_provider_chain>();
+        _creds_provider_chain->add_credentials_provider(std::make_unique<aws::environment_aws_credentials_provider>())
+            .add_credentials_provider(std::make_unique<aws::instance_profile_credentials_provider>())
+            .add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>(_cfg->region, _cfg->role_arn));
+    }
 
     _creds_update_timer.arm(lowres_clock::now());
     if (!_retry_strategy) {
@@ -134,7 +137,7 @@ future<> client::update_config(endpoint_config_ptr cfg) {
     }
     _cfg = std::move(cfg);
     auto units = co_await get_units(_creds_sem, 1);
-    _creds_provider_chain.invalidate_credentials();
+    _creds_provider_chain->invalidate_credentials();
     _credentials = {};
     _creds_update_timer.rearm(lowres_clock::now());
 }
@@ -143,8 +146,13 @@ shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, s
     return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{});
 }
 
+shared_ptr<client> client::make(std::string endpoint, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, std::unique_ptr<aws::retry_strategy> rs, std::unique_ptr<aws::aws_credentials_provider_chain> cp_chain) {
+    return seastar::make_shared<client>(std::move(endpoint), std::move(cfg), mem, std::move(gf), private_tag{}, std::move(rs), std::move(cp_chain));
+}
+
 future<> client::update_credentials_and_rearm() {
-    _credentials = co_await _creds_provider_chain.get_aws_credentials();
+    _creds_provider_chain->invalidate_credentials();
+    _credentials = co_await _creds_provider_chain->get_aws_credentials();
     _creds_invalidation_timer.rearm(_credentials.expires_at);
     _creds_update_timer.rearm(_credentials.expires_at - 1h);
 }
@@ -204,7 +212,7 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
 }
 
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::yes, retry_strategy) {
+    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::no, retry_strategy) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -1215,7 +1223,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 _get_cv.signal();
                                 utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                     // Inject retryable error after some data was already downloaded
-                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
+                                    throw std::system_error(ECONNRESET, std::system_category());
                                 });
                             }
                         } catch (...) {
@@ -1223,14 +1231,16 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         }
                         co_await in.close();
                         if (ex) {
-                            try {
-                                std::rethrow_exception(ex);
-                            } catch (const aws::aws_exception& aws_ex) {
-                                if (aws_ex.error().is_retryable()) {
-                                    throw filler_exception(format("{}", std::current_exception()).c_str());
+                            auto aws_ex = aws::aws_error::from_exception_ptr(ex);
+                            if (aws_ex.is_retryable() || aws_ex.get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                                s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
+                                if (aws_ex.get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                                    auto units = co_await get_units(_client->_creds_sem, 1);
+                                    co_await _client->update_credentials_and_rearm();
                                 }
-                                throw;
+                                throw filler_exception(format("{}", ex).c_str());
                             }
+                            std::rethrow_exception(ex);
                         }
                     },
                     {},
