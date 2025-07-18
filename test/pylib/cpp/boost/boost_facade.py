@@ -110,7 +110,7 @@ class BoostTestFacade(CppTestFacade):
             except IOError:
                 return ''
         root_log_dir = self.temp_dir / mode
-        log_xml = root_log_dir / f"{test_name}.{self.run_id}.log"
+        log_xml = root_log_dir / f"{test_name}.{self.run_id}.xml"
         args = [ str(executable),
                  '--report_level=no',
                  '--output_format=XML',
