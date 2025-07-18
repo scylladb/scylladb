@@ -75,7 +75,7 @@ async def test_write_query_during_cql_server_shutdown(request: pytest.FixtureReq
         # Start shutdown of the query coordinator node
         async def do_shutdown():
             logger.info(f"Starting shutdown of node {target_server.server_id}")
-            await manager.server_stop_gracefully(target_server.server_id)
+            await manager.server_stop_gracefully(target_server.server_id, timeout=60)
 
         shutdown_task = asyncio.create_task(do_shutdown())
 
