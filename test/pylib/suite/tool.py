@@ -57,7 +57,6 @@ class ToolTest(Test):
             "junit_family=xunit2",
             "--junit-xml={}".format(self.xmlout),
             "--mode={}".format(self.mode),
-            "--run_id={}".format(self.id)
         ]
         if options.gather_metrics:
             self.args.append("--gather-metrics")

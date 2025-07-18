@@ -169,7 +169,6 @@ class PythonTest(Test):
             "junit_suite_name={}".format(self.suite.name),
             "--junit-xml={}".format(self.xmlout),
             "-rs",
-            "--run_id={}".format(self.id),
             "--mode={}".format(self.mode),
             "--tmpdir={}".format(options.tmpdir),
         ]
