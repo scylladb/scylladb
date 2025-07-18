@@ -94,6 +94,7 @@ class BoostTestFacade(CppTestFacade):
         file_name: Path,
         test_args:Sequence[str] = (),
         env: dict = None,
+        run_id: int = 1
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         def read_file(name: Path) -> str:
             try:
@@ -104,7 +105,7 @@ class BoostTestFacade(CppTestFacade):
         root_log_dir = self.temp_dir / mode
         log_xml = (root_log_dir /
                    f"{'.'.join(file_name.relative_to(TEST_DIR).parent.parts)}"
-                   f".{file_name.stem}.{test_name}.{self.run_id}.xml")
+                   f".{file_name.stem}.{test_name}.{run_id}.xml")
         args = [ str(executable),
                  '--report_level=no',
                  '--output_format=XML',
@@ -120,7 +121,7 @@ class BoostTestFacade(CppTestFacade):
         # Tests are written in the way that everything after '--' passes to the test itself rather than to the test framework
         args.append('--')
         args.extend(test_args)
-        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
+        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env, run_id=run_id)
 
         log = read_file(log_xml)
 

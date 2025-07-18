@@ -32,9 +32,10 @@ class UnitTestFacade(CppTestFacade):
         file_name: Path,
         test_args: Sequence[str] = (),
         env: dict = None,
+        run_id: int = 1
     ) -> tuple[list[CppTestFailure], str] | tuple[None, str]:
         args = [str(executable), *test_args]
-        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env)
+        test_passed, stdout_file_path, return_code = self.run_process(test_name, mode, file_name, args, env, run_id=run_id)
 
         if not test_passed:
             allure.attach(stdout_file_path.read_bytes(), name='output', attachment_type=allure.attachment_type.TEXT)
