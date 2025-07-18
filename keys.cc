@@ -36,14 +36,20 @@ partition_key_view::ring_order_tri_compare(const schema& s, partition_key_view k
     return legacy_tri_compare(s, k2);
 }
 
-partition_key partition_key::from_nodetool_style_string(const schema_ptr s, const sstring& key) {
+partition_key partition_key::from_nodetool_style_string(const schema_ptr s, const sstring& key, const sstring& key_delimiter) {
     std::vector<sstring> vec;
-    boost::split(vec, key, boost::is_any_of(":"));
+    if (s->partition_key_type()->types().size() == 1) {
+        // For a single column partition key. Don't try to split the key
+        // See #16596
+        vec.push_back(key);
+    } else {
+        boost::split(vec, key, boost::is_any_of(key_delimiter));
+        if (vec.size() != s->partition_key_type()->types().size()) {
+           throw std::invalid_argument("partition key '" + key + "' has mismatch number of components");
+        }
+    }
 
     auto it = std::begin(vec);
-    if (vec.size() != s->partition_key_type()->types().size()) {
-        throw std::invalid_argument("partition key '" + key + "' has mismatch number of components");
-    }
     std::vector<bytes> r;
     r.reserve(vec.size());
     for (auto t : s->partition_key_type()->types()) {
