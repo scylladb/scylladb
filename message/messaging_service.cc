@@ -264,6 +264,7 @@ const uint64_t* messaging_service::get_dropped_messages() const {
 }
 
 future<> messaging_service::unregister_handler(messaging_verb verb) {
+    mlogger.debug("Unregistering handler for verb {}", static_cast<int>(verb));
     return _rpc->unregister_handler(verb);
 }
 
