@@ -264,6 +264,7 @@ as bin/nodetool and other things), which you will ask run-cassandra to use:
 
 ```
 export CASSANDRA=/tmp/apache-cassandra-4.1.4/bin/cassandra
+export NODETOOL=/tmp/apache-cassandra-4.1.4/bin/nodetool
 test/cqlpy/run-cassandra testfile.py::testfunc
 ```
 
@@ -295,5 +296,6 @@ with run-cassandra:
 
 ```
 export CASSANDRA=/tmp/cassandra/bin/cassandra
+export NODETOOL=/tmp/cassandra/bin/nodetool
 test/cqlpy/run-cassandra testfile.py::testfunc
 ```
