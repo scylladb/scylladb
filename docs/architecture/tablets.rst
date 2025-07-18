@@ -152,8 +152,6 @@ enabled. If you plan to use any of the features listed below, CREATE your keyspa
 
 * Counters
 * Change Data Capture (CDC)
-* Lightweight Transactions (LWT)
-* Alternator (as it uses LWT)
 * Materialized Views (MV) ``*``
 * Secondary indexes (SI, as it depends on MV) ``*``
 
