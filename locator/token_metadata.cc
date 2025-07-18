@@ -357,6 +357,7 @@ future<std::unique_ptr<token_metadata_impl>> token_metadata_impl::clone_only_tok
 }
 
 future<> token_metadata_impl::clear_gently() noexcept {
+    _version_tracker = {};
     co_await utils::clear_gently(_token_to_endpoint_map);
     co_await utils::clear_gently(_normal_token_owners);
     co_await utils::clear_gently(_bootstrap_tokens);
@@ -834,16 +835,30 @@ token_metadata::token_metadata(std::unique_ptr<token_metadata_impl> impl)
 {
 }
 
-token_metadata::token_metadata(config cfg)
-        : _impl(std::make_unique<token_metadata_impl>(cfg))
+token_metadata::token_metadata(shared_token_metadata& stm, config cfg)
+        : _shared_token_metadata(&stm)
+        , _impl(std::make_unique<token_metadata_impl>(std::move(cfg)))
 {
 }
 
-token_metadata::~token_metadata() = default;
+token_metadata::~token_metadata() {
+    clear_and_dispose_impl();
+}
 
 token_metadata::token_metadata(token_metadata&&) noexcept = default;
 
-token_metadata& token_metadata::token_metadata::operator=(token_metadata&&) noexcept = default;
+token_metadata& token_metadata::token_metadata::operator=(token_metadata&& o) noexcept {
+    if (this != &o) {
+        clear_and_dispose_impl();
+        _shared_token_metadata = std::exchange(o._shared_token_metadata, nullptr);
+        _impl = std::exchange(o._impl, nullptr);
+    }
+    return *this;
+}
+
+void token_metadata::set_shared_token_metadata(shared_token_metadata& stm) {
+    _shared_token_metadata = &stm;
+}
 
 const std::vector<token>&
 token_metadata::sorted_tokens() const {
@@ -1027,6 +1042,15 @@ token_metadata::clone_after_all_left() const noexcept {
     co_return token_metadata(co_await _impl->clone_after_all_left());
 }
 
+void token_metadata::clear_and_dispose_impl() noexcept {
+    if (!_shared_token_metadata) {
+        return;
+    }
+    if (auto impl = std::exchange(_impl, nullptr)) {
+        _shared_token_metadata->clear_and_dispose(std::move(impl));
+    }
+}
+
 future<> token_metadata::clear_gently() noexcept {
     return _impl->clear_gently();
 }
@@ -1143,6 +1167,17 @@ version_tracker shared_token_metadata::new_tracker(token_metadata::version_t ver
     return tracker;
 }
 
+future<> shared_token_metadata::stop() noexcept {
+    co_await _background_dispose_gate.close();
+}
+
+void shared_token_metadata::clear_and_dispose(std::unique_ptr<token_metadata_impl> impl) noexcept {
+    // Safe to drop the future since the gate is closed in stop()
+    if (auto gh = _background_dispose_gate.try_hold()) {
+        (void)impl->clear_gently().finally([i = std::move(impl), gh = std::move(gh)] {});
+    }
+}
+
 void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
     if (_shared->get_ring_version() >= tmptr->get_ring_version()) {
         on_internal_error(tlogger, format("shared_token_metadata: must not set non-increasing ring_version: {} -> {}", _shared->get_ring_version(), tmptr->get_ring_version()));
@@ -1154,6 +1189,7 @@ void shared_token_metadata::set(mutable_token_metadata_ptr tmptr) noexcept {
         _stale_versions_in_use = _versions_barrier.advance_and_await();
     }
 
+    tmptr->set_shared_token_metadata(*this);
     _shared = std::move(tmptr);
     _shared->set_version_tracker(new_tracker(_shared->get_version()));
 
@@ -1216,7 +1252,7 @@ future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metada
 
     std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
     pending_token_metadata_ptr.resize(smp::count);
-    auto tmptr = make_token_metadata_ptr(co_await stm.local().get()->clone_async());
+    auto tmptr = stm.local().make_token_metadata_ptr(co_await stm.local().get()->clone_async());
     auto& tm = *tmptr;
     // bump the token_metadata ring_version
     // to invalidate cached token/replication mappings
@@ -1227,7 +1263,7 @@ future<> shared_token_metadata::mutate_on_all_shards(sharded<shared_token_metada
     // Apply the mutated token_metadata only after successfully cloning it on all shards.
     pending_token_metadata_ptr[base_shard] = tmptr;
     co_await smp::invoke_on_others(base_shard, [&] () -> future<> {
-        pending_token_metadata_ptr[this_shard_id()] = make_token_metadata_ptr(co_await tm.clone_async());
+        pending_token_metadata_ptr[this_shard_id()] = stm.local().make_token_metadata_ptr(co_await tm.clone_async());
     });
 
     co_await stm.invoke_on_all([&] (shared_token_metadata& stm) {
