@@ -134,12 +134,27 @@ public:
     //
     // Call ONLY on shard 0.
     // Requires a quorum of nodes to be available in order to finish.
-    future<group0_guard> start_group0_operation();
+    // Parameters:
+    //   timeout -- Optional. If set, this timeout is used for the group0.read_barrier operation.
+    //              If the timeout is reached and there is no Raft quorum, an exception is thrown.
+    //              The exception will include information about the current set of alive and
+    //              unavailable voters.
+    //              If not set, the default timeout is used (from the Scylla config parameter
+    //              `group0_raft_op_timeout_in_ms`, which defaults to one minute).
+    future<group0_guard> start_group0_operation(std::optional<raft_timeout> timeout = std::nullopt);
 
     // Apply a group 0 change.
     // The future resolves after the change is applied locally.
+    // Parameters:
+    //   timeout -- Optional. Applies only if raft is used (group0_guard.with_raft returns true).
+    //              If set, this timeout is used for the group0.add_entry operation.
+    //              If the timeout is reached and there is no Raft quorum, an exception is thrown.
+    //              The exception will include information about the current set of alive and
+    //              unavailable voters, which 
+    //              If not set, the default timeout is used (from the Scylla config parameter
+    //              `group0_raft_op_timeout_in_ms`, which defaults to one minute).
     template<typename mutation_type = schema_change>
-    future<> announce(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+    future<> announce(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 
     void passive_announce(table_schema_version version);
 
@@ -168,7 +183,7 @@ private:
     future<> maybe_schedule_schema_pull(const table_schema_version& their_version, locator::host_id endpoint);
 
     template<typename mutation_type = schema_change>
-    future<> announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+    future<> announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
     future<> announce_without_raft(utils::chunked_vector<mutation> schema, group0_guard);
 
 public:
@@ -195,14 +210,14 @@ public:
 };
 
 extern template
-future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
 extern template
-future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
 
 extern template
-future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 extern template
-future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 
 
 future<column_mapping> get_column_mapping(db::system_keyspace& sys_ks, table_id, table_schema_version v);

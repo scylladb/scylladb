@@ -19,3 +19,8 @@ using inet_address_vector_topology_change = utils::small_vector<gms::inet_addres
 using host_id_vector_replica_set = utils::small_vector<locator::host_id, 3>;
 
 using host_id_vector_topology_change = utils::small_vector<locator::host_id, 1>;
+
+template <typename T>
+concept HostIdVector =
+    std::same_as<std::remove_cvref_t<T>, host_id_vector_replica_set> ||
+    std::same_as<std::remove_cvref_t<T>, host_id_vector_topology_change>;
