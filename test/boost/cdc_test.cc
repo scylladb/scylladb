@@ -230,7 +230,7 @@ SEASTAR_THREAD_TEST_CASE(test_permissions_of_cdc_log_table) {
             log_table, stream_id, time, batch_seq_no
         )).get();
         e.execute_cql("SELECT * FROM " + log_table).get();
-        e.execute_cql("ALTER TABLE " + log_table + " ALTER \"" + ttl + "\" TYPE blob").get();
+        e.execute_cql("ALTER TABLE " + log_table + " WITH comment = 'some not very interesting comment'").get();
 
         // Disallow DROP
         assert_unauthorized("DROP TABLE " + log_table);
