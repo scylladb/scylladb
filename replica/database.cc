@@ -1931,7 +1931,9 @@ future<> memtable_list::flush() {
         promise<> flushed;
         future<> ret = _flush_coalescing.emplace(flushed.get_future());
         _dirty_memory_manager->start_extraneous_flush();
+        dblog.debug("Getting flush permit, {}", current_backtrace());
         _dirty_memory_manager->get_flush_permit().then([this] (auto permit) {
+            dblog.debug("Got flush permit, {}", current_backtrace());
             _flush_coalescing.reset();
             return _dirty_memory_manager->flush_one(*this, std::move(permit)).finally([this] {
                 _dirty_memory_manager->finish_extraneous_flush();

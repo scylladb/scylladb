@@ -254,6 +254,7 @@ future<> dirty_memory_manager::flush_when_needed() {
         auto has_work = [this] { return has_pressure() || _db_shutdown_requested; };
         return _should_flush.wait(std::move(has_work)).then([this] {
             return get_flush_permit().then([this] (auto permit) {
+                 dblog.debug("flush_when_needed");
                 // We give priority to explicit flushes. They are mainly user-initiated flushes,
                 // flushes coming from a DROP statement, or commitlog flushes.
                 if (_flush_serializer.waiters()) {

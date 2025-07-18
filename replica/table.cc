@@ -3172,6 +3172,7 @@ future<> compaction_group::clear_memtables() {
 }
 
 future<> table::clear() {
+    tlogger.info("table::clear {}", _schema->cf_name());
     auto permits = co_await _config.dirty_memory_manager->get_all_flush_permits();
 
     co_await parallel_foreach_compaction_group(std::mem_fn(&compaction_group::clear_memtables));
