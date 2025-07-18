@@ -7,7 +7,7 @@
  */
 
 #pragma once
-#include "retry_strategy.hh"
+#include "default_aws_retry_strategy.hh"
 #include <seastar/http/client.hh>
 
 namespace aws {
@@ -19,8 +19,8 @@ public:
     retryable_http_client(std::unique_ptr<seastar::http::experimental::connection_factory>&& factory,
                           unsigned max_conn,
                           error_handler error_func,
-                          seastar::http::experimental::client::retry_requests should_retry,
-                          const aws::retry_strategy& retry_strategy);
+                          seastar::http::experimental::retry_requests should_retry,
+                          const aws::default_aws_retry_strategy& retry_strategy);
     seastar::future<> make_request(seastar::http::request req,
                                    seastar::http::experimental::client::reply_handler handle,
                                    std::optional<seastar::http::reply::status_type> expected = std::nullopt,
@@ -34,7 +34,7 @@ private:
     do_retryable_request(seastar::http::request req, seastar::http::experimental::client::reply_handler handler, seastar::abort_source* as = nullptr);
 
     seastar::http::experimental::client http;
-    const aws::retry_strategy& _retry_strategy;
+    const aws::default_aws_retry_strategy& _retry_strategy;
     error_handler _error_handler;
 };
 
