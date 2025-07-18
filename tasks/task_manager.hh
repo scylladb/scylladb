@@ -158,7 +158,7 @@ public:
 
         class children {
             mutable foreign_task_map _children;
-            mutable std::vector<task_essentials> _finished_children;
+            mutable utils::chunked_vector<task_essentials> _finished_children;
             mutable rwlock _lock;
         public:
             bool all_finished() const noexcept;
