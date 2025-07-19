@@ -75,26 +75,34 @@ SEASTAR_TEST_CASE(test_make_buffer) {
     auto test = [] (size_t maximum, size_t actual, utils::reusable_buffer<manual_clock>& buffer) {
         testlog.info("Testing maximum buffer size {}, actual: {} ", maximum, actual);
 
+        using make_buffer_return_type = utils::result_with_exception<
+            size_t,
+            std::exception
+        >;
+
         bytes original;
-        auto make_buffer_fn = [&] (bytes_mutable_view view) {
+        auto make_buffer_fn = [&] (bytes_mutable_view view) -> make_buffer_return_type {
             original = tests::random::get_bytes(actual);
             BOOST_REQUIRE_EQUAL(maximum, view.size());
             BOOST_REQUIRE_LE(actual, view.size());
             boost::range::copy(original, view.begin());
-            return actual;
+            return bo::success(actual);
         };
 
         {
             auto bufguard = utils::reusable_buffer_guard(buffer);
-            auto bo = bufguard.make_bytes_ostream(maximum, make_buffer_fn);
-
+            auto bo_res = bufguard.make_bytes_ostream(maximum, make_buffer_fn);
+            BOOST_REQUIRE(bo_res.has_value());
+            auto bo = std::move(bo_res).value();
             BOOST_REQUIRE_EQUAL(bo.size(), actual);
             BOOST_REQUIRE(bo.linearize() == original);
         }
 
         {
             auto bufguard = utils::reusable_buffer_guard(buffer);
-            auto fbuf = bufguard.make_fragmented_temporary_buffer(maximum, make_buffer_fn);
+            auto fbuf_res = bufguard.make_fragmented_temporary_buffer(maximum, make_buffer_fn);
+            BOOST_REQUIRE(fbuf_res.has_value());
+            auto fbuf = std::move(fbuf_res).value();
             auto view = fragmented_temporary_buffer::view(fbuf);
 
             BOOST_REQUIRE_EQUAL(view.size_bytes(), actual);
