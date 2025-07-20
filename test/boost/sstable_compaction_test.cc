@@ -42,7 +42,7 @@
 #include "compaction/incremental_backlog_tracker.hh"
 #include "compaction/size_tiered_backlog_tracker.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "counters.hh"
+#include "mutation/counters.hh"
 #include "test/lib/simple_schema.hh"
 #include "replica/memtable-sstable.hh"
 #include "test/lib/mutation_reader_assertions.hh"

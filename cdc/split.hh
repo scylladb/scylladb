@@ -10,7 +10,7 @@
 
 #include <boost/dynamic_bitset.hpp>  // IWYU pragma: keep
 #include "replica/database_fwd.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 class mutation;
 

@@ -11,7 +11,7 @@
 #include <unordered_set>
 #include <memory>
 #include "sstables/shared_sstable.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 class compaction_backlog_manager;
 class compaction_controller;

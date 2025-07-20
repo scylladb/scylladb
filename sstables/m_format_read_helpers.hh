@@ -12,7 +12,7 @@
 #include <concepts>
 #include <seastar/core/future.hh>
 #include "gc_clock.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "sstables/types.hh"
 #include "sstables/exceptions.hh"
 

@@ -8,7 +8,7 @@
 
 #include "utils/assert.hh"
 #include "counters.hh"
-#include "mutation/mutation.hh"
+#include "mutation.hh"
 #include "combine.hh"
 #include "utils/log.hh"
 

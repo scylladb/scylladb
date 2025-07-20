@@ -20,7 +20,7 @@
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "validation.hh"
 #include "db/extensions.hh"
 #include "cql3/util.hh"

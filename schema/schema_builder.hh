@@ -11,7 +11,7 @@
 #include "schema.hh"
 #include "replica/database_fwd.hh"
 #include "cdc/log.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/view/base_info.hh"
 

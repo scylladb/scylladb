@@ -35,7 +35,7 @@ class tablet_metadata_change_hint;
 class tablet_map;
 }
 
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 #include "seastarx.hh"
 
