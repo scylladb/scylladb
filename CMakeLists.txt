@@ -172,7 +172,6 @@ target_sources(scylla-main
     clocks-impl.cc
     sstable_dict_autotrainer.cc
     exceptions/exceptions.cc
-    generic_server.cc
     debug.cc
     init.cc
     keys/keys.cc
