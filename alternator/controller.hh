@@ -11,7 +11,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/smp.hh>
 
-#include "protocol_server.hh"
+#include "transport/protocol_server.hh"
 
 namespace service {
 class storage_proxy;
