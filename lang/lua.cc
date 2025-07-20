@@ -11,7 +11,7 @@
 #include "lua.hh"
 #include "lang/lua_scylla_types.hh"
 #include "exceptions/exceptions.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "utils/assert.hh"
 #include "utils/utf8.hh"
 #include "utils/ascii.hh"

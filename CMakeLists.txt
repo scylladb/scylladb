@@ -174,7 +174,6 @@ target_sources(scylla-main
     converting_mutation_partition_applier.cc
     counters.cc
     sstable_dict_autotrainer.cc
-    duration.cc
     exceptions/exceptions.cc
     frozen_schema.cc
     generic_server.cc

@@ -8,7 +8,7 @@
 
 #include "wasm.hh"
 #include "wasm_instance_cache.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "db/config.hh"
 #include <seastar/core/byteorder.hh>
 #include <seastar/core/coroutine.hh>
