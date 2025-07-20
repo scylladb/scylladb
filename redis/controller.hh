@@ -12,7 +12,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 
-#include "protocol_server.hh"
+#include "transport/protocol_server.hh"
 #include "data_dictionary/data_dictionary.hh"
 
 namespace db {
