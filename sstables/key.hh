@@ -11,8 +11,8 @@
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
 #include "replica/database_fwd.hh"
-#include "keys.hh"
-#include "compound_compat.hh"
+#include "keys/keys.hh"
+#include "keys/compound_compat.hh"
 #include "dht/token.hh"
 
 namespace sstables {

@@ -17,7 +17,7 @@
 #include "partition_snapshot_row_cursor.hh"
 #include "read_context.hh"
 #include "readers/delegating.hh"
-#include "clustering_key_filter.hh"
+#include "keys/clustering_key_filter.hh"
 
 namespace cache {
 

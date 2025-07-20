@@ -7,8 +7,8 @@
  */
 
 #include "utils/assert.hh"
-#include "clustering_key_filter.hh"
-#include "clustering_ranges_walker.hh"
+#include "keys/clustering_key_filter.hh"
+#include "keys/clustering_ranges_walker.hh"
 #include "mutation/mutation.hh"
 #include "mutation/mutation_partition.hh"
 #include "mutation/mutation_compactor.hh"

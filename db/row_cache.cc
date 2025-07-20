@@ -25,7 +25,7 @@
 #include "readers/nonforwardable.hh"
 #include "cache_mutation_reader.hh"
 #include "partition_snapshot_reader.hh"
-#include "clustering_key_filter.hh"
+#include "keys/clustering_key_filter.hh"
 #include "utils/assert.hh"
 #include "utils/updateable_value.hh"
 #include "utils/labels.hh"

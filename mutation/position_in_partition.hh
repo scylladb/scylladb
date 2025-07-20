@@ -10,8 +10,8 @@
 
 #include "utils/assert.hh"
 #include "types/types.hh"
-#include "keys.hh"
-#include "clustering_bounds_comparator.hh"
+#include "keys/keys.hh"
+#include "keys/clustering_bounds_comparator.hh"
 #include "query-request.hh"
 
 #include <optional>

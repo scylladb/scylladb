@@ -10,7 +10,7 @@
 
 #include "mutation_fragment.hh"
 #include "mutation_fragment_v2.hh"
-#include "clustering_interval_set.hh"
+#include "keys/clustering_interval_set.hh"
 #include "utils/assert.hh"
 #include "utils/hashing.hh"
 #include "utils/xx_hasher.hh"

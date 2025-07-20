@@ -9,7 +9,7 @@
  */
 
 #include "bytes.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "paging_state.hh"
 #include <seastar/core/simple-stream.hh>
 #include "idl/paging_state.dist.hh"

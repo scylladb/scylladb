@@ -14,7 +14,7 @@
 
 #include "schema/schema.hh"
 #include "schema/schema_registry.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation.hh"
 #include "schema/schema_builder.hh"

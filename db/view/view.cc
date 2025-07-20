@@ -25,7 +25,7 @@
 
 #include "db/view/base_info.hh"
 #include "replica/database.hh"
-#include "clustering_bounds_comparator.hh"
+#include "keys/clustering_bounds_comparator.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/util.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
@@ -45,7 +45,7 @@
 #include "dht/sharder.hh"
 #include "gms/inet_address.hh"
 #include "gms/feature_service.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/network_topology_strategy.hh"
 #include "mutation/mutation.hh"

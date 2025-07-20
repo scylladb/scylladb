@@ -6,7 +6,7 @@
 #include "expression.hh"
 
 #include "bytes.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "utils/interval.hh"
 #include "cql3/expr/restrictions.hh"
 #include "cql3/assignment_testable.hh"
