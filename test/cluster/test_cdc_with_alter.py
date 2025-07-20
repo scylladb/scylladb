@@ -5,7 +5,7 @@
 #
 
 from test.pylib.manager_client import ManagerClient
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, reconnect_driver
 from cassandra.protocol import InvalidRequest
 
 import asyncio
@@ -73,3 +73,39 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
         base_rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test")
         cdc_rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test_scylla_cdc_log")
         assert base_rows[0].count == cdc_rows[0].count, f"Base table rows: {base_rows[0].count}, CDC log rows: {cdc_rows[0].count}"
+
+@pytest.mark.asyncio
+async def test_cdc_compatible_schema(manager: ManagerClient):
+    """
+    Basic test that we can write to a table with CDC enabled when the schema of
+    the base table is altered, or when the schema is loaded after node restart.
+    We want to ensure the schemas of the base table and its CDC table are loaded correctly.
+    """
+
+    servers = await manager.servers_add(1)
+    cql = manager.get_cql()
+
+    log = await manager.server_open_log(servers[0].server_id)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
+
+        await cql.run_async(f"INSERT INTO {ks}.test(pk, v) VALUES(1, 10)")
+        await cql.run_async(f"ALTER TABLE {ks}.test ADD a int")
+        await cql.run_async(f"INSERT INTO {ks}.test(pk, v, a) VALUES(1, 20, 30)")
+
+        # Verify the CDC schema is set after node restart.
+
+        await manager.server_restart(servers[0].server_id)
+        cql = await reconnect_driver(manager)
+
+        await cql.run_async(f"INSERT INTO {ks}.test(pk, v, a) VALUES(2, 40, 50)")
+
+        # validate rows in the CDC log
+        cdc_rows = await cql.run_async(f"SELECT * FROM {ks}.test_scylla_cdc_log")
+        assert len(cdc_rows) == 3, f"Expected 3 rows in CDC log, got {len(cdc_rows)}"
+        assert set([row.a for row in cdc_rows]) == {None, 30, 50}, \
+            f"Unexpected values in column 'a' of CDC log: {[row.a for row in cdc_rows]}"
+
+        matches = await log.grep("has no CDC schema set")
+        assert len(matches) == 0, "Found unexpected log messages indicating missing CDC schema"
