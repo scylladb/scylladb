@@ -14,7 +14,7 @@
 #include "sstables/generation_type.hh"
 #include "compaction/compaction_descriptor.hh"
 #include "mutation/mutation_tombstone_stats.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "utils/UUID.hh"
 #include "compaction_group_view.hh"
 #include <seastar/core/abort_source.hh>

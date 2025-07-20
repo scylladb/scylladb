@@ -19,7 +19,7 @@
 #include "utils/UUID.hh"
 #include <seastar/net/byteorder.hh>
 #include <seastar/util/bool_class.hh>
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "bytes.hh"
 #include "duration.hh"
 #include "marshal_exception.hh"
@@ -989,8 +989,8 @@ data_value::data_value(std::optional<NativeType> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<NativeType>())) {
 }
 
-//in this case we want to turn it automatically to bool 
-template <typename Tag> 
+//in this case we want to turn it automatically to bool
+template <typename Tag>
 data_value::data_value(bool_class<Tag> v) : data_value(bool(v)) {
 
 }

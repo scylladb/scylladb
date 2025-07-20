@@ -17,7 +17,7 @@
 #include "seastarx.hh"
 
 #include "dht/i_partitioner_fwd.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "query/query-result.hh"
 

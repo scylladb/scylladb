@@ -19,8 +19,8 @@
 #include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
-#include "db_clock.hh"
-#include "gc_clock.hh"
+#include "clocks/db_clock.hh"
+#include "clocks/gc_clock.hh"
 #include <chrono>
 #include <seastar/core/sharded.hh>
 #include <functional>
@@ -50,7 +50,7 @@
 #include "backlog_controller.hh"
 #include "dirty_memory_manager.hh"
 #include "reader_concurrency_semaphore_group.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "querier.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>

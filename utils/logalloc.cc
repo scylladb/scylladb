@@ -33,7 +33,7 @@
 #include "utils/log_heap.hh"
 #include "utils/preempt.hh"
 #include "utils/vle.hh"
-#include "utils/coarse_steady_clock.hh"
+#include "clocks/coarse_steady_clock.hh"
 #include "utils/labels.hh"
 
 #include <random>

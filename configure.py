@@ -1153,7 +1153,7 @@ scylla_core = (['message/messaging_service.cc',
                 'streaming/stream_result_future.cc',
                 'streaming/stream_session_state.cc',
                 'streaming/consumer.cc',
-                'clocks-impl.cc',
+                'clocks/clocks-impl.cc',
                 'partition_slice_builder.cc',
                 'init.cc',
                 'utils/lister.cc',
@@ -1608,7 +1608,7 @@ deps['test/boost/bytes_ostream_test'] = [
     "test/lib/log.cc",
 ]
 deps['test/boost/input_stream_test'] = ['test/boost/input_stream_test.cc']
-deps['test/boost/UUID_test'] = ['clocks-impl.cc', 'utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc', 'utils/on_internal_error.cc']
+deps['test/boost/UUID_test'] = ['clocks/clocks-impl.cc', 'utils/UUID_gen.cc', 'test/boost/UUID_test.cc', 'utils/uuid.cc', 'utils/dynamic_bitset.cc', 'utils/hashers.cc', 'utils/on_internal_error.cc']
 deps['test/boost/murmur_hash_test'] = ['bytes.cc', 'utils/murmur_hash.cc', 'test/boost/murmur_hash_test.cc']
 deps['test/boost/allocation_strategy_test'] = ['test/boost/allocation_strategy_test.cc', 'utils/logalloc.cc', 'utils/dynamic_bitset.cc', 'utils/labels.cc']
 deps['test/boost/log_heap_test'] = ['test/boost/log_heap_test.cc']

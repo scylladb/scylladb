@@ -13,7 +13,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/rpc/rpc_types.hh>
 #include "utils/error_injection.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/test_utils.hh"
 #include "types/list.hh"

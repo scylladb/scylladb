@@ -10,7 +10,7 @@
 #pragma once
 
 #include "mutation/timestamp.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "sstables/types.hh"
 #include "mutation/mutation_partition.hh"
 

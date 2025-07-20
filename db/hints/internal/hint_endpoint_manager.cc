@@ -22,7 +22,7 @@
 #include "db/hints/internal/hint_logger.hh"
 #include "db/hints/internal/hint_storage.hh"
 #include "db/hints/manager.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/disk-error-handler.hh"

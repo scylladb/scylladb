@@ -11,7 +11,7 @@
 #include "query/query-request.hh"
 #include "query/query-result.hh"
 #include "mutation/frozen_mutation.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "mutation/mutation.hh"
 #include "utils/chunked_vector.hh"
 #include "mutation/range_tombstone_assembler.hh"

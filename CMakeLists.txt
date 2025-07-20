@@ -169,7 +169,7 @@ target_sources(scylla-main
     absl-flat_hash_map.cc
     bytes.cc
     client_data.cc
-    clocks-impl.cc
+    clocks/clocks-impl.cc
     sstable_dict_autotrainer.cc
     exceptions/exceptions.cc
     generic_server.cc

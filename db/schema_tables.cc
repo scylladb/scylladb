@@ -64,7 +64,7 @@
 #include "compaction/compaction_strategy.hh"
 #include "view_info.hh"
 #include "cql_type_parser.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "replica/database.hh"
 #include "data_dictionary/user_types_metadata.hh"
 

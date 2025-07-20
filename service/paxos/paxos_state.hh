@@ -11,7 +11,7 @@
 #include "service/paxos/proposal.hh"
 #include "utils/log.hh"
 #include "utils/digest_algorithm.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include <unordered_map>
 #include "utils/UUID_gen.hh"
 #include "service/paxos/prepare_response.hh"

@@ -16,7 +16,7 @@
 #include "db/view/view_building_coordinator.hh"
 #include "utils/disk_space_monitor.hh"
 #include "compaction/task_manager_module.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "raft/raft.hh"
 #include <ranges>
 #include <seastar/core/sleep.hh>

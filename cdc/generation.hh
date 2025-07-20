@@ -24,7 +24,7 @@
 #include <seastar/util/noncopyable_function.hh>
 
 #include "replica/database_fwd.hh"
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "dht/token.hh"
 #include "locator/token_metadata.hh"
 #include "utils/chunked_vector.hh"

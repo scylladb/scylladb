@@ -47,7 +47,7 @@
 #include "utils/memory_data_sink.hh"
 #include "utils/chunked_vector.hh"
 #include "utils/aws_sigv4.hh"
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "utils/log.hh"
 
 using namespace std::chrono_literals;

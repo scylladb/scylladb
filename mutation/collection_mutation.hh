@@ -10,7 +10,7 @@
 
 #include "utils/chunked_vector.hh"
 #include "schema/schema_fwd.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/compact_and_expire_result.hh"
 #include "compaction/compaction_garbage_collector.hh"

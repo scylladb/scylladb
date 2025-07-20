@@ -60,7 +60,7 @@
 #include "utils/human_readable.hh"
 #include "utils/error_injection.hh"
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
 #include "db/data_listeners.hh"

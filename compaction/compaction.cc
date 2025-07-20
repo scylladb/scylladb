@@ -37,7 +37,7 @@
 #include "compaction.hh"
 #include "schema/schema.hh"
 #include "db/system_keyspace.hh"
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "mutation/mutation_compactor.hh"
 #include "leveled_manifest.hh"
 #include "dht/partition_filter.hh"

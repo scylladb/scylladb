@@ -4,7 +4,7 @@
 #pragma once
 
 #include <variant>
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 
 namespace service {
 

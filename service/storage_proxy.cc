@@ -50,7 +50,7 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "multishard_mutation_query.hh"
 #include "replica/database.hh"
 #include "db/consistency_level_validations.hh"

@@ -35,7 +35,7 @@
 #include "gms/inet_address.hh"
 #include "message/messaging_service.hh"
 #include "mutation_query.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "sstables/sstables.hh"
 #include "db/schema_tables.hh"
 #include "gms/generation-number.hh"

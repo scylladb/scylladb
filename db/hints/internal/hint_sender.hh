@@ -27,7 +27,7 @@
 #include "schema/schema.hh"
 #include "utils/fragmented_temporary_buffer.hh"
 #include "enum_set.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 
 // STD.
 #include <list>

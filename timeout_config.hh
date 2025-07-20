@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "utils/updateable_value.hh"
 
 namespace db { class config; }

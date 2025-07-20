@@ -24,7 +24,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/future.hh>
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include "dht/decorated_key.hh"
