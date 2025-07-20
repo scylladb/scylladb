@@ -15,6 +15,7 @@
 #include <limits>
 #include <iterator>
 #include <numeric>
+#include <fstream>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -25,9 +26,11 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/thread.hh>
 #include <seastar/core/when_all.hh>
+#include <seastar/core/fstream.hh>
 #include <seastar/http/exception.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/util/closeable.hh>
 #include <seastar/core/units.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/net/inet_address.hh>
@@ -1751,22 +1754,40 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         }
         params[required_param] = vm[required_param].as<sstring>();
     }
-    if (!vm.contains("sstables")) {
-      throw std::invalid_argument("missing required possitional argument: sstables");
+    bool sstables_as_params = vm.contains("sstables");
+    bool sstables_as_file_list = vm.contains("sstables-file-list");
+    if (not sstables_as_params and not sstables_as_file_list) {
+      throw std::invalid_argument("missing both argument: sstables and --sstables-file-list (at least one is required)");
     }
     if (vm.contains("scope")) {
         params["scope"] = vm["scope"].as<sstring>();
     }
-    sstring sstables_body = std::invoke([&vm] {
-        std::stringstream output;
-        rjson::streaming_writer writer(output);
-        writer.StartArray();
-        for (auto& toc_fn : vm["sstables"].as<std::vector<sstring>>()) {
-            writer.String(toc_fn);
+    
+    std::stringstream output;
+    rjson::streaming_writer writer(output);
+    writer.StartArray();
+    
+    // add the list given by the file param
+    if (sstables_as_file_list) {
+        sstring sstables_list_file = vm["sstables-file-list"].as<sstring>();
+        auto file = open_file_dma(sstables_list_file, open_flags::ro).get();
+        auto file_close = seastar::deferred_close(file);
+        auto is = seastar::make_file_input_stream(file);
+        auto is_close = seastar::deferred_close(is);
+        auto sstables_list = seastar::util::read_entire_stream_contiguous(is).get();
+        for (const auto& toc : std::views::split(sstables_list, '\n')) {
+            writer.String(std::string_view(toc));
         }
-        writer.EndArray();
-        return make_sstring(output.view());
-    });
+    }
+    // add the list provided by the command line
+    if (sstables_as_params) {
+        for (auto& toc : vm["sstables"].as<std::vector<sstring>>()) {
+            writer.String(toc);
+        }
+    }
+    writer.EndArray();
+    sstring sstables_body = make_sstring(output.view());
+    
     const auto restore_res = client.post("/storage_service/restore", std::move(params),
                                          request_body{"application/json", std::move(sstables_body)});
     const auto task_id = rjson::to_string_view(restore_res);
@@ -4267,6 +4288,7 @@ For more information, see: {}"
                     typed_option<sstring>("table", "Name of a table to copy SSTables to"),
                     typed_option<>("nowait", "Don't wait on the restore process"),
                     typed_option<sstring>("scope", "Load-and-stream scope (node, rack or dc)"),
+                    typed_option<sstring>("sstables-file-list", "A file containing the list of sstables to restore (optional)"),
                 },
                 {
                     typed_option<std::vector<sstring>>("sstables", "The object keys of the TOC component of the SSTables to be restored", -1),
