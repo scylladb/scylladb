@@ -175,7 +175,6 @@ target_sources(scylla-main
     counters.cc
     sstable_dict_autotrainer.cc
     exceptions/exceptions.cc
-    generic_server.cc
     debug.cc
     init.cc
     keys/keys.cc

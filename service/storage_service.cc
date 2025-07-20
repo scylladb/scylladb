@@ -110,7 +110,7 @@
 #include "idl/join_node.dist.hh"
 #include "idl/migration_manager.dist.hh"
 #include "idl/node_ops.dist.hh"
-#include "protocol_server.hh"
+#include "transport/protocol_server.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "node_ops/task_manager_module.hh"
 #include "service/task_manager_module.hh"
