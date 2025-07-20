@@ -28,7 +28,7 @@
 #include "index/built_indexes_virtual_reader.hh"
 #include "gms/gossiper.hh"
 #include "mutation/frozen_mutation.hh"
-#include "protocol_server.hh"
+#include "transport/protocol_server.hh"
 #include "release.hh"
 #include "replica/database.hh"
 #include "schema/schema_builder.hh"

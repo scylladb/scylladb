@@ -5,6 +5,7 @@ target_sources(transport
     cql_protocol_extension.cc
     event.cc
     event_notifier.cc
+    generic_server.cc
     messages/result_message.cc
     server.cc)
 target_include_directories(transport
