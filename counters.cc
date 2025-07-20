@@ -9,7 +9,7 @@
 #include "utils/assert.hh"
 #include "counters.hh"
 #include "mutation/mutation.hh"
-#include "combine.hh"
+#include "mutation/combine.hh"
 #include "utils/log.hh"
 
 logging::logger cell_locker_log("cell_locker");
