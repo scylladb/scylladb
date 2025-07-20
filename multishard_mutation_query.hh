@@ -10,7 +10,7 @@
 
 #include "replica/database_fwd.hh"
 #include "schema/schema_fwd.hh"
-#include "cache_temperature.hh"
+#include "replica/cache_temperature.hh"
 #include "db/timeout_clock.hh"
 #include "dht/i_partitioner_fwd.hh"
 

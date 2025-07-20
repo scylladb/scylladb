@@ -189,7 +189,7 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             make_view_building_state_transition = true;
         }
     }
-    
+
     if (update_service_levels_cache || update_service_levels_effective_cache) { // this also updates SL effective cache
         co_await _ss.update_service_levels_cache(qos::update_both_cache_levels(update_service_levels_cache), qos::query_context::group0);
     }

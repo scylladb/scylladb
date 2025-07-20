@@ -16,7 +16,7 @@
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/time_window_compaction_strategy.hh"
-#include "cell_locking.hh"
+#include "replica/cell_locking.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
