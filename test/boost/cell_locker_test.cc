@@ -10,7 +10,7 @@
 
 #include <seastar/core/thread.hh>
 
-#include "cell_locking.hh"
+#include "replica/cell_locking.hh"
 #include "mutation/mutation.hh"
 #include "schema/schema_builder.hh"
 
