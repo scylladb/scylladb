@@ -236,11 +236,7 @@ schema_ptr schema_registry_entry::get_schema() {
     if (!_schema) {
         slogger.trace("Activating {}", _version);
         schema_ptr s;
-        if (_base_info) {
-            s = _frozen_schema->unfreeze(*_registry._ctxt, *_base_info);
-        } else {
-            s = _frozen_schema->unfreeze(*_registry._ctxt);
-        }
+        s = _frozen_schema->unfreeze(*_registry._ctxt, _base_info);
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
@@ -370,11 +366,7 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
             return s;
         } else {
             return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> view_schema_and_base_info {
-                if (s->is_view()) {
-                    return {frozen_schema(s), s->view_info()->base_info()};
-                } else {
-                    return {frozen_schema(s)};
-                }
+                return extended_frozen_schema(s);
             });
         }
     };
