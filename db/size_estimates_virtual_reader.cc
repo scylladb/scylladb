@@ -12,7 +12,7 @@
 
 #include "utils/assert.hh"
 
-#include "clustering_bounds_comparator.hh"
+#include "keys/clustering_bounds_comparator.hh"
 #include "replica/database_fwd.hh"
 #include "db/system_keyspace.hh"
 #include "dht/i_partitioner.hh"

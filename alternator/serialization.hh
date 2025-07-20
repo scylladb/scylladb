@@ -13,7 +13,7 @@
 #include <optional>
 #include "types/types.hh"
 #include "schema/schema_fwd.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "utils/rjson.hh"
 #include "utils/big_decimal.hh"
 

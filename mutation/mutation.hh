@@ -9,7 +9,7 @@
 #pragma once
 
 #include "mutation_partition.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/assert.hh"
 #include "utils/hashing.hh"

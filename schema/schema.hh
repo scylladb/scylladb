@@ -21,7 +21,7 @@
 #include <seastar/util/backtrace.hh>
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
-#include "compound.hh"
+#include "keys/compound.hh"
 #include "gc_clock.hh"
 #include "compress.hh"
 #include "compaction/compaction_strategy_type.hh"

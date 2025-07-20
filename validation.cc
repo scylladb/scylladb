@@ -10,7 +10,7 @@
 
 #include "validation.hh"
 #include "schema/schema.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "exceptions/exceptions.hh"
 

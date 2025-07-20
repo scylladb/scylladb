@@ -11,7 +11,7 @@
 #include "utils/assert.hh"
 
 #include "query-result.hh"
-#include "full_position.hh"
+#include "keys/full_position.hh"
 
 #include "idl/query.dist.hh"
 #include "idl/query.dist.impl.hh"

@@ -11,7 +11,7 @@
 #include <boost/test/unit_test.hpp>
 #include <random>
 #include <iostream>
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "schema/schema_builder.hh"
 #include "mutation/range_tombstone_list.hh"
 #include "test/boost/range_tombstone_list_assertions.hh"

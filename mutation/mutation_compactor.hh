@@ -13,7 +13,7 @@
 #include "mutation_fragment_stream_validator.hh"
 #include "mutation_tombstone_stats.hh"
 #include "tombstone_gc.hh"
-#include "full_position.hh"
+#include "keys/full_position.hh"
 #include <type_traits>
 #include "utils/log.hh"
 

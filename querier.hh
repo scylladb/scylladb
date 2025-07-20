@@ -13,7 +13,7 @@
 #include "mutation/mutation_compactor.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/mutation_source.hh"
-#include "full_position.hh"
+#include "keys/full_position.hh"
 
 #include <boost/intrusive/set.hpp>
 

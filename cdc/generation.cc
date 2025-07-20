@@ -16,7 +16,7 @@
 
 #include "gms/endpoint_state.hh"
 #include "gms/versioned_value.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"

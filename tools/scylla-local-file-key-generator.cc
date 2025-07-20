@@ -12,7 +12,7 @@
 #include <ranges>
 
 #include <fmt/ranges.h>
-#include "compound.hh"
+#include "keys/compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "schema/schema_builder.hh"
 #include "tools/utils.hh"
