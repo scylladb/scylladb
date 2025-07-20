@@ -25,6 +25,12 @@ class schema_registry;
 struct view_schema_and_base_info {
     frozen_schema schema;
     std::optional<db::view::base_dependent_view_info> base_info;
+
+    view_schema_and_base_info(frozen_schema fs, std::optional<db::view::base_dependent_view_info> base_info = std::nullopt)
+        : schema(std::move(fs)), base_info(std::move(base_info)) {}
+
+    view_schema_and_base_info(extended_frozen_schema fs)
+        : schema(std::move(fs.fs)), base_info(fs.base_info) {}
 };
 
 using async_schema_loader = std::function<future<view_schema_and_base_info>(table_schema_version)>;
