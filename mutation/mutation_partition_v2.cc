@@ -10,7 +10,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "mutation_partition_v2.hh"
-#include "clustering_interval_set.hh"
+#include "keys/clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
 #include "query-result-writer.hh"

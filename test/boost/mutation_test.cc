@@ -27,7 +27,7 @@
 
 #include "replica/database.hh"
 #include "utils/UUID_gen.hh"
-#include "clustering_interval_set.hh"
+#include "keys/clustering_interval_set.hh"
 #include "schema/schema_builder.hh"
 #include "query-result-set.hh"
 #include "query-result-reader.hh"
@@ -58,7 +58,7 @@
 #include "mutation/mutation_rebuilder.hh"
 #include "mutation/mutation_partition.hh"
 #include "mutation/async_utils.hh"
-#include "clustering_key_filter.hh"
+#include "keys/clustering_key_filter.hh"
 #include "readers/from_mutations.hh"
 #include "readers/from_fragments.hh"
 

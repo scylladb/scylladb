@@ -11,7 +11,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "mutation_partition.hh"
-#include "clustering_interval_set.hh"
+#include "keys/clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
 #include "query-result-writer.hh"
@@ -26,7 +26,7 @@
 #include <seastar/core/execution_stage.hh>
 #include "types/map.hh"
 #include "compaction/compaction_garbage_collector.hh"
-#include "clustering_key_filter.hh"
+#include "keys/clustering_key_filter.hh"
 #include "mutation_partition_view.hh"
 #include "tombstone_gc.hh"
 #include "utils/assert.hh"
