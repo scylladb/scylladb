@@ -14,7 +14,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 #include "types/types.hh"
 #include "types/tuple.hh"
-#include "compound.hh"
+#include "keys/compound.hh"
 #include "db/marshal/type_parser.hh"
 #include "cql3/cql3_type.hh"
 #include "cql3/type_json.hh"
