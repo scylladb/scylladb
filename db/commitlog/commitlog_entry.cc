@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "counters.hh"
+#include "mutation/counters.hh"
 #include "commitlog_entry.hh"
 #include "idl/commitlog.dist.hh"
 #include "idl/commitlog.dist.impl.hh"
