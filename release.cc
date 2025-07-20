@@ -7,7 +7,7 @@
  */
 
 #include "utils/assert.hh"
-#include "main/version.hh"
+#include "main/version_main.hh"
 #include "main/build_mode.hh"
 
 #include <boost/algorithm/string/classification.hpp>

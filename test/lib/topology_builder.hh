@@ -19,7 +19,7 @@
 #include "locator/host_id.hh"
 #include "locator/tablets.hh"
 #include "test/lib/log.hh"
-#include "main/version.hh"
+#include "main/version_main.hh"
 
 #include <atomic>
 
