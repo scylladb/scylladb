@@ -14,7 +14,7 @@
 #include "schema/schema_fwd.hh"
 #include "schema_features.hh"
 #include "utils/hashing.hh"
-#include "schema_mutations.hh"
+#include "schema/schema_mutations.hh"
 #include "types/map.hh"
 #include "query/query-result-set.hh"
 #include "db/view/base_info.hh"

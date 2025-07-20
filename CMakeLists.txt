@@ -176,7 +176,6 @@ target_sources(scylla-main
     sstable_dict_autotrainer.cc
     duration.cc
     exceptions/exceptions.cc
-    frozen_schema.cc
     generic_server.cc
     debug.cc
     init.cc
@@ -193,7 +192,6 @@ target_sources(scylla-main
     tombstone_gc.cc
     reader_concurrency_semaphore.cc
     reader_concurrency_semaphore_group.cc
-    schema_mutations.cc
     serializer.cc
     service/direct_failure_detector/failure_detector.cc
     sstables_loader.cc

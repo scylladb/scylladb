@@ -13,7 +13,7 @@
 
 #include "utils/rjson.hh"
 #include "serialization.hh"
-#include "column_computation.hh"
+#include "schema/column_computation.hh"
 #include "db/view/regular_column_transformation.hh"
 
 namespace alternator {
