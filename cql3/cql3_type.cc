@@ -21,7 +21,7 @@
 #include "types/set.hh"
 #include "types/list.hh"
 #include "types/vector.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 
 namespace cql3 {
 

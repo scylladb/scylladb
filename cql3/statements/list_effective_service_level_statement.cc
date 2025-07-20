@@ -15,7 +15,7 @@
 #include "service/query_state.hh"
 #include "cql3/result_set.hh"
 #include "types/types.hh"
-#include "duration.hh"
+#include "types/duration.hh"
 #include "transport/messages/result_message.hh"
 
 namespace cql3 {

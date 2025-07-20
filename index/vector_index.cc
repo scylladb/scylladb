@@ -16,7 +16,7 @@
 #include "index/vector_index.hh"
 #include "index/secondary_index.hh"
 #include "index/secondary_index_manager.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "utils/managed_string.hh"
 #include <seastar/core/sstring.hh>
 

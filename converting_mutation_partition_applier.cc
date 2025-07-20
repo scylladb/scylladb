@@ -8,7 +8,7 @@
 
 #include "utils/assert.hh"
 #include "converting_mutation_partition_applier.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 
 #include "mutation/mutation_partition_view.hh"
 #include "mutation/mutation_partition.hh"
