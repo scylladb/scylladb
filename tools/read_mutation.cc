@@ -9,7 +9,7 @@
 #include "tools/read_mutation.hh"
 #include "readers/combined.hh"
 #include "replica/database.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 
 #include <algorithm>
 #include <seastar/util/closeable.hh>

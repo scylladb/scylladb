@@ -16,7 +16,7 @@
 #include "utils/logalloc.hh"
 #include "utils/UUID_gen.hh"
 #include "db/row_cache.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "schema/schema_builder.hh"
 #include "replica/memtable.hh"
 #include "test/lib/memtable_snapshot_source.hh"

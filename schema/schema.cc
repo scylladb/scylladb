@@ -23,7 +23,7 @@
 #include "schema_registry.hh"
 #include <type_traits>
 #include "view_info.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "replica/database.hh"
 #include "dht/token-sharding.hh"
 #include "cdc/cdc_extension.hh"

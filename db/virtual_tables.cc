@@ -18,7 +18,7 @@
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
 #include "db/virtual_table.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "db/virtual_tables.hh"
 #include "db/size_estimates_virtual_reader.hh"
 #include "db/view/build_progress_virtual_reader.hh"

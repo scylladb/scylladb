@@ -35,7 +35,7 @@
 #include "keys.hh"
 #include "types/types.hh"
 #include "types/user.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "schema/schema.hh"
 #include "encoding_stats.hh"
 #include "test/lib/simple_schema.hh"

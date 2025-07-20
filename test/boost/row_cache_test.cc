@@ -26,7 +26,7 @@
 #include "db/row_cache.hh"
 #include <seastar/core/thread.hh>
 #include "replica/memtable.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "service/migration_manager.hh"
 #include "test/lib/cql_test_env.hh"

@@ -10,7 +10,7 @@
 #include <set>
 #include <boost/test/unit_test.hpp>
 #include <fmt/ranges.h>
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "readers/mutation_source.hh"

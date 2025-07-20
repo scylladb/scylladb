@@ -31,7 +31,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "db/schema_tables.hh"
 #include "db/system_keyspace.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "readers/combined.hh"
 #include "replica/database.hh"
 #include "sstables/sstables_manager.hh"

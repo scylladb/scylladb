@@ -15,7 +15,7 @@
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "db/commitlog/commitlog.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"
 #include <seastar/core/reactor.hh>
