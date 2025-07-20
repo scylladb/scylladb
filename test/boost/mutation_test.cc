@@ -43,7 +43,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/mutation_source_test.hh"
-#include "cell_locking.hh"
+#include "replica/cell_locking.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"

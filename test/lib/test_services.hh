@@ -29,7 +29,7 @@
 #include "schema/schema_builder.hh"
 #include "db/row_cache.hh"
 #include "replica/database.hh"
-#include "cell_locking.hh"
+#include "replica/cell_locking.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
 #include "sstables/sstables_manager.hh"

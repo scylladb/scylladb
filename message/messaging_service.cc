@@ -44,7 +44,7 @@
 #include "streaming/stream_reason.hh"
 #include "streaming/stream_mutation_fragments_cmd.hh"
 #include "streaming/stream_blob.hh"
-#include "cache_temperature.hh"
+#include "replica/cache_temperature.hh"
 #include "raft/raft.hh"
 #include "service/raft/group0_fwd.hh"
 #include "replica/exceptions.hh"

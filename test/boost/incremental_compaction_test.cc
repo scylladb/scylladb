@@ -23,7 +23,7 @@
 #include "sstable_test.hh"
 #include "sstables/metadata_collector.hh"
 #include "test/lib/tmpdir.hh"
-#include "cell_locking.hh"
+#include "replica/cell_locking.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/key_utils.hh"
 #include "service/storage_proxy.hh"
