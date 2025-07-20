@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 
 #include <seastar/util/closeable.hh>
 #include "test/lib/scylla_test_case.hh"
@@ -14,7 +14,7 @@
 #include "utils/hashers.hh"
 #include "utils/xx_hasher.hh"
 #include "utils/simple_hashers.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "test/lib/simple_schema.hh"
 #include "reader_concurrency_semaphore.hh"
 

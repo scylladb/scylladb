@@ -11,7 +11,7 @@
 #include <compare>
 
 #include "timestamp.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "utils/hashing.hh"
 
 /**

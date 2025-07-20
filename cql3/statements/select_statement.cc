@@ -47,7 +47,7 @@
 #include "view_info.hh"
 #include "partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "test/lib/select_statement_utils.hh"

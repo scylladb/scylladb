@@ -16,7 +16,7 @@
 #include "service/migration_manager.hh"
 #include "service/client_state.hh"
 #include "service_permit.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 
 #include "alternator/error.hh"
 #include "stats.hh"

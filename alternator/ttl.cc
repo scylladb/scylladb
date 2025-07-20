@@ -23,7 +23,7 @@
 #include "inet_address_vectors.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "replica/database.hh"
 #include "service/client_state.hh"
 #include "service_permit.hh"

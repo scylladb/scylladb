@@ -16,7 +16,7 @@
 #include <seastar/util/defer.hh>
 
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "message/messaging_service.hh"
 #include "utils/assert.hh"
 #include "utils/chunked_vector.hh"
