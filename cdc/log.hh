@@ -21,7 +21,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
 

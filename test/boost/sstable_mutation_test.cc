@@ -21,7 +21,7 @@
 #include <seastar/core/thread.hh>
 #include "sstables/sstables.hh"
 #include "replica/database.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "schema/schema_builder.hh"
 #include "partition_slice_builder.hh"
 #include "readers/combined.hh"

@@ -20,7 +20,7 @@
 #include "mutation_compactor.hh"
 #include "counters.hh"
 #include "db/row_cache.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "view_info.hh"
 #include "mutation_cleaner.hh"
 #include <seastar/core/execution_stage.hh>

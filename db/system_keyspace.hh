@@ -18,7 +18,7 @@
 #include "schema/schema_fwd.hh"
 #include "utils/UUID.hh"
 #include "query-result-set.hh"
-#include "db_clock.hh"
+#include "time/db_clock.hh"
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
 #include "sstables/sstables_registry.hh"

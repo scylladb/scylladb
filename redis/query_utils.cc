@@ -14,7 +14,7 @@
 #include "dht/i_partitioner.hh"
 #include "partition_slice_builder.hh"
 #include "query-result-reader.hh"
-#include "gc_clock.hh"
+#include "time/gc_clock.hh"
 #include "service_permit.hh"
 #include "redis/keyspace_utils.hh"
 

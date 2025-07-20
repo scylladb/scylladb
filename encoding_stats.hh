@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "gc_clock.hh"
-#include "timestamp.hh"
+#include "time/gc_clock.hh"
+#include "time/timestamp.hh"
 #include "utils/extremum_tracking.hh"
 
 // Stores statistics on all the updates done to a memtable

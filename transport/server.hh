@@ -17,7 +17,7 @@
 #include "auth/authenticator.hh"
 #include <seastar/core/distributed.hh>
 #include "service/qos/qos_configuration_change_subscriber.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include <seastar/core/semaphore.hh>
 #include <memory>
 #include <type_traits>

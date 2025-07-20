@@ -10,8 +10,8 @@
 
 #include <compare>
 
-#include "timestamp.hh"
-#include "gc_clock.hh"
+#include "time/timestamp.hh"
+#include "time/gc_clock.hh"
 #include "utils/hashing.hh"
 
 /**

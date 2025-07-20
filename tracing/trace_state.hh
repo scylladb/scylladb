@@ -18,7 +18,7 @@
 #include "auth/authenticated_user.hh"
 #include "db/consistency_level_type.hh"
 #include "types/types.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "inet_address_vectors.hh"
 
 namespace cql3{

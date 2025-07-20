@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "gc_clock.hh"
+#include "time/gc_clock.hh"
 #include "query-request.hh"
 #include "schema/schema_fwd.hh"
 #include "readers/mutation_reader.hh"

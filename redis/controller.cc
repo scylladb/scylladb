@@ -9,7 +9,7 @@
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/core/with_scheduling_group.hh>
 
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "redis/controller.hh"
 #include "redis/keyspace_utils.hh"
 #include "redis/server.hh"

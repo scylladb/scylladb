@@ -20,7 +20,7 @@
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "types/map.hh"
 #include "schema/schema.hh"
 #include "query-request.hh"

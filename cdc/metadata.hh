@@ -10,8 +10,8 @@
 
 #include <map>
 
-#include "db_clock.hh"
-#include "timestamp.hh"
+#include "time/db_clock.hh"
+#include "time/timestamp.hh"
 #include "cdc/generation.hh"
 
 namespace dht {

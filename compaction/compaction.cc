@@ -37,7 +37,7 @@
 #include "compaction.hh"
 #include "schema/schema.hh"
 #include "db/system_keyspace.hh"
-#include "db_clock.hh"
+#include "time/db_clock.hh"
 #include "mutation/mutation_compactor.hh"
 #include "leveled_manifest.hh"
 #include "dht/partition_filter.hh"
@@ -52,7 +52,7 @@
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
 #include "replica/database.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 
 namespace sstables {
 

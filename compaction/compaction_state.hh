@@ -15,7 +15,7 @@
 
 #include "compaction/compaction_fwd.hh"
 #include "compaction/compaction_backlog_manager.hh"
-#include "gc_clock.hh"
+#include "time/gc_clock.hh"
 
 namespace compaction {
 

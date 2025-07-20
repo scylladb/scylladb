@@ -15,7 +15,7 @@
 
 #include "mutation/canonical_mutation.hh"
 #include "schema/schema_fwd.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "cql3/query_processor.hh"
@@ -23,7 +23,7 @@
 #include "schema/schema_builder.hh"
 #include "service/migration_manager.hh"
 #include "service/raft/group0_state_machine.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "utils/error_injection.hh"
 #include "db/system_keyspace.hh"
 

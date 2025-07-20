@@ -11,7 +11,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/future.hh>
 #include "bytes_fwd.hh"
-#include "gc_clock.hh"
+#include "time/gc_clock.hh"
 #include "query-request.hh"
 
 namespace service {

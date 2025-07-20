@@ -15,7 +15,7 @@
 
 #include "utils/assert.hh"
 #include "utils/disk-error-handler.hh"
-#include "db_clock.hh"
+#include "time/db_clock.hh"
 #include "sstables/sstables.hh"
 #include "sstables/shareable_components.hh"
 #include "sstables/shared_sstable.hh"

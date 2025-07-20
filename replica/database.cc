@@ -50,7 +50,7 @@
 #include "db/schema_tables.hh"
 #include "compaction/compaction_manager.hh"
 #include "gms/feature_service.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "service/storage_proxy.hh"
 #include "db/operation_type.hh"
 #include "db/view/view_update_generator.hh"
@@ -59,7 +59,7 @@
 #include "utils/human_readable.hh"
 #include "utils/error_injection.hh"
 
-#include "db/timeout_clock.hh"
+#include "time/timeout_clock.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
 #include "db/data_listeners.hh"
@@ -71,7 +71,7 @@
 #include <seastar/util/file.hh>
 
 #include "locator/abstract_replication_strategy.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "tombstone_gc.hh"
 #include "service/qos/service_level_controller.hh"
 

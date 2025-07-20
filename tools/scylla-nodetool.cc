@@ -40,7 +40,7 @@
 #include "gms/application_state.hh"
 #include "db/config.hh"
 #include "db/compaction_history_entry.hh"
-#include "db_clock.hh"
+#include "time/db_clock.hh"
 #include "utils/log.hh"
 #include "release.hh"
 #include "tools/format_printers.hh"
