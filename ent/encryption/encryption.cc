@@ -59,7 +59,7 @@
 #include "encrypted_file_impl.hh"
 #include "encryption_config.hh"
 #include "utils/UUID_gen.hh"
-#include "init.hh"
+#include "main/init.hh"
 
 static seastar::logger logg{"encryption"};
 

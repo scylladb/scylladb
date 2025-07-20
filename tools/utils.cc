@@ -15,7 +15,7 @@
 #include "tools/utils.hh"
 #include "utils/assert.hh"
 #include "utils/logalloc.hh"
-#include "init.hh"
+#include "main/init.hh"
 
 namespace bpo = boost::program_options;
 

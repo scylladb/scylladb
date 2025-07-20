@@ -9,7 +9,7 @@
 #pragma once
 
 #include <string>
-#include "build_mode.hh"
+#include "main/build_mode.hh"
 
 std::string scylla_version();
 

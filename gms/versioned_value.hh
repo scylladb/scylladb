@@ -17,7 +17,7 @@
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
 #include "service/state_id.hh"
-#include "version.hh"
+#include "main/version.hh"
 #include "cdc/generation_id.hh"
 #include <set>
 #include <unordered_set>

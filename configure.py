@@ -1119,7 +1119,7 @@ scylla_core = (['message/messaging_service.cc',
                 'streaming/consumer.cc',
                 'clocks-impl.cc',
                 'partition_slice_builder.cc',
-                'init.cc',
+                'main/init.cc',
                 'utils/lister.cc',
                 'repair/repair.cc',
                 'repair/row_level.cc',
@@ -1412,7 +1412,7 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
-    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools + scylla_perfs,
+    'scylla': idls + ['main/main.cc'] + scylla_core + api + alternator + redis + scylla_tools + scylla_perfs,
     'patchelf': ['tools/patchelf.cc'],
 }
 

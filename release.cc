@@ -7,8 +7,8 @@
  */
 
 #include "utils/assert.hh"
-#include "version.hh"
-#include "build_mode.hh"
+#include "main/version.hh"
+#include "main/build_mode.hh"
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>

@@ -63,7 +63,7 @@
 #include <algorithm>
 #include "locator/local_strategy.hh"
 #include "utils/user_provided_param.hh"
-#include "version.hh"
+#include "main/version.hh"
 #include "streaming/stream_blob.hh"
 #include "dht/range_streamer.hh"
 #include <boost/range/algorithm.hpp>

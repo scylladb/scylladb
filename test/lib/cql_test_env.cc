@@ -69,7 +69,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
 #include "sstables/sstables_manager.hh"
-#include "init.hh"
+#include "main/init.hh"
 #include "lang/manager.hh"
 #include "utils/disk_space_monitor.hh"
 
