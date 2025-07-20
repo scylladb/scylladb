@@ -2,7 +2,9 @@ add_library(schema STATIC)
 target_sources(schema
   PRIVATE
     caching_options.cc
+    frozen_schema.cc
     schema.cc
+    schema_mutations.cc
     schema_registry.cc)
 target_include_directories(schema
   PUBLIC
