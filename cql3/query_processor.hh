@@ -24,7 +24,7 @@
 #include "cql3/dialect.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"

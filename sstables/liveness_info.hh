@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "gc_clock.hh"
 #include "sstables/types.hh"
 #include "mutation/mutation_partition.hh"

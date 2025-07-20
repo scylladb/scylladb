@@ -31,7 +31,7 @@
 #include "dht/i_partitioner.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
-#include "counters.hh"
+#include "mutation/counters.hh"
 #include "test/lib/index_reader_assertions.hh"
 #include "test/lib/make_random_string.hh"
 #include "test/lib/simple_schema.hh"

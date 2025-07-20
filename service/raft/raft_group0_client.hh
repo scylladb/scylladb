@@ -22,7 +22,7 @@
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_timeout.hh"
 #include "utils/UUID.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "gc_clock.hh"
 #include "service/raft/group0_state_machine.hh"
 #include "service/maintenance_mode.hh"

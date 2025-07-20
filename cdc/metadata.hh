@@ -11,7 +11,7 @@
 #include <map>
 
 #include "db_clock.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "cdc/generation.hh"
 
 namespace dht {

@@ -14,7 +14,7 @@
 #include "schema/schema_builder.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "readers/mutation_source.hh"
-#include "counters.hh"
+#include "mutation/counters.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "test/lib/simple_schema.hh"
 #include "readers/mutation_reader.hh"

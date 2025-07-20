@@ -27,7 +27,7 @@
 #include "replica/database.hh"
 #include "service/client_state.hh"
 #include "service_permit.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "service/storage_proxy.hh"
 #include "service/pager/paging_state.hh"
 #include "service/pager/query_pagers.hh"

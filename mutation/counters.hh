@@ -10,7 +10,7 @@
 
 #include "utils/assert.hh"
 
-#include "mutation/atomic_cell.hh"
+#include "atomic_cell.hh"
 #include "types/types.hh"
 #include "locator/host_id.hh"
 

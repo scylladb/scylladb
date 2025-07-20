@@ -12,7 +12,7 @@
 #include "cql3/description.hh"
 #include "db/tablet_options.hh"
 #include "db/view/view.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/column_identifier.hh"

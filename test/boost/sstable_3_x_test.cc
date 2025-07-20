@@ -23,7 +23,7 @@
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
 #include "sstables/compressor.hh"
-#include "counters.hh"
+#include "mutation/counters.hh"
 #include "schema/schema_builder.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/mutation_reader_assertions.hh"

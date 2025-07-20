@@ -22,7 +22,7 @@
 #include "replica/database.hh"
 #include "db/system_keyspace.hh"
 #include "utils/log.hh"
-#include "converting_mutation_partition_applier.hh"
+#include "mutation/converting_mutation_partition_applier.hh"
 #include "commitlog_entry.hh"
 #include "validation.hh"
 #include "mutation/mutation_partition_view.hh"

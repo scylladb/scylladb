@@ -20,7 +20,7 @@
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
 #include "service/client_state.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "types/map.hh"
 #include "schema/schema.hh"
 #include "query/query-request.hh"
@@ -38,7 +38,7 @@
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
-#include "collection_mutation.hh"
+#include "mutation/collection_mutation.hh"
 #include "schema/schema.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"

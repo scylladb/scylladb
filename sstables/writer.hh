@@ -16,7 +16,7 @@
 #include "vint-serialization.hh"
 #include <seastar/core/byteorder.hh>
 #include "version.hh"
-#include "counters.hh"
+#include "mutation/counters.hh"
 #include "dht/i_partitioner_fwd.hh"
 #include <set>
 

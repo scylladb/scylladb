@@ -13,7 +13,7 @@
 #include "auth/service.hh"
 #include "exceptions/exceptions.hh"
 #include "timeout_config.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "replica/database_fwd.hh"
 #include "auth/authenticated_user.hh"
 #include "auth/authenticator.hh"

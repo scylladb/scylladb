@@ -34,7 +34,7 @@ namespace locator {
 class tablet_metadata_change_hint;
 }
 
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 #include "seastarx.hh"
 

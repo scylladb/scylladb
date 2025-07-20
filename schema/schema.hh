@@ -27,7 +27,7 @@
 #include "compaction/compaction_strategy_type.hh"
 #include "caching_options.hh"
 #include "column_computation.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "tombstone_gc_options.hh"
 #include "db/per_partition_rate_limit_options.hh"
 #include "db/tablet_options.hh"

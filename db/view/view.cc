@@ -61,7 +61,7 @@
 #include "service/raft/raft_group0_client.hh"
 #include "service/storage_proxy.hh"
 #include "compaction/compaction_manager.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "view_info.hh"
