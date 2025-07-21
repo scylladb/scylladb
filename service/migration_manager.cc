@@ -18,6 +18,7 @@
 #include "locator/host_id.hh"
 #include "schema/schema_registry.hh"
 #include "service/migration_manager.hh"
+#include "seastar/core/on_internal_error.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/group0_state_machine.hh"
 
@@ -1112,6 +1113,9 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     // `_enable_schema_pulls` may change concurrently with this function (but only from `true` to `false`).
     bool use_raft = !_enable_schema_pulls;
     if ((!s || !s->is_synced()) && use_raft) {
+        if ((co_await _group0_client.get_group0_upgrade_state()).second == group0_upgrade_state::use_pre_raft_procedures) {
+            on_internal_error(mlogger, "Trying to pull schema over raft while in pre raft procedures");
+        }
         // Schema is synchronized through Raft, so perform a group 0 read barrier.
         // Batch the barriers so we don't invoke them redundantly.
         mlogger.trace("Performing raft read barrier because schema is not synced, version: {}", v);
