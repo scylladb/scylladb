@@ -79,6 +79,7 @@ private:
     void set_chunk_after_emplace_back(std::pair<chunk_ptr, size_t>) noexcept;
     void make_room(size_t n, bool stop_after_one);
     chunk_ptr new_chunk(size_t n);
+    void resize_smaller(size_t n);
     T* addr(size_t i) const {
         return &_chunks[i / max_chunk_capacity()][i % max_chunk_capacity()];
     }
@@ -568,13 +569,22 @@ void chunked_vector<T, max_contiguous_allocation>::set_chunk_after_emplace_back(
 template <typename T, size_t max_contiguous_allocation>
 void
 chunked_vector<T, max_contiguous_allocation>::resize(size_t n) {
+    if (n < _size) {
+        resize_smaller(n);
+        return;
+    }
     reserve(n);
     // FIXME: construct whole chunks at once
-    while (_size > n) {
-        pop_back();
-    }
     while (_size < n) {
         push_back(T{});
+    }
+}
+
+template <typename T, size_t max_contiguous_allocation>
+void
+chunked_vector<T, max_contiguous_allocation>::resize_smaller(size_t n) {
+    while (_size > n) {
+        pop_back();
     }
     shrink_to_fit();
 }
@@ -656,7 +666,7 @@ chunked_vector<T, max_contiguous_allocation>::erase(const_iterator first, const_
     auto erase_idx = first - begin();
     auto n_erase = last - first;
     std::rotate(begin() + erase_idx, begin() + erase_idx + n_erase, end());
-    resize(size() - n_erase);
+    resize_smaller(size() - n_erase);
     return begin() + erase_idx;
 }
 
