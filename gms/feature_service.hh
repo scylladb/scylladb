@@ -20,7 +20,6 @@
 #include "gms/feature.hh"
 
 namespace db {
-class config;
 class system_keyspace;
 }
 namespace service { class storage_service; }
@@ -35,15 +34,14 @@ struct feature_config {
     std::set<sstring> disabled_features;
 };
 
-feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
-std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
-
 class unsupported_feature_exception : public std::runtime_error {
 public:
     unsupported_feature_exception(std::string what)
             : runtime_error(std::move(what))
     {}
 };
+
+bool is_test_only_feature_enabled();
 
 using namespace std::literals;
 

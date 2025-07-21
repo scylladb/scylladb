@@ -8,7 +8,6 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/smp.hh>
 #include "utils/log.hh"
-#include "db/config.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "db/system_keyspace.hh"
@@ -31,7 +30,7 @@ static bool is_test_only_feature_deprecated() {
     return utils::get_local_injector().enter(enable_test_feature_as_deprecated_error_injection_name);
 }
 
-static bool is_test_only_feature_enabled() {
+bool is_test_only_feature_enabled() {
     return utils::get_local_injector().enter(enable_test_feature_error_injection_name)
             || is_test_only_feature_deprecated();
 }
@@ -46,63 +45,6 @@ feature_service::feature_service(feature_config cfg) : _config(cfg) {
         test_only_feature.enable();
         unregister_feature(test_only_feature);
     }
-}
-
-feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
-    feature_config fcfg;
-    fcfg.disabled_features = get_disabled_features_from_db_config(cfg, std::move(disabled));
-    return fcfg;
-}
-
-std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
-    switch (sstables::version_from_string(cfg.sstable_format())) {
-    case sstables::sstable_version_types::md:
-        logger.warn("sstable_format must be 'me', '{}' is specified", cfg.sstable_format());
-        break;
-    case sstables::sstable_version_types::me:
-        break;
-    default:
-        SCYLLA_ASSERT(false && "Invalid sstable_format");
-    }
-
-    if (!cfg.enable_user_defined_functions()) {
-        disabled.insert("UDF");
-    } else {
-        if (!cfg.check_experimental(db::experimental_features_t::feature::UDF)) {
-            throw std::runtime_error(
-                    "You must use both enable_user_defined_functions and experimental_features:udf "
-                    "to enable user-defined functions");
-        }
-    }
-
-    if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
-        disabled.insert("ALTERNATOR_STREAMS"s);
-    }
-    if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
-        disabled.insert("KEYSPACE_STORAGE_OPTIONS"s);
-    }
-    if (!cfg.check_experimental(db::experimental_features_t::feature::VIEWS_WITH_TABLETS)) {
-        disabled.insert("VIEWS_WITH_TABLETS"s);
-    }
-    if (cfg.force_gossip_topology_changes()) {
-        if (cfg.enable_tablets_by_default()) {
-            throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled|enforced or --force-gossip-topology-changes, but not both.");
-        }
-        logger.warn("The tablets feature is disabled due to forced gossip topology changes");
-        disabled.insert("TABLETS"s);
-    }
-    if (!cfg.table_digest_insensitive_to_expiry()) {
-        disabled.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
-    }
-    if (!cfg.commitlog_use_fragmented_entries()) {
-        disabled.insert("FRAGMENTED_COMMITLOG_ENTRIES"s);
-    }
-
-    if (!is_test_only_feature_enabled()) {
-        disabled.insert("TEST_ONLY_FEATURE"s);
-    }
-
-    return disabled;
 }
 
 future<> feature_service::stop() {
