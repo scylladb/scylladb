@@ -305,8 +305,7 @@ future<> service_level_controller::update_effective_service_levels_cache() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
     
     if (!_auth_service.local_is_initialized()) {
-        // Because cache update is triggered in `topology_state_load()`, auth service
-        // might be not initialized yet.
+        // Auth service might be not initialized yet.
         co_return;
     }
     if (!_sl_data_accessor || !_sl_data_accessor->can_use_effective_service_level_cache()) {

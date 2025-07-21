@@ -332,6 +332,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     if (_feature_service.compression_dicts) {
         co_await _ss.compression_dictionary_updated_callback_all();
     }
+    co_await _ss.update_service_levels_cache(qos::update_both_cache_levels::yes, qos::query_context::group0);
     _ss._topology_state_machine.event.broadcast();
 }
 
