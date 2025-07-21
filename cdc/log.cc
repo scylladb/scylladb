@@ -960,8 +960,12 @@ public:
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to the given value for the given row.
     void set_value(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes_view& value) {
-        auto& log_cdef = *_log_schema.get_column_definition(log_data_column_name_bytes(base_cdef.name()));
-        _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
+        auto log_cdef_ptr = _log_schema.get_column_definition(log_data_column_name_bytes(base_cdef.name()));
+        if (!log_cdef_ptr) {
+            throw exceptions::invalid_request_exception(format("CDC log schema for {}.{} does not have base column {}",
+                _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
+        }
+        _log_mut.set_cell(log_ck, *log_cdef_ptr, atomic_cell::make_live(*base_cdef.type, _ts, value, _ttl));
     }
 
     // Each regular and static column in the base schema has a corresponding column in the log schema
@@ -969,7 +973,13 @@ public:
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to `true` for the given row. If not called, the column will be `null`.
     void set_deleted(const clustering_key& log_ck, const column_definition& base_cdef) {
-        _log_mut.set_cell(log_ck, log_data_column_deleted_name_bytes(base_cdef.name()), data_value(true), _ts, _ttl);
+        auto log_cdef_ptr = _log_schema.get_column_definition(log_data_column_deleted_name_bytes(base_cdef.name()));
+        if (!log_cdef_ptr) {
+            throw exceptions::invalid_request_exception(format("CDC log schema for {}.{} does not have base column {}",
+                _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
+        }
+        auto& log_cdef = *log_cdef_ptr;
+        _log_mut.set_cell(log_ck, *log_cdef_ptr, atomic_cell::make_live(*log_cdef.type, _ts, log_cdef.type->decompose(true), _ttl));
     }
 
     // Each regular and static non-atomic column in the base schema has a corresponding column in the log schema
@@ -978,7 +988,12 @@ public:
     // Given a reference to such a column from the base schema, this function sets the corresponding column
     // in the log to the given set of keys for the given row.
     void set_deleted_elements(const clustering_key& log_ck, const column_definition& base_cdef, const managed_bytes& deleted_elements) {
-        auto& log_cdef = *_log_schema.get_column_definition(log_data_column_deleted_elements_name_bytes(base_cdef.name()));
+        auto log_cdef_ptr = _log_schema.get_column_definition(log_data_column_deleted_elements_name_bytes(base_cdef.name()));
+        if (!log_cdef_ptr) {
+            throw exceptions::invalid_request_exception(format("CDC log schema for {}.{} does not have base column {}",
+                _log_schema.ks_name(), _log_schema.cf_name(), base_cdef.name_as_text()));
+        }
+        auto& log_cdef = *log_cdef_ptr;
         _log_mut.set_cell(log_ck, log_cdef, atomic_cell::make_live(*log_cdef.type, _ts, deleted_elements, _ttl));
     }
 
@@ -1865,5 +1880,10 @@ bool cdc::cdc_service::needs_cdc_augmentation(const std::vector<mutation>& mutat
 
 future<std::tuple<std::vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, std::vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+    if (utils::get_local_injector().enter("sleep_before_cdc_augmentation")) {
+        return seastar::sleep(std::chrono::milliseconds(100)).then([this, timeout, mutations = std::move(mutations), tr_state = std::move(tr_state), write_cl] () mutable {
+            return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
+        });
+    }
     return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
 }
