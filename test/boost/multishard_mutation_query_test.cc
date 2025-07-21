@@ -13,7 +13,7 @@
 #include "db/extensions.hh"
 #include "partition_slice_builder.hh"
 #include "serializer_impl.hh"
-#include "query-result-set.hh"
+#include "query/query-result-set.hh"
 #include "mutation_query.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/eventually.hh"

@@ -9,7 +9,7 @@
 #pragma once
 
 #include "gc_clock.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "schema/schema_fwd.hh"
 #include "readers/mutation_reader.hh"
 #include "mutation/frozen_mutation.hh"

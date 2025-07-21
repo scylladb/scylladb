@@ -11,7 +11,7 @@
 #include <seastar/util/defer.hh>
 #include <boost/intrusive/set.hpp>
 #include "range_tombstone.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "utils/assert.hh"
 #include "utils/preempt.hh"
 #include "utils/chunked_vector.hh"

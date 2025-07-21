@@ -13,7 +13,7 @@
 #include "utils/assert.hh"
 #include "bytes.hh"
 #include "schema/schema_fwd.hh"
-#include "query-result-reader.hh"
+#include "query/query-result-reader.hh"
 #include "selector.hh"
 #include "cql3/column_specification.hh"
 #include "cql3/functions/function.hh"

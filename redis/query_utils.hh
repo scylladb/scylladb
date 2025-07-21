@@ -12,7 +12,7 @@
 #include <seastar/core/future.hh>
 #include "bytes_fwd.hh"
 #include "gc_clock.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 
 namespace service {
 class storage_proxy;

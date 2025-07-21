@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "query-request.hh"
+#include "query/query-request.hh"
 
 #include "idl/keys.idl.hh"
 #include "idl/range.idl.hh"

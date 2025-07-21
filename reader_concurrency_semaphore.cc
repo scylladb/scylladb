@@ -17,7 +17,7 @@
 #include <utility>
 
 #include "reader_concurrency_semaphore.hh"
-#include "query-result.hh"
+#include "query/query-result.hh"
 #include "readers/mutation_reader.hh"
 #include "utils/assert.hh"
 #include "utils/exceptions.hh"

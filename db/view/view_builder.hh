@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "service/migration_listener.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/serialized_action.hh"
