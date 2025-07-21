@@ -22,7 +22,7 @@
 #include "mutation/frozen_mutation.hh"
 #include "mutation/mutation.hh"
 #include "message/messaging_service.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "dht/i_partitioner.hh"
 #include "dht/sharder.hh"
 #include <boost/icl/interval.hpp>

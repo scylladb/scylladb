@@ -15,7 +15,7 @@
 #include "gms/inet_address.hh"
 #include <seastar/rpc/rpc_types.hh>
 #include <unordered_map>
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "schema/schema_fwd.hh"
 #include "streaming/stream_fwd.hh"
 #include "locator/host_id.hh"

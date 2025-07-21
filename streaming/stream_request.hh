@@ -11,7 +11,7 @@
 #pragma once
 
 #include <seastar/core/sstring.hh>
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "partition_range_compat.hh"
 #include <vector>
 

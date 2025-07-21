@@ -35,7 +35,7 @@
 #include <seastar/core/do_with.hh>
 #include "compaction/compaction_manager.hh"
 #include "test/lib/tmpdir.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "partition_slice_builder.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 #include "compaction/leveled_compaction_strategy.hh"

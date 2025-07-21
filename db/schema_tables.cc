@@ -18,7 +18,7 @@
 #include "query-result-set.hh"
 #include "query-result-writer.hh"
 #include "schema/schema_builder.hh"
-#include "map_difference.hh"
+#include "utils/map_difference.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/to_string.hh"

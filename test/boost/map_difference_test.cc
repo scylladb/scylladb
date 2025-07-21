@@ -10,7 +10,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include "map_difference.hh"
+#include "utils/map_difference.hh"
 
 #include <map>
 #include <set>

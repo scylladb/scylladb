@@ -12,7 +12,7 @@
 #include "gc_clock.hh"
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "utils/chunked_vector.hh"
 
 namespace replica {

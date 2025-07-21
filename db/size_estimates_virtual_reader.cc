@@ -17,7 +17,7 @@
 #include "db/system_keyspace.hh"
 #include "dht/i_partitioner.hh"
 #include "partition_range_compat.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "mutation/mutation_fragment.hh"
 #include "sstables/sstables.hh"
 #include "replica/database.hh"

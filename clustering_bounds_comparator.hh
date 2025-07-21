@@ -12,7 +12,7 @@
 #include <functional>
 #include "keys.hh"
 #include "schema/schema_fwd.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 
 /**
  * Represents the kind of bound in a range tombstone.

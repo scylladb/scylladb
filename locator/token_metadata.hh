@@ -18,7 +18,7 @@
 #include <optional>
 #include <memory>
 #include <boost/icl/interval.hpp>
-#include "interval.hh"
+#include "utils/interval.hh"
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/semaphore.hh>
