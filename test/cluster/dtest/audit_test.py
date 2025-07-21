@@ -958,6 +958,16 @@ class TestCQLAudit(AuditTester):
         with self.assert_entries_were_added(session, expected_audit_entries, filter_out_cassandra_auth=True):
             self.prepare(user="test", password="test", create_keyspace=False)
 
+    def test_cassandra_login(self):
+        """
+        Test user login to default (cassandra) user
+        """
+        session = self.prepare(user="cassandra", password="cassandra", create_keyspace=False)
+        expected_audit_entries = [AuditEntry(category="AUTH", statement="LOGIN", user="cassandra", table="", ks="", cl="", error=False)]
+
+        with self.assert_entries_were_added(session, expected_audit_entries, filter_out_cassandra_auth=False):
+            self.prepare(user="cassandra", password="cassandra", create_keyspace=False)
+
     def test_categories(self):
         """
         Test filtering audit categories
