@@ -53,9 +53,11 @@ feature_service::feature_service(feature_config cfg) : _config(cfg) {
 
 feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
+    fcfg._disabled_features = get_disabled_features_from_db_config(cfg, std::move(disabled));
+    return fcfg;
+}
 
-    fcfg._disabled_features = std::move(disabled);
-
+std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
     switch (sstables::version_from_string(cfg.sstable_format())) {
     case sstables::sstable_version_types::md:
         logger.warn("sstable_format must be 'me', '{}' is specified", cfg.sstable_format());
@@ -67,7 +69,7 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     }
 
     if (!cfg.enable_user_defined_functions()) {
-        fcfg._disabled_features.insert("UDF");
+        disabled.insert("UDF");
     } else {
         if (!cfg.check_experimental(db::experimental_features_t::feature::UDF)) {
             throw std::runtime_error(
@@ -77,33 +79,33 @@ feature_config feature_config_from_db_config(const db::config& cfg, std::set<sst
     }
 
     if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
-        fcfg._disabled_features.insert("ALTERNATOR_STREAMS"s);
+        disabled.insert("ALTERNATOR_STREAMS"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
-        fcfg._disabled_features.insert("KEYSPACE_STORAGE_OPTIONS"s);
+        disabled.insert("KEYSPACE_STORAGE_OPTIONS"s);
     }
     if (!cfg.check_experimental(db::experimental_features_t::feature::VIEWS_WITH_TABLETS)) {
-        fcfg._disabled_features.insert("VIEWS_WITH_TABLETS"s);
+        disabled.insert("VIEWS_WITH_TABLETS"s);
     }
     if (cfg.force_gossip_topology_changes()) {
         if (cfg.enable_tablets_by_default()) {
             throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled|enforced or --force-gossip-topology-changes, but not both.");
         }
         logger.warn("The tablets feature is disabled due to forced gossip topology changes");
-        fcfg._disabled_features.insert("TABLETS"s);
+        disabled.insert("TABLETS"s);
     }
     if (!cfg.table_digest_insensitive_to_expiry()) {
-        fcfg._disabled_features.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
+        disabled.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
     }
     if (!cfg.commitlog_use_fragmented_entries()) {
-        fcfg._disabled_features.insert("FRAGMENTED_COMMITLOG_ENTRIES"s);
+        disabled.insert("FRAGMENTED_COMMITLOG_ENTRIES"s);
     }
 
     if (!is_test_only_feature_enabled()) {
-        fcfg._disabled_features.insert("TEST_ONLY_FEATURE"s);
+        disabled.insert("TEST_ONLY_FEATURE"s);
     }
 
-    return fcfg;
+    return disabled;
 }
 
 future<> feature_service::stop() {

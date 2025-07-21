@@ -41,6 +41,7 @@ private:
 };
 
 feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
+std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
 
 class unsupported_feature_exception : public std::runtime_error {
 public:
