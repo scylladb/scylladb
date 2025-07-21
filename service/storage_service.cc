@@ -5398,8 +5398,8 @@ void storage_service::add_expire_time_if_found(locator::host_id endpoint, int64_
     }
 }
 
-bool storage_service::is_raft_leader() const noexcept {
-    return _group0->joined_group0() && _group0->group0_server().is_leader();
+bool storage_service::is_raft_leader() const {
+    return _group0->joined_group0() && _group0->is_leader();
 }
 
 future<> storage_service::shutdown_protocol_servers() {

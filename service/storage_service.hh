@@ -348,7 +348,7 @@ public:
         return _sys_ks.local();
     }
 
-    bool is_raft_leader() const noexcept;
+    bool is_raft_leader() const;
 
 private:
     inet_address get_broadcast_address() const noexcept {

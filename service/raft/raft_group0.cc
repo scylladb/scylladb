@@ -488,6 +488,9 @@ future<> raft_group0::leadership_monitor_fiber() {
     } catch (...) {
         group0_log.debug("leadership_monitor_fiber aborted with {}", std::current_exception());
     }
+    if (_leadership_observable.get()) {
+        _leadership_observable.set(false);
+    }
 }
 
 utils::observer<bool> raft_group0::observe_leadership(std::function<void(bool)> cb) {
@@ -495,6 +498,10 @@ utils::observer<bool> raft_group0::observe_leadership(std::function<void(bool)> 
         cb(true);
     }
     return _leadership_observable.observe(cb);
+}
+
+bool raft_group0::is_leader() {
+    return _leadership_observable.get();
 }
 
 future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_ptr<service::group0_handshaker> handshaker, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm,
