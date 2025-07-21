@@ -4843,6 +4843,7 @@ future<std::vector<std::byte>> storage_service::train_dict(utils::chunked_vector
 
 future<> storage_service::publish_new_sstable_dict(table_id t_id, std::span<const std::byte> dict, service::raft_group0_client& group0_client) {
     co_await container().invoke_on(0, coroutine::lambda([t_id, dict, &group0_client] (storage_service& local_ss) -> future<> {
+        auto group0_holder = local_ss._group0->hold_group0_gate();
         while (true) {
             try {
                 auto name = fmt::format("sstables/{}", t_id);
