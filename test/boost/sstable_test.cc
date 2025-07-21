@@ -25,7 +25,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/test_utils.hh"
 #include "schema/schema.hh"
-#include "compress.hh"
+#include "sstables/compressor.hh"
 #include "replica/database.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"

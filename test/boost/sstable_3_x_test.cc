@@ -22,7 +22,7 @@
 
 #include "sstables/sstables.hh"
 #include "compaction/compaction_manager.hh"
-#include "compress.hh"
+#include "sstables/compressor.hh"
 #include "counters.hh"
 #include "schema/schema_builder.hh"
 #include "test/boost/sstable_test.hh"

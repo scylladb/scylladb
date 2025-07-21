@@ -23,7 +23,7 @@
 #include "types/types.hh"
 #include "keys/compound.hh"
 #include "gc_clock.hh"
-#include "compress.hh"
+#include "sstables/compressor.hh"
 #include "compaction/compaction_strategy_type.hh"
 #include "caching_options.hh"
 #include "column_computation.hh"

@@ -22,7 +22,7 @@
 #include "sstables/exceptions.hh"
 #include "utils/hashers.hh"
 #include "sstables/sstable_compressor_factory.hh"
-#include "compress.hh"
+#include "compressor.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/class_registrator.hh"
 #include "gms/feature_service.hh"

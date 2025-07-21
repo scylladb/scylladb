@@ -20,7 +20,6 @@
 #include <fmt/ostream.h>
 
 #include "../../bytes.hh"
-#include "../../compress.hh"
 
 class service_set;
 
