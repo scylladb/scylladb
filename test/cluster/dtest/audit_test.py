@@ -453,8 +453,17 @@ class TestCQLAudit(AuditTester):
         set_of_rows_after = set(rows_after)
         assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
 
+<<<<<<< HEAD
         new_rows = rows_after[len(rows_before) :]
         assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
+||||||| parent of e634a2cb4f (test: audit: add missing `nonlocal new_rows` statement)
+            new_rows = rows_after[len(rows_before) :]
+            assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
+=======
+            nonlocal new_rows
+            new_rows = rows_after[len(rows_before) :]
+            assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
+>>>>>>> e634a2cb4f (test: audit: add missing `nonlocal new_rows` statement)
 
         if merge_duplicate_rows:
             new_rows = self.deduplicate_audit_entries(new_rows)
@@ -467,7 +476,18 @@ class TestCQLAudit(AuditTester):
 
         assert len(new_rows) == len(expected_entries), f"Expected {len(expected_entries)} new audit entries, but got {len(new_rows)} new entries: {new_rows}"
 
+<<<<<<< HEAD
         for row, entry in zip(new_rows, expected_entries):
+||||||| parent of e634a2cb4f (test: audit: add missing `nonlocal new_rows` statement)
+        wait_for(is_number_of_new_rows_correct, timeout=60)
+        sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row_operation, row_source, row_table_name, row.username))
+        for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
+=======
+        wait_for(is_number_of_new_rows_correct, timeout=60)
+        sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row.operation, row.source, row.table_name, row.username))
+        assert len(sorted_new_rows) == len(expected_entries)
+        for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
+>>>>>>> e634a2cb4f (test: audit: add missing `nonlocal new_rows` statement)
             self.assert_audit_row_eq(row, entry.category, entry.statement, entry.table, entry.ks, entry.user, entry.cl, entry.error)
 
     def verify_keyspace(self, audit_settings=None, helper=None):
