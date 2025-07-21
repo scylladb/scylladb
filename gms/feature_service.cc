@@ -36,9 +36,6 @@ static bool is_test_only_feature_enabled() {
             || is_test_only_feature_deprecated();
 }
 
-feature_config::feature_config() {
-}
-
 feature_service::feature_service(feature_config cfg) : _config(cfg) {
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
     initialize_suppressed_features_set();
@@ -53,7 +50,7 @@ feature_service::feature_service(feature_config cfg) : _config(cfg) {
 
 feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
     feature_config fcfg;
-    fcfg._disabled_features = get_disabled_features_from_db_config(cfg, std::move(disabled));
+    fcfg.disabled_features = get_disabled_features_from_db_config(cfg, std::move(disabled));
     return fcfg;
 }
 
@@ -176,7 +173,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         features.insert(name);
     }
 
-    for (const sstring& s : _config._disabled_features) {
+    for (const sstring& s : _config.disabled_features) {
         features.erase(s);
     }
 

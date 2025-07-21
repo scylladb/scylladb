@@ -32,12 +32,7 @@ class feature_service;
 class i_endpoint_state_change_subscriber;
 
 struct feature_config {
-private:
-    std::set<sstring> _disabled_features;
-    feature_config();
-
-    friend class feature_service;
-    friend feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled);
+    std::set<sstring> disabled_features;
 };
 
 feature_config feature_config_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
