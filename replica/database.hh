@@ -39,7 +39,7 @@
 #include "db/snapshot-ctl.hh"
 #include "memtable.hh"
 #include "db/row_cache.hh"
-#include "query-result.hh"
+#include "query/query-result.hh"
 #include "compaction/compaction_strategy.hh"
 #include "utils/estimated_histogram.hh"
 #include <seastar/core/metrics_registration.hh>

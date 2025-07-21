@@ -10,7 +10,7 @@
 #pragma once
 #include <variant>
 #include <fmt/core.h>
-#include "query-result.hh"
+#include "query/query-result.hh"
 #include "service/paxos/proposal.hh"
 
 namespace service {

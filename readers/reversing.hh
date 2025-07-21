@@ -8,7 +8,7 @@
 
 #pragma once
 #include <memory>
-#include "query-request.hh"
+#include "query/query-request.hh"
 
 class mutation_reader;
 

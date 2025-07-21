@@ -9,7 +9,7 @@
 #include <seastar/util/closeable.hh>
 
 #include "mutation.hh"
-#include "query-result-writer.hh"
+#include "query/query-result-writer.hh"
 #include "mutation_rebuilder.hh"
 #include "mutation/json.hh"
 #include "types/collection.hh"

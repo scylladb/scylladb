@@ -12,7 +12,7 @@
 
 #include "utils/assert.hh"
 #include "schema/schema.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation_fragment_v2.hh"
 

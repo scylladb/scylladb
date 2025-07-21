@@ -13,7 +13,7 @@
 #include "mutation/mutation.hh"
 #include <seastar/core/future.hh>
 #include "service/storage_proxy.hh"
-#include "query-result-set.hh"
+#include "query/query-result-set.hh"
 #include "db/schema_tables.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "schema/schema_registry.hh"

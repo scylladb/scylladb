@@ -12,7 +12,7 @@
 #include "types/types.hh"
 #include "keys/keys.hh"
 #include "keys/clustering_bounds_comparator.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 
 #include <optional>
 #include <cstdlib>

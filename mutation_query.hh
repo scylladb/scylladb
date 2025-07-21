@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "query-request.hh"
-#include "query-result.hh"
+#include "query/query-request.hh"
+#include "query/query-result.hh"
 #include "mutation/frozen_mutation.hh"
 #include "db/timeout_clock.hh"
 #include "mutation/mutation.hh"

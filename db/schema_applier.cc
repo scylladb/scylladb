@@ -40,8 +40,8 @@
 #include "gms/feature_service.hh"
 #include "dht/i_partitioner.hh"
 #include "system_keyspace.hh"
-#include "query-result-set.hh"
-#include "query-result-writer.hh"
+#include "query/query-result-set.hh"
+#include "query/query-result-writer.hh"
 #include "utils/map_difference.hh"
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"

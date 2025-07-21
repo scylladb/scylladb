@@ -14,7 +14,7 @@
 #include "keys/clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
-#include "query-result-writer.hh"
+#include "query/query-result-writer.hh"
 #include "mutation_fragment.hh"
 #include "mutation_query.hh"
 #include "mutation_compactor.hh"

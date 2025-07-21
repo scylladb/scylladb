@@ -14,7 +14,7 @@
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/evaluate.hh"
 #include "cql3/expr/expr-utils.hh"
-#include "query-result-reader.hh"
+#include "query/query-result-reader.hh"
 #include "types/map.hh"
 
 namespace cql3 {

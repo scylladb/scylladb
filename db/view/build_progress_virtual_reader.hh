@@ -12,7 +12,7 @@
 #include "db/system_keyspace.hh"
 #include "readers/mutation_reader.hh"
 #include "mutation/mutation_fragment.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "schema/schema_fwd.hh"
 
 #include <iterator>

@@ -10,7 +10,7 @@
 
 #include <map>
 
-#include "query-result-set.hh"
+#include "query/query-result-set.hh"
 
 //
 // Contains assertions for query::result_set objects

@@ -13,7 +13,7 @@
 #include "utils/UUID_gen.hh"
 #include <seastar/core/sstring.hh>
 #include "gms/inet_address.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "streaming/stream_fwd.hh"
 #include "streaming/stream_coordinator.hh"
 #include "streaming/stream_detail.hh"

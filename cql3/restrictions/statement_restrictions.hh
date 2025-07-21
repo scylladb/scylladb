@@ -17,7 +17,7 @@
 #include "schema/schema_fwd.hh"
 #include "cql3/prepare_context.hh"
 #include "cql3/statements/statement_type.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 
 namespace cql3 {
 

@@ -42,7 +42,7 @@
 #include "service/storage_service.hh"
 #include "service/storage_proxy.hh"
 #include "service/paxos/paxos_state.hh"
-#include "query-result-set.hh"
+#include "query/query-result-set.hh"
 #include "idl/frozen_mutation.dist.hh"
 #include "idl/frozen_mutation.dist.impl.hh"
 #include "service/topology_state_machine.hh"

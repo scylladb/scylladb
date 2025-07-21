@@ -11,7 +11,7 @@
 #pragma once
 
 #include "schema/schema_fwd.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 
 namespace query {
 

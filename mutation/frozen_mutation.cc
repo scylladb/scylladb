@@ -14,7 +14,7 @@
 #include "counters.hh"
 #include "partition_builder.hh"
 #include "mutation_partition_serializer.hh"
-#include "query-result-set.hh"
+#include "query/query-result-set.hh"
 #include "idl/mutation.dist.hh"
 #include "idl/mutation.dist.impl.hh"
 #include "readers/mutation_reader.hh"

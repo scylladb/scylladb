@@ -11,7 +11,7 @@
 #include "utils/UUID_gen.hh"
 #include "service/paxos/proposal.hh"
 #include "inet_address_vectors.hh"
-#include "query-result.hh"
+#include "query/query-result.hh"
 
 namespace service {
 
