@@ -20,6 +20,7 @@
 #include <seastar/util/bool_class.hh>
 #include "utils/user_provided_param.hh"
 #include "locator/tablet_metadata_guard.hh"
+#include "utils/chunked_vector.hh"
 
 using namespace seastar;
 
