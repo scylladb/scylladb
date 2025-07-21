@@ -1452,10 +1452,6 @@ future<std::optional<double>> repair::user_requested_repair_task_impl::expected_
     co_return _ranges.size() * _cfs.size() * smp::count;
 }
 
-std::optional<double> repair::user_requested_repair_task_impl::expected_children_number() const {
-    return smp::count;
-}
-
 future<int> repair_start(seastar::sharded<repair_service>& repair, sharded<gms::gossip_address_map>& am,
         sstring keyspace, std::unordered_map<sstring, sstring> options) {
     return repair.invoke_on(0, [keyspace = std::move(keyspace), options = std::move(options), &am] (repair_service& local_repair) {
@@ -1622,10 +1618,6 @@ future<> repair::data_sync_repair_task_impl::run() {
 
 future<std::optional<double>> repair::data_sync_repair_task_impl::expected_total_workload() const {
     co_return _cfs_size ? std::make_optional<double>(_ranges.size() * _cfs_size * smp::count) : std::nullopt;
-}
-
-std::optional<double> repair::data_sync_repair_task_impl::expected_children_number() const {
-    return smp::count;
 }
 
 future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> bootstrap_tokens) {
@@ -2680,10 +2672,6 @@ future<> repair::tablet_repair_task_impl::run() {
 future<std::optional<double>> repair::tablet_repair_task_impl::expected_total_workload() const {
     auto sz = get_metas_size();
     co_return sz ? std::make_optional<double>(sz) : std::nullopt;
-}
-
-std::optional<double> repair::tablet_repair_task_impl::expected_children_number() const {
-    return get_metas_size();
 }
 
 node_ops_cmd_category categorize_node_ops_cmd(node_ops_cmd cmd) noexcept {

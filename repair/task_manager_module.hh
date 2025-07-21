@@ -74,7 +74,6 @@ protected:
     future<> run() override;
 
     virtual future<std::optional<double>> expected_total_workload() const override;
-    virtual std::optional<double> expected_children_number() const override;
 };
 
 class data_sync_repair_task_impl : public repair_task_impl {
@@ -103,7 +102,6 @@ protected:
     future<> run() override;
 
     virtual future<std::optional<double>> expected_total_workload() const override;
-    virtual std::optional<double> expected_children_number() const override;
 };
 
 class tablet_repair_task_impl : public repair_task_impl {
@@ -145,7 +143,6 @@ protected:
     future<> run() override;
 
     virtual future<std::optional<double>> expected_total_workload() const override;
-    virtual std::optional<double> expected_children_number() const override;
 };
 
 class shard_repair_task_impl : public repair_task_impl {
