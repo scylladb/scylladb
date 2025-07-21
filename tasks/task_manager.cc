@@ -121,10 +121,6 @@ future<std::optional<double>> task_manager::task::impl::expected_total_workload(
     return make_ready_future<std::optional<double>>(std::nullopt);
 }
 
-std::optional<double> task_manager::task::impl::expected_children_number() const {
-    return std::nullopt;
-}
-
 task_manager::task::progress task_manager::task::impl::get_binary_progress() const {
     return tasks::task_manager::task::progress{
         .completed = is_complete(),
@@ -133,20 +129,10 @@ task_manager::task::progress task_manager::task::impl::get_binary_progress() con
 }
 
 future<task_manager::task::progress> task_manager::task::impl::get_progress() const {
-    auto children_num = _children.size();
-    if (children_num == 0) {
-        co_return get_binary_progress();
+    std::optional<double> expected_workload = co_await expected_total_workload();
+    if (!expected_workload && _children.size() == 0) {
+        co_return task_manager::task::progress{};
     }
-
-    std::optional<double> expected_workload = std::nullopt;
-    auto expected_children_num = expected_children_number();
-    // When get_progress is called, the task can have some of its children unregistered yet.
-    // Then if total workload is not known, progress obtained from children may be deceiving.
-    // In such a situation it's safer to return binary progress value.
-    if (expected_children_num.value_or(0) != children_num && !(expected_workload = co_await expected_total_workload())) {
-        co_return get_binary_progress();
-    }
-
     auto progress = co_await _children.get_progress(_status.progress_units);
     progress.total = expected_workload.value_or(progress.total);
     co_return progress;
