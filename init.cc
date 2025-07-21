@@ -14,6 +14,7 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <seastar/core/coroutine.hh>
 #include "sstables/sstable_compressor_factory.hh"
+#include "gms/feature_service.hh"
 
 logging::logger startlog("init");
 
@@ -67,6 +68,9 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
     return seeds;
 }
 
+std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
+    return gms::get_disabled_features_from_db_config(cfg, std::move(disabled));
+}
 
 std::vector<std::reference_wrapper<configurable>>& configurable::configurables() {
     static std::vector<std::reference_wrapper<configurable>> configurables;

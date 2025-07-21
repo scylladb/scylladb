@@ -204,7 +204,7 @@ int main(int ac, char ** av) {
             compressor_tracker.start([] { return utils::walltime_compressor_tracker::config{}; }).get();
             auto stop_compressor_tracker = deferred_stop(compressor_tracker);
             seastar::sharded<gms::feature_service> feature_service;
-            auto cfg = gms::feature_config_from_db_config(db::config(), {});
+            gms::feature_config cfg;
             feature_service.start(cfg).get();
             seastar::sharded<gms::gossip_address_map> gossip_address_map;
             gossip_address_map.start().get();
