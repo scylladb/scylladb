@@ -33,7 +33,6 @@
 #include <fmt/std.h>
 #include "utils/to_string.hh"
 
-#include "compress.hh"
 #include "encryption.hh"
 #include "symmetric_key.hh"
 #include "local_file_provider.hh"

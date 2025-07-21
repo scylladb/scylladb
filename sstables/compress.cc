@@ -15,8 +15,8 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/core/on_internal_error.hh>
 
-#include "../compress.hh"
 #include "compress.hh"
+#include "compressor.hh"
 #include "exceptions.hh"
 #include "unimplemented.hh"
 #include "segmented_compress_params.hh"
