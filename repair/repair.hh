@@ -195,19 +195,19 @@ struct node_repair_meta_id {
 // Represent a partition_key and frozen_mutation_fragments within the partition_key.
 class partition_key_and_mutation_fragments {
     partition_key _key;
-    std::list<frozen_mutation_fragment> _mfs;
+    utils::chunked_vector<frozen_mutation_fragment> _mfs;
 public:
     partition_key_and_mutation_fragments()
         : _key(std::vector<bytes>() ) {
     }
-    partition_key_and_mutation_fragments(partition_key key, std::list<frozen_mutation_fragment> mfs)
+    partition_key_and_mutation_fragments(partition_key key, utils::chunked_vector<frozen_mutation_fragment> mfs)
         : _key(std::move(key))
         , _mfs(std::move(mfs)) {
     }
     const partition_key& get_key() const { return _key; }
-    const std::list<frozen_mutation_fragment>& get_mutation_fragments() const { return _mfs; }
+    const utils::chunked_vector<frozen_mutation_fragment>& get_mutation_fragments() const { return _mfs; }
     partition_key& get_key() { return _key; }
-    std::list<frozen_mutation_fragment>& get_mutation_fragments() { return _mfs; }
+    utils::chunked_vector<frozen_mutation_fragment>& get_mutation_fragments() { return _mfs; }
     void push_mutation_fragment(frozen_mutation_fragment mf) { _mfs.push_back(std::move(mf)); }
     future<> clear_gently() { return utils::clear_gently(_mfs); };
 };
