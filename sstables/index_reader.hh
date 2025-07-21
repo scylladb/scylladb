@@ -50,6 +50,10 @@ struct open_rt_marker {
 // to a start of some partition or to EOF,
 // while "position" means a position that corresponds either to the start of some partition,
 // to the start of some clustering entry, or to EOF.
+//
+// Note: even though some methods of the index are inexact (i.e. they advance the index to *some*
+// Data position close to the queried ring position), they are monotonic.
+// I.e. if B >= A, then advance(B) >= advance(A).
 class abstract_index_reader {
 public:
     virtual ~abstract_index_reader() = default;
@@ -58,8 +62,11 @@ public:
     // True iff lower bound is at EOF.
     virtual bool eof() const = 0;
 
-    // Advances lower bound to the first PK no smaller than pos.
-    // Returns true iff `key` is a partition key present in the sstable.
+    // If `key` is a partition key present in the sstable, advances lower bound to `key`.
+    // Otherwise advances lower bound to the some PK no greater than `key`.
+    // Returns `true` iff it's possible that `key` is a partition key present in the sstable.
+    // (In other words, if it returns `false`, then the key is definitely not present.
+    // Otherwise it's unknown if it's present).
     //
     // Precondition: pos >= lower bound
     //
@@ -74,8 +81,10 @@ public:
     //
     // Preconditions: dk >= lower bound, dk is present in the sstable
     virtual future<> advance_to_definitely_present_partition(const dht::decorated_key& dk) = 0;
-    // Advances lower bound to the first PK which lies inside or after the range.
+    // Advances lower bound to the first PK which lies inside or after the range,
+    // or to some close predecessor of that optimal PK.
     // Advances upper bound to the first PK which lies after the range.
+    // or to some close successor of that optimal PK.
     // Preconditions:
     // 1. next lower bound >= lower bound
     // 2. next upper bound >= upper bound
