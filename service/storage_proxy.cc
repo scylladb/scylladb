@@ -3154,6 +3154,12 @@ storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::
     slogger.trace("hinted DCs: {}", cfg.hinted_handoff_enabled.to_configuration_string());
     _hints_manager.register_metrics("hints_manager");
     _hints_for_views_manager.register_metrics("hints_for_views_manager");
+    if (!_db.local().get_config().developer_mode()) {
+        // preallocate 128K pointers and set max_load_factor to 8 to support around 1M outstanding requests
+        // without re-allocations
+        _response_handlers.reserve(128*1024);
+        _response_handlers.max_load_factor(8);
+    }
 }
 
 struct storage_proxy::remote& storage_proxy::remote() {
