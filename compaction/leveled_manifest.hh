@@ -15,7 +15,7 @@
 #include "utils/assert.hh"
 #include "sstables/sstables.hh"
 #include "size_tiered_compaction_strategy.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "utils/log.hh"
 
 class leveled_manifest {

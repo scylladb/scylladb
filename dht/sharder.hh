@@ -10,7 +10,7 @@
 
 #include "dht/ring_position.hh"
 #include "dht/token-sharding.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 
 #include <vector>
 

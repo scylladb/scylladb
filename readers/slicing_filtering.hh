@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "interval.hh"
+#include "utils/interval.hh"
 
 class mutation_reader;
 

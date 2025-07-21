@@ -9,7 +9,7 @@
 
 #pragma once
 #include <vector>
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "utils/chunked_vector.hh"
 
 namespace sstables {

@@ -32,7 +32,7 @@
 #include "db/config.hh"
 #include "db/view/view_update_backlog.hh"
 #include "dht/i_partitioner.hh"
-#include "interval.hh"
+#include "utils/interval.hh"
 #include "frozen_schema.hh"
 #include "repair/repair.hh"
 #include "node_ops/node_ops_ctl.hh"

@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "../../utils/config_file.hh"
+#include "utils/config_file.hh"
 
 namespace encryption {
 
