@@ -4848,7 +4848,7 @@ future<> storage_service::publish_new_sstable_dict(table_id t_id, std::span<cons
             try {
                 auto name = fmt::format("sstables/{}", t_id);
                 slogger.debug("publish_new_sstable_dict: trying to publish the dict as {}", name);
-                auto batch = service::group0_batch(co_await group0_client.start_operation(local_ss.get_abort_source()));
+                auto batch = service::group0_batch(co_await group0_client.start_operation(local_ss._group0_as));
                 auto write_ts = batch.write_timestamp();
                 auto new_dict_ts = db_clock::now();
                 auto data = bytes(reinterpret_cast<const bytes::value_type*>(dict.data()), dict.size());
@@ -4856,7 +4856,7 @@ future<> storage_service::publish_new_sstable_dict(table_id t_id, std::span<cons
                 mutation publish_new_dict = co_await local_ss._sys_ks.local().get_insert_dict_mutation(name, std::move(data), this_host_id, new_dict_ts, write_ts);
                 batch.add_mutation(std::move(publish_new_dict), "publish new SSTable compression dictionary");
                 slogger.debug("publish_new_sstable_dict: committing");
-                co_await std::move(batch).commit(group0_client, local_ss.get_abort_source(), {});
+                co_await std::move(batch).commit(group0_client, local_ss._group0_as, {});
                 slogger.debug("publish_new_sstable_dict: finished");
                 break;
             } catch (const service::group0_concurrent_modification&) {
