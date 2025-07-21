@@ -676,6 +676,33 @@ public:
         return res;
     }
 
+    std::tuple<opt_bytes, shared_ptr<encryption_schema_extension>> get_encryption_schema_extension(const sstables::sstable& sst,
+                                                                                                   sstables::component_type type) const {
+        const auto& sc = sst.get_shared_components();
+        if (!sc.scylla_metadata) {
+            return {};
+        }
+        const auto* ext_attr = sc.scylla_metadata->get_extension_attributes();
+        if (!ext_attr) {
+            return {};
+        }
+
+        bool ok = ext_attr->map.contains(encryption_attribute_ds);
+        if (ok && type != sstables::component_type::Data) {
+            ok = (ser::deserialize_from_buffer(ext_attr->map.at(encrypted_components_attribute_ds).value, std::type_identity<uint32_t>{}, 0) & (1 << static_cast<int>(type))) > 0;
+        }
+
+        if (!ok) {
+            return {};
+        }
+        auto esx = encryption_schema_extension::create(*_ctxt, ext_attr->map.at(encryption_attribute_ds).value);
+        opt_bytes id;
+        if (ext_attr->map.contains(key_id_attribute_ds)) {
+            id = ext_attr->map.at(key_id_attribute_ds).value;
+        }
+        return {std::move(id), std::move(esx)};
+    }
+
     future<file> wrap_file(const sstables::sstable& sst, sstables::component_type type, file f, open_flags flags) override {
         switch (type) {
         case sstables::component_type::Scylla:
@@ -688,44 +715,21 @@ public:
 
         if (flags == open_flags::ro) {
             // open existing. check read opts.
-            auto& sc = sst.get_shared_components();
-            if (sc.scylla_metadata) {
-                auto* exta  = sc.scylla_metadata->get_extension_attributes();
-                if (exta) {
-                    auto i = exta->map.find(encryption_attribute_ds);
-                    // note: earlier builds of encryption extension would only encrypt data component,
-                    // so iff we are opening old sstables we need to check if this component is actually
-                    // encrypted. We use a bitmask attribute for this.
+            auto [id, esx] = get_encryption_schema_extension(sst, type);
+            if (esx) {
+                if (esx->should_delay_read(id)) {
+                    logg.debug("Encrypted sstable component {} using delayed opening {} (id: {})", sst.component_basename(type), *esx, id);
 
-                    bool ok = i != exta->map.end();
-                    if (ok && type != sstables::component_type::Data) {
-                        ok = exta->map.count(encrypted_components_attribute_ds) &&
-                                        (ser::deserialize_from_buffer(exta->map.at(encrypted_components_attribute_ds).value, std::type_identity<uint32_t>{}, 0) & (1 << int(type)));
-                    }
-
-                    if (ok) {
-                        auto esx = encryption_schema_extension::create(*_ctxt, i->second.value);
-                        opt_bytes id;
-
-                        if (exta->map.count(key_id_attribute_ds)) {
-                            id = exta->map.at(key_id_attribute_ds).value;
-                        }
-
-                        if (esx->should_delay_read(id)) {
-                            logg.debug("Encrypted sstable component {} using delayed opening {} (id: {})", sst.component_basename(type), *esx, id);
-
-                            co_return make_delayed_encrypted_file(f, esx->key_block_size(), [esx, comp = sst.component_basename(type), id = std::move(id)] {
-                                logg.trace("Delayed component {} using {} (id: {}) resolve", comp, *esx, id);
-                                return esx->key_for_read(id);
-                            });
-                        }
-
-                        logg.debug("Open encrypted sstable component {} using {} (id: {})", sst.component_basename(type), *esx, id);
-
-                        auto k = co_await esx->key_for_read(std::move(id));
-                        co_return make_encrypted_file(f, std::move(k));
-                    }
+                    co_return make_delayed_encrypted_file(f, esx->key_block_size(), [esx, comp = sst.component_basename(type), id = std::move(id)] {
+                        logg.trace("Delayed component {} using {} (id: {}) resolve", comp, *esx, id);
+                        return esx->key_for_read(id);
+                    });
                 }
+
+                logg.debug("Open encrypted sstable component {} using {} (id: {})", sst.component_basename(type), *esx, id);
+
+                auto k = co_await esx->key_for_read(std::move(id));
+                co_return make_encrypted_file(f, std::move(k));
             }
         } else {
             if (co_await wrap_writeonly(sst, type, [&f](shared_ptr<symmetric_key> k) { f = make_encrypted_file(std::move(f), std::move(k)); })) {
@@ -822,6 +826,36 @@ public:
             sink = data_sink(make_encrypted_sink(std::move(sink), std::move(k))); 
         });
         co_return sink;
+    }
+
+    future<data_source> wrap_source(const sstables::sstable& sst,
+                                                         sstables::component_type type,
+                                                         sstables::data_source_creator_fn data_source_creator,
+                                                         uint64_t offset,
+                                                         uint64_t len) override {
+        switch (type) {
+        case sstables::component_type::Scylla:
+        case sstables::component_type::TemporaryTOC:
+        case sstables::component_type::TOC:
+            co_return data_source_creator(offset, len);
+        case sstables::component_type::CompressionInfo:
+        case sstables::component_type::CRC:
+        case sstables::component_type::Data:
+        case sstables::component_type::Digest:
+        case sstables::component_type::Filter:
+        case sstables::component_type::Index:
+        case sstables::component_type::Statistics:
+        case sstables::component_type::Summary:
+        case sstables::component_type::TemporaryStatistics:
+        case sstables::component_type::Unknown:
+            auto [id, esx] = get_encryption_schema_extension(sst, type);
+            if (esx) {
+                auto key = co_await esx->key_for_read(std::move(id));
+                auto block_size = key->block_size();
+                co_return data_source(make_encrypted_source(data_source_creator(align_down(offset, block_size), align_up(len, block_size)), std::move(key)));
+            }
+            co_return data_source_creator(offset, len);
+        }
     }
 };
 
