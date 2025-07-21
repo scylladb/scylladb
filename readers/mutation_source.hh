@@ -9,7 +9,7 @@
 #pragma once
 
 #include "utils/assert.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "tracing/trace_state.hh"
 #include "readers/mutation_reader_fwd.hh"
 #include "readers/mutation_reader.hh"

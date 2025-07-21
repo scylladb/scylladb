@@ -187,9 +187,9 @@ target_sources(scylla-main
     node_ops/task_manager_module.cc
     partition_slice_builder.cc
     querier.cc
-    query.cc
-    query_ranges_to_vnodes.cc
-    query-result-set.cc
+    query/query.cc
+    query/query_ranges_to_vnodes.cc
+    query/query-result-set.cc
     tombstone_gc_options.cc
     tombstone_gc.cc
     reader_concurrency_semaphore.cc

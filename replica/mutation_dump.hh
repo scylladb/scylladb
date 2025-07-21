@@ -9,7 +9,7 @@
 #pragma once
 
 #include "db/timeout_clock.hh"
-#include "query-result.hh"
+#include "query/query-result.hh"
 
 namespace locator {
 

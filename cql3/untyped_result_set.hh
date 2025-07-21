@@ -19,7 +19,7 @@
 #include "bytes_ostream.hh"
 #include "transport/messages/result_message_base.hh"
 #include "column_specification.hh"
-#include "query-result.hh"
+#include "query/query-result.hh"
 
 #pragma once
 

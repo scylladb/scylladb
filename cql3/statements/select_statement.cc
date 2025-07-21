@@ -30,9 +30,9 @@
 #include <optional>
 #include <ranges>
 #include <seastar/core/shared_ptr.hh>
-#include "query-result-reader.hh"
-#include "query_ranges_to_vnodes.hh"
-#include "query_result_merger.hh"
+#include "query/query-result-reader.hh"
+#include "query/query_ranges_to_vnodes.hh"
+#include "query/query_result_merger.hh"
 #include "service/pager/query_pagers.hh"
 #include "service/storage_proxy.hh"
 #include <seastar/core/execution_stage.hh>

@@ -28,7 +28,7 @@
 #include "mutation/mutation.hh"
 #include "mutation/frozen_mutation.hh"
 #include "mutation/async_utils.hh"
-#include "query_result_merger.hh"
+#include "query/query_result_merger.hh"
 #include <seastar/core/do_with.hh>
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
@@ -44,7 +44,7 @@
 #include "utils/assert.hh"
 #include "utils/latency.hh"
 #include "schema/schema.hh"
-#include "query_ranges_to_vnodes.hh"
+#include "query/query_ranges_to_vnodes.hh"
 #include "schema/schema_registry.hh"
 #include <seastar/util/lazy.hh>
 #include <seastar/core/metrics.hh>

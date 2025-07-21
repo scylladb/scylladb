@@ -8,9 +8,9 @@
 
 #pragma once
 
-#include "query-request.hh"
-#include "query-result.hh"
-#include "query-result-writer.hh"
+#include "query/query-request.hh"
+#include "query/query-result.hh"
+#include "query/query-result-writer.hh"
 
 namespace replica {
 

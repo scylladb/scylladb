@@ -15,7 +15,7 @@
 
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
-#include "query_ranges_to_vnodes.hh"
+#include "query/query_ranges_to_vnodes.hh"
 #include "schema/schema_builder.hh"
 
 BOOST_AUTO_TEST_SUITE(storage_proxy_test)
