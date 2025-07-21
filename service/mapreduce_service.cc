@@ -24,7 +24,7 @@
 #include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "message/messaging_service.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "query_ranges_to_vnodes.hh"
 #include "replica/database.hh"
 #include "schema/schema.hh"

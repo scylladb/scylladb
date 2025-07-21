@@ -26,7 +26,7 @@
 #include "types/set.hh"
 #include "types/vector.hh"
 #include "utils/like_matcher.hh"
-#include "query-result-reader.hh"
+#include "query/query-result-reader.hh"
 #include "types/user.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/first_function.hh"

@@ -26,7 +26,7 @@
 #include "gms/gossip_digest_syn.hh"
 #include "gms/gossip_digest_ack.hh"
 #include "gms/gossip_digest_ack2.hh"
-#include "query-result.hh"
+#include "query/query-result.hh"
 #include <seastar/rpc/rpc.hh>
 #include "mutation/canonical_mutation.hh"
 #include "db/config.hh"
@@ -38,7 +38,7 @@
 #include "node_ops/node_ops_ctl.hh"
 #include "service/paxos/proposal.hh"
 #include "service/paxos/prepare_response.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "mutation_query.hh"
 #include "repair/repair.hh"
 #include "streaming/stream_reason.hh"

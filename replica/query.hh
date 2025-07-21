@@ -19,7 +19,7 @@
 #include "dht/i_partitioner_fwd.hh"
 #include "db/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
-#include "query-result.hh"
+#include "query/query-result.hh"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>

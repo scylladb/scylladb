@@ -10,8 +10,8 @@
 #include "multishard_mutation_query.hh"
 #include "mutation_query.hh"
 #include "replica/database.hh"
-#include "query-result-writer.hh"
-#include "query_result_merger.hh"
+#include "query/query-result-writer.hh"
+#include "query/query_result_merger.hh"
 #include "readers/multishard.hh"
 
 #include <fmt/core.h>

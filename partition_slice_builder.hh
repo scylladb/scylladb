@@ -11,7 +11,7 @@
 #include <optional>
 #include <vector>
 
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "schema/schema_fwd.hh"
 
 //

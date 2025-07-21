@@ -13,7 +13,7 @@
 #include "keys/clustering_interval_set.hh"
 #include "converting_mutation_partition_applier.hh"
 #include "partition_builder.hh"
-#include "query-result-writer.hh"
+#include "query/query-result-writer.hh"
 #include "counters.hh"
 #include "db/row_cache.hh"
 #include <seastar/core/execution_stage.hh>

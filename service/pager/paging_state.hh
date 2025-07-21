@@ -14,7 +14,7 @@
 
 #include "bytes_fwd.hh"
 #include "keys/keys.hh"
-#include "query-request.hh"
+#include "query/query-request.hh"
 #include "db/read_repair_decision.hh"
 #include "mutation/position_in_partition.hh"
 #include "locator/host_id.hh"
