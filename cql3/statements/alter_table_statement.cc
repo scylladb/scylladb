@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "cdc/log.hh"
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include "cql3/query_options.hh"
@@ -27,6 +28,7 @@
 #include "db/view/view.hh"
 #include "cql3/query_processor.hh"
 #include "cdc/cdc_extension.hh"
+#include "cdc/cdc_partitioner.hh"
 
 namespace cql3 {
 
@@ -280,6 +282,53 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
     auto s = validation::validate_column_family(db, keyspace(), column_family());
     if (s->is_view()) {
         throw exceptions::invalid_request_exception("Cannot use ALTER TABLE on Materialized View");
+    }
+
+    const bool is_cdc_log_table = cdc::is_log_for_some_table(db.real_database(), s->ks_name(), s->cf_name());
+    // Only a CDC log table will have this partitioner name. User tables should
+    // not be able to set this. Note that we perform a similar check when trying to
+    // re-enable CDC for a table, when the log table has been replaced by a user table.
+    // For better visualization of the above, consider this
+    //
+    // cqlsh> CREATE TABLE ks.t (p int PRIMARY KEY, v int) WITH cdc = {'enabled': true};
+    // cqlsh> INSERT INTO ks.t (p, v) VALUES (1, 2);
+    // cqlsh> ALTER TABLE ks.t WITH cdc = {'enabled': false};
+    // cqlsh> DESC TABLE ks.t_scylla_cdc_log WITH INTERNALS; # Save this output!
+    // cqlsh> DROP TABLE ks.t_scylla_cdc_log;
+    // cqlsh> [Recreate the log table using the received statement]
+    // cqlsh> ALTER TABLE ks.t WITH cdc = {'enabled': true};
+    //
+    // InvalidRequest: Error from server: code=2200 [Invalid query] message="Cannot create CDC log
+    //                 table for table ks.t because a table of name ks.t_scylla_cdc_log already exists"
+    //
+    // See commit adda43edc75b901b2329bca8f3eb74596698d05f for more information on THAT case.
+    // We reuse the same technique here.
+    const bool was_cdc_log_table = s->get_partitioner().name() == cdc::cdc_partitioner::classname;
+
+    if (_column_changes.size() != 0 && is_cdc_log_table) {
+        throw exceptions::invalid_request_exception(
+                "You cannot modify the set of columns of a CDC log table directly. "
+                "Modify the base table instead.");
+    }
+    if (_column_changes.size() != 0 && was_cdc_log_table) {
+        throw exceptions::invalid_request_exception(
+                "You cannot modify the set of columns of a CDC log table directly. "
+                "Although the base table has deactivated CDC, this table will continue being "
+                "a CDC log table until it is dropped. If you want to modify the columns in it, "
+                "you can only do that by reenabling CDC on the base table, which will reattach "
+                "this log table. Then you will be able to modify the columns in the base table, "
+                "and that will have effect on the log table too. Modifying the columns of a CDC "
+                "log table directly is never allowed.");
+    }
+
+    if (_renames.size() != 0 && is_cdc_log_table) {
+        throw exceptions::invalid_request_exception("Cannot rename a column of a CDC log table.");
+    }
+    if (_renames.size() != 0 && was_cdc_log_table) {
+        throw exceptions::invalid_request_exception(
+                "You cannot rename a column of a CDC log table. Although the base table "
+                "has deactivated CDC, this table will continue being a CDC log table until it "
+                "is dropped.");
     }
 
     auto cfm = schema_builder(s);
