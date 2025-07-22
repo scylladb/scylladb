@@ -10,7 +10,7 @@ on:
       - 'master'
       - 'branch-*'
   schedule:
-    - cron: '0 10 * * 1,4'  # Runs every Monday and Thursday at 10:00am
+    - cron: '0 10 * * 1'  # Runs every Monday at 10:00am
 
 jobs:
   notify_conflict_prs:
@@ -42,10 +42,10 @@ jobs:
             const recentPrs = prs.filter(pr => new Date(pr.created_at) >= twoMonthsAgo);
             const validBaseBranches = ['master'];
             const branchPrefix = 'branch-';
-            const threeDaysAgo = new Date();
+            const oneWeekAgo = new Date();
             const conflictLabel = 'conflicts';
-            threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-            console.log(`Three days ago: ${threeDaysAgo.toISOString()}`);
+            oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+            console.log(`One week ago: ${oneWeekAgo.toISOString()}`);
 
             for (const pr of recentPrs) {
               console.log(`Checking PR #${pr.number} on base branch '${pr.base.ref}'`);
@@ -57,8 +57,8 @@ jobs:
               }
               const updatedDate = new Date(pr.updated_at);
               console.log(`PR #${pr.number} last updated at: ${updatedDate.toISOString()}`);
-              if (!isPushEvent && updatedDate >= threeDaysAgo) {
-                console.log(`PR #${pr.number} skipped: updated within last 3 days`);
+              if (!isPushEvent && updatedDate >= oneWeekAgo) {
+                console.log(`PR #${pr.number} skipped: updated within last week`);
                 continue;
               }
               if (pr.assignee === null) {
@@ -90,34 +90,41 @@ jobs:
                 const hasConflictLabel = pr.labels.some(label => label.name === conflictLabel);
                 console.log(`PR #${pr.number} has conflict label: ${hasConflictLabel}`);
 
+                // Fetch comments to check for existing notifications
+                const comments = await github.paginate(github.rest.issues.listComments, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  per_page: 100,
+                });
+                
+                // Find last notification comment from the bot
+                const notificationPrefix = `@${pr.assignee.login}, this PR has merge conflicts with the base branch.`;
+                const lastNotification = comments
+                  .filter(c =>
+                    c.user.type === "Bot" &&
+                    c.body.startsWith(notificationPrefix)
+                  )
+                  .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+
+                // Check if we should skip notification based on recent notification
+                let shouldSkipNotification = false;
+                if (lastNotification) {
+                  const lastNotified = new Date(lastNotification.created_at);
+                  if (lastNotified >= oneWeekAgo) {
+                    console.log(`PR #${pr.number} skipped: last notification was less than 1 week ago`);
+                    shouldSkipNotification = true;
+                  }
+                }
+
+                // Additional check for push events on draft PRs with conflict labels
                 if (
                   isPushEvent &&
                   pr.draft === true &&
-                  hasConflictLabel
+                  hasConflictLabel &&
+                  shouldSkipNotification
                 ) {
-                  // Fetch comments to find last bot notification
-                  const comments = await github.paginate(github.rest.issues.listComments, {
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: pr.number,
-                    per_page: 100,
-                  });
-                  // Find last notification comment from the bot (by body and user)
-                  const botLogin = context.actor;
-                  const notificationPrefix = `@${pr.assignee.login}, this PR has merge conflicts with the base branch.`;
-                  const lastNotification = comments
-                    .filter(c =>
-                      c.user.type === "Bot" &&
-                      c.body.startsWith(notificationPrefix)
-                    )
-                    .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-                  if (lastNotification) {
-                    const lastNotified = new Date(lastNotification.created_at);
-                    if (lastNotified >= threeDaysAgo) {
-                      console.log(`PR #${pr.number} skipped: last notification was less than 3 days ago`);
-                      continue;
-                    }
-                  }
+                  continue;
                 }
 
                 if (!hasConflictLabel) {
@@ -129,8 +136,9 @@ jobs:
                   });
                   console.log(`Added 'conflicts' label to PR #${pr.number}`);
                 }
+                
                 const assignee = pr.assignee.login;
-                if (assignee) {
+                if (assignee && !shouldSkipNotification) {
                   await github.rest.issues.createComment({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
