@@ -3873,7 +3873,11 @@ class scylla_io_queues(gdb.Command):
                 try:
                     f_groups = static_vector(group['_fgs'])
                     _ = len(f_groups)
-                    f_queues = static_vector(ioq['_streams'])
+                    streams = static_vector(ioq['_streams'])
+                    try:
+                        f_queues = [ s['fq'] for s in streams ]
+                    except gdb.error:
+                        f_queues = streams
                     _ = len(f_queues)
                     fq_pclass = lambda x: x.dereference()
                     break
