@@ -875,7 +875,8 @@ sharded<locator::shared_token_metadata> token_metadata;
                 startlog.warn("Ignoring unused features found in config: {}", unused_features);
             }
 
-            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg);
+            gms::feature_config fcfg;
+            fcfg.disabled_features = get_disabled_features_from_db_config(*cfg);
 
             checkpoint(stop_signal, "starting feature service");
             debug::the_feature_service = &feature_service;

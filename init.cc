@@ -14,8 +14,11 @@
 #include <boost/algorithm/string/trim.hpp>
 #include <seastar/core/coroutine.hh>
 #include "sstables/sstable_compressor_factory.hh"
+#include "gms/feature_service.hh"
 
 logging::logger startlog("init");
+
+using namespace std::string_literals;
 
 std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
                                                      const gms::inet_address broadcast_address,
@@ -67,6 +70,56 @@ std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
     return seeds;
 }
 
+std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled) {
+    switch (sstables::version_from_string(cfg.sstable_format())) {
+    case sstables::sstable_version_types::md:
+        startlog.warn("sstable_format must be 'me', '{}' is specified", cfg.sstable_format());
+        break;
+    case sstables::sstable_version_types::me:
+        break;
+    default:
+        SCYLLA_ASSERT(false && "Invalid sstable_format");
+    }
+
+    if (!cfg.enable_user_defined_functions()) {
+        disabled.insert("UDF");
+    } else {
+        if (!cfg.check_experimental(db::experimental_features_t::feature::UDF)) {
+            throw std::runtime_error(
+                    "You must use both enable_user_defined_functions and experimental_features:udf "
+                    "to enable user-defined functions");
+        }
+    }
+
+    if (!cfg.check_experimental(db::experimental_features_t::feature::ALTERNATOR_STREAMS)) {
+        disabled.insert("ALTERNATOR_STREAMS"s);
+    }
+    if (!cfg.check_experimental(db::experimental_features_t::feature::KEYSPACE_STORAGE_OPTIONS)) {
+        disabled.insert("KEYSPACE_STORAGE_OPTIONS"s);
+    }
+    if (!cfg.check_experimental(db::experimental_features_t::feature::VIEWS_WITH_TABLETS)) {
+        disabled.insert("VIEWS_WITH_TABLETS"s);
+    }
+    if (cfg.force_gossip_topology_changes()) {
+        if (cfg.enable_tablets_by_default()) {
+            throw std::runtime_error("Tablets cannot be enabled with gossip topology changes.  Use either --tablets-mode-for-new-keyspaces=enabled|enforced or --force-gossip-topology-changes, but not both.");
+        }
+        startlog.warn("The tablets feature is disabled due to forced gossip topology changes");
+        disabled.insert("TABLETS"s);
+    }
+    if (!cfg.table_digest_insensitive_to_expiry()) {
+        disabled.insert("TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"s);
+    }
+    if (!cfg.commitlog_use_fragmented_entries()) {
+        disabled.insert("FRAGMENTED_COMMITLOG_ENTRIES"s);
+    }
+
+    if (!gms::is_test_only_feature_enabled()) {
+        disabled.insert("TEST_ONLY_FEATURE"s);
+    }
+
+    return disabled;
+}
 
 std::vector<std::reference_wrapper<configurable>>& configurable::configurables() {
     static std::vector<std::reference_wrapper<configurable>> configurables;

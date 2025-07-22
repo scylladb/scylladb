@@ -13,6 +13,7 @@
 #include <string_view>
 #include <optional>
 
+#include "init.hh"
 #include "db/cache_tracker.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
@@ -39,7 +40,7 @@ struct sstable_manager_service {
 
     explicit sstable_manager_service(const db::config& dbcfg, sstable_compressor_factory& scf)
         : corrupt_data_handler(db::corrupt_data_handler::register_metrics::no)
-        , feature_service(gms::feature_config_from_db_config(dbcfg))
+        , feature_service({get_disabled_features_from_db_config(dbcfg)})
         , dir_sem(1)
         , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
     }

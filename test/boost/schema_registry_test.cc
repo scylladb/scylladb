@@ -14,6 +14,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/lowres_clock.hh>
+#include "init.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "schema/schema_registry.hh"
 #include "schema/schema_builder.hh"
@@ -47,7 +48,7 @@ struct dummy_init {
     seastar::lowres_clock::duration grace_period;
     dummy_init()
             : config(std::make_unique<db::config>())
-            , fs(gms::feature_config_from_db_config(*config))
+            , fs({get_disabled_features_from_db_config(*config)})
             , grace_period(std::chrono::seconds(config->schema_registry_grace_period())) {
         local_schema_registry().init(db::schema_ctxt(*config, std::make_shared<data_dictionary::dummy_user_types_storage>(), fs));
     }

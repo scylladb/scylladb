@@ -11,6 +11,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/test_utils.hh"
+#include "init.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
@@ -226,7 +227,7 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
     , dir(tdir == nullptr ? local_dir.value() : *tdir)
     , db_config(make_db_config(dir.path().native(), cfg.storage))
     , dir_sem(1)
-    , feature_service(gms::feature_config_from_db_config(*db_config))
+    , feature_service({get_disabled_features_from_db_config(*db_config)})
     , nop_cd_handler(db::corrupt_data_handler::register_metrics::no)
     , scf(scfarg)
     , mgr(
