@@ -454,6 +454,49 @@ async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces(manager:
     _ = await manager.server_start(s1.server_id)
 
 @pytest.mark.asyncio
+async def test_startup_with_keyspaces_violating_rf_rack_valid_keyspaces_but_not_enforced(manager: ManagerClient):
+    """
+    When the configuration option `rf_rack_valid_keyspaces` is enabled and there is an RF-rack-invalid keyspace,
+    starting a node fails. However, when the configuration option is disabled, but there still is a keyspace
+    that violates the condition, Scylla should print a warning informing the user about the fact. This test
+    verifies that.
+
+    For more context, see issue: scylladb/scylladb#23330.
+    """
+
+    cfg = {"rf_rack_valid_keyspaces": False}
+
+    # One DC, 4 racks.
+    dc = "dc1"
+    s1, _, _, _ = await manager.servers_add(4, config=cfg, auto_rack_dc=dc)
+
+    cql = manager.get_cql()
+    # We need to set `max_schema_agreement_wait` to 0 to speed up this test.
+    assert hasattr(cql.cluster, "max_schema_agreement_wait")
+    cql.cluster.max_schema_agreement_wait = 0
+
+    async def create_ks(name: str, rf: int):
+        await cql.run_async(f"CREATE KEYSPACE {name} WITH replication = {{'class': 'NetworkTopologyStrategy', '{dc}': {rf}}} AND tablets = {{'enabled': true}}")
+
+    await create_ks("ks1", 1)
+    await create_ks("ks2", 2)
+    await create_ks("ks3", 3)
+    await create_ks("ks4", 4)
+
+    await manager.server_stop_gracefully(s1.server_id)
+    await manager.server_start(s1.server_id)
+
+    log = await manager.server_open_log(s1.server_id)
+
+    expected_pattern = r"Some existing keyspaces are not RF-rack-valid, i\.e\. the replication factor " \
+                       r"does not match the number of racks in one of the datacenters. That may reduce " \
+                       r"availability in case of a failure \(cf\. " \
+                       r"https://docs\.scylladb\.com/manual/stable/reference/glossary\.html#term-RF-rack-valid-keyspace\)\. " \
+                       r"Those keyspaces are: (ks2, ks3)|(ks3, ks2)"
+
+    await log.wait_for(expected_pattern)
+
+@pytest.mark.asyncio
 async def test_restart_with_prefer_local(request: pytest.FixtureRequest, manager: ManagerClient) -> None:
     logger.info("Creating a new cluster")
     for i in range(3):
