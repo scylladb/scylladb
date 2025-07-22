@@ -60,6 +60,10 @@ protected:
     seastar::named_gate _pending_requests_gate;
     seastar::gate::holder _hold_server;
 
+    bool _ssl_enabled = false;
+    std::optional<sstring> _ssl_cipher_suite = std::nullopt;
+    std::optional<sstring> _ssl_protocol = std::nullopt;;
+
 private:
     future<> process_until_tenant_switch();
     bool shutdown_input();
