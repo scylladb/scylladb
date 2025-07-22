@@ -65,7 +65,6 @@ def sstable_cache(scylla_path):
             self._in_json = os.path.join(workdir, "input.json")
             self._store_dir = os.path.join(workdir, "sst_store_dir")
             self._cache = {}
-            self._next_generation = 0
 
             os.mkdir(self._store_dir)
 
@@ -80,10 +79,8 @@ def sstable_cache(scylla_path):
                 return generation
             with open(self._in_json, "w") as f:
                 f.write(json_str)
-            generation = self._next_generation
+            generation = subprocess.check_output([self._scylla_path, "sstable", "write", "--schema-file", schema_file, "--output-dir", self._store_dir, "--input-file", self._in_json], text=True)
             self._cache[json_str] = generation
-            self._next_generation = self._next_generation + 1
-            subprocess.check_call([self._scylla_path, "sstable", "write", "--schema-file", schema_file, "--output-dir", self._store_dir, "--generation", str(generation), "--input-file", self._in_json])
             return generation
 
         def copy_sstable_to(self, generation, target_dir):
