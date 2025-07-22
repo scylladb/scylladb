@@ -319,8 +319,7 @@ public:
     /// corresponding hint_endpoint_manager objects.
     ///
     /// \param host_id host ID of the node that left the cluster
-    /// \param ip the IP of the node that left the cluster
-    future<> drain_for(endpoint_id host_id, gms::inet_address ip) noexcept;
+    future<> drain_for(endpoint_id host_id) noexcept;
 
     void update_backlog(size_t backlog, size_t max_backlog);
 
