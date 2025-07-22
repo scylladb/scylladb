@@ -676,7 +676,6 @@ public:
     // Allow mutating a tablet_map
     // Uses the copy-modify-swap idiom.
     // If func throws, no changes are done to the tablet map.
-    void mutate_tablet_map(table_id, noncopyable_function<void(tablet_map&)> func);
     future<> mutate_tablet_map_async(table_id, noncopyable_function<future<>(tablet_map&)> func);
 
     future<> clear_gently();

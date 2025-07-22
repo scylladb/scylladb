@@ -297,23 +297,6 @@ bool tablet_metadata::is_base_table(table_id id) const {
     return !_base_table.contains(id);
 }
 
-void tablet_metadata::mutate_tablet_map(table_id id, noncopyable_function<void(tablet_map&)> func) {
-    auto it = _tablets.find(id);
-    if (it == _tablets.end()) {
-        throw no_such_tablet_map(id);
-    }
-    auto tablet_map_copy = make_lw_shared<tablet_map>(*it->second);
-    func(*tablet_map_copy);
-    auto new_map_ptr = lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy));
-    // share the tablet map with all co-located tables
-    for (auto colocated_id : _table_groups.at(id)) {
-        if (colocated_id != id) {
-            _tablets[colocated_id] = make_foreign(new_map_ptr);
-        }
-    }
-    it->second = make_foreign(std::move(new_map_ptr));
-}
-
 future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
