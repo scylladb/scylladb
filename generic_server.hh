@@ -53,7 +53,7 @@ protected:
     server& _server;
     utils::scoped_item_list<std::reference_wrapper<connection>>::handle _connections_list_entry;
 
-    connected_socket _fd;
+    mutable connected_socket _fd;
     input_stream<char> _read_buf;
     output_stream<char> _write_buf;
     future<> _ready_to_respond = make_ready_future<>();
