@@ -679,6 +679,11 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+
+    cd.ssl_enabled = _ssl_enabled;
+    cd.ssl_protocol = _ssl_protocol;
+    cd.ssl_cipher_suite = _ssl_cipher_suite;
+
     return cd;
 }
 
