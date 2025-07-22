@@ -353,18 +353,19 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
         lo.lba = server_socket::load_balancing_algorithm::port;
     }
     server_socket ss;
+    bool is_tls = false;
     try {
         ss = builder
-            ? seastar::tls::listen(_credentials, addr, lo)
+            ? is_tls = true, seastar::tls::listen(_credentials, addr, lo)
             : seastar::listen(addr, lo);
     } catch (...) {
         throw std::runtime_error(format("{} error while listening on {} -> {}", _server_name, addr, std::current_exception()));
     }
     _listeners.emplace_back(std::move(ss));
-    _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr)).discard_result();
+    _listeners_stopped = when_all(std::move(_listeners_stopped), do_accepts(_listeners.size() - 1, keepalive, addr, is_tls)).discard_result();
 }
 
-future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
+future<> server::do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls) {
     while (!_gate.is_closed()) {
         seastar::gate::holder holder(_gate);
         bool shed = false;
@@ -404,10 +405,26 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 conn->shutdown();
                 continue;
             }
+            conn->_ssl_enabled = is_tls;
             // Move the processing into the background.
-            (void)futurize_invoke([this, conn] {
-                // Block while monitoring for lifetime/errors.
-                return conn->process().then_wrapped([this, conn] (auto f) {
+            (void)futurize_invoke([this, conn, is_tls] {
+                return (is_tls
+                    ? tls::get_protocol_version(conn->_fd).then([conn](const sstring& protocol) {
+                            return tls::get_cipher_suite(conn->_fd).then(
+                                [conn, protocol](const sstring& cipher_suite) mutable {
+                                    conn->_ssl_protocol = protocol;
+                                    conn->_ssl_cipher_suite = cipher_suite;
+                                    return make_ready_future<bool>(true);
+                                });
+                        }).handle_exception([this, conn](std::exception_ptr ep) {
+                            _logger.warn("Inspecting TLS connection failed: {}", ep);
+                            return make_ready_future<bool>(false);
+                        })
+                    : make_ready_future<bool>(true)
+                ).then([conn] (bool ok){
+                    // Block while monitoring for lifetime/errors.
+                    return ok ? conn->process() : make_ready_future<>();
+                }).then_wrapped([this, conn](auto f) {
                     try {
                         f.get();
                     } catch (...) {
