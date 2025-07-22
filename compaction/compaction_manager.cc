@@ -750,15 +750,15 @@ compaction_manager::compaction_reenabler::~compaction_reenabler() {
 }
 
 future<compaction_manager::compaction_reenabler>
-compaction_manager::stop_and_disable_compaction(table_state& t) {
+compaction_manager::stop_and_disable_compaction(sstring reason, table_state& t) {
     compaction_reenabler cre(*this, t);
-    co_await stop_ongoing_compactions("user-triggered operation", &t);
+    co_await stop_ongoing_compactions(std::move(reason), &t);
     co_return cre;
 }
 
 future<>
 compaction_manager::run_with_compaction_disabled(table_state& t, std::function<future<> ()> func) {
-    compaction_reenabler cre = co_await stop_and_disable_compaction(t);
+    compaction_reenabler cre = co_await stop_and_disable_compaction("user-triggered operation", t);
 
     co_await func();
 }

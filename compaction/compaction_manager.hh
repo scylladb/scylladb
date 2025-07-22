@@ -386,7 +386,7 @@ public:
 
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
-    future<compaction_reenabler> stop_and_disable_compaction(compaction::table_state& t);
+    future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::table_state& t);
 
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
