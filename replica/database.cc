@@ -3231,11 +3231,34 @@ database::on_effective_service_levels_cache_reloaded() {
     co_return;
 }
 
-void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
-    SCYLLA_ASSERT(get_config().rf_rack_valid_keyspaces());
+void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr tmptr) const {
+    const auto& keyspaces = get_keyspaces();
+    std::vector<std::string_view> invalid_keyspaces{};
 
-    for (const auto& [name, info] : get_keyspaces()) {
-        locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
+    for (const auto& [name, info] : keyspaces) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
+        } catch (...) {
+            if (enforce_rf_rack_valid_keyspaces) {
+                throw;
+            }
+
+            invalid_keyspaces.push_back(std::string_view(name));
+        }
+    }
+
+    if (invalid_keyspaces.size() == 0) {
+        dblog.info("All keyspaces are RF-rack-valid");
+    } else {
+        const auto ks_list = invalid_keyspaces
+                | std::views::join_with(std::string_view(", "))
+                | std::ranges::to<std::string>();
+
+        dblog.warn("Some existing keyspaces are not RF-rack-valid, i.e. the replication factor "
+                "does not match the number of racks in one of the datacenters. That may reduce "
+                "availability in case of a failure (cf. "
+                "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
+                "Those keyspaces are: {}", ks_list);
     }
 }
 
