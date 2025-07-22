@@ -180,7 +180,7 @@ def default_timeout(mode):
     if mode == "dev":
         return "30s"
     elif mode == "debug":
-        return "3m"
+        return "1m30s"
     else:
         # this branch shouldn't be reached
         assert False
