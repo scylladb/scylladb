@@ -26,6 +26,7 @@ Syntax
                --table <table>
                [--nowait]
                [--scope <scope>]
+               [--sstables-file-list <file>]
                <sstables>...
 
 Example
@@ -51,6 +52,7 @@ Options
 * ``--table`` - Name of the table to load SSTables into
 * ``--nowait`` - Don't wait on the restore process
 * ``--scope <scope>`` - Use specified load-and-stream scope
+* ``--sstables-file-list <file>`` - restore the sstables listed in the given <file>. the list should be new-line seperated.
 * ``<sstables>`` - Remainder of keys of the TOC (Table of Contents) components of SSTables to restore, relative to the specified prefix
 
 The `scope` parameter describes the subset of cluster nodes where you want to load data:
@@ -59,6 +61,8 @@ The `scope` parameter describes the subset of cluster nodes where you want to lo
 * `rack` - On the local rack.
 * `dc` - In the datacenter (DC) where the local node lives.
 * `all` (default) - Everywhere across the cluster.
+
+`--sstables-file-list <file>` and `<sstable>` can be combined together, `nodetool restore` will attempt to restore the combined list. duplicates are _not_ removed
 
 To fully restore a cluster, you should combine the ``scope`` parameter with the correct list of
 SStables to restore to each node.
