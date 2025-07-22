@@ -43,7 +43,7 @@ public:
     execute_under_tenant_type _execute_under_current_tenant = no_tenant();
 protected:
     server& _server;
-    connected_socket _fd;
+    mutable connected_socket _fd;
     input_stream<char> _read_buf;
     output_stream<char> _write_buf;
     future<> _ready_to_respond = make_ready_future<>();

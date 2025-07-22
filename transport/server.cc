@@ -650,6 +650,14 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+    cd.hostname = fmt::format("{}", _client_state.get_remote_address().addr());
+
+    if (const auto& cfg = _server._query_processor.local().db().get_config();
+        cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() == _fd.local_address()) {
+        cd.ssl_enabled = true;
+        cd.ssl_protocol = tls::get_protocol_version(_fd);
+        cd.ssl_cipher_suite = tls::get_cipher_suite(_fd);
+    }
     return cd;
 }
 
