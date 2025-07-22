@@ -757,8 +757,8 @@ compaction_manager::stop_and_disable_compaction(sstring reason, table_state& t) 
 }
 
 future<>
-compaction_manager::run_with_compaction_disabled(table_state& t, std::function<future<> ()> func) {
-    compaction_reenabler cre = co_await stop_and_disable_compaction("user-triggered operation", t);
+compaction_manager::run_with_compaction_disabled(table_state& t, std::function<future<> ()> func, sstring reason) {
+    compaction_reenabler cre = co_await stop_and_disable_compaction(std::move(reason), t);
 
     co_await func();
 }
@@ -2079,7 +2079,7 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
         if (!cs.sstables_requiring_cleanup.empty()) {
             cs.owned_ranges_ptr = std::move(sorted_owned_ranges);
         }
-    });
+    }, "cleanup");
 
     if (cs.sstables_requiring_cleanup.empty()) {
         cmlog.debug("perform_cleanup for {} found no sstables requiring cleanup", t);

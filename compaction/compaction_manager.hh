@@ -389,7 +389,7 @@ public:
     future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::table_state& t);
 
     // Run a function with compaction temporarily disabled for a table T.
-    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
+    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func, sstring reason = "custom operation");
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     future<> unplug_system_keyspace() noexcept;
