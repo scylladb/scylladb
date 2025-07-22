@@ -107,6 +107,7 @@ public:
     static aws_error from_http_code(seastar::http::reply::status_type http_code);
     static aws_error from_system_error(const std::system_error& system_error);
     static aws_error from_maybe_nested_exception(const std::exception& maybe_nested_error);
+    static aws_error from_exception_ptr(std::exception_ptr exception);
     static const aws_errors& get_errors();
 };
 
