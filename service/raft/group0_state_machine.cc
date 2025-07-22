@@ -47,7 +47,7 @@
 #include "service/raft/group0_state_machine_merger.hh"
 #include "gms/feature_service.hh"
 #include "idl/migration_manager.dist.hh"
-#include "build_mode.hh"
+#include "main/build_mode.hh"
 
 namespace service {
 

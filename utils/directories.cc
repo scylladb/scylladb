@@ -10,7 +10,7 @@
 #include <seastar/core/seastar.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include "init.hh"
+#include "main/init.hh"
 #include "supervisor.hh"
 #include "directories.hh"
 #include "sstables/exceptions.hh"

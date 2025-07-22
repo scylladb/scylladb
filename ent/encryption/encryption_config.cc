@@ -10,7 +10,7 @@
 #include "db/config.hh"
 #include "utils/config_file_impl.hh"
 
-#include "init.hh"
+#include "main/init.hh"
 #include "encryption_config.hh"
 #include "encryption.hh"
 

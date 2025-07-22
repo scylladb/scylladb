@@ -7,7 +7,7 @@
  */
 
 
-#include "build_mode.hh"
+#include "main/build_mode.hh"
 
 #ifndef SCYLLA_BUILD_MODE_RELEASE
 

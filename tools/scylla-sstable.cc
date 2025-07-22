@@ -19,7 +19,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/core/queue.hh>
 
-#include "init.hh"
+#include "main/init.hh"
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"

@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include "build_mode.hh"
+#include "main/build_mode.hh"
 
 namespace tools::build_info {
 enum class build_type { debug = 0, release, dev, sanitize, coverage };

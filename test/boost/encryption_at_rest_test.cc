@@ -36,7 +36,7 @@
 #include "db/extensions.hh"
 #include "db/commitlog/commitlog.hh"
 #include "db/commitlog/commitlog_replayer.hh"
-#include "init.hh"
+#include "main/init.hh"
 #include "sstables/sstables.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/rjson.hh"

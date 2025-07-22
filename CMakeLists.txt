@@ -180,7 +180,7 @@ target_sources(scylla-main
     frozen_schema.cc
     generic_server.cc
     debug.cc
-    init.cc
+    main/init.cc
     keys.cc
     multishard_mutation_query.cc
     mutation_query.cc
@@ -291,7 +291,7 @@ add_version_library(scylla_version
     release.cc)
 
 add_executable(scylla
-  main.cc)
+  main/main.cc)
 set(scylla_libs
     audit
     scylla-main
