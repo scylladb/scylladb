@@ -1,6 +1,9 @@
 add_library(message STATIC)
 target_sources(message
   PRIVATE
+    advanced_rpc_compressor.cc
+    stream_compressor.cc
+    dict_trainer.cc
     dictionary_service.cc
     dictionary_service.hh
     messaging_service.cc

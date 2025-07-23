@@ -8,10 +8,10 @@
 
 #pragma once
 
-#include "utils/shared_dict.hh"
-#include "utils/advanced_rpc_compressor.hh"
+#include "shared_dict.hh"
+#include "advanced_rpc_compressor.hh"
 
-namespace utils {
+namespace netw {
 
 struct control_protocol_frame {
     enum header_enum : uint8_t {
@@ -44,4 +44,4 @@ struct control_protocol_frame {
     static control_protocol_frame deserialize(std::span<const std::byte, serialized_size>);
 };
 
-} // namespace utils
+} // namespace netw
