@@ -15,7 +15,8 @@ target_link_libraries(cdc
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    replica)
+    replica
+    scylla-precompiled-header)
 
 check_headers(check-headers cdc
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

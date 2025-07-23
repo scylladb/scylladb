@@ -53,7 +53,8 @@ target_link_libraries(redis
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    db)
+    db
+    scylla-precompiled-header)
 
 check_headers(check-headers redis
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
