@@ -176,11 +176,25 @@ volume_path = "$HOME/.local/share/containers/storage/libpod"
 # netns = private, the default, doesn't work in nested containers,
 # and we don't mind using the host network anyway.
 netns = "host"
+
 EOF
+
+    storage_conf="$(mktemp)"
+    tmpfiles+=("$storage_conf")
+    cat > "$storage_conf" <<EOF
+
+[storage]
+driver = "overlay"
+runroot = "/run/containers/storage"
+graphroot = "$HOME/.local/share/containers/storage"
+
+EOF
+
     if grep -q 'cgroup2.*/sys/fs/cgroup ' /proc/mounts; then
         docker_common_args+=(
             -v "$HOME/.local/share/containers:$HOME/.local/share/containers"
             -v "$containers_conf:/etc/containers/containers.conf.d/nested.conf"
+            -v "$storage_conf:/etc/containers/storage.conf"
             --pids-limit -1
             --annotation run.oci.keep_original_groups=1
         )
