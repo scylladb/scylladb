@@ -2134,7 +2134,8 @@ sharded<locator::shared_token_metadata> token_metadata;
             group0_service.start().get();
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
                 sl_controller.local().abort_group0_operations();
-                group0_service.abort().get();
+                group0_service.abort_and_drain().get();
+                group0_service.destroy();
             });
 
             utils::get_local_injector().inject("stop_after_starting_group0_service",

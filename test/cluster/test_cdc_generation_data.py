@@ -59,8 +59,8 @@ async def test_group0_apply_while_node_is_being_shutdown(manager: ManagerClient)
     logger.info("Triggering s0 shutdown")
     stop_s0_task = asyncio.create_task(manager.server_stop_gracefully(s0.server_id))
 
-    logger.info("Waiting for group0 to start aborting on s0")
-    await log.wait_for('Raft group0 service is aborting...')
+    logger.info("Waiting for 'Aborting raft group0 service...' on s0")
+    await log.wait_for('Aborting raft group0 service...')
 
     logger.info("Releasing topology_state_load_before_update_cdc on s0")
     await manager.api.message_injection(s0.ip_addr, 'topology_state_load_before_update_cdc')

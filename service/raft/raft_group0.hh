@@ -133,6 +133,7 @@ class raft_group0 {
     future<> _leadership_monitor = make_ready_future<>();
     abort_source _leadership_monitor_as;
     utils::updateable_value_source<bool> _leadership_observable;
+    std::optional<shared_future<>> _aborted;
 
 public:
     // Passed to `setup_group0` when replacing a node.
@@ -154,8 +155,16 @@ public:
     // Call after construction but before using the object.
     future<> start();
 
-    // Call before destroying the object.
-    future<> abort();
+    // Deinitializes the group0 Raft server and stops all background activity.
+    // The server object remains valid, but new requests will get raft::stopped_error.
+    // This function is idempotent: it can be called multiple times; subsequent calls
+    // will wait for the abort initiated by the first call to complete.
+    future<> abort_and_drain();
+
+    // Destroys the Raft server instance registered in raft_group_registry.
+    // It must be ensured that no one accesses it from this point on, including via raft_group0_client.
+    // Must be called before destroying the raft_group0 object.
+    void destroy();
 
     // Run the discovery algorithm.
     //
@@ -320,10 +329,9 @@ private:
     static void init_rpc_verbs(raft_group0& shard0_this);
     static future<> uninit_rpc_verbs(netw::messaging_service& ms);
 
-    // Stop the group 0 server and remove it from the raft_group_registry.
-    future<> stop_group0();
-
     future<bool> raft_upgrade_complete() const;
+
+    future<> do_abort_and_drain();
 
     // Handle peer_exchange RPC
     future<group0_peer_exchange> peer_exchange(discovery::peer_list peers);
