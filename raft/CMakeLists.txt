@@ -14,7 +14,8 @@ target_link_libraries(raft
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    absl::headers)
+    absl::headers
+    scylla-precompiled-header)
 
 check_headers(check-headers raft
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

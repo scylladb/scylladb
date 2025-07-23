@@ -104,7 +104,8 @@ target_link_libraries(api
   PRIVATE
     idl
     wasmtime_bindings
-    absl::headers)
+    absl::headers
+scylla-precompiled-header)
 
 check_headers(check-headers api
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

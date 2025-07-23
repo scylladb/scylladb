@@ -14,7 +14,8 @@ target_link_libraries(index
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    cql3)
+    cql3
+    scylla-precompiled-header)
 
 check_headers(check-headers index
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
