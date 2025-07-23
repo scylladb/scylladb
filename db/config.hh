@@ -207,6 +207,7 @@ public:
     using seed_provider_type = db::seed_provider_type;
     using hinted_handoff_enabled_type = db::hints::host_filter;
     using error_injection_at_startup = db::error_injection_at_startup;
+    using UUID = utils::UUID;
 
     /*
      * All values and documentation taken from
