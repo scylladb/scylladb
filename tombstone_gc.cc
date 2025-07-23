@@ -35,16 +35,6 @@ repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const ta
     return {};
 }
 
-seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_or_create_group0_gc_time() {
-    if (!_reconcile_history_maps) {
-        return {};
-    }
-    if (!_reconcile_history_maps->_group0_gc_time) {
-        _reconcile_history_maps->_group0_gc_time = seastar::make_lw_shared<gc_clock::time_point>();
-    }
-    return _reconcile_history_maps->_group0_gc_time;
-}
-
 seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_group0_gc_time() const {
     if (!_reconcile_history_maps) {
         return {};
@@ -235,11 +225,13 @@ future<> tombstone_gc_state::flush_pending_repair_time_update(replica::database&
 };
 
 void tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh_time) {
-    auto m = get_or_create_group0_gc_time();
-    if (!m) {
+    if (!_reconcile_history_maps) {
         on_fatal_internal_error(dblog, "group0_gc_time not found/created");
     }
-    *m = refresh_time;
+    if (!_reconcile_history_maps->_group0_gc_time) {
+        _reconcile_history_maps->_group0_gc_time = seastar::make_lw_shared<gc_clock::time_point>();
+    }
+    *_reconcile_history_maps->_group0_gc_time = refresh_time;
 }
 
 static bool needs_repair_before_gc(const replica::database& db, sstring ks_name) {
