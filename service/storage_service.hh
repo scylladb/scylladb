@@ -283,12 +283,12 @@ private:
     future<> snitch_reconfigured();
 
     future<mutable_token_metadata_ptr> get_mutable_token_metadata_ptr() noexcept {
-        return _shared_token_metadata.get()->clone_async().then([] (token_metadata tm) {
+        return _shared_token_metadata.get()->clone_async().then([this] (token_metadata tm) {
             // bump the token_metadata ring_version
             // to invalidate cached token/replication mappings
             // when the modified token_metadata is committed.
             tm.invalidate_cached_rings();
-            return make_ready_future<mutable_token_metadata_ptr>(make_token_metadata_ptr(std::move(tm)));
+            return _shared_token_metadata.make_token_metadata_ptr(std::move(tm));
         });
     }
 
