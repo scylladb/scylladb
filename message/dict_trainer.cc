@@ -10,9 +10,9 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/core/sleep.hh>
-#include "utils/dict_trainer.hh"
+#include "dict_trainer.hh"
 #include "utils/alien_worker.hh"
-#include "utils/shared_dict.hh"
+#include "shared_dict.hh"
 #include "utils/hashers.hh"
 #include "raft/raft.hh"
 #include <zdict.h>
@@ -20,7 +20,7 @@
 using namespace seastar;
 
 
-namespace utils {
+namespace netw {
 
 seastar::logger dict_trainer_logger("dict_training");
 
@@ -34,7 +34,7 @@ future<std::vector<dict_sampler::page_type>> dict_sampler::sample(request req, a
     assert(req.page_size);
 
     _storage.reserve(req.sample_size / req.page_size);
-    _page_sampler = page_sampler(req.page_size, req.sample_size / req.page_size, /* hardcoded random seed */ 0);
+    _page_sampler = utils::page_sampler(req.page_size, req.sample_size / req.page_size, /* hardcoded random seed */ 0);
     _bytes_remaining = req.min_sampling_bytes;
     _min_bytes_satisifed.signal(_bytes_remaining == 0);
     _sampling = true;
@@ -167,7 +167,7 @@ seastar::future<> dict_training_loop::start(
     }
 }
 
-shared_dict::shared_dict(std::span<const std::byte> d, uint64_t timestamp, UUID origin_node, int zstd_compression_level)
+shared_dict::shared_dict(std::span<const std::byte> d, uint64_t timestamp, utils::UUID origin_node, int zstd_compression_level)
     : id{
         .timestamp = timestamp,
         .origin_node = origin_node,
@@ -190,5 +190,5 @@ shared_dict::shared_dict(std::span<const std::byte> d, uint64_t timestamp, UUID 
     lz4_ddict = std::span(data).last(lz4_dict_size);
 }
 
-} // namespace utils
+} // namespace netw
 

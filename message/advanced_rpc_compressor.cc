@@ -9,14 +9,14 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/util/defer.hh>
 #include <numeric>
-#include "log.hh"
-#include "utils/advanced_rpc_compressor.hh"
-#include "utils/advanced_rpc_compressor_protocol.hh"
+#include "utils/log.hh"
+#include "advanced_rpc_compressor.hh"
+#include "advanced_rpc_compressor_protocol.hh"
 #include "stream_compressor.hh"
-#include "utils/dict_trainer.hh"
+#include "dict_trainer.hh"
 #include <seastar/core/on_internal_error.hh>
 
-namespace utils {
+namespace netw {
 
 logging::logger arc_logger("advanced_rpc_compressor");
 
@@ -61,7 +61,7 @@ control_protocol_frame::one_side control_protocol_frame::one_side::deserialize(s
     ret.header = static_cast<header_enum>(seastar::read_le<uint8_t>(&in[0]));
     ret.epoch = seastar::read_le<uint64_t>(&in[1]);
     ret.algo = compression_algorithm_set::from_value(seastar::read_le<uint8_t>(&in[9]));
-    ret.dict.origin_node = UUID(seastar::read_le<uint64_t>(&in[18]), seastar::read_le<uint64_t>(&in[10]));
+    ret.dict.origin_node = utils::UUID(seastar::read_le<uint64_t>(&in[18]), seastar::read_le<uint64_t>(&in[10]));
     ret.dict.timestamp = seastar::read_le<uint64_t>(&in[26]);
     std::memcpy(ret.dict.content_sha256.data(), &in[34], 32);
     static_assert(serialized_size == 66);
@@ -559,7 +559,7 @@ void advanced_rpc_compressor::tracker::announce_dict(dict_ptr d) {
     }
 }
 
-future<> announce_dict_to_shards(seastar::sharded<walltime_compressor_tracker>& sharded_tracker, utils::shared_dict shared_dict) {
+future<> announce_dict_to_shards(seastar::sharded<walltime_compressor_tracker>& sharded_tracker, shared_dict shared_dict) {
     arc_logger.debug("Announcing new dictionary: ts={}, origin={}", shared_dict.id.timestamp, shared_dict.id.origin_node);
     auto dict = make_lw_shared(std::move(shared_dict));
     auto foreign_ptrs = std::vector<foreign_ptr<decltype(dict)>>();
@@ -571,4 +571,4 @@ future<> announce_dict_to_shards(seastar::sharded<walltime_compressor_tracker>& 
     });
 }
 
-} // namespace utils
+} // namespace netw
