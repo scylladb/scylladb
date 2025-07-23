@@ -3312,19 +3312,19 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     release_guard(std::move(guard));
     co_await _group0.wait_for_all_nodes_to_finish_upgrade(_as);
 
+    auto auth_version = co_await _sys_ks.get_auth_version();
+    if (auth_version < db::system_keyspace::auth_version_t::v2) {
+        rtlogger.info("migrating system_auth keyspace data");
+        co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
+                [this] (abort_source&) { return start_operation();}, _as);
+    }
+
     auto tmptr = get_token_metadata_ptr();
 
     auto sl_version = co_await _sys_ks.get_service_levels_version();
     if (!sl_version || *sl_version < 2) {
         rtlogger.info("migrating service levels data");
         co_await qos::service_level_controller::migrate_to_v2(tmptr->get_normal_token_owners().size(), _sys_ks, _sys_ks.query_processor(), _group0.client(), _as);
-    }
-
-    auto auth_version = co_await _sys_ks.get_auth_version();
-    if (auth_version < db::system_keyspace::auth_version_t::v2) {
-        rtlogger.info("migrating system_auth keyspace data");
-        co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
-                [this] (abort_source&) { return start_operation();}, _as);
     }
 
     rtlogger.info("building initial raft topology state and CDC generation");
