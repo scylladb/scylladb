@@ -60,15 +60,20 @@ struct range_repair_time {
     shard_id shard;
 };
 
+class tombstone_gc_state_snapshot;
+
 class shared_tombstone_gc_state {
     gc_time_min_source _gc_min_source;
-    lw_shared_ptr<per_table_history_maps> _reconcile_history_maps;
+    lw_shared_ptr<const per_table_history_maps> _reconcile_history_maps;
 
     std::unordered_map<table_id, utils::chunked_vector<range_repair_time>> _pending_updates;
 
+private:
+    void mutate_repair_history(std::function<void(per_table_history_maps&)>);
+
 public:
     shared_tombstone_gc_state();
-    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<per_table_history_maps> reconcile_history_maps);
+    shared_tombstone_gc_state(gc_time_min_source gc_min_source, lw_shared_ptr<const per_table_history_maps> reconcile_history_maps);
     shared_tombstone_gc_state(shared_tombstone_gc_state&&);
     ~shared_tombstone_gc_state();
 
@@ -91,6 +96,20 @@ public:
 
     void insert_pending_repair_time_update(table_id id, const dht::token_range& range, gc_clock::time_point repair_time, shard_id shard);
     future<> flush_pending_repair_time_update(replica::database& db);
+
+    tombstone_gc_state_snapshot snapshot() const noexcept;
+};
+
+class tombstone_gc_state_snapshot {
+    shared_tombstone_gc_state _shared_state;
+    gc_clock::time_point _query_time;
+
+public:
+    explicit tombstone_gc_state_snapshot(shared_tombstone_gc_state&&);
+
+    gc_clock::time_point query_time() const noexcept { return _query_time; }
+
+    [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, bool check_commitlog) const;
 };
 
 class tombstone_gc_state {
@@ -111,7 +130,7 @@ private:
 
 public:
     tombstone_gc_state() = delete;
-    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state) noexcept : tombstone_gc_state(&shared_state, true) {}
+    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept : tombstone_gc_state(&shared_state, check_commitlog) {}
     explicit tombstone_gc_state(std::nullptr_t) noexcept : tombstone_gc_state(nullptr, true) {}
 
     explicit operator bool() const noexcept {
