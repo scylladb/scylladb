@@ -91,11 +91,12 @@ size_t get_tablet_count(const tablet_metadata& tm) {
 }
 
 static
-void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
+future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-        tm.tablets().mutate_tablet_map(table_id, [&resize_decision] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(table_id, [&resize_decision] (tablet_map& tmap) {
             resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
             tmap.set_resize_decision(resize_decision);
+            return make_ready_future();
         });
     }
     for (auto table_id : plan.resize_plan().finalize_resize) {
@@ -108,15 +109,16 @@ void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-void apply_plan(token_metadata& tm, const migration_plan& plan) {
+future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tm.tablets().mutate_tablet_map(mig.tablet.table, [&mig] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&mig] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
             tmap.set_tablet(mig.tablet.tablet, tinfo);
+            return make_ready_future();
         });
     }
-    apply_resize_plan(tm, plan);
+    co_await apply_resize_plan(tm, plan);
 }
 
 using seconds_double = std::chrono::duration<double>;
@@ -185,8 +187,7 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
             return stats;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan(tm, plan);
-            return make_ready_future<>();
+            return apply_plan(tm, plan);
         }).get();
     }
     throw std::runtime_error("rebalance_tablets(): convergence not reached within limit");

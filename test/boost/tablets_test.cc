@@ -209,7 +209,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             verify_tablet_metadata_persistence(e, tm, ts);
 
             // Increase RF of table2
-            tm.mutate_tablet_map(table2, [&] (tablet_map& tmap) {
+            tm.mutate_tablet_map_async(table2, [&] (tablet_map& tmap) {
                 auto tb = tmap.first_tablet();
                 tb = *tmap.next_tablet(tb);
 
@@ -234,7 +234,8 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     tablet_replica {h1, 4},
                     session_id(utils::UUID_gen::get_time_UUID())
                 });
-            });
+                return make_ready_future();
+            }).get();
 
             verify_tablet_metadata_persistence(e, tm, ts);
 
@@ -1440,11 +1441,12 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 }
 
 static
-void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
+future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-        tm.tablets().mutate_tablet_map(table_id, [&] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(table_id, [&] (tablet_map& tmap) {
             resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
             tmap.set_resize_decision(resize_decision);
+            return make_ready_future();
         });
     }
 }
@@ -1485,28 +1487,30 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-void apply_plan(token_metadata& tm, const migration_plan& plan) {
+future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             testlog.trace("Replacing tablet {} replica from {} to {}", mig.tablet.tablet, mig.src, mig.dst);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
             tmap.set_tablet(mig.tablet.tablet, tinfo);
+            return make_ready_future();
         });
     }
-    apply_resize_plan(tm, plan);
+    co_await apply_resize_plan(tm, plan);
 }
 
 // Reflects the plan in a given token metadata as if the migrations were started but not yet executed.
 static
-void apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
+future<> apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        tm.tablets().mutate_tablet_map(mig.tablet.table, [&] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
+            return make_ready_future();
         });
     }
-    apply_resize_plan(tm, plan);
+    co_await apply_resize_plan(tm, plan);
 }
 
 static
@@ -1548,8 +1552,7 @@ void do_rebalance_tablets(cql_test_env& e,
             return;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan(tm, plan);
-            return make_ready_future<>();
+            return apply_plan(tm, plan);
         }).get();
 
         if (auto_split && load_stats) {
@@ -1612,8 +1615,7 @@ void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_met
             break;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan_as_in_progress(tm, plan);
-            return make_ready_future<>();
+            return apply_plan_as_in_progress(tm, plan);
         }).get();
     }
 }
@@ -1621,18 +1623,18 @@ void rebalance_tablets_as_in_progress(tablet_allocator& talloc, shared_token_met
 // Completes any in progress tablet migrations.
 static
 void execute_transitions(shared_token_metadata& stm) {
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         for (auto&& [table, tables] : tm.tablets().all_table_groups()) {
-            tm.tablets().mutate_tablet_map(table, [&] (tablet_map& tmap) {
+            co_await tm.tablets().mutate_tablet_map_async(table, [&] (tablet_map& tmap) {
                 for (auto&& [tablet, trinfo]: tmap.transitions()) {
                     auto ti = tmap.get_tablet_info(tablet);
                     ti.replicas = trinfo.next;
                     tmap.set_tablet(tablet, ti);
                 }
                 tmap.clear_transitions();
+                return make_ready_future();
             });
         }
-        return make_ready_future<>();
     }).get();
 }
 
@@ -1899,11 +1901,11 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_colocated_tablets) {
                 }
         });
 
-        tablet_map tmap1(tmap);
+        tablet_map tmap1 = co_await tmap.clone_gently();
         tmeta.set_tablet_map(table1, std::move(tmap1));
         co_await tmeta.set_colocated_table(table2, table1);
 
-        tablet_map tmap3(tmap);
+        tablet_map tmap3 = co_await tmap.clone_gently();
         tmeta.set_tablet_map(table3, std::move(tmap3));
         co_await tmeta.set_colocated_table(table4, table3);
     });
@@ -3047,9 +3049,9 @@ SEASTAR_THREAD_TEST_CASE(test_split_and_merge_of_colocated_tables) {
                     }
             });
 
-            tablet_map tmap1(tmap);
+            tablet_map tmap1 = co_await tmap.clone_gently();
             tmeta.set_tablet_map(table1, std::move(tmap1));
-            return tmeta.set_colocated_table(table2, table1);
+            co_await tmeta.set_colocated_table(table2, table1);
         });
 
         auto& stm = e.shared_token_metadata().local();
@@ -3836,7 +3838,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         tablet_metadata tab_meta;
         auto table = s->id();
-        tab_meta.set_tablet_map(table, allocated_map);
+        tab_meta.set_tablet_map(table, std::move(allocated_map));
         tm.set_tablets(std::move(tab_meta));
         return make_ready_future<>();
     }).get();
@@ -3846,7 +3848,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
         initial_rep_factor[dc] = std::stoul(shard_count);
     }
 
-    auto tablets = stm.get()->tablets().get_tablet_map(s->id());
+    auto tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
     BOOST_REQUIRE_EQUAL(tablets.tablet_count(), tablet_count);
     for (auto tb : tablets.tablet_ids()) {
         const locator::tablet_info& ti = tablets.get_tablet_info(tb);
@@ -3863,10 +3865,10 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     }
 
     try {
-        tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id());
+        tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
         locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count()};
         auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), old_tablets).get();
+        auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), std::move(old_tablets)).get();
 
         auto const& ts = tmap.tablets();
         BOOST_REQUIRE_EQUAL(ts.size(), tablet_count);
