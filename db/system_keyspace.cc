@@ -1679,6 +1679,12 @@ future<> system_keyspace::peers_table_read_fixup() {
             continue;
         }
         const auto host_id = row.get_as<utils::UUID>("host_id");
+        if (!host_id) {
+            slogger.error("Peer {} has null host_id in system.{}, the record is broken, removing it",
+                peer, system_keyspace::PEERS);
+            co_await remove_endpoint(gms::inet_address{peer});
+            continue;
+        }
         const auto ts = row.get_as<int64_t>("ts");
         const auto it = map.find(host_id);
         if (it == map.end()) {
