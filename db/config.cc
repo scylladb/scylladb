@@ -86,6 +86,12 @@ object_storage_endpoints_to_json(const std::vector<db::object_storage_endpoint_p
     return value_to_json(m);
 }
 
+static
+json::json_return_type
+uuid_to_json(const db::config::UUID& uuid) {
+    return value_to_json(format("{}", uuid));
+}
+
 // Convert a value that can be printed with fmt::format, or a vector of
 // such values, to JSON. An example is enum_option<T>, because enum_option<T>
 // has a specialization for fmt::formatter.
@@ -294,6 +300,12 @@ const config_type& config_type_for<std::vector<db::object_storage_endpoint_param
     return ct;
 }
 
+template <>
+const config_type& config_type_for<db::config::UUID>() {
+    static config_type ct("UUID", uuid_to_json);
+    return ct;
+}
+
 }
 
 namespace YAML {
@@ -487,6 +499,22 @@ struct convert<db::object_storage_endpoint_param> {
         ep.config.use_https = node["https"].as<bool>(false);
         ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
         ep.config.role_arn = node["iam_role_arn"] ? node["iam_role_arn"].as<std::string>() : "";
+        return true;
+    }
+};
+
+template<>
+struct convert<utils::UUID> {
+    static bool decode(const Node& node, utils::UUID& uuid) {
+        std::string uuid_string;
+        if (!convert<std::string>::decode(node, uuid_string)) {
+            return false;
+        }
+        try {
+            std::istringstream(uuid_string) >> uuid;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
         return true;
     }
 };
