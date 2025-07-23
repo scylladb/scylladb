@@ -12,7 +12,8 @@ target_link_libraries(repair
     idl
     absl::headers
     Seastar::seastar
-    xxHash::xxhash)
+    xxHash::xxhash
+    scylla-precompiled-header)
 
 check_headers(check-headers repair
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

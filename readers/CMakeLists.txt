@@ -13,7 +13,8 @@ target_link_libraries(readers
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    schema)
+    schema
+    scylla-precompiled-header)
 
 check_headers(check-headers readers
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

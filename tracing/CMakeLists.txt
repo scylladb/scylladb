@@ -16,7 +16,8 @@ target_link_libraries(scylla_tracing
     xxHash::xxhash
   PRIVATE
     service
-    scylla-main)
+    scylla-main
+    scylla-precompiled-header)
 
 add_whole_archive(tracing scylla_tracing)
 

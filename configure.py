@@ -747,6 +747,7 @@ arg_parser.add_argument('--use-cmake', action=argparse.BooleanOptionalAction, de
 arg_parser.add_argument('--coverage', action = 'store_true', help = 'Compile scylla with coverage instrumentation')
 arg_parser.add_argument('--build-dir', action='store', default='build',
                         help='Build directory path')
+arg_parser.add_argument('--disable-precompiled-header', action='store_true', default=False, help='Disable precompiled header for scylla binary')
 arg_parser.add_argument('-h', '--help', action='store_true', help='show this help message and exit')
 args = arg_parser.parse_args()
 if args.help:
@@ -2207,6 +2208,7 @@ def write_build_file(f,
                      scylla_version,
                      scylla_release,
                      args):
+    use_precompiled_header = not args.disable_precompiled_header
     warnings = get_warning_options(args.cxx)
     rustc_target = pick_rustc_target('wasm32-wasi', 'wasm32-wasip1')
     f.write(textwrap.dedent('''\
@@ -2313,7 +2315,6 @@ def write_build_file(f,
 
     for mode in build_modes:
         modeval = modes[mode]
-
         fmt_lib = 'fmt'
         f.write(textwrap.dedent('''\
             cxx_ld_flags_{mode} = {cxx_ld_flags}
@@ -2324,6 +2325,14 @@ def write_build_file(f,
             seastar_testing_libs_{mode} = {seastar_testing_libs}
             rule cxx.{mode}
               command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in
+              description = CXX $out
+              depfile = $out.d
+            rule cxx_build_precompiled_header.{mode}
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch
+              description = CXX-PRECOMPILED-HEADER $out
+              depfile = $out.d
+            rule cxx_with_pch.{mode}
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -Xclang -include-pch -Xclang $builddir/{mode}/stdafx.hh.pch
               description = CXX $out
               depfile = $out.d
             rule link.{mode}
@@ -2371,7 +2380,9 @@ def write_build_file(f,
               command = CARGO_BUILD_DEP_INFO_BASEDIR='.' cargo build --locked --manifest-path=rust/Cargo.toml --target-dir=$builddir/{mode} --profile=rust-{mode} $
                         && touch $out
               description = RUST_LIB $out
-            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, **modeval))
+
+            build $builddir/{mode}/stdafx.hh.pch: cxx_build_precompiled_header.{mode} stdafx.hh | {profile_dep}
+            ''').format(mode=mode, antlr3_exec=args.antlr3_exec, fmt_lib=fmt_lib, test_repeat=args.test_repeat, test_timeout=args.test_timeout, profile_dep=modeval.get('profile_target', ""), **modeval))
         f.write(
             'build {mode}-build: phony {artifacts} {wasms}\n'.format(
                 mode=mode,
@@ -2385,6 +2396,7 @@ def write_build_file(f,
         include_dist_target = f'dist-{mode}' if args.enable_dist is None or args.enable_dist else ''
         f.write(f'build {mode}: phony {include_cxx_target} {include_dist_target}\n')
         compiles = {}
+        compiles_with_pch = set()
         swaggers = set()
         serializers = {}
         ragels = {}
@@ -2409,6 +2421,7 @@ def write_build_file(f,
             if binary in other or binary in wasms:
                 continue
             srcs = deps[binary]
+            # 'scylla'
             objs = ['$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     for src in srcs
                     if src.endswith('.cc')]
@@ -2440,6 +2453,7 @@ def write_build_file(f,
                 local_libs += ' -flto=thin -ffat-lto-objects'
             else:
                 local_libs += ' -fno-lto'
+            use_pch = use_precompiled_header and binary == 'scylla'
             if binary in tests:
                 if binary in pure_boost_tests:
                     local_libs += ' ' + maybe_static(args.staticboost, '-lboost_unit_test_framework')
@@ -2468,6 +2482,8 @@ def write_build_file(f,
                 if src.endswith('.cc'):
                     obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
                     compiles[obj] = src
+                    if use_pch:
+                        compiles_with_pch.add(obj)
                 elif src.endswith('.idl.hh'):
                     hh = '$builddir/' + mode + '/gen/' + src.replace('.idl.hh', '.dist.hh')
                     serializers[hh] = src
@@ -2546,7 +2562,9 @@ def write_build_file(f,
             src = compiles[obj]
             seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
             abseil_dep = ' '.join(f'$builddir/{mode}/abseil/{lib}' for lib in abseil_libs)
-            f.write(f'build {obj}: cxx.{mode} {src} | {profile_dep} || {seastar_dep} {abseil_dep} {gen_headers_dep}\n')
+            cxx_cmd = 'cxx_with_pch' if obj in compiles_with_pch else 'cxx'
+            pch_dep = f'$builddir/{mode}/stdafx.hh.pch' if obj in compiles_with_pch else ''
+            f.write(f'build {obj}: {cxx_cmd}.{mode} {src} | {profile_dep} || {seastar_dep} {abseil_dep} {gen_headers_dep} {pch_dep}\n')
             if src in modeval['per_src_extra_cxxflags']:
                 f.write('    cxxflags = {seastar_cflags} $cxxflags $cxxflags_{mode} {extra_cxxflags}\n'.format(mode=mode, extra_cxxflags=modeval["per_src_extra_cxxflags"][src], **modeval))
         for swagger in swaggers:
@@ -2891,6 +2909,7 @@ def configure_using_cmake(args):
         'Scylla_TEST_TIMEOUT': args.test_timeout,
         'Scylla_TEST_REPEAT': args.test_repeat,
         'Scylla_ENABLE_LTO': 'ON' if args.lto else 'OFF',
+        'Scylla_USE_PRECOMPILED_HEADER': 'OFF' if args.disable_precompiled_header else 'ON'
     }
     if args.date_stamp:
         settings['Scylla_DATE_STAMP'] = args.date_stamp

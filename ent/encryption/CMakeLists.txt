@@ -31,7 +31,8 @@ target_link_libraries(scylla_encryption
   PRIVATE
     cql3
     utils
-    cpp-jwt::cpp-jwt)
+    cpp-jwt::cpp-jwt
+    scylla-precompiled-header)
 if(kmip_FOUND)
   target_link_libraries(scylla_encryption
     PRIVATE

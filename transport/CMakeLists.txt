@@ -16,7 +16,8 @@ target_link_libraries(transport
     xxHash::xxhash
   PRIVATE
     cql3
-    Snappy::snappy)
+    Snappy::snappy
+    scylla-precompiled-header)
 
 check_headers(check-headers transport
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
