@@ -165,6 +165,7 @@ have nodetool && have cqlsh &&
             upgradesstables
             verify
             viewbuildstatus
+            dropquarantinedsstables
 	    '
 
         local optwks='
@@ -188,6 +189,7 @@ have nodetool && have cqlsh &&
             toppartitions
             verify
             viewbuildstatus
+            dropquarantinedsstables
             '
 
         local optwcfs='

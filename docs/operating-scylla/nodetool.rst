@@ -25,6 +25,7 @@ Nodetool
    nodetool-commands/disablebinary
    nodetool-commands/disablegossip
    nodetool-commands/drain
+   nodetool-commands/dropquarantinedsstables
    nodetool-commands/enableautocompaction
    nodetool-commands/enablebackup
    nodetool-commands/enablebinary
@@ -98,6 +99,7 @@ Operations that are not listed below are currently not available.
 * :doc:`disablebinary </operating-scylla/nodetool-commands/disablebinary/>` - Disable native transport (binary protocol).
 * :doc:`disablegossip </operating-scylla/nodetool-commands/disablegossip/>` - Disable gossip (effectively marking the node down).
 * :doc:`drain </operating-scylla/nodetool-commands/drain/>` - Drain the node (stop accepting writes and flush all column families).
+* :doc:`dropquarantinedsstables </operating-scylla/nodetool-commands/dropquarantinedsstables>` :code:`<keyspace>` :code:`<table>` Drop quarantined SSTables from the specified keyspace and table(s), or from all keyspaces if no keyspace is specified.
 * :doc:`enableautocompaction </operating-scylla/nodetool-commands/enableautocompaction/>` - Enable automatic compaction of a keyspace or table.
 * :doc:`enablebackup </operating-scylla/nodetool-commands/enablebackup/>` - Enable incremental backup.
 * :doc:`enablebinary </operating-scylla/nodetool-commands/enablebinary/>` - Re-enable native transport (binary protocol).
