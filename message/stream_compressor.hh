@@ -18,7 +18,7 @@
 #define LZ4_STATIC_LINKING_ONLY
 #include <lz4.h>
 
-namespace utils {
+namespace netw {
 
 // The pairs (zstd_dstream, zstd_cstream) and (raw_stream, raw_stream)
 // implement a common compressor interface, with similar semantics as the streaming interface of zstd.
@@ -184,4 +184,4 @@ public:
     void set_dict(std::span<const std::byte> dict);
 };
 
-} // namespace utils
+} // namespace netw
