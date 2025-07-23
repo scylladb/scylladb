@@ -1,4 +1,7 @@
 add_library(node_ops STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(node_ops REUSE_FROM scylla-main)
+endif()
 target_sources(node_ops
   PRIVATE
     node_ops_ctl.cc)

@@ -1,4 +1,7 @@
 add_library(schema STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(schema REUSE_FROM scylla-main)
+endif()
 target_sources(schema
   PRIVATE
     caching_options.cc

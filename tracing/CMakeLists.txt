@@ -1,6 +1,9 @@
 include(add_whole_archive)
 
 add_library(scylla_tracing STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(scylla_tracing REUSE_FROM scylla-main)
+endif()
 target_sources(scylla_tracing
   PRIVATE
     tracing.cc

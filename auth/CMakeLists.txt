@@ -3,6 +3,9 @@ find_package(OpenLDAP REQUIRED
   ldap)
 
 add_library(scylla_auth STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(scylla_auth REUSE_FROM scylla-main)
+endif()
 target_sources(scylla_auth
   PRIVATE
     allow_all_authenticator.cc

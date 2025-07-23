@@ -27,6 +27,9 @@ generate_ragel(
     OUT_FILE ${scylla_gen_build_dir}/redis/protocol_parser.hh)
 
 add_library(redis STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(redis REUSE_FROM scylla-main)
+endif()
 add_dependencies(redis
   scylla_ragel_gen_protocol_parser)
 target_sources(redis

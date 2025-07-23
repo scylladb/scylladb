@@ -1,4 +1,7 @@
 add_library(lang STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(lang REUSE_FROM scylla-main)
+endif()
 target_sources(lang
   PRIVATE
     manager.cc

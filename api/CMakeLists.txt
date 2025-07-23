@@ -64,6 +64,9 @@ foreach(f ${swagger_files})
 endforeach()
 
 add_library(api STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(api REUSE_FROM scylla-main)
+endif()
 target_sources(api
   PRIVATE
     api.cc

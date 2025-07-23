@@ -1,4 +1,7 @@
 add_library(data_dictionary STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(data_dictionary REUSE_FROM scylla-main)
+endif()
 target_sources(data_dictionary
   PRIVATE
     data_dictionary.cc)

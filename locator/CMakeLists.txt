@@ -1,6 +1,9 @@
 include(add_whole_archive)
 
 add_library(scylla_locator STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(scylla_locator REUSE_FROM scylla-main)
+endif()
 target_sources(scylla_locator
   PRIVATE
     abstract_replication_strategy.cc

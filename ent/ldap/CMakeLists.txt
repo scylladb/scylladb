@@ -1,6 +1,9 @@
 find_package(OpenLDAP REQUIRED
   ldap lber)
 add_library(ldap STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(ldap REUSE_FROM scylla-main)
+endif()
 target_sources(ldap
   PRIVATE
     ldap_connection.cc)

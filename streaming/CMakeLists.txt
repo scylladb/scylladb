@@ -1,4 +1,7 @@
 add_library(streaming STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(streaming REUSE_FROM scylla-main)
+endif()
 target_sources(streaming
   PRIVATE
     consumer.cc

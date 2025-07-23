@@ -1,4 +1,7 @@
 add_library(message STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(message REUSE_FROM scylla-main)
+endif()
 target_sources(message
   PRIVATE
     dictionary_service.cc

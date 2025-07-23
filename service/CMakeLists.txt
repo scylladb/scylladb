@@ -1,4 +1,7 @@
 add_library(service STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(service REUSE_FROM scylla-main)
+endif()
 target_sources(service
   PRIVATE
     broadcast_tables/experimental/lang.cc
