@@ -66,7 +66,6 @@ class tombstone_gc_state {
     [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
 
     [[nodiscard]] repair_history_map_ptr get_repair_history_for_table(const table_id& id) const;
-    [[nodiscard]] repair_history_map_ptr get_or_create_repair_history_for_table(const table_id& id);
 
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_group0_gc_time() const;
     [[nodiscard]] seastar::lw_shared_ptr<gc_clock::time_point> get_or_create_group0_gc_time();
