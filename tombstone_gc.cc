@@ -28,12 +28,11 @@ repair_history_map_ptr tombstone_gc_state::get_or_create_repair_history_for_tabl
         return {};
     }
     auto& reconcile_history_maps = _reconcile_history_maps->_repair_maps;
-    auto it = reconcile_history_maps.find(id);
-    if (it != reconcile_history_maps.end()) {
-        return it->second;
+    auto [it, inserted] = reconcile_history_maps.try_emplace(id, lw_shared_ptr<repair_history_map>(nullptr));
+    if (inserted) {
+        it->second = seastar::make_lw_shared<repair_history_map>();
     }
-    reconcile_history_maps[id] = seastar::make_lw_shared<repair_history_map>();
-    return reconcile_history_maps[id];
+    return it->second;
 }
 
 repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const table_id& id) const {
