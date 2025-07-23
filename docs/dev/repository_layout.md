@@ -148,12 +148,6 @@ Implementation for the Raft distributed state machine which helps store the topo
 ScyllaDB library for readers. There is a reader interface defined and implementations for SSTable readers, Memtable readers, network readers, etc
 All of these readers can be combined to produce a common output stream.
 
-[redis/](https://github.com/scylladb/scylladb/tree/master/redis)
-
-This is a (partial) implementation of the Redis API, a third front-end after CQL and [DynamoDB API (Alternator)](https://github.com/scylladb/scylladb/tree/master/alternator).
-
-More details about this API in [redis.md](redis.md) developer documentation.
-
 [reloc/](https://github.com/scylladb/scylladb/tree/master/reloc)
 
 Code related to packaging ScyllaDB as rpm, deb, etc. This is called reloc because ScyllaDB is packaged as a relocatable package with all dependencies bundled in.

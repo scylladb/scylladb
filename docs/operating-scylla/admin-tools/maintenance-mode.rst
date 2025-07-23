@@ -10,7 +10,7 @@ In this mode, the node is not reachable from the outside, i.e.
    * all cluster-wide operations are disabled for this node (e.g. repair),
    * other nodes see this node as dead,
    * cannot read or write data from/to other nodes,
- * it does not open Alternator and Redis transport ports and the TCP CQL port.
+ * it does not open Alternator transport ports and the TCP CQL port.
 
 The only way to make CQL queries is to use :doc:`the maintenance socket </operating-scylla/admin-tools/maintenance-socket/>`. The node serves only local data.
 

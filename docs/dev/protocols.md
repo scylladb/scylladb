@@ -205,23 +205,6 @@ can be overridden by specifying in `alternator_encryption_options` the
 `keyfile` and `certificate` options. For example,
 `--alternator-encryption-options keyfile="..."`.
 
-## Redis client protocol
-
-Scylla also has partial and experimental support for the Redis API.
-Because this support is experimental, it is not turned on by
-default, and must be turned on manually by setting the `redis_port`
-and/or `redis_ssl_port` configuration option.
-
-The traditional port used for Redis is 6379. Regular Redis does not
-support SSL, so there is no traditional choice of port for it.
-
-The same `rpc_address` configuration option used by the CQL
-protocol to set the IP address (and therefore network interface) on which
-Scylla should listen also applies to the Redis protocol.
-
-See [redis.md](redis.md) for more information about Scylla's
-support for the Redis protocol.
-
 ## Metrics protocol
 
 Scylla provides an HTTP-based protocol to fetch performance and activity
