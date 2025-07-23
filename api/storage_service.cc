@@ -808,7 +808,7 @@ rest_force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>
         try {
             co_await task->done();
         } catch (...) {
-            apilog.error("force_keyspace_cleanup: keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
+            apilog.warn("force_keyspace_cleanup: keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
             throw;
         }
 
