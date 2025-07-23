@@ -23,18 +23,6 @@
 
 extern logging::logger dblog;
 
-repair_history_map_ptr tombstone_gc_state::get_or_create_repair_history_for_table(const table_id& id) {
-    if (!_reconcile_history_maps) {
-        return {};
-    }
-    auto& reconcile_history_maps = _reconcile_history_maps->_repair_maps;
-    auto [it, inserted] = reconcile_history_maps.try_emplace(id, lw_shared_ptr<repair_history_map>(nullptr));
-    if (inserted) {
-        it->second = seastar::make_lw_shared<repair_history_map>();
-    }
-    return it->second;
-}
-
 repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const table_id& id) const {
     if (!_reconcile_history_maps) {
         return {};
@@ -211,11 +199,15 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
 }
 
 void tombstone_gc_state::update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time) {
-    auto m = get_or_create_repair_history_for_table(id);
-    if (!m) {
+    if (!_reconcile_history_maps) {
         on_fatal_internal_error(dblog, "repair_history_map not found/created");
     }
-    *m += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
+    auto& reconcile_history_maps = _reconcile_history_maps->_repair_maps;
+    auto [it, inserted] = reconcile_history_maps.try_emplace(id, lw_shared_ptr<repair_history_map>(nullptr));
+    if (inserted || !it->second) { // check for failed past update, leaving behind nullptr
+        it->second = seastar::make_lw_shared<repair_history_map>();
+    }
+    *it->second += std::make_pair(locator::token_metadata::range_to_interval(range), repair_time);
 }
 
 void tombstone_gc_state::insert_pending_repair_time_update(table_id id,
