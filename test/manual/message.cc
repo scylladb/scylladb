@@ -200,8 +200,8 @@ int main(int ac, char ** av) {
             as.start().get();
             auto stop_as = defer([&as] { as.stop().get(); });
             sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), qos::service_level_options{.shares = 1000}, default_scheduling_group).get();
-            seastar::sharded<utils::walltime_compressor_tracker> compressor_tracker;
-            compressor_tracker.start([] { return utils::walltime_compressor_tracker::config{}; }).get();
+            seastar::sharded<netw::walltime_compressor_tracker> compressor_tracker;
+            compressor_tracker.start([] { return netw::walltime_compressor_tracker::config{}; }).get();
             auto stop_compressor_tracker = deferred_stop(compressor_tracker);
             seastar::sharded<gms::feature_service> feature_service;
             gms::feature_config cfg;

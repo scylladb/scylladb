@@ -14,17 +14,17 @@
 #include "utils/refcounted.hh"
 #include "utils/updateable_value.hh"
 #include "utils/enum_option.hh"
+#include "shared_dict.hh"
 
-namespace utils {
+namespace netw {
 
-class dict_sampler;
 class lz4_cstream;
 class lz4_dstream;
 class zstd_cstream;
 class zstd_dstream;
 class stream_compressor;
 class stream_decompressor;
-class shared_dict;
+class dict_sampler;
 using dict_ptr = lw_shared_ptr<foreign_ptr<lw_shared_ptr<shared_dict>>>;
 class control_protocol_frame;
 
@@ -166,8 +166,8 @@ public:
     void announce_dict(dict_ptr) noexcept;
     void set_supported_algos(compression_algorithm_set algos) noexcept;
     compression_algorithm sender_current_algorithm() const noexcept;
-    const shared_dict& sender_current_dict() const noexcept; 
-    const shared_dict& receiver_current_dict() const noexcept; 
+    const shared_dict& sender_current_dict() const noexcept;
+    const shared_dict& receiver_current_dict() const noexcept;
 };
 
 class advanced_rpc_compressor final : public rpc::compressor {
@@ -179,7 +179,7 @@ private:
     // and limits that we need to respect.
     //
     // The `refcounted` is just a precaution against a misuse of the APIs.
-    refcounted::ref<tracker> _tracker;
+    utils::refcounted::ref<tracker> _tracker;
 
     // Index of the compressor inside the tracker.
     // Used to unregister the compressor on destruction.
@@ -246,25 +246,25 @@ struct per_algorithm_stats {
 //
 // Tracker is referenced by all compressors, so we inherit from `refcounted` to
 // prevent a misuse of the API (dangling references).
-class advanced_rpc_compressor::tracker : public refcounted {
+class advanced_rpc_compressor::tracker : public utils::refcounted {
 public:
     using algo_config = algo_config;
     struct config {
-        updateable_value<uint32_t> zstd_min_msg_size{0};
-        updateable_value<uint32_t> zstd_max_msg_size{std::numeric_limits<uint32_t>::max()};
-        updateable_value<float> zstd_quota_fraction{0};
-        updateable_value<uint32_t> zstd_quota_refresh_ms{20};
-        updateable_value<float> zstd_longterm_quota_fraction{1000};
-        updateable_value<uint32_t> zstd_longterm_quota_refresh_ms{1000};
-        updateable_value<algo_config> algo_config{{compression_algorithm::type::ZSTD, compression_algorithm::type::LZ4}};
+        utils::updateable_value<uint32_t> zstd_min_msg_size{0};
+        utils::updateable_value<uint32_t> zstd_max_msg_size{std::numeric_limits<uint32_t>::max()};
+        utils::updateable_value<float> zstd_quota_fraction{0};
+        utils::updateable_value<uint32_t> zstd_quota_refresh_ms{20};
+        utils::updateable_value<float> zstd_longterm_quota_fraction{1000};
+        utils::updateable_value<uint32_t> zstd_longterm_quota_refresh_ms{1000};
+        utils::updateable_value<algo_config> algo_config{{compression_algorithm::type::ZSTD, compression_algorithm::type::LZ4}};
         bool register_metrics = false;
-        updateable_value<bool> checksumming{true};
+        utils::updateable_value<bool> checksumming{true};
     };
 private:
     friend advanced_rpc_compressor;
     
     config _cfg;
-    observer<algo_config> _algo_config_observer;
+    utils::observer<algo_config> _algo_config_observer;
 
     std::array<per_algorithm_stats, compression_algorithm::count()> _stats;
     metrics::metric_groups _metrics;
@@ -355,12 +355,12 @@ public:
     {}
 };
 
-class walltime_compressor_tracker final : public utils::advanced_rpc_compressor::tracker_with_clock<std::chrono::steady_clock, lowres_clock> {
+class walltime_compressor_tracker final : public advanced_rpc_compressor::tracker_with_clock<std::chrono::steady_clock, lowres_clock> {
     using tracker_with_clock::tracker_with_clock;
 };
 
-// Helper for setting up the lw_shared_ptr<foreign_ptr<lw_shared_ptr<utils::shared_dict>>> tree
+// Helper for setting up the lw_shared_ptr<foreign_ptr<lw_shared_ptr<shared_dict>>> tree
 // used by the tracker to manage the lifetime of dicts.
-future<> announce_dict_to_shards(seastar::sharded<walltime_compressor_tracker>&, utils::shared_dict);
+future<> announce_dict_to_shards(seastar::sharded<walltime_compressor_tracker>&, shared_dict);
 
-} // namespace utils
+} // namespace netw

@@ -5,7 +5,6 @@ add_library(utils STATIC)
 target_sources(utils
   PRIVATE
     UUID_gen.cc
-    advanced_rpc_compressor.cc
     alien_worker.cc
     array-search.cc
     ascii.cc
@@ -16,7 +15,6 @@ target_sources(utils
     buffer_input_stream.cc
     build_id.cc
     config_file.cc
-    dict_trainer.cc
     directories.cc
     disk-error-handler.cc
     disk_space_monitor.cc
@@ -51,7 +49,6 @@ target_sources(utils
     uuid.cc
     labels.cc
     aws_sigv4.cc
-    stream_compressor.cc
     rest/client.cc
     s3/aws_error.cc
     s3/client.cc

@@ -113,8 +113,8 @@
 #include "service/paxos/paxos_state.hh"
 #include "gms/gossip_address_map.hh"
 #include "utils/alien_worker.hh"
-#include "utils/advanced_rpc_compressor.hh"
-#include "utils/shared_dict.hh"
+#include "message/advanced_rpc_compressor.hh"
+#include "message/shared_dict.hh"
 #include "message/dictionary_service.hh"
 #include "sstable_dict_autotrainer.hh"
 #include "utils/disk_space_monitor.hh"
@@ -1467,9 +1467,9 @@ sharded<locator::shared_token_metadata> token_metadata;
           }).get();
 
             checkpoint(stop_signal, "starting compressor_tracker");
-            utils::dict_sampler dict_sampler;
+            netw::dict_sampler dict_sampler;
             auto arct_cfg = [&] {
-                return utils::advanced_rpc_compressor::tracker::config{
+                return netw::advanced_rpc_compressor::tracker::config{
                     .zstd_min_msg_size = cfg->internode_compression_zstd_min_message_size,
                     .zstd_max_msg_size = cfg->internode_compression_zstd_max_message_size,
                     .zstd_quota_fraction = cfg->internode_compression_zstd_max_cpu_fraction,
@@ -1481,7 +1481,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                     .checksumming = cfg->internode_compression_checksumming,
                 };
             };
-            static sharded<utils::walltime_compressor_tracker> compressor_tracker;
+            static sharded<netw::walltime_compressor_tracker> compressor_tracker;
             compressor_tracker.start(arct_cfg).get();
             auto stop_compressor_tracker = defer_verbose_shutdown("compressor_tracker", [] { compressor_tracker.stop().get(); });
             compressor_tracker.local().attach_to_dict_sampler(&dict_sampler);
@@ -1735,7 +1735,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                     auto table = table_id(utils::UUID(name.substr(sstables_prefix.size())));
                     co_await sstable_compressor_factory.local().set_recommended_dict(table, std::move(dict.data));
                 } else if (name == dictionary_service::rpc_compression_dict_name) {
-                    co_await utils::announce_dict_to_shards(compressor_tracker, std::move(dict));
+                    co_await netw::announce_dict_to_shards(compressor_tracker, std::move(dict));
                 }
             };
 
@@ -1816,7 +1816,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             ss.local().set_train_dict_callback([&rpc_dict_training_worker] (std::vector<std::vector<std::byte>> sample) {
                 return rpc_dict_training_worker.submit<std::vector<std::byte>>([sample = std::move(sample)] {
-                    return utils::zdict_train(sample, {});
+                    return netw::zdict_train(sample, {});
                 });
             });
 

@@ -23,8 +23,8 @@
 #include "db/hints/host_filter.hh"
 #include "utils/s3/creds.hh"
 #include "utils/error_injection.hh"
-#include "utils/dict_trainer.hh"
-#include "utils/advanced_rpc_compressor.hh"
+#include "message/dict_trainer.hh"
+#include "message/advanced_rpc_compressor.hh"
 #include "db/tri_mode_restriction.hh"
 #include "sstables/compressor.hh"
 
@@ -329,9 +329,9 @@ public:
     named_value<uint32_t> internode_compression_zstd_min_message_size;
     named_value<uint32_t> internode_compression_zstd_max_message_size;
     named_value<bool> internode_compression_checksumming;
-    named_value<utils::advanced_rpc_compressor::tracker::algo_config> internode_compression_algorithms;
+    named_value<netw::advanced_rpc_compressor::tracker::algo_config> internode_compression_algorithms;
     named_value<bool> internode_compression_enable_advanced;
-    named_value<enum_option<utils::dict_training_loop::when>> rpc_dict_training_when;
+    named_value<enum_option<netw::dict_training_loop::when>> rpc_dict_training_when;
     named_value<uint32_t> rpc_dict_training_min_time_seconds;
     named_value<uint64_t> rpc_dict_training_min_bytes;
     named_value<bool> inter_dc_tcp_nodelay;
