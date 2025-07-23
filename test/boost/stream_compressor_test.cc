@@ -8,7 +8,7 @@
 
 #define BOOST_TEST_MODULE core
 #include <seastar/util/alloc_failure_injector.hh>
-#include "utils/stream_compressor.hh"
+#include "message/stream_compressor.hh"
 #include "test/lib/random_utils.hh"
 #include <boost/test/unit_test.hpp>
 #include "bytes.hh"
@@ -76,7 +76,7 @@ std::vector<Buf> compute_splits(bytes b) {
     return out;
 }
 
-void test_compressor_pair_basic_correctness(utils::stream_compressor& compressor, utils::stream_decompressor& decompressor) {
+void test_compressor_pair_basic_correctness(netw::stream_compressor& compressor, netw::stream_decompressor& decompressor) {
     // Generate some messages.
     for (const auto& message : {
         tests::random::get_bytes(0),
@@ -93,36 +93,36 @@ void test_compressor_pair_basic_correctness(utils::stream_compressor& compressor
     // Use each compressor multiple times to make sure it is returned to a proper state after each use.
     for (int repeat = 0; repeat < 3; ++repeat)
     {
-        auto compressed = utils::compress_impl(0, input, compressor, end_of_frame, chunk_size);
+        auto compressed = netw::compress_impl(0, input, compressor, end_of_frame, chunk_size);
         auto rcv_buf = convert_rpc_buf<rpc::rcv_buf>(std::move(compressed));
-        auto decompressed = utils::decompress_impl(rcv_buf, decompressor, end_of_frame, chunk_size);
+        auto decompressed = netw::decompress_impl(rcv_buf, decompressor, end_of_frame, chunk_size);
         BOOST_REQUIRE_EQUAL(message, rpc_buf_to_bytes(std::move(decompressed)));
     }
 }
 
 BOOST_AUTO_TEST_CASE(test_correctness) {
     {
-        utils::raw_stream stream;
+        netw::raw_stream stream;
         test_compressor_pair_basic_correctness(stream, stream);
     }
     {
-        utils::lz4_dstream dstream{};
-        utils::lz4_cstream cstream{};
+        netw::lz4_dstream dstream{};
+        netw::lz4_cstream cstream{};
         test_compressor_pair_basic_correctness(cstream, dstream);
     }
     {
-        utils::lz4_dstream dstream{2};
-        utils::lz4_cstream cstream{2};
+        netw::lz4_dstream dstream{2};
+        netw::lz4_cstream cstream{2};
         test_compressor_pair_basic_correctness(cstream, dstream);
     }
     {
-        utils::zstd_dstream dstream{};
-        utils::zstd_cstream cstream{};
+        netw::zstd_dstream dstream{};
+        netw::zstd_cstream cstream{};
         test_compressor_pair_basic_correctness(cstream, dstream);
     }
 }
 
-void test_recovery_after_oom_one(utils::stream_decompressor& dstream, utils::stream_compressor& cstream) {
+void test_recovery_after_oom_one(netw::stream_decompressor& dstream, netw::stream_compressor& cstream) {
     // Check that compressors and decompressors handle OOM properly and can be reused afterwards.
     for (int repeat = 0; repeat < 3; ++repeat) {
         auto message = tests::random::get_bytes(256);
@@ -131,7 +131,7 @@ void test_recovery_after_oom_one(utils::stream_decompressor& dstream, utils::str
             auto message_buf = rpc::snd_buf(temporary_buffer<char>(reinterpret_cast<const char*>(message.data()), message.size()));
             memory::with_allocation_failures([&] {
                 try {
-                    compressed = utils::compress_impl(0, message_buf, cstream, true, 64);
+                    compressed = netw::compress_impl(0, message_buf, cstream, true, 64);
                 } catch (const std::runtime_error&) {
                     throw std::bad_alloc();
                 }
@@ -142,7 +142,7 @@ void test_recovery_after_oom_one(utils::stream_decompressor& dstream, utils::str
             auto compressed_2 = convert_rpc_buf<rpc::rcv_buf>(std::move(compressed));
             memory::with_allocation_failures([&] {
                 try {
-                    decompressed = utils::decompress_impl(compressed_2, dstream, true, 64);
+                    decompressed = netw::decompress_impl(compressed_2, dstream, true, 64);
                 } catch (const std::runtime_error&) {
                     throw std::bad_alloc();
                 }
@@ -154,13 +154,13 @@ void test_recovery_after_oom_one(utils::stream_decompressor& dstream, utils::str
 
 BOOST_AUTO_TEST_CASE(test_recovery_after_oom) {
     {
-        utils::lz4_dstream dstream{};
-        utils::lz4_cstream cstream{};
+        netw::lz4_dstream dstream{};
+        netw::lz4_cstream cstream{};
         test_recovery_after_oom_one(dstream, cstream);
     }
     {
-        utils::zstd_dstream dstream{};
-        utils::zstd_cstream cstream{};
+        netw::zstd_dstream dstream{};
+        netw::zstd_cstream cstream{};
         test_recovery_after_oom_one(dstream, cstream);
     }
 }
