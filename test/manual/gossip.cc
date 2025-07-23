@@ -61,7 +61,7 @@ int main(int ac, char ** av) {
 
             sharded<abort_source> abort_sources;
             sharded<locator::shared_token_metadata> token_metadata;
-            sharded<utils::walltime_compressor_tracker> compressor_tracker;
+            sharded<netw::walltime_compressor_tracker> compressor_tracker;
             sharded<gms::feature_service> feature_service;
             sharded<gms::gossip_address_map> gossip_address_map;
             sharded<netw::messaging_service> messaging;
@@ -83,7 +83,7 @@ int main(int ac, char ** av) {
             as.start().get();
             auto stop_as = defer([&as] { as.stop().get(); });
             sl_controller.start(std::ref(auth_service), std::ref(tm), std::ref(as), qos::service_level_options{.shares = 1000}, default_scheduling_group).get();
-            compressor_tracker.start([] { return utils::walltime_compressor_tracker::config{}; }).get();
+            compressor_tracker.start([] { return netw::walltime_compressor_tracker::config{}; }).get();
             auto stop_compressor_tracker = deferred_stop(compressor_tracker);
 
             gms::feature_config cfg;

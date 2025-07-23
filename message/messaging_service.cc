@@ -152,8 +152,8 @@ using namespace std::chrono_literals;
 
 class messaging_service::compressor_factory_wrapper {
     struct advanced_rpc_compressor_factory : rpc::compressor::factory {
-        utils::walltime_compressor_tracker& _tracker;
-        advanced_rpc_compressor_factory(utils::walltime_compressor_tracker& tracker)
+        walltime_compressor_tracker& _tracker;
+        advanced_rpc_compressor_factory(walltime_compressor_tracker& tracker)
             : _tracker(tracker)
         {}
         const sstring& supported() const override {
@@ -275,7 +275,7 @@ messaging_service::messaging_service(
     gms::feature_service& feature_service,
     gms::gossip_address_map& address_map,
     gms::generation_type generation,
-    utils::walltime_compressor_tracker& wct,
+    walltime_compressor_tracker& wct,
     qos::service_level_controller& sl_controller)
     : messaging_service(config{std::move(id), ip, ip, port},
                         scheduling_config{{{{}, "$default"}}, {}, {}},
@@ -480,7 +480,7 @@ void messaging_service::do_start_listen() {
 }
 
 messaging_service::messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder> credentials, gms::feature_service& feature_service,
-                                     gms::gossip_address_map& address_map, gms::generation_type generation, utils::walltime_compressor_tracker& arct, qos::service_level_controller& sl_controller)
+                                     gms::gossip_address_map& address_map, gms::generation_type generation, walltime_compressor_tracker& arct, qos::service_level_controller& sl_controller)
     : _cfg(std::move(cfg))
     , _rpc(new rpc_protocol_wrapper(serializer { }))
     , _credentials_builder(credentials ? std::make_unique<seastar::tls::credentials_builder>(*credentials) : nullptr)

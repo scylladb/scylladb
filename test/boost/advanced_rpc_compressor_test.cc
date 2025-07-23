@@ -10,22 +10,22 @@
 #include <seastar/util/closeable.hh>
 #include "test/lib/random_utils.hh"
 #include "test/lib/scylla_test_case.hh"
-#include "utils/advanced_rpc_compressor.hh"
-#include "utils/advanced_rpc_compressor_protocol.hh"
+#include "message/advanced_rpc_compressor.hh"
+#include "message/advanced_rpc_compressor_protocol.hh"
 
 using namespace seastar;
 using namespace std::chrono_literals;
 
-static utils::dict_ptr make_dict(uint64_t timestamp, std::vector<std::byte> content = {}) {
-    return make_lw_shared(make_foreign(make_lw_shared(utils::shared_dict(std::move(content), timestamp, {}))));
+static netw::dict_ptr make_dict(uint64_t timestamp, std::vector<std::byte> content = {}) {
+    return make_lw_shared(make_foreign(make_lw_shared(netw::shared_dict(std::move(content), timestamp, {}))));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_control_protocol_sanity) {
     condition_variable cv;
     auto dict_1 = make_dict(1);
     auto dict_2 = make_dict(2);
-    utils::control_protocol alice(cv);
-    utils::control_protocol bob(cv);
+    netw::control_protocol alice(cv);
+    netw::control_protocol bob(cv);
     auto settle = [&] {
         bool run = true;
         while (run) {
@@ -43,8 +43,8 @@ SEASTAR_THREAD_TEST_CASE(test_control_protocol_sanity) {
     alice.announce_dict(dict_1);
     bob.announce_dict(dict_2);
     settle();
-    BOOST_REQUIRE(alice.sender_current_dict().id == utils::shared_dict::dict_id());
-    BOOST_REQUIRE(bob.sender_current_dict().id == utils::shared_dict::dict_id());
+    BOOST_REQUIRE(alice.sender_current_dict().id == netw::shared_dict::dict_id());
+    BOOST_REQUIRE(bob.sender_current_dict().id == netw::shared_dict::dict_id());
     alice.announce_dict(dict_2);
     settle();
     BOOST_REQUIRE(alice.sender_current_dict().id == (**dict_2).id);
@@ -55,8 +55,8 @@ SEASTAR_THREAD_TEST_CASE(test_control_protocol_sanity) {
     BOOST_REQUIRE(bob.sender_current_dict().id == (**dict_2).id);
     bob.announce_dict(nullptr);
     settle();
-    BOOST_REQUIRE(alice.sender_current_dict().id == utils::shared_dict::dict_id());
-    BOOST_REQUIRE(bob.sender_current_dict().id == utils::shared_dict::dict_id());
+    BOOST_REQUIRE(alice.sender_current_dict().id == netw::shared_dict::dict_id());
+    BOOST_REQUIRE(bob.sender_current_dict().id == netw::shared_dict::dict_id());
 }
 
 temporary_buffer<char> bytes_view_to_temporary_buffer(bytes_view bv) {
@@ -90,7 +90,7 @@ Buf convert_rpc_buf(BufFrom data) {
     return b;
 }
 
-class tracker_without_clock final : public utils::advanced_rpc_compressor::tracker {
+class tracker_without_clock final : public netw::advanced_rpc_compressor::tracker {
     virtual uint64_t get_steady_nanos() const override {
         return 0;
     }
@@ -101,10 +101,10 @@ public:
 SEASTAR_THREAD_TEST_CASE(test_tracker_basic_sanity) {
     for (const bool checksumming : {false, true})
     for (const auto& zstd_cpu_limit : {0.0, 1.0}) {
-        auto cfg = utils::advanced_rpc_compressor::tracker::config{
+        auto cfg = netw::advanced_rpc_compressor::tracker::config{
             .zstd_quota_fraction{zstd_cpu_limit},
-            .algo_config = utils::updateable_value<utils::algo_config>{
-                {utils::compression_algorithm::type::ZSTD, utils::compression_algorithm::type::LZ4},
+            .algo_config = utils::updateable_value<netw::algo_config>{
+                {netw::compression_algorithm::type::ZSTD, netw::compression_algorithm::type::LZ4},
             },
             .checksumming = utils::updateable_value<bool>{checksumming},
         };
@@ -143,11 +143,11 @@ SEASTAR_THREAD_TEST_CASE(test_tracker_basic_sanity) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_tracker_dict_sanity) {
-    for (const auto& algo : {utils::compression_algorithm::type::ZSTD, utils::compression_algorithm::type::LZ4}) {
-        auto cfg = utils::advanced_rpc_compressor::tracker::config{
+    for (const auto& algo : {netw::compression_algorithm::type::ZSTD, netw::compression_algorithm::type::LZ4}) {
+        auto cfg = netw::advanced_rpc_compressor::tracker::config{
             .zstd_quota_fraction{1.0},
-            .algo_config = utils::updateable_value<utils::algo_config>{
-                {utils::compression_algorithm::type::RAW},
+            .algo_config = utils::updateable_value<netw::algo_config>{
+                {netw::compression_algorithm::type::RAW},
             },
         };
         tracker_without_clock tracker{cfg};
@@ -163,7 +163,7 @@ SEASTAR_THREAD_TEST_CASE(test_tracker_dict_sanity) {
         // If dict negotiation succeeds as expected, this should result in very small messages.
         auto dict = make_dict(1, {message_view.begin(), message_view.end()});
         tracker.announce_dict(dict);
-        tracker.set_supported_algos(utils::compression_algorithm_set::singleton(algo));
+        tracker.set_supported_algos(netw::compression_algorithm_set::singleton(algo));
 
         // Arbitrary number of repeats.
         for (int repeat = 0; repeat < 10; ++repeat)
@@ -189,15 +189,15 @@ SEASTAR_THREAD_TEST_CASE(test_tracker_dict_sanity) {
 SEASTAR_THREAD_TEST_CASE(test_tracker_cpu_limit_shortterm) {
     constexpr int quota = 10;
     constexpr int quota_refresh = 128;
-    auto cfg = utils::advanced_rpc_compressor::tracker::config{
+    auto cfg = netw::advanced_rpc_compressor::tracker::config{
         .zstd_quota_fraction{float(quota) / quota_refresh},
         .zstd_quota_refresh_ms{quota_refresh},
-        .algo_config = utils::updateable_value<utils::algo_config>{
-            {utils::compression_algorithm::type::ZSTD, utils::compression_algorithm::type::LZ4},
+        .algo_config = utils::updateable_value<netw::algo_config>{
+            {netw::compression_algorithm::type::ZSTD, netw::compression_algorithm::type::LZ4},
         },
     };
     
-    struct manual_clock_tracker : utils::advanced_rpc_compressor::tracker_with_clock<manual_clock, manual_clock> {
+    struct manual_clock_tracker : netw::advanced_rpc_compressor::tracker_with_clock<manual_clock, manual_clock> {
         using tracker_with_clock::tracker_with_clock;
         virtual uint64_t get_steady_nanos() const override {
             manual_clock::advance(std::chrono::milliseconds(1));
@@ -223,13 +223,13 @@ SEASTAR_THREAD_TEST_CASE(test_tracker_cpu_limit_shortterm) {
     manual_clock::advance(std::chrono::milliseconds(1000));
 
     for (int repeat = 0; repeat < 5; ++repeat) {
-        auto before = tracker.get_stats()[utils::compression_algorithm(utils::compression_algorithm::type::ZSTD).idx()];
+        auto before = tracker.get_stats()[netw::compression_algorithm(netw::compression_algorithm::type::ZSTD).idx()];
         // Do many compressions.
         for (int i = 0; i < 30; ++i) {
             client_compressor->compress(0, rpc::snd_buf{0});
         }
         // Check that the quota is respected.
-        auto after = tracker.get_stats()[utils::compression_algorithm(utils::compression_algorithm::type::ZSTD).idx()];
+        auto after = tracker.get_stats()[netw::compression_algorithm(netw::compression_algorithm::type::ZSTD).idx()];
         BOOST_REQUIRE_EQUAL(std::chrono::nanoseconds(after.compression_cpu_nanos - before.compression_cpu_nanos), std::chrono::milliseconds(quota));
         // Refresh quotas.
         manual_clock::advance(std::chrono::milliseconds(1000));
@@ -239,17 +239,17 @@ SEASTAR_THREAD_TEST_CASE(test_tracker_cpu_limit_shortterm) {
 SEASTAR_THREAD_TEST_CASE(test_tracker_cpu_limit_longterm) {
     constexpr static auto step = std::chrono::milliseconds(10);
     constexpr static auto limit = 0.1;
-    auto cfg = utils::advanced_rpc_compressor::tracker::config{
+    auto cfg = netw::advanced_rpc_compressor::tracker::config{
         .zstd_quota_fraction{1},
         .zstd_quota_refresh_ms{1},
         .zstd_longterm_quota_fraction{limit},
         .zstd_longterm_quota_refresh_ms{1000},
-        .algo_config = utils::updateable_value<utils::algo_config>{
-            {utils::compression_algorithm::type::ZSTD, utils::compression_algorithm::type::LZ4},
+        .algo_config = utils::updateable_value<netw::algo_config>{
+            {netw::compression_algorithm::type::ZSTD, netw::compression_algorithm::type::LZ4},
         },
     };
     
-    struct manual_clock_tracker : utils::advanced_rpc_compressor::tracker_with_clock<manual_clock, manual_clock> {
+    struct manual_clock_tracker : netw::advanced_rpc_compressor::tracker_with_clock<manual_clock, manual_clock> {
         using tracker_with_clock::tracker_with_clock;
         virtual uint64_t get_steady_nanos() const override {
             manual_clock::advance(step);
@@ -273,14 +273,14 @@ SEASTAR_THREAD_TEST_CASE(test_tracker_cpu_limit_longterm) {
     }
 
     constexpr int n_compressions = 1000;
-    auto used_before = tracker.get_stats()[utils::compression_algorithm(utils::compression_algorithm::type::ZSTD).idx()];
+    auto used_before = tracker.get_stats()[netw::compression_algorithm(netw::compression_algorithm::type::ZSTD).idx()];
     auto clock_before = manual_clock::now();
     // Do many compressions.
     for (int i = 0; i < n_compressions; ++i) {
         client_compressor->compress(0, rpc::snd_buf{0});
     }
     // Check that the quota is respected.
-    auto used_after = tracker.get_stats()[utils::compression_algorithm(utils::compression_algorithm::type::ZSTD).idx()];
+    auto used_after = tracker.get_stats()[netw::compression_algorithm(netw::compression_algorithm::type::ZSTD).idx()];
     auto clock_after = manual_clock::now();
 
     auto used = std::chrono::nanoseconds(used_after.compression_cpu_nanos - used_before.compression_cpu_nanos);

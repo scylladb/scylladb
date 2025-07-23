@@ -23,7 +23,7 @@
 #include "service/maintenance_mode.hh"
 #include "gms/gossip_address_map.hh"
 #include "tasks/types.hh"
-#include "utils/advanced_rpc_compressor.hh"
+#include "message/advanced_rpc_compressor.hh"
 #include "utils/chunked_vector.hh"
 
 #include <list>
@@ -376,9 +376,9 @@ public:
     using clock_type = lowres_clock;
 
     messaging_service(locator::host_id id, gms::inet_address ip, uint16_t port,
-                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, utils::walltime_compressor_tracker&, qos::service_level_controller&);
+                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, walltime_compressor_tracker&, qos::service_level_controller&);
     messaging_service(config cfg, scheduling_config scfg, std::shared_ptr<seastar::tls::credentials_builder>,
-                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, utils::walltime_compressor_tracker&, qos::service_level_controller&);
+                      gms::feature_service&, gms::gossip_address_map&, gms::generation_type, walltime_compressor_tracker&, qos::service_level_controller&);
     ~messaging_service();
 
     future<> start();

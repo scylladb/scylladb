@@ -52,7 +52,7 @@
 #include "replica/query.hh"
 #include "types/types.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "utils/shared_dict.hh"
+#include "message/shared_dict.hh"
 #include "replica/database.hh"
 #include "db/compaction_history_entry.hh"
 
@@ -3927,7 +3927,7 @@ future<std::vector<sstring>> system_keyspace::query_all_dict_names() const {
     co_return result;
 }
 
-future<utils::shared_dict> system_keyspace::query_dict(std::string_view name) const {
+future<netw::shared_dict> system_keyspace::query_dict(std::string_view name) const {
     static sstring query = format("SELECT * FROM {}.{} WHERE name = ?;", NAME, DICTS);
     auto result_set = co_await _qp.execute_internal(
         query, db::consistency_level::ONE, internal_system_query_state(), {name}, cql3::query_processor::cache_internal::yes);
@@ -3937,14 +3937,14 @@ future<utils::shared_dict> system_keyspace::query_dict(std::string_view name) co
         auto timestamp = row.get_as<db_clock::time_point>("timestamp").time_since_epoch().count();
         auto origin = row.get_as<utils::UUID>("origin");
         const int zstd_compression_level = 1;
-        co_return utils::shared_dict(
+        co_return netw::shared_dict(
             std::as_bytes(std::span(content)),
             timestamp,
             origin,
             zstd_compression_level
         );
     } else {
-        co_return utils::shared_dict();
+        co_return netw::shared_dict();
     }
 }
 

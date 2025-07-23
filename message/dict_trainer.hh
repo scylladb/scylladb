@@ -16,10 +16,12 @@
 #include <seastar/util/log.hh>
 
 namespace utils {
+class alien_worker;
+}
+
+namespace netw {
 
 extern seastar::logger dict_trainer_logger;
-
-class alien_worker;
 
 // A utility for training static compression dictionaries.
 // 

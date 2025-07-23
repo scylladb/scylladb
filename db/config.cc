@@ -291,16 +291,16 @@ const config_type& config_type_for<std::vector<db::config::error_injection_at_st
 }
 
 template <>
-const config_type& config_type_for<enum_option<utils::dict_training_loop::when>>() {
+const config_type& config_type_for<enum_option<netw::dict_training_loop::when>>() {
     static config_type ct(
-        "dictionary training conditions", printable_to_json<enum_option<utils::dict_training_loop::when>>);
+        "dictionary training conditions", printable_to_json<enum_option<netw::dict_training_loop::when>>);
     return ct;
 }
 
 template <>
-const config_type& config_type_for<utils::advanced_rpc_compressor::tracker::algo_config>() {
+const config_type& config_type_for<netw::advanced_rpc_compressor::tracker::algo_config>() {
     static config_type ct(
-        "advanced rpc compressor config", printable_vector_to_json<enum_option<compression_algorithm>>);
+        "advanced rpc compressor config", printable_vector_to_json<enum_option<netw::compression_algorithm>>);
     return ct;
 }
 
@@ -474,9 +474,9 @@ struct convert<db::config::error_injection_at_startup> {
 
 
 template <>
-class convert<enum_option<utils::dict_training_loop::when>> {
+class convert<enum_option<netw::dict_training_loop::when>> {
 public:
-    static bool decode(const Node& node, enum_option<utils::dict_training_loop::when>& rhs) {
+    static bool decode(const Node& node, enum_option<netw::dict_training_loop::when>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -491,9 +491,9 @@ public:
 };
 
 template <>
-class convert<enum_option<utils::compression_algorithm>> {
+class convert<enum_option<netw::compression_algorithm>> {
 public:
-    static bool decode(const Node& node, enum_option<utils::compression_algorithm>& rhs) {
+    static bool decode(const Node& node, enum_option<netw::compression_algorithm>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -776,7 +776,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Related information: Enabling incremental backups")
     , snapshot_before_compaction(this, "snapshot_before_compaction", value_status::Unused, false,
         "Enable or disable taking a snapshot before each compaction. This option is useful to back up data when there is a data format change. Be careful using this option because Cassandra does not clean up older snapshots automatically.\n"
-        "\n"
+        "\n"  
         "Related information: Configuring compaction")
     /**
     * @Group Common fault detection setting
@@ -1058,11 +1058,11 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , internode_compression_checksumming(this, "internode_compression_checksumming", liveness::LiveUpdate, value_status::Used, true,
         "Computes and checks checksums for compressed RPC frames. This is a paranoid precaution against corruption bugs in the compression protocol.")
     , internode_compression_algorithms(this, "internode_compression_algorithms", liveness::LiveUpdate, value_status::Used,
-            { utils::compression_algorithm::type::ZSTD, utils::compression_algorithm::type::LZ4, },
+            { netw::compression_algorithm::type::ZSTD, netw::compression_algorithm::type::LZ4, },
         "Specifies RPC compression algorithms supported by this node. ")
     , internode_compression_enable_advanced(this, "internode_compression_enable_advanced", liveness::MustRestart, value_status::Used, false,
         "Enables the new implementation of RPC compression. If disabled, Scylla will fall back to the old implementation.")
-    , rpc_dict_training_when(this, "rpc_dict_training_when", liveness::LiveUpdate, value_status::Used, utils::dict_training_loop::when::type::NEVER,
+    , rpc_dict_training_when(this, "rpc_dict_training_when", liveness::LiveUpdate, value_status::Used, netw::dict_training_loop::when::type::NEVER,
         "Specifies when RPC compression dictionary training is performed by this node.\n"
         "* `never` disables it unconditionally.\n"
         "* `when_leader` enables it only whenever the node is the Raft leader.\n"
