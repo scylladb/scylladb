@@ -93,7 +93,6 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "db/schema_tables.hh"
 
-#include "redis/controller.hh"
 #include "cdc/log.hh"
 #include "cdc/generation_service.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
@@ -2433,7 +2432,6 @@ sharded<locator::shared_token_metadata> token_metadata;
             api::set_server_service_levels(ctx, cql_server_ctl, qp).get();
 
             alternator::controller alternator_ctl(gossiper, proxy, mm, sys_dist_ks, cdc_generation_service, service_memory_limiter, auth_service, sl_controller, *cfg, dbcfg.statement_scheduling_group);
-            redis::controller redis_ctl(proxy, auth_service, mm, *cfg, gossiper, dbcfg.statement_scheduling_group);
 
             // Register at_exit last, so that storage_service::drain_on_shutdown will be called first
             auto do_drain = defer_verbose_shutdown("local storage", [&ss] {
@@ -2461,10 +2459,6 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             if (bool enabled = cfg->alternator_port() || cfg->alternator_https_port()) {
                 ss.local().register_protocol_server(alternator_ctl, enabled).get();
-            }
-
-            if (bool enabled = cfg->redis_port() || cfg->redis_ssl_port()) {
-                ss.local().register_protocol_server(redis_ctl, enabled).get();
             }
 
             stop_signal.ready();

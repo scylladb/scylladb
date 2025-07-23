@@ -11,7 +11,7 @@ import tempfile
 import requests
 
 # run_with_temporary_dir() is a utility function for running a process, such
-# as Scylla, Cassandra or Redis, inside its own new temporary directory,
+# as Scylla and Cassandra, inside its own new temporary directory,
 # and ensure that on exit for any reason - success, failure, signal or
 # exception - the subprocess is killed and its temporary directory is deleted.
 #
@@ -200,7 +200,7 @@ for sig in [signal.SIGTERM, signal.SIGHUP]:
 
 ##############################
 
-# When we run a server - e.g., Scylla, Cassandra, or Redis - we want to
+# When we run a server - e.g., Scylla or Cassandra - we want to
 # have it listen on a unique IP address so it doesn't collide with other
 # servers run by other concurrent tests. Luckily, Linux allows us to use any
 # IP address in the range 127/8 (i.e., 127.*.*.*). If we pick an IP address

@@ -94,7 +94,6 @@ fedora_packages=(
     python3-pytest
     python3-pytest-asyncio
     python3-pytest-timeout
-    python3-redis
     python3-unidiff
     python3-humanfriendly
     python3-jinja2

@@ -1313,22 +1313,6 @@ alternator = [
        'alternator/ttl.cc',
 ]
 
-redis = [
-        'redis/controller.cc',
-        'redis/server.cc',
-        'redis/query_processor.cc',
-        'redis/protocol_parser.rl',
-        'redis/keyspace_utils.cc',
-        'redis/options.cc',
-        'redis/stats.cc',
-        'redis/mutation_utils.cc',
-        'redis/query_utils.cc',
-        'redis/abstract_command.cc',
-        'redis/command_factory.cc',
-        'redis/commands.cc',
-        'redis/lolwut.cc',
-        ]
-
 idls = ['idl/gossip_digest.idl.hh',
         'idl/uuid.idl.hh',
         'idl/range.idl.hh',
@@ -1430,7 +1414,7 @@ scylla_perfs = ['test/perf/perf_alternator.cc',
                 'seastar/tests/perf/linux_perf_event.cc']
 
 deps = {
-    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + redis + scylla_tools + scylla_perfs,
+    'scylla': idls + ['main.cc'] + scylla_core + api + alternator + scylla_tools + scylla_perfs,
     'patchelf': ['tools/patchelf.cc'],
 }
 
