@@ -15,8 +15,13 @@
 
 // hack: perf_sstable falsely depends on Boost.Test, but we can't include it with
 // with statically linked boost
+#ifndef BOOST_REQUIRE
 #define BOOST_REQUIRE(x) (void)(x)
+#endif
+
+#ifndef BOOST_CHECK_NO_THROW
 #define BOOST_CHECK_NO_THROW(x) (void)(x)
+#endif
 
 #include "test/perf/perf_sstable.hh"
 

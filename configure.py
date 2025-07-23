@@ -2328,7 +2328,7 @@ def write_build_file(f,
               description = CXX $out
               depfile = $out.d
             rule cxx_build_precompiled_header.{mode}
-              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch
+              command = $cxx -MD -MT $out -MF $out.d {seastar_cflags} $cxxflags_{mode} $cxxflags $obj_cxxflags -c -o $out $in -Winvalid-pch -fpch-instantiate-templates -Xclang -emit-pch -DSCYLLA_USE_PRECOMPILED_HEADER
               description = CXX-PRECOMPILED-HEADER $out
               depfile = $out.d
             rule cxx_with_pch.{mode}
