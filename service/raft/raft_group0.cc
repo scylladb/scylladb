@@ -414,10 +414,6 @@ future<group0_info> persistent_discovery::run(
 }
 
 future<> raft_group0::abort() {
-    if (_aborted) {
-        co_return;
-    }
-    _aborted = true;
     group0_log.debug("Raft group0 service is aborting...");
 
     co_await smp::invoke_on_all([this]() {
