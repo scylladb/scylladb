@@ -600,6 +600,8 @@ private:
         ++p->get_stats().received_mutations;
         p->get_stats().forwarded_mutations += forward_host_id.size();
 
+        co_await utils::get_local_injector().inject("storage_proxy_write_response_pause", utils::wait_for_message(5min));
+
         if (auto stale = _sp.apply_fence(fence, src_addr)) {
             errors.count += (forward_host_id.size() + 1);
             errors.local = std::move(*stale);
@@ -6994,7 +6996,7 @@ future<> storage_proxy::drain_on_shutdown() {
     //NOTE: the thread is spawned here because there are delicate lifetime issues to consider
     // and writing them down with plain futures is error-prone.
     return async([this] {
-        cancel_write_handlers([] (const abstract_write_response_handler&) { return true; });
+        cancel_all_write_response_handlers().get();
         _hints_resource_manager.stop().get();
     });
 }
@@ -7024,4 +7026,13 @@ future<utils::chunked_vector<dht::token_range_endpoints>> storage_proxy::describ
     return locator::describe_ring(_db.local(), _remote->gossiper(), keyspace, include_only_local_dc);
 }
 
+future<> storage_proxy::cancel_all_write_response_handlers() {
+    while (!_response_handlers.empty()) {
+        _response_handlers.begin()->second->timeout_cb();
+
+        if (!_response_handlers.empty()) {
+            co_await maybe_yield();
+        }
+    }
+}
 }
