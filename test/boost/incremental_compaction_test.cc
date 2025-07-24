@@ -343,14 +343,14 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
         sstable_run run;
         // FIXME: can we ignore return value of insert()?
         (void)run.insert(sst);
-        BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(now, cf.as_table_state().get_tombstone_gc_state(), cf.schema()) - expired) <= 0.1);
+        BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(now, cf.as_table_state().get_tombstone_gc_before_getter(), cf.schema()) - expired) <= 0.1);
 
         auto cd = sstables::compaction_descriptor({ sst });
         cd.enable_garbage_collection(cf->get_sstable_set());
         auto info = compact_sstables(env, std::move(cd), cf, creator).get();
         auto uncompacted_size = sst->data_size();
         BOOST_REQUIRE(info.new_sstables.size() == 1);
-        BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(now, cf.as_table_state().get_tombstone_gc_state(), cf.schema()) == 0.0f);
+        BOOST_REQUIRE(info.new_sstables.front()->estimate_droppable_tombstone_ratio(now, cf.as_table_state().get_tombstone_gc_before_getter(), cf.schema()) == 0.0f);
         BOOST_REQUIRE_CLOSE(info.new_sstables.front()->data_size(), uncompacted_size*(1-expired), 5);
         auto control = make_strategy_control_for_test(false);
 

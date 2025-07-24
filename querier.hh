@@ -160,9 +160,10 @@ public:
             dht::partition_range range,
             query::partition_slice slice,
             tracing::trace_state_ptr trace_ptr,
+            tombstone_gc_before_getter gc_before_getter,
             querier_config config = {})
         : querier_base(schema, permit, std::move(range), std::move(slice), ms, std::move(trace_ptr), std::move(config))
-        , _compaction_state(make_lw_shared<compact_for_query_state>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
+        , _compaction_state(make_lw_shared<compact_for_query_state>(*schema, gc_clock::time_point{}, *_slice, 0, 0, std::move(gc_before_getter))) {
     }
 
     bool are_limits_reached() const {
