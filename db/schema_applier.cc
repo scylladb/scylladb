@@ -921,8 +921,9 @@ void schema_applier::commit_tables_and_views() {
     }
 
     for (auto& schema : views.created) {
+        // add the schema without marking it synced. we will mark it synced after the view is created on all shards.
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local(), false);
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
@@ -1016,6 +1017,7 @@ future<> schema_applier::finalize_tables_and_views() {
         }
         for (auto& created_view : views.created) {
             co_await db.make_column_family_directory(created_view);
+            created_view->registry_entry()->mark_synced();
         }
     });
 
