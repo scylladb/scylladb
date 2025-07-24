@@ -856,6 +856,9 @@ rf_rack_valid_keyspaces: false
 # Note: DynamoDB has a hard-coded limit of 25.
 # alternator_max_items_in_batch_write: 100
 
+# Maximum number of expressions cached by Alternator. Default 0 means cache is disabled.
+# alternator_max_expression_cache_entries: 0
+
 #
 # Vector Store options
 #
