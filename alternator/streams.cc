@@ -32,6 +32,7 @@
 
 #include "executor.hh"
 #include "data_dictionary/data_dictionary.hh"
+#include "utils/rjson.hh"
 
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
@@ -934,9 +935,11 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 dynamodb = rjson::empty_object();
             }
             if (!record.ObjectEmpty()) {
-                // TODO: awsRegion?
+                const sstring& dc_name = _proxy.get_token_metadata_ptr()->get_topology().get_datacenter();
+                rjson::add(record, "awsRegion", rjson::from_string(dc_name));
                 rjson::add(record, "eventID", event_id(iter.shard.id, *timestamp));
                 rjson::add(record, "eventSource", "scylladb:alternator");
+                rjson::add(record, "eventVersion", "1.1");
                 rjson::push_back(records, std::move(record));
                 record = rjson::empty_object();
                 --limit;
@@ -950,12 +953,13 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
             if (!dynamodb.HasMember("Keys")) {
                 auto keys = rjson::empty_object();
-                describe_single_item(*selection, row, key_names, keys);
+                uint64_t row_size = 0;
+                describe_single_item(*selection, row, key_names, keys, &row_size);
                 rjson::add(dynamodb, "Keys", std::move(keys));
                 rjson::add(dynamodb, "ApproximateCreationDateTime", utils::UUID_gen::unix_timestamp_in_sec(ts).count());
                 rjson::add(dynamodb, "SequenceNumber", sequence_number(ts));
+                rjson::add(dynamodb, "SizeBytes", row_size);
                 rjson::add(dynamodb, "StreamViewType", type);
-                //TODO: SizeInBytes
             }
 
             /**

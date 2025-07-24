@@ -282,6 +282,9 @@ experimental:
     instead of just a single MODIFY or INSERT.
     <https://github.com/scylladb/scylla/issues/6930>
     <https://github.com/scylladb/scylla/issues/6918>
+  * In GetRecords responses, Alternator sets `eventSource` to
+    `scylladb:alternator`, rather than `aws:dynamodb`.
+    <https://github.com/scylladb/scylla/issues/6931>
 
 ## Unimplemented API features
 
