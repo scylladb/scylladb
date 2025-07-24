@@ -3346,7 +3346,8 @@ const std::vector<view_ptr>& table::views() const {
 std::vector<view_ptr> table::affected_views(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base, const mutation& update) const {
     //FIXME: Avoid allocating a vector here; consider returning the boost iterator.
     return std::ranges::to<std::vector<view_ptr>>(_views | std::views::filter([&] (auto&& view) {
-        return db::view::partition_key_matches(gen->get_db().as_data_dictionary(), *base, *view->view_info(), update.decorated_key());
+        return view->is_synced() &&
+               db::view::partition_key_matches(gen->get_db().as_data_dictionary(), *base, *view->view_info(), update.decorated_key());
     }));
 }
 
