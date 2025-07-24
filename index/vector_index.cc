@@ -38,7 +38,9 @@ static void validate_unsigned_option(const sstring& value) {
 }
 
 static void validate_similarity_function(const sstring& value) {
-    if (value != "COSINE" && value != "EUCLIDEAN" && value != "DOT_PRODUCT") {
+    sstring similarity_function = value;
+    std::transform(similarity_function.begin(), similarity_function.end(), similarity_function.begin(), ::tolower);
+    if (similarity_function != "cosine" && similarity_function != "euclidean" && similarity_function != "dot_product") {
         throw exceptions::invalid_request_exception(format("Unsupported similarity function: {}", value));
     }
 }
