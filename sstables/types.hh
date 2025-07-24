@@ -20,7 +20,6 @@
 #include "sstables/key.hh"
 #include "sstables/file_writer.hh"
 #include "db/commitlog/replay_position.hh"
-#include "version.hh"
 #include <vector>
 #include <unordered_map>
 #include <type_traits>
