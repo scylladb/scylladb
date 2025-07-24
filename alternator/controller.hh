@@ -90,6 +90,10 @@ public:
     virtual future<> start_server() override;
     virtual future<> stop_server() override;
     virtual future<> request_stop_server() override;
+    // This virtual function is called (on each shard separately) when the
+    // virtual table "system.clients" is read. It is expected to generate a
+    // list of clients connected to this server (on this shard).
+    virtual future<utils::chunked_vector<client_data>> get_client_data() override;
 };
 
 }
