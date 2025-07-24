@@ -677,10 +677,13 @@ public:
      * @param keyspaceName keyspace name also known as keyspace
      * @param cf Column family name
      * @param key key for which we need to find the endpoint
+     * @param key_delimiter delimiter used to split the composite key into parts
      * @return the endpoint responsible for this key
      */
     inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace,
-            const sstring& cf, const sstring& key) const;
+            const sstring& cf,
+            const sstring& key,
+            const sstring& key_delimiter) const;
 
     /**
      * @return Vector of Token ranges (_not_ keys!) together with estimated key count,
