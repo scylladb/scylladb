@@ -10,6 +10,7 @@
  */
 
 #include "storage_service.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/disk_space_monitor.hh"
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
@@ -3549,9 +3550,9 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
         //
         // The call for get_range_for_endpoint is done once per endpoint
         const auto& tm = *erm->get_token_metadata_ptr();
-        const auto tokens = co_await std::invoke([&]() -> future<std::vector<token>> {
+        const auto tokens = co_await std::invoke([&]() -> future<utils::chunked_vector<token>> {
             if (!erm->get_replication_strategy().uses_tablets()) {
-                return make_ready_future<std::vector<token>>(tm.sorted_tokens());
+                return make_ready_future<utils::chunked_vector<token>>(tm.sorted_tokens());
             } else {
                 auto& cf = ss._db.local().find_column_family(keyspace_name, table_name);
                 const auto& tablets = tm.tablets().get_tablet_map(cf.schema()->id());
