@@ -543,7 +543,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // created in the Raft-based recovery procedure). The persistent topology state is present on that node
                 // when it creates the new group 0. Also, it joins the new group 0 using legacy_handshaker, so there is
                 // no need to create a join request.
-                if (topology_change_enabled && qp.db().get_config().recovery_leader().empty()) {
+                if (topology_change_enabled && !qp.db().get_config().recovery_leader.is_set()) {
                     co_await ss.raft_initialize_discovery_leader(params);
                 }
 
@@ -718,7 +718,7 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         } else {
             // We'll disable them once we complete the upgrade procedure.
         }
-    } else if (qp.db().get_config().recovery_leader().empty()) {
+    } else if (!qp.db().get_config().recovery_leader.is_set()) {
         // Scylla has bootstrapped earlier but group 0 ID is not present and we are not recovering from majority loss
         // using the Raft-based procedure. This means we're upgrading.
         // Upgrade will start through a feature listener created after we enter NORMAL state.

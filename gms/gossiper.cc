@@ -76,6 +76,10 @@ const utils::UUID& gossiper::get_group0_id() const noexcept {
     return _gcfg.group0_id;
 }
 
+const utils::UUID& gossiper::get_recovery_leader() const noexcept {
+    return _gcfg.recovery_leader;
+}
+
 const std::set<inet_address>& gossiper::get_seeds() const noexcept {
     return _gcfg.seeds;
 }
@@ -172,8 +176,11 @@ void gossiper::do_sort(utils::chunked_vector<gossip_digest>& g_digest_list) cons
 // Depends on
 // - no external dependency
 future<> gossiper::handle_syn_msg(locator::host_id from, gossip_digest_syn syn_msg) {
-    logger.trace("handle_syn_msg():from={},cluster_name:peer={},local={},group0_id:peer={},local={},partitioner_name:peer={},local={}",
-        from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.group0_id(), get_group0_id(), syn_msg.partioner(), get_partitioner_name());
+    logger.trace(
+            "handle_syn_msg():from={},cluster_name:peer={},local={},group0_id:peer={},local={},"
+            "recovery_leader:peer={},local={},partitioner_name:peer={},local={}",
+            from, syn_msg.cluster_id(), get_cluster_name(), syn_msg.group0_id(), get_group0_id(),
+            syn_msg.recovery_leader(), get_recovery_leader(), syn_msg.partioner(), get_partitioner_name());
     if (!is_enabled()) {
         co_return;
     }
@@ -184,10 +191,20 @@ future<> gossiper::handle_syn_msg(locator::host_id from, gossip_digest_syn syn_m
         co_return;
     }
 
+    // Recovery leader mismatch implies an administrator's mistake during the Raft-based recovery procedure.
+    // Throw away the message and signal that something is wrong.
+    bool both_nodes_in_recovery = syn_msg.recovery_leader() && get_recovery_leader();
+    if (both_nodes_in_recovery && syn_msg.recovery_leader() != get_recovery_leader()) {
+        logger.warn("Recovery leader mismatch from {} {} != {},",
+                from, syn_msg.recovery_leader(), get_recovery_leader());
+        co_return;
+    }
+
     // If the message is from a node with a different group0 id throw it away.
     // A group0 id mismatch is expected during a rolling restart in the Raft-based recovery procedure.
-    if (_gcfg.recovery_leader().empty()
-            && syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id()) {
+    bool no_recovery = !syn_msg.recovery_leader() && !get_recovery_leader();
+    bool group0_ids_mismatch = syn_msg.group0_id() && get_group0_id() && syn_msg.group0_id() != get_group0_id();
+    if (no_recovery && group0_ids_mismatch) {
         logger.warn("Group0Id mismatch from {} {} != {}", from, syn_msg.group0_id(), get_group0_id());
         co_return;
     }
@@ -1102,7 +1119,8 @@ void gossiper::run() {
             utils::chunked_vector<gossip_digest> g_digests = make_random_gossip_digest();
 
             if (g_digests.size() > 0) {
-                gossip_digest_syn message(get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id());
+                gossip_digest_syn message(
+                        get_cluster_name(), get_partitioner_name(), g_digests, get_group0_id(), get_recovery_leader());
 
                 if (_endpoints_to_talk_with.empty() && !_live_endpoints.empty()) {
                     auto live_endpoints = _live_endpoints | std::ranges::to<std::vector>();

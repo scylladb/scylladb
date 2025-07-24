@@ -1771,7 +1771,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     // the topology coordinator. We can assume this node has already been accepted by the topology coordinator once
     // and joined topology.
     ::shared_ptr<group0_handshaker> handshaker =
-            raft_topology_change_enabled() && _db.local().get_config().recovery_leader().empty()
+            raft_topology_change_enabled() && !_db.local().get_config().recovery_leader.is_set()
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
             : _group0->make_legacy_handshaker(can_vote::no);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
@@ -2934,7 +2934,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
 
     gms::inet_address recovery_leader_ip;
     locator::host_id recovery_leader_id;
-    if (!_db.local().get_config().recovery_leader().empty()) {
+    if (_db.local().get_config().recovery_leader.is_set()) {
         if (_group0->joined_group0()) {
             // Something is wrong unless it is a noninitial (and unneeded) restart while recreating the new group 0 in
             // the Raft-based recovery procedure.
@@ -2944,7 +2944,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
                     "the Raft-based recovery procedure, please follow the steps in the documentation.",
                     _db.local().get_config().recovery_leader(), _group0->load_my_id());
         } else {
-            recovery_leader_id = locator::host_id(utils::UUID(_db.local().get_config().recovery_leader()));
+            recovery_leader_id = locator::host_id(_db.local().get_config().recovery_leader());
             auto recovery_leader_it = loaded_endpoints.find(recovery_leader_id);
             if (recovery_leader_id != my_host_id() && recovery_leader_it == loaded_endpoints.end()) {
                 throw std::runtime_error(
