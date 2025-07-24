@@ -854,7 +854,7 @@ future<encryption::gcp_host::impl::key_and_id_type> encryption::gcp_host::impl::
      * a data key, and encrypt it as the key ID.
      * 
      * For ID -> key, we simply split the ID into the encrypted key part, and
-     * the master key name part, decrypt the first using the second (AWS KMS Decrypt),
+     * the master key name part, decrypt the first using the second (GCP KMS Decrypt),
      * and create a local key using the result.
      * 
      * Data recovery:
