@@ -10,9 +10,9 @@
 
 #include <seastar/util/bool_class.hh>
 
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "mutation/tombstone.hh"
-#include "gc_clock.hh"
+#include "time/gc_clock.hh"
 #include "utils/assert.hh"
 #include "utils/managed_bytes.hh"
 #include <seastar/util/bool_class.hh>

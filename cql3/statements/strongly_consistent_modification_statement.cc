@@ -22,7 +22,7 @@
 #include "cql3/expr/evaluate.hh"
 #include "cql3/query_processor.hh"
 #include "cql3/values.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "db/system_keyspace.hh"
 

@@ -16,7 +16,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 
-#include "db_clock.hh"
+#include "time/db_clock.hh"
 
 #include <chrono>
 #include <limits>

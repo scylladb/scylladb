@@ -10,7 +10,7 @@
 
 #pragma once
 
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "audit/audit.hh"
 

@@ -20,7 +20,7 @@
 
 #include "auth/service.hh"
 #include "service_permit.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "generic_server.hh"
 
 #include <seastar/core/seastar.hh>

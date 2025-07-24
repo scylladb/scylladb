@@ -20,7 +20,7 @@
 #include "service/client_state.hh"
 #include "service/qos/service_level_controller.hh"
 #include "utils/assert.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "utils/rjson.hh"
 #include "auth.hh"
 #include <cctype>

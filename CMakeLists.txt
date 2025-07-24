@@ -169,7 +169,7 @@ target_sources(scylla-main
     absl-flat_hash_map.cc
     bytes.cc
     client_data.cc
-    clocks-impl.cc
+    time/clocks-impl.cc
     collection_mutation.cc
     compress.cc
     converting_mutation_partition_applier.cc
@@ -201,7 +201,7 @@ target_sources(scylla-main
     table_helper.cc
     tasks/task_handler.cc
     tasks/task_manager.cc
-    timeout_config.cc
+    time/timeout_config.cc
     unimplemented.cc
     validation.cc
     vint-serialization.cc)

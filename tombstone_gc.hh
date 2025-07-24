@@ -9,7 +9,7 @@
 #pragma once
 
 #include <seastar/core/shared_ptr.hh>
-#include "gc_clock.hh"
+#include "time/gc_clock.hh"
 #include "dht/token.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/interval.hh"

@@ -10,7 +10,7 @@
 
 #include <optional>
 
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 
 struct mutation_source_metadata {
     std::optional<api::timestamp_type> min_timestamp;

@@ -15,7 +15,7 @@
 #include "db/system_keyspace.hh"
 #include "db/config.hh"
 #include "schema/schema_builder.hh"
-#include "timeout_config.hh"
+#include "time/timeout_config.hh"
 #include "types/types.hh"
 #include "types/tuple.hh"
 #include "types/set.hh"

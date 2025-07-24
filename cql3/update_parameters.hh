@@ -10,8 +10,8 @@
 
 #pragma once
 
-#include "gc_clock.hh"
-#include "timestamp.hh"
+#include "time/gc_clock.hh"
+#include "time/timestamp.hh"
 #include "schema/schema_fwd.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/tombstone.hh"

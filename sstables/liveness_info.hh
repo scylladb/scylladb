@@ -9,8 +9,8 @@
 
 #pragma once
 
-#include "timestamp.hh"
-#include "gc_clock.hh"
+#include "time/timestamp.hh"
+#include "time/gc_clock.hh"
 #include "sstables/types.hh"
 #include "mutation/mutation_partition.hh"
 

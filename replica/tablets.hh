@@ -9,7 +9,7 @@
 #pragma once
 
 #include "types/types.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "locator/tablets.hh"
 #include "schema/schema_fwd.hh"
 #include "mutation/mutation.hh"

@@ -11,8 +11,8 @@
 #include <type_traits>
 #include <concepts>
 #include <seastar/core/future.hh>
-#include "gc_clock.hh"
-#include "timestamp.hh"
+#include "time/gc_clock.hh"
+#include "time/timestamp.hh"
 #include "sstables/types.hh"
 #include "sstables/exceptions.hh"
 

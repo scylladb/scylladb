@@ -20,7 +20,7 @@
 #include "mutation/mutation.hh"
 #include "schema/schema.hh"
 #include "service/topology_state_machine.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "utils/UUID.hh"
 
 namespace service {

@@ -45,7 +45,7 @@
 #include "service/topology_state_machine.hh"
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
-#include "timestamp.hh"
+#include "time/timestamp.hh"
 #include "utils/user_provided_param.hh"
 #include "utils/sequenced_set.hh"
 #include "service/topology_coordinator.hh"

@@ -35,7 +35,7 @@
 #include "utils/div_ceil.hh"
 #include "utils/error_injection.hh"
 #include "converting_mutation_partition_applier.hh"
-#include "gc_clock.hh"
+#include "time/gc_clock.hh"
 
 // STD.
 #include <ranges>
