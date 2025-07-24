@@ -1030,7 +1030,7 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
+void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata, bool mark_schema_synced) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1065,7 +1065,9 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     cf->start();
     _tables_metadata.add_table(*this, ks, *cf, schema);
     // Table must be added before entry is marked synced.
-    schema->registry_entry()->mark_synced();
+    if (mark_schema_synced) {
+        schema->registry_entry()->mark_synced();
+    }
 }
 
 future<> database::make_column_family_directory(schema_ptr schema) {
