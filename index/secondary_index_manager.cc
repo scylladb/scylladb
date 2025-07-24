@@ -362,12 +362,14 @@ std::optional<sstring> secondary_index_manager::custom_index_class(const schema&
 // This function returns a factory, as the custom index class should be lightweight, preferably not holding any state.
 // We prefer this over a static custom index class instance, as it allows us to avoid any issues with thread safety.
 std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_manager::get_custom_class_factory(const sstring& class_name) {
+    sstring lower_class_name = class_name;
+    std::transform(lower_class_name.begin(), lower_class_name.end(), lower_class_name.begin(), ::tolower);
 
     const static std::unordered_map<std::string_view, std::function<std::unique_ptr<custom_index>()>> classes = {
         {"vector_index", vector_index_factory},
     };
 
-    if (auto class_it = classes.find(class_name); class_it != classes.end()) {
+    if (auto class_it = classes.find(lower_class_name); class_it != classes.end()) {
         return class_it->second;
     } else {
         return std::nullopt;
