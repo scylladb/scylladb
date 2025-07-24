@@ -30,6 +30,7 @@
 #include "gms/gossiper.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/aws_sigv4.hh"
+#include "client_data.hh"
 
 static logging::logger slogger("alternator-server");
 
@@ -430,6 +431,13 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     SCYLLA_ASSERT(req->content_stream);
     chunked_content content = co_await util::read_entire_stream(*req->content_stream);
     auto username = co_await verify_signature(*req, content);
+    // As long as the system_clients_entry object is alive, this request will
+    // be visible in the "system.clients" virtual table. When requested, this
+    // entry will be formatted by server::ongoing_request::make_client_data().
+    auto system_clients_entry = _ongoing_requests.emplace(
+        req->get_client_address(), req->get_header("User-Agent"),
+        username, current_scheduling_group(),
+        req->get_protocol_name() == "https");
 
     if (slogger.is_enabled(log_level::trace)) {
         std::string buf;
@@ -678,6 +686,37 @@ future<> server::json_parser::stop() {
     _document_waiting.signal();
     _document_parsed.broken();
     return std::move(_run_parse_json_thread);
+}
+
+// Convert an entry in the server's list of ongoing Alternator requests
+// (_ongoing_requests) into a client_data object. This client_data object
+// will then be used to produce a row for the "system.clients" virtual table.
+client_data server::ongoing_request::make_client_data() const {
+    client_data cd;
+    cd.ct = client_type::alternator;
+    cd.ip = _client_address.addr();
+    cd.port = _client_address.port();
+    cd.shard_id = this_shard_id();
+    cd.connection_stage = client_connection_stage::established;
+    cd.username = _username;
+    cd.scheduling_group_name = _scheduling_group.name();
+    cd.ssl_enabled = _is_https;
+    // For now, we save the full User-Agent header as the "driver name"
+    // and keep "driver_version" unset.
+    cd.driver_name = _user_agent;
+    // Leave "protocol_version" unset, it has no meaning in Alternator.
+    // Leave "hostname", "ssl_protocol" and "ssl_cipher_suite" unset.
+    // As reported in issue #9216, we never set these fields in CQL
+    // either (see cql_server::connection::make_client_data()).
+    return cd;
+}
+
+future<utils::chunked_vector<client_data>> server::get_client_data() {
+    utils::chunked_vector<client_data> ret;
+    co_await _ongoing_requests.for_each_gently([&ret] (const ongoing_request& r) {
+        ret.emplace_back(r.make_client_data());
+    });
+    co_return ret;
 }
 
 const char* api_error::what() const noexcept {
