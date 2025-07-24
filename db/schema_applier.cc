@@ -979,6 +979,9 @@ future<> schema_applier::commit() {
     // with a new e_r_m instance.
     SCYLLA_ASSERT(this_shard_id() == 0);
     commit_on_shard(sharded_db.local());
+    if (utils::get_local_injector().enter("schema_applier_delay_between_commit_on_shards")) {
+        co_await seastar::sleep(std::chrono::seconds(1));
+    }
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);
     });
