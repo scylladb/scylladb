@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def test_load_stats_on_coordinator_failover(manager: ManagerClient):
     cfg = {
         'data_file_capacity': 7000000,
-        'error_injections_at_startup': ['short_tablet_stats_refresh_interval'],
+        'tablet_load_stats_refresh_interval_in_seconds': 1
     }
     servers = await manager.servers_add(3, config=cfg)
     host_ids = [await manager.get_host_id(s.server_id) for s in servers]

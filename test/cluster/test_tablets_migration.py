@@ -408,7 +408,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
     """
     stage, injection = migration_stage_and_injection
 
-    cfg = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
+    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(2, config=cfg)
 
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)

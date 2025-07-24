@@ -48,7 +48,7 @@ async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fas
     assert rf <= 3, "A keyspace with RF > 3 will be RF-rack-invalid if there are fewer racks than the RF"
 
     if fast_stats_refresh:
-        config = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
+        config = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     else:
         config = {}
     if disable_flush_cache_time:
