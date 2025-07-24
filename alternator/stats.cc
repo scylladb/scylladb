@@ -155,6 +155,22 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
             seastar::metrics::make_histogram("batch_item_count_histogram", seastar::metrics::description("Histogram of the number of items in a batch request"), labels,
                     [&stats]{ return estimated_histogram_to_metrics(stats.api_operations.batch_write_item_histogram);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
     });
+
+    seastar::metrics::label expression_label("expression");
+    metrics.add_group(group_name, {
+            seastar::metrics::make_total_operations("expression_cache_evictions", stats.expression_cache.evictions,
+                    seastar::metrics::description("Counts number of evictions from expressions cache"), labels).aggregate(aggregate_labels).set_skip_when_empty(),
+
+#define EXPR_CACHE(name, Type) \
+                seastar::metrics::make_total_operations("expression_cache_hits", stats.expression_cache.requests[stats::expression_types::name].hits, \
+                        seastar::metrics::description("Counts number of hits of cached expressions"), labels)(expression_label(Type)).aggregate(aggregate_labels).set_skip_when_empty(), \
+                seastar::metrics::make_total_operations("expression_cache_misses", stats.expression_cache.requests[stats::expression_types::name].misses, \
+                        seastar::metrics::description("Counts number of misses of cached expressions"), labels)(expression_label(Type)).aggregate(aggregate_labels).set_skip_when_empty()
+
+            EXPR_CACHE(UPDATE_EXPRESSION, "UpdateExpression"),
+            EXPR_CACHE(CONDITION_EXPRESSION, "ConditionExpression"),
+            EXPR_CACHE(PROJECTION_EXPRESSION, "ProjectionExpression")
+    });
 }
 
 void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats) {
