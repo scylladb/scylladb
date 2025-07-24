@@ -30,7 +30,7 @@
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/user.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "validation.hh"
 #include "dht/i_partitioner.hh"
 #include <optional>

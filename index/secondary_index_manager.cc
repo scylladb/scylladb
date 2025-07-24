@@ -24,7 +24,7 @@
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "db/view/view.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "db/tags/extension.hh"
 
 namespace secondary_index {

@@ -7,7 +7,7 @@
  */
 
 #include "reader.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "mutation/mutation_fragment_stream_validator.hh"
 #include "sstables/liveness_info.hh"
 #include "sstables/mutation_fragment_filter.hh"

@@ -9,7 +9,7 @@
 #include "sstable_mutation_reader.hh"
 
 #include "column_translation.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "utils/fragment_range.hh"
 #include "utils/to_string.hh"
 

@@ -12,7 +12,7 @@
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
 #include "index/vector_index.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "utils/managed_string.hh"
 #include <seastar/core/sstring.hh>
 
