@@ -1025,7 +1025,8 @@ db::commitlog* database::commitlog_for(const schema_ptr& schema) {
         : _commitlog.get();
 }
 
-void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata) {
+void database::add_column_family(keyspace& ks, schema_ptr schema, column_family::config cfg, is_new_cf is_new, locator::token_metadata_ptr not_commited_new_metadata,
+        seastar::noncopyable_function<future<>()> syncer) {
     schema = local_schema_registry().learn(schema);
     auto&& rs = ks.get_replication_strategy();
     locator::effective_replication_map_ptr erm;
@@ -1060,7 +1061,8 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
     cf->start();
     _tables_metadata.add_table(*this, ks, *cf, schema);
     // Table must be added before entry is marked synced.
-    schema->registry_entry()->mark_synced();
+    // ignore future - start syncing the schema in the background. the caller waits for syncing to complete.
+    (void) schema->registry_entry()->maybe_sync(std::move(syncer));
 }
 
 future<> database::make_column_family_directory(schema_ptr schema) {
