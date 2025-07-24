@@ -173,3 +173,6 @@
 
 # Divide API reference to smaller files
 # /stable/reference/api-reference.html: /stable/reference/api/index.html
+
+# Fixed typo in the file name
+/stable/operating-scylla/nodetool-commands/enbleautocompaction.html: /stable/operating-scylla/nodetool-commands/enableautocompaction.html
