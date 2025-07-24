@@ -52,6 +52,10 @@ public:
     /// current replica list, as replication factor changes involve table rebuilding transitions
     /// which are not instantaneous.
     virtual size_t get_replication_factor(const sstring& dc) const = 0;
+
+    virtual bool is_rack_based() const = 0;
+
+    virtual const rack_list& get_dc_racks(const sstring& dc) const = 0;
 };
 
 } // namespace locator

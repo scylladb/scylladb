@@ -9,6 +9,7 @@
  */
 
 #include "cql3/statements/cf_prop_defs.hh"
+#include "cql3/statements/property_definitions.hh"
 #include "cql3/statements/request_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "db/extensions.hh"
@@ -23,6 +24,7 @@
 #include "db/per_partition_rate_limit_options.hh"
 #include "db/tablet_options.hh"
 #include "utils/bloom_calculations.hh"
+#include "utils/overloaded_functor.hh"
 #include "db/config.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -62,12 +64,19 @@ schema::extensions_map cf_prop_defs::make_schema_extensions(const db::extensions
     for (auto& p : exts.schema_extensions()) {
         auto i = _properties.find(p.first);
         if (i != _properties.end()) {
-            std::visit([&](auto& v) {
+            std::visit(overloaded_functor{
+            [&](const sstring& v) {
                 auto ep = p.second(v);
                 if (ep) {
                     er.emplace(p.first, std::move(ep));
                 }
-            }, i->second);
+            },
+            [&](const property_definitions::extended_map_type& xmap) {
+                auto ep = p.second(property_definitions::to_simple_map(std::move(xmap)));
+                if (ep) {
+                    er.emplace(p.first, std::move(ep));
+                }
+            }}, i->second);
         }
     }
     return er;
@@ -240,8 +249,8 @@ std::optional<caching_options> cf_prop_defs::get_caching_options() const {
         return {};
     }
     return std::visit(make_visitor(
-        [] (const property_definitions::map_type& map) {
-            return map.empty() ? std::nullopt : std::optional<caching_options>(caching_options::from_map(map));
+        [] (const property_definitions::extended_map_type& map) {
+            return map.empty() ? std::nullopt : std::optional<caching_options>(caching_options::from_map(to_simple_map(map)));
         },
         [] (const sstring& str) {
             return std::optional<caching_options>(caching_options::from_sstring(str));

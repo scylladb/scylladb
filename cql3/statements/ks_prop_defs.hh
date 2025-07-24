@@ -12,6 +12,7 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "data_dictionary/storage_options.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -58,13 +59,13 @@ public:
     explicit ks_prop_defs(std::map<sstring, sstring> options);
 
     void validate();
-    std::map<sstring, sstring> get_replication_options() const;
+    locator::replication_strategy_config_options get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets = false) const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&, const gms::feature_service&, const db::config&);
-    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&, const gms::feature_service&);
+    lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata&, const gms::feature_service&, const db::config&);
 };
 
 }

@@ -35,7 +35,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/util.hh"
-#include "types/user.hh"
+#include "cql3/statements/property_definitions.hh"
 
 static seastar::logger mlogger("legacy_schema_migrator");
 
@@ -541,7 +541,7 @@ public:
         for (auto& ks : _keyspaces) {
             auto ksm = ::make_lw_shared<keyspace_metadata>(ks.name
                             , ks.replication_params["class"] // TODO, make ksm like c3?
-                            , ks.replication_params
+                            , cql3::statements::property_definitions::to_extended_map(ks.replication_params)
                             , std::nullopt
                             , ks.durable_writes);
 

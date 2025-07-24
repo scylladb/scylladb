@@ -53,7 +53,7 @@ struct storage_options {
 
     bool can_update_to(const storage_options& new_options);
 
-    static value_type from_map(std::string_view type, std::map<sstring, sstring> values);
+    static value_type from_map(std::string_view type, const std::map<sstring, sstring>& values);
 
     storage_options append_to_s3_prefix(const sstring& s) const;
 };

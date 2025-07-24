@@ -14,7 +14,7 @@
 
 namespace locator {
 
-local_strategy::local_strategy(replication_strategy_params params) :
+local_strategy::local_strategy(replication_strategy_params params, const topology*) :
         abstract_replication_strategy(params, replication_strategy_type::local) {
     _natural_endpoints_depend_on_token = false;
 }
@@ -40,7 +40,8 @@ sstring local_strategy::sanity_check_read_replicas(const effective_replication_m
     return {};
 }
 
-using registry = class_registrator<abstract_replication_strategy, local_strategy, replication_strategy_params>;
+// Note: signature must match the class_registry signature defined and used by abstract_replication_strategy::to_qualified_class_name
+using registry = class_registrator<abstract_replication_strategy, local_strategy, replication_strategy_params, const topology*>;
 static registry registrator("org.apache.cassandra.locator.LocalStrategy");
 static registry registrator_short_name("LocalStrategy");
 

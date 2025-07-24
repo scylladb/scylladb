@@ -16,6 +16,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include "locator/network_topology_strategy.hh"
 #include "locator/load_sketch.hh"
@@ -26,6 +27,7 @@
 #include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "utils/hash.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace std {
 template<>
@@ -38,13 +40,31 @@ struct hash<locator::endpoint_dc_rack> {
 
 namespace locator {
 
-network_topology_strategy::network_topology_strategy(replication_strategy_params params) :
+static logging::logger logger("network_topology_strategy");
+
+network_topology_strategy::network_topology_strategy(replication_strategy_params params, const topology* topo) :
         abstract_replication_strategy(params,
                                       replication_strategy_type::network_topology) {
     auto opts = _config_options;
+
     process_tablet_options(*this, opts, params);
 
     size_t rep_factor = 0;
+    assert(topo);
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>& dcs
+        = topo->get_datacenter_racks();
+
+    logger.info("options={{{}}} dcs={}", fmt::join(opts | std::views::transform([] (auto& x) {
+        return std::visit(overloaded_functor{
+            [&] (const sstring& s) {
+                return fmt::format("'{}':'{}'", x.first, s);
+            },
+            [&] (const rack_list& racks) {
+                return fmt::format("'{}':[{}]", x.first, fmt::join(racks | std::views::transform([] (auto& s) { return fmt::format("'{}'", s); }), ","));
+            }
+        }, x.second);
+    }), ","), fmt::format("{}", fmt::join(dcs | std::views::keys, ",")));
+
     for (auto& config_pair : opts) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
@@ -66,9 +86,20 @@ network_topology_strategy::network_topology_strategy(replication_strategy_params
             }
         }
 
-        auto rf = parse_replication_factor(val);
-        rep_factor += rf;
-        _dc_rep_factor.emplace(key, rf);
+        auto dc = dcs.find(key);
+        std::unordered_set<sstring> racks;
+        if (dc != dcs.end()) {
+            racks = dc->second | std::views::keys | std::ranges::to<std::unordered_set<sstring>>();
+        } else if (!dcs.empty()) {
+            throw exceptions::configuration_exception(format("Unrecognized datacenter name '{}'", key));
+        }
+
+        replication_factor_data rf = parse_replication_factor(val, racks);
+        if (topo->get_config().force_rack_valid_keyspaces && rf.count() && !rf.is_rack_based()) {
+            on_fatal_internal_error(rslogger, seastar::format("Invalid replication factor option: {}: must be a comma-separated list of rack names, or 0", val));
+        }
+        rep_factor += rf.count();
+        _dc_rep_factor.emplace(key, std::move(rf));
         _datacenteres.push_back(key);
     }
 
@@ -165,7 +196,7 @@ class natural_endpoints_tracker {
 
     const token_metadata& _tm;
     const topology& _tp;
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
+    network_topology_strategy::dc_rep_factor_map _dc_rep_factor;
 
     //
     // We want to preserve insertion order so that the first added endpoint
@@ -192,7 +223,7 @@ class natural_endpoints_tracker {
     size_t _dcs_to_fill;
 
 public:
-    natural_endpoints_tracker(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rep_factor)
+    natural_endpoints_tracker(const token_metadata& tm, const network_topology_strategy::dc_rep_factor_map& dc_rep_factor)
         : _tm(tm)
         , _tp(_tm.get_topology())
         , _dc_rep_factor(dc_rep_factor)
@@ -208,8 +239,9 @@ public:
         };
 
         // Create a data_center_endpoints object for each non-empty DC.
-        for (auto& [dc, rf] : _dc_rep_factor) {
+        for (auto& [dc, rf_data] : _dc_rep_factor) {
             auto node_count = size_for(_token_owners, dc);
+            auto rf = rf_data.count();
 
             if (rf == 0 || node_count == 0) {
                 continue;
@@ -237,13 +269,14 @@ public:
         return _replicas;
     }
 
-    static void check_enough_endpoints(const token_metadata& tm, const std::unordered_map<sstring, size_t>& dc_rf) {
+    static void check_enough_endpoints(const token_metadata& tm, const network_topology_strategy::dc_rep_factor_map& dc_rf) {
         auto dc_endpoints = tm.get_datacenter_token_owners();
         auto endpoints_in = [&dc_endpoints](sstring dc) {
             auto i = dc_endpoints.find(dc);
             return i != dc_endpoints.end() ? i->second.size() : size_t(0);
         };
-        for (const auto& [dc, rf] : dc_rf) {
+        for (const auto& [dc, rf_data] : dc_rf) {
+            auto rf = rf_data.count();
             if (rf > endpoints_in(dc)) {
                 throw exceptions::configuration_exception(seastar::format(
                         "Datacenter {} doesn't have enough token-owning nodes for replication_factor={}", dc, rf));
@@ -274,18 +307,28 @@ void network_topology_strategy::validate_options(const gms::feature_service& fs,
     // #22688 / #20039 - we want to remove dc:s once rf=0, and we
     // also want to allow fully setting rf=0 in _all_ dc:s (hello data loss)
     // so empty options here are in fact ok. Removed check for it
-    auto dcs = topology.get_datacenters();
+    auto dcs = topology.get_datacenter_racks();
     validate_tablet_options(*this, fs, _config_options);
     for (auto& c : _config_options) {
+        if (c.first == sstring("class")) {
+            on_internal_error(rslogger, fmt::format("'class' tag should be dropped by now."
+                                                    "_config_options:{}", _config_options));
+        }
         if (c.first == sstring("replication_factor")) {
             on_internal_error(rslogger, fmt::format("'replication_factor' tag should be unrolled into a list of DC:RF by now."
                                                     "_config_options:{}", _config_options));
         }
-        if (!dcs.contains(c.first)) {
+        auto dc = dcs.find(c.first);
+        if (dc == dcs.end()) {
             throw exceptions::configuration_exception(format("Unrecognized strategy option {{{}}} "
                 "passed to NetworkTopologyStrategy", this->to_qualified_class_name(c.first)));
         }
-        parse_replication_factor(c.second);
+        std::unordered_set<sstring> racks;
+        // FIXME: use ranges::to transformation
+        for (auto& i : std::views::keys(dc->second)) {
+            racks.insert(i);
+        }
+        parse_replication_factor(c.second, racks);
     }
 }
 
@@ -305,6 +348,28 @@ future<tablet_map> network_topology_strategy::allocate_tablets_for_new_table(sch
     co_return co_await reallocate_tablets(std::move(s), std::move(tm), tablet_map(tablet_count));
 }
 
+struct rack_diff {
+    rack_list added;
+    rack_list removed;
+
+    bool empty() const {
+        return added.empty() && removed.empty();
+    }
+
+    operator bool() const {
+        return !empty();
+    }
+};
+
+rack_diff diff_racks(const rack_list& old_racks, const rack_list& new_racks) {
+    rack_diff diff;
+    std::set_difference(new_racks.begin(), new_racks.end(), old_racks.begin(), old_racks.end(),
+                        std::back_inserter(diff.added));
+    std::set_difference(old_racks.begin(), old_racks.end(), new_racks.begin(), new_racks.end(),
+                        std::back_inserter(diff.removed));
+    return diff;
+}
+
 future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, tablet_map tablets) const {
     natural_endpoints_tracker::check_enough_endpoints(*tm, _dc_rep_factor);
     load_sketch load(tm);
@@ -314,7 +379,11 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
 
     for (tablet_id tb : tablets.tablet_ids()) {
         auto tinfo = tablets.get_tablet_info(tb);
-        tinfo.replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
+        if (is_rack_based()) {
+            tinfo.replicas = co_await reallocate_tablets_racklist(s, tm, load, tablets, tb);
+        } else {
+            tinfo.replicas = co_await reallocate_tablets(s, tm, load, tablets, tb);
+        }
         tablets.set_tablet(tb, std::move(tinfo));
     }
 
@@ -322,7 +391,12 @@ future<tablet_map> network_topology_strategy::reallocate_tablets(schema_ptr s, t
     co_return tablets;
 }
 
-future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_ptr s, token_metadata_ptr tm, load_sketch& load, const tablet_map& cur_tablets, tablet_id tb) const {
+future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_ptr s,
+    token_metadata_ptr tm,
+    load_sketch& load,
+    const tablet_map& cur_tablets,
+    tablet_id tb) const
+{
     tablet_replica_set replicas;
     // Current number of replicas per dc
     std::unordered_map<sstring, size_t> nodes_per_dc;
@@ -352,6 +426,115 @@ future<tablet_replica_set> network_topology_strategy::reallocate_tablets(schema_
     }
 
     co_return replicas;
+}
+
+future<tablet_replica_set> network_topology_strategy::reallocate_tablets_racklist(schema_ptr s,
+        token_metadata_ptr tm,
+        load_sketch& load,
+        const tablet_map& cur_tablets,
+        tablet_id tb) const
+{
+    tablet_replica_set replicas;
+    std::unordered_map<sstring, rack_list> old_racks_per_dc;
+    replicas = cur_tablets.get_tablet_info(tb).replicas;
+    for (const auto& tr : replicas) {
+        const auto& node = tm->get_topology().get_node(tr.host);
+        old_racks_per_dc[node.dc_rack().dc].push_back(node.dc_rack().rack);
+    }
+
+    // FIXME: Handle RF++ for old keyspaces by using the old method.
+
+    // take only dcs wiht replicas into account when determining migration.
+    // Any change should still have been pre-checked to never exceed rf factor one.
+    for (const auto& dc : _dc_rep_factor | std::views::keys) {
+        auto new_racks = get_dc_racks(dc);
+        auto diff = diff_racks(old_racks_per_dc[dc], new_racks);
+
+        if (!diff) {
+            continue;
+        }
+
+        if (!diff.added.empty() && !diff.removed.empty()) {
+            // FIXME: Support replace
+            throw std::runtime_error("replacing racks unsupported");
+        } else if (!diff.added.empty()) {
+            replicas = add_tablets_in_racks(s, tm, load, tb, replicas, dc, diff.added);
+        } else { // diff.removed
+            replicas = drop_tablets_in_racks(s, tm, load, tb, replicas, dc, diff.removed);
+        }
+
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return replicas;
+}
+
+tablet_replica_set network_topology_strategy::drop_tablets_in_racks(schema_ptr s,
+                                                                    token_metadata_ptr tm,
+                                                                    load_sketch& load,
+                                                                    tablet_id tb,
+                                                                    const tablet_replica_set& cur_replicas,
+                                                                    const sstring& dc,
+                                                                    const rack_list& racks_to_drop) const {
+    auto& topo = tm->get_topology();
+    tablet_replica_set filtered;
+    auto is_rack_to_drop = [&racks_to_drop] (const sstring& rack) {
+        return std::find(racks_to_drop.begin(), racks_to_drop.end(), rack) != racks_to_drop.end();
+    };
+    for (const auto& tr : cur_replicas) {
+        auto& node = topo.get_node(tr.host);
+        if (node.dc_rack().dc == dc && is_rack_to_drop(node.dc_rack().rack)) {
+            tablet_logger.debug("drop_tablets_in_rack {}.{} tablet_id={} dc={} rack={} removing replica: {}",
+                            s->ks_name(), s->cf_name(), tb, node.dc_rack().dc, node.dc_rack().rack, tr);
+            load.unload(tr.host, tr.shard);
+        } else {
+            filtered.emplace_back(tr);
+        }
+    }
+    return filtered;
+}
+
+tablet_replica_set network_topology_strategy::add_tablets_in_racks(schema_ptr s,
+                                                                   token_metadata_ptr tm,
+                                                                   load_sketch& load,
+                                                                   tablet_id tb,
+                                                                   const tablet_replica_set& cur_replicas,
+                                                                   const sstring& dc,
+                                                                   const rack_list& racks_to_add) const {
+    auto nodes = tm->get_datacenter_racks_token_owners_nodes();
+    auto& dc_nodes = nodes.at(dc);
+    auto new_replicas = cur_replicas;
+
+    for (auto&& rack: racks_to_add) {
+        host_id min_node;
+        double min_load = std::numeric_limits<double>::max();
+
+        for (auto&& node: dc_nodes.at(rack)) {
+            if (!node.get().is_normal()) {
+                continue;
+            }
+            // Assume that if there was a diff to add a rack, we don't already have a replica
+            // in the target rack so all nodes in the rack are eligible.
+            // FIXME: pick based on storage utilization.
+            auto node_load = load.get_real_avg_shard_load(node.get().host_id());
+            if (node_load < min_load) {
+                min_load = node_load;
+                min_node = node.get().host_id();
+            }
+        }
+
+        if (!min_node) {
+            throw std::runtime_error(
+                    fmt::format("No candidate node in rack {}.{} to allocate tablet replica", dc, rack));
+        }
+
+        auto new_replica = tablet_replica{min_node, load.next_shard(min_node)};
+        new_replicas.push_back(new_replica);
+
+        tablet_logger.trace("add_tablet_in_rack {}.{} tablet_id={} dc={} rack={} load={} new_replica={}",
+                            s->ks_name(), s->cf_name(), tb.id, dc, rack, min_load, new_replica);
+    }
+    return new_replicas;
 }
 
 future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_ptr s, token_metadata_ptr tm, load_sketch& load, tablet_id tb,
@@ -549,7 +732,8 @@ sstring network_topology_strategy::sanity_check_read_replicas(const effective_re
     return {};
 }
 
-using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params>;
+// Note: signature must match the class_registry signature defined and used by abstract_replication_strategy::to_qualified_class_name
+using registry = class_registrator<abstract_replication_strategy, network_topology_strategy, replication_strategy_params, const topology*>;
 static registry registrator("org.apache.cassandra.locator.NetworkTopologyStrategy");
 static registry registrator_short_name("NetworkTopologyStrategy");
 }

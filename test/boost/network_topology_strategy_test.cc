@@ -11,6 +11,7 @@
 #include "db/tablet_options.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/host_id.hh"
 #include "locator/types.hh"
 #include "locator/snitch_base.hh"
@@ -23,6 +24,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/core/sstring.hh>
+#include <seastar/util/backtrace.hh>
 #include "utils/log.hh"
 #include "gms/gossiper.hh"
 #include "schema/schema_builder.hh"
@@ -41,6 +43,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/topology_builder.hh"
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
 
@@ -83,7 +86,7 @@ static future<> check_ranges_are_sorted(vnode_effective_replication_map_ptr erm,
 void strategy_sanity_check(
     replication_strategy_ptr ars_ptr,
     const token_metadata_ptr& tm,
-    const std::map<sstring, sstring>& options) {
+    const replication_strategy_config_options& options) {
 
     const network_topology_strategy* nts_ptr =
         dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
@@ -94,10 +97,10 @@ void strategy_sanity_check(
     //
     size_t total_rf = 0;
     for (auto& val : options) {
-        size_t rf = std::stol(val.second);
-        BOOST_CHECK(nts_ptr->get_replication_factor(val.first) == rf);
+        auto rf = locator::replication_factor_data(val.second, {});
+        BOOST_CHECK(nts_ptr->get_replication_factor(val.first) == rf.count());
 
-        total_rf += rf;
+        total_rf += rf.count();
     }
 
     BOOST_CHECK(ars_ptr->get_replication_factor(*tm) == total_rf);
@@ -156,7 +159,7 @@ void endpoints_check(
  * Run in a seastar thread.
  */
 void full_ring_check(const std::vector<ring_point>& ring_points,
-                     const std::map<sstring, sstring>& options,
+                     replication_strategy_config_options& options,
                      replication_strategy_ptr ars_ptr,
                      locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
@@ -222,34 +225,27 @@ void check_tablets_balance(const tablet_map& tmap,
     testlog.debug("load_map={}", load_map);
 
     for (const auto& [dc, dc_racks] : load_map) {
-        size_t replicas_in_dc = 0;
-        size_t num_racks = dc_racks.size();
-        size_t num_shards = 0;
+        std::unordered_map<sstring, double> avg_replicas_per_shard;
+
         for (const auto& [rack, rack_nodes] : dc_racks) {
+            size_t num_shards = 0;
             for (const auto& [host, shards] : rack_nodes) {
                 num_shards += shards.size();
                 for (const auto& [shard, n] : shards) {
-                    replicas_in_dc += n;
+                    avg_replicas_per_shard[rack] += n;
                 }
             }
+            testlog.debug("dc={} rack={}: replicas={} num_shards={} avg_replicas_per_shard={}", dc, rack, avg_replicas_per_shard[rack], num_shards, avg_replicas_per_shard[rack] / num_shards);
+            avg_replicas_per_shard[rack] /= num_shards;
         }
 
-        auto avg_replicas_per_rack = double(replicas_in_dc) / num_racks;
-        auto avg_replicas_per_shard = double(replicas_in_dc) / num_shards;
-
         for (const auto& [rack, rack_nodes] : dc_racks) {
-            size_t replicas_in_rack = 0;
             for (const auto& [host, shards] : rack_nodes) {
-                size_t replicas_in_node = 0;
                 for (const auto& [shard, n] : shards) {
-                    BOOST_REQUIRE_GE(n, floor(avg_replicas_per_shard - 1));
-                    BOOST_REQUIRE_LE(n, ceil(avg_replicas_per_shard + 1));
-                    replicas_in_node += n;
+                    BOOST_REQUIRE_GE(n, floor(avg_replicas_per_shard[rack] - 1));
+                    BOOST_REQUIRE_LE(n, ceil(avg_replicas_per_shard[rack] + 1));
                 }
-                replicas_in_rack += replicas_in_node;
             }
-            BOOST_REQUIRE_GE(replicas_in_rack, floor(avg_replicas_per_rack - 1));
-            BOOST_REQUIRE_LE(replicas_in_rack, ceil(avg_replicas_per_rack + 1));
         }
     }
 }
@@ -257,8 +253,8 @@ void check_tablets_balance(const tablet_map& tmap,
 locator::endpoint_dc_rack make_endpoint_dc_rack(gms::inet_address endpoint) {
     // This resembles rack_inferring_snitch dc/rack generation which is
     // still in use by this test via token_metadata internals
-    auto dc = std::to_string(uint8_t(endpoint.bytes()[1]));
-    auto rack = std::to_string(uint8_t(endpoint.bytes()[2]));
+    auto dc = fmt::format("dc{}", (uint8_t(endpoint.bytes()[1])));
+    auto rack = fmt::format("rack{}", uint8_t(endpoint.bytes()[2]));
     return locator::endpoint_dc_rack{dc, rack};
 }
 
@@ -309,29 +305,29 @@ void simple_test() {
 
     /////////////////////////////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options323 = {
-        {"100", "3"},
-        {"101", "2"},
-        {"102", "3"}
+    replication_strategy_config_options options323 = {
+        {"dc100", std::vector<sstring>{"rack10", "rack20", "rack30"}},
+        {"dc101", std::vector<sstring>{"rack10", "rack20"}},
+        {"dc102", std::vector<sstring>{"rack10", "rack20", "rack30"}}
     };
     locator::replication_strategy_params params323(options323, std::nullopt);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params323);
+        "NetworkTopologyStrategy", params323, stm.get()->get_topology());
 
     full_ring_check(ring_points, options323, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options320 = {
-        {"100", "3"},
-        {"101", "2"},
-        {"102", "0"}
+    replication_strategy_config_options options320 = {
+        {"dc100", std::vector<sstring>{"rack10", "rack20", "rack30"}},
+        {"dc101", std::vector<sstring>{"rack10", "rack20"}},
+        {"dc102", "0"}
     };
     locator::replication_strategy_params params320(options320, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params320);
+        "NetworkTopologyStrategy", params320, stm.get()->get_topology());
 
     full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
@@ -368,9 +364,13 @@ void heavy_origin_test() {
 
     std::vector<int> dc_racks = {2, 4, 8};
     std::vector<int> dc_endpoints = {128, 256, 512};
-    std::vector<int> dc_replication = {2, 6, 6};
+    std::vector<std::vector<sstring>> dc_replication = {
+        {"rack0", "rack1"},
+        {"rack0", "rack1", "rack2", "rack3"},
+        {"rack0", "rack1", "rack2", "rack3", "rack4", "rack5"}
+    };
 
-    std::map<sstring, sstring> config_options;
+    replication_strategy_config_options config_options;
     std::unordered_map<inet_address, std::unordered_set<token>> tokens;
     std::vector<ring_point> ring_points;
 
@@ -387,8 +387,7 @@ void heavy_origin_test() {
     std::shuffle(token_points.begin(), token_points.end(), random_engine);
     auto token_point_iterator = token_points.begin();
     for (size_t dc = 0; dc < dc_racks.size(); ++dc) {
-        config_options.emplace(to_sstring(dc),
-                                to_sstring(dc_replication[dc]));
+        config_options.emplace(fmt::format("dc{}", dc), dc_replication[dc]);
         for (int rack = 0; rack < dc_racks[dc]; ++rack) {
             for (int ep = 1; ep <= dc_endpoints[dc]/dc_racks[dc]; ++ep) {
                 double token_point = *token_point_iterator++;
@@ -418,7 +417,7 @@ void heavy_origin_test() {
 
     locator::replication_strategy_params params(config_options, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params);
+        "NetworkTopologyStrategy", params, stm.get()->get_topology());
 
     full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
@@ -432,6 +431,31 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_simple) {
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_heavy) {
     return heavy_origin_test();
 }
+
+namespace {
+
+auto& random_engine = seastar::testing::local_random_engine;
+
+replication_strategy_config_options make_random_options(const std::map<sstring, size_t>& rack_count_per_dc) {
+    auto option_dcs = rack_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
+    replication_strategy_config_options options;
+    std::ranges::shuffle(option_dcs, random_engine);
+    size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
+    for (size_t i = 0; i < num_option_dcs; ++i) {
+        const auto& dc = option_dcs[i];
+        std::vector<sstring> racks;
+        size_t num_racks = rack_count_per_dc.at(dc);
+        racks.reserve(num_racks);
+        for (size_t rack = 0; rack < num_racks; ++rack) {
+            racks.emplace_back(fmt::format("rack{}", 10 + rack));
+        }
+        std::ranges::shuffle(racks, random_engine);
+        options.emplace(fmt::format("dc{}", dc), racks);
+    }
+    return options;
+};
+
+} // namespace
 
 SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     auto my_address = gms::inet_address("localhost");
@@ -451,10 +475,8 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
 
     // Generate a random cluster
-    auto& random_engine = seastar::testing::local_random_engine;
     for (unsigned shard_count = 1; shard_count <= 4; ++shard_count) {
-        std::map<sstring, size_t> node_count_per_dc;
-        std::map<sstring, std::map<sstring, size_t>> node_count_per_rack;
+        std::map<sstring, size_t> rack_count_per_dc;
         std::vector<ring_point> ring_points;
 
         double point = 1;
@@ -462,19 +484,18 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         for (size_t dc = 0; dc < num_dcs; ++dc) {
             sstring dc_name = fmt::format("{}", 100 + dc);
             size_t num_racks = 1 + tests::random::get_int(5);
+            rack_count_per_dc[dc_name] = num_racks;
             for (size_t rack = 0; rack < num_racks; ++rack) {
                 sstring rack_name = fmt::format("{}", 10 + rack);
                 size_t rack_nodes = 1 + tests::random::get_int(2);
                 for (size_t i = 1; i <= rack_nodes; ++i) {
                     ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
-                    node_count_per_dc[dc_name]++;
-                    node_count_per_rack[dc_name][rack_name]++;
                     point++;
                 }
             }
         }
 
-        testlog.debug("node_count_per_rack={}", node_count_per_rack);
+        testlog.debug("rack_count_per_dc={}", rack_count_per_dc);
 
         // Initialize the token_metadata
         locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
@@ -489,41 +510,31 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             }
         }).get();
 
+        auto tmptr = stm.get();
+        const auto& topo = tmptr->get_topology();
+
         auto s = schema_builder("ks", "tb")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("v", utf8_type)
             .build();
 
-        auto make_random_options = [&] () {
-            auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
-            std::map<sstring, sstring> options;
-            std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-            size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
-            for (size_t i = 0; i < num_option_dcs; ++i) {
-                const auto& dc = option_dcs[i];
-                size_t node_count = tests::random::get_int(node_count_per_dc[dc]);
-                options.emplace(dc, fmt::to_string(node_count));
-            }
-            return options;
-        };
-
         // Create the replication strategy
-        auto options = make_random_options();
+        auto options = make_random_options(rack_count_per_dc);
         size_t tablet_count = 1 + tests::random::get_int(99);
         testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
         locator::replication_strategy_params params(options, tablet_count);
         auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(tab_awr_ptr);
         auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
         full_ring_check(tmap, ars_ptr, stm.get());
 
         // Test reallocate_tablets after randomizing a different set of options
-        auto realloc_options = make_random_options();
+        auto realloc_options = make_random_options(rack_count_per_dc);
         locator::replication_strategy_params realloc_params(realloc_options, tablet_count);
         auto realloc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto realloc_tab_awr_ptr = realloc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(realloc_tab_awr_ptr);
         auto realloc_tmap = tab_awr_ptr->reallocate_tablets(s, stm.get(), tmap).get();
@@ -590,11 +601,16 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         .build();
 
     auto rf_per_dc = tests::random::get_int<size_t>(1, nodes_per_dc, rand);
+    std::vector<sstring> rf_racks;
+    rf_racks.reserve(rf_per_dc);
+    for (size_t i = 0; i < rf_per_dc; ++i) {
+        rf_racks.emplace_back(fmt::format("rack{}", 10 + (i % num_racks)));
+    }
 
     auto make_options = [&] (size_t rf_per_dc) {
-        std::map<sstring, sstring> options;
+        replication_strategy_config_options options;
         for (const auto& dc : dcs) {
-            options.emplace(dc, fmt::to_string(rf_per_dc));
+            options.emplace(fmt::format("dc{}", dc), std::move(rf_racks));
         }
         return options;
     };
@@ -605,7 +621,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     testlog.debug("tablet_count={} options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params);
+            "NetworkTopologyStrategy", params, topo);
     auto nts_ptr = dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
@@ -618,7 +634,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
         locator::replication_strategy_params inc_params(inc_options, tablet_count);
         auto inc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto inc_nts_ptr = dynamic_cast<const network_topology_strategy*>(inc_ars_ptr.get());
         auto inc_tab_awr_ptr = inc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(inc_tab_awr_ptr);
@@ -632,7 +648,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
         locator::replication_strategy_params dec_params(dec_options, tablet_count);
         auto dec_ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto dec_nts_ptr = dynamic_cast<const network_topology_strategy*>(dec_ars_ptr.get());
         auto dec_tab_awr_ptr = dec_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(dec_tab_awr_ptr);
@@ -812,20 +828,25 @@ static locator::host_id_set calculate_natural_endpoints(
 }
 
 // Called in a seastar thread.
-static void test_equivalence(const shared_token_metadata& stm, const locator::topology& topo, const std::unordered_map<sstring, size_t>& datacenters) {
+static void test_equivalence(const shared_token_metadata& stm, const locator::topology& topo, std::unordered_map<sstring, size_t>& datacenters) {
     class my_network_topology_strategy : public network_topology_strategy {
     public:
         using network_topology_strategy::network_topology_strategy;
         using network_topology_strategy::calculate_natural_endpoints;
     };
 
-    my_network_topology_strategy nts(replication_strategy_params(
-                                    datacenters | std::views::transform(
-                                                                    [](const std::pair<sstring, size_t>& p) {
-                                                                        return std::make_pair(p.first, to_sstring(p.second));
-                                                                    })
-                                                | std::ranges::to<std::map<sstring, sstring>>(),
-                                    std::nullopt));
+    replication_strategy_config_options rf_options;
+    const auto& dc_racks = topo.get_datacenter_racks();
+    for (auto& [dc, dc_rf] : datacenters) {
+        auto racks = dc_racks.at(dc) | std::views::keys | std::ranges::to<std::vector<sstring>>();
+        dc_rf = std::min(dc_rf, racks.size());
+        racks.resize(dc_rf);
+        rf_options.emplace(dc, racks);
+    }
+
+    my_network_topology_strategy nts(replication_strategy_params(rf_options,
+                                    std::nullopt),
+                                    &topo);
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
@@ -868,7 +889,7 @@ void generate_topology(topology& topo, const std::unordered_map<sstring, size_t>
         const sstring& dc = dcs[udist(0, dcs.size() - 1)(e1)];
         auto rc = racks_per_dc.at(dc);
         auto r = udist(0, rc)(e1);
-        topo.add_or_update_endpoint(node, endpoint_dc_rack{dc, to_sstring(r)}, locator::node::state::normal);
+        topo.add_or_update_endpoint(node, endpoint_dc_rack{dc, fmt::format("rack{}", r)}, locator::node::state::normal);
     }
 }
 
@@ -928,7 +949,7 @@ SEASTAR_THREAD_TEST_CASE(testCalculateEndpoints) {
 
 SEASTAR_TEST_CASE(test_invalid_dcs) {
     return do_with_cql_env_thread([] (auto& e) {
-        for (auto& incorrect : std::vector<std::string>{"3\"", "", "!!!", "abcb", "!3", "-5", "0x123", "999999999999999999999999999999"}) {
+        for (auto& incorrect : std::vector<std::string>{"3\"", "", "!!!", "!3", "-5"}) {
             BOOST_REQUIRE_THROW(e.execute_cql("CREATE KEYSPACE abc WITH REPLICATION "
                     "= {'class': 'NetworkTopologyStrategy', 'dc1':'" + incorrect + "'}").get(),
                     exceptions::configuration_exception);
@@ -939,6 +960,36 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
                     "= {'class': 'SimpleStrategy', 'replication_factor':'" + incorrect + "'}").get(),
                     exceptions::configuration_exception);
         };
+    });
+}
+
+SEASTAR_TEST_CASE(test_rack_aware_rf) {
+    return do_with_cql_env_thread([] (auto& e) {
+        //size_t num_dcs = 1;
+        //size_t racks_per_dc = 1;
+        //size_t num_nodes = num_dcs * racks_per_dc;
+
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.add_node(service::node_state::normal, shard_count);
+        auto s = "CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']} AND tablets = {'enabled':true}";
+        testlog.info("{}", s);
+        e.execute_cql(s).get();
+
+        topo.start_new_rack();
+        topo.add_node(service::node_state::normal, shard_count);
+        s = "CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']} AND tablets = {'enabled':true}";
+        testlog.info("{}", s);
+        e.execute_cql(s).get();
+
+        topo.start_new_dc();
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack();
+        topo.add_node(service::node_state::normal, shard_count);
+        s = "CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b'], 'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}";
+        testlog.info("{}", s);
+        e.execute_cql(s).get();
     });
 }
 
@@ -1228,11 +1279,9 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
 
-    std::map<sstring, size_t> node_count_per_dc;
-    std::map<sstring, std::map<sstring, size_t>> node_count_per_rack;
+    std::map<sstring, size_t> rack_count_per_dc;
     std::vector<ring_point> ring_points;
 
-    auto& random_engine = seastar::testing::local_random_engine;
     unsigned shard_count = 2;
     size_t num_dcs = 1 + tests::random::get_int(3);
 
@@ -1241,19 +1290,18 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     for (size_t dc = 0; dc < num_dcs; ++dc) {
         sstring dc_name = fmt::format("{}", 100 + dc);
         size_t num_racks = 1 + tests::random::get_int(5);
+        rack_count_per_dc[dc_name] = num_racks;
         for (size_t rack = 0; rack < num_racks; ++rack) {
             sstring rack_name = fmt::format("{}", 10 + rack);
             size_t rack_nodes = 1 + tests::random::get_int(2);
             for (size_t i = 1; i <= rack_nodes; ++i) {
                 ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
-                node_count_per_dc[dc_name]++;
-                node_count_per_rack[dc_name][rack_name]++;
                 point++;
             }
         }
     }
 
-    testlog.debug("node_count_per_rack={}", node_count_per_rack);
+    testlog.debug("rack_count_per_dc={}", rack_count_per_dc);
 
     // Initialize the token_metadata
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
@@ -1281,25 +1329,12 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     auto tmptr = stm.get();
 
     // Create the replication strategy
-    auto make_random_options = [&] () {
-        auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
-        std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-        std::map<sstring, sstring> options;
-        for (const auto& dc : option_dcs) {
-            auto num_racks = node_count_per_rack.at(dc).size();
-            auto max_rf_factor = std::ranges::min(std::ranges::views::transform(node_count_per_rack.at(dc), [] (auto& x) { return x.second; }));
-            auto rf = num_racks * tests::random::get_int(1UL, max_rf_factor);
-            options.emplace(dc, fmt::to_string(rf));
-        }
-        return options;
-    };
-
-    auto options = make_random_options();
+    auto options = make_random_options(rack_count_per_dc);
     size_t tablet_count = 1 + tests::random::get_int(99);
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params);
+            "NetworkTopologyStrategy", params, tmptr->get_topology());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
     auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1).get();
@@ -1364,7 +1399,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
 }
 
 // Called in a seastar thread
-void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
+void test_complex_rack_aware_view_pairing_test() {
     auto my_address = gms::inet_address("localhost");
 
     // Create the RackInferringSnitch
@@ -1381,11 +1416,9 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     tm_cfg.topo_cfg.this_endpoint = my_address;
     tm_cfg.topo_cfg.local_dc_rack = { snitch.local()->get_datacenter(), snitch.local()->get_rack() };
 
-    std::map<sstring, size_t> node_count_per_dc;
-    std::map<sstring, std::map<sstring, size_t>> node_count_per_rack;
+    std::map<sstring, size_t> rack_count_per_dc;
     std::vector<ring_point> ring_points;
 
-    auto& random_engine = seastar::testing::local_random_engine;
     unsigned shard_count = 2;
     size_t num_dcs = 1 + tests::random::get_int(3);
 
@@ -1394,19 +1427,18 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     for (size_t dc = 0; dc < num_dcs; ++dc) {
         sstring dc_name = fmt::format("{}", 100 + dc);
         size_t num_racks = 2 + tests::random::get_int(4);
+        rack_count_per_dc[dc_name] = num_racks;
         for (size_t rack = 0; rack < num_racks; ++rack) {
             sstring rack_name = fmt::format("{}", 10 + rack);
             size_t rack_nodes = 1 + tests::random::get_int(2);
             for (size_t i = 1; i <= rack_nodes; ++i) {
                 ring_points.emplace_back(point, inet_address(format("192.{}.{}.{}", dc_name, rack_name, i)));
-                node_count_per_dc[dc_name]++;
-                node_count_per_rack[dc_name][rack_name]++;
                 point++;
             }
         }
     }
 
-    testlog.debug("node_count_per_rack={}", node_count_per_rack);
+    testlog.debug("rack_count_per_dc={}", rack_count_per_dc);
 
     // Initialize the token_metadata
     locator::shared_token_metadata stm([] () noexcept { return db::schema_tables::hold_merge_lock(); }, tm_cfg);
@@ -1434,26 +1466,12 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     auto tmptr = stm.get();
 
     // Create the replication strategy
-    auto make_random_options = [&] () {
-        auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
-        std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-        std::map<sstring, sstring> options;
-        for (const auto& dc : option_dcs) {
-            auto num_racks = node_count_per_rack.at(dc).size();
-            auto rf = more_or_less ?
-                    tests::random::get_int(num_racks, node_count_per_dc[dc]) :
-                    tests::random::get_int(1UL, num_racks);
-            options.emplace(dc, fmt::to_string(rf));
-        }
-        return options;
-    };
-
-    auto options = make_random_options();
+    auto options = make_random_options(rack_count_per_dc);
     size_t tablet_count = 1 + tests::random::get_int(99);
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params);
+            "NetworkTopologyStrategy", params, tmptr->get_topology());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
     auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1).get();
@@ -1526,17 +1544,13 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
         }
     }
     for (const auto& [dc, rf_opt] : options) {
-        auto rf = std::stol(rf_opt);
-        BOOST_REQUIRE_EQUAL(same_rack_pairs[dc] + cross_rack_pairs[dc], rf);
+        auto rf = locator::replication_factor_data(rf_opt, {});
+        BOOST_REQUIRE_EQUAL(same_rack_pairs[dc] + cross_rack_pairs[dc], rf.count());
     }
 }
 
 SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_lt_racks) {
-    test_complex_rack_aware_view_pairing_test(false);
-}
-
-SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_gt_racks) {
-    test_complex_rack_aware_view_pairing_test(true);
+    test_complex_rack_aware_view_pairing_test();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

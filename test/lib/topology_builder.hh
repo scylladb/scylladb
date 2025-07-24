@@ -71,11 +71,13 @@ public:
 private:
     cql_test_env& _env;
     int _nr_nodes = 0;
+    int _dc_id;
     int _rack_id;
     sstring _dc;
     sstring _rack;
     shared_load_stats _load_stats;
     std::vector<locator::host_id> _hosts;
+    std::unordered_map<sstring, std::vector<sstring>> _dc_racks;
 private:
     inet_address make_node_address(int n) {
         assert(n > 0);
@@ -150,8 +152,7 @@ public:
     // Starts building a new rack in the current DC.
     // Returns location of the new rack.
     endpoint_dc_rack start_new_rack() {
-        _rack_id++;
-        _rack = fmt::format("rack{}", _rack_id);
+        _rack = fmt::format("rack{}{:c}", _dc_id, 'a' + _rack_id++);
         return rack();
     }
 
@@ -159,9 +160,14 @@ public:
     // DC is named uniquely in the scope of the process, not just this object.
     endpoint_dc_rack start_new_dc() {
         static std::atomic<int> next_id = 1;
-        _dc = fmt::format("dc{}", next_id.fetch_add(1));
+        _dc_id = next_id.fetch_add(1);
+        _dc = fmt::format("dc{}", _dc_id);
         _rack_id = 0;
         return start_new_rack();
+    }
+
+    std::unordered_map<sstring, std::vector<sstring>> get_dc_racks() const {
+        return _dc_racks;
     }
 
     locator::load_stats_ptr get_load_stats() const {
@@ -227,6 +233,7 @@ public:
             }
         }
         _hosts.push_back(id);
+        _dc_racks[dc_rack.dc].push_back(dc_rack.rack);
         return id;
     }
 
