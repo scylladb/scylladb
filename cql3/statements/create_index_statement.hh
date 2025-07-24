@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "cql3/statements/index_prop_defs.hh"
+#include "cql3/statements/view_prop_defs.hh"
 #include "schema_altering_statement.hh"
 #include "index_target.hh"
 
@@ -27,20 +29,25 @@ class index_name;
 
 namespace statements {
 
-class index_prop_defs;
+class index_specific_prop_defs;
 
 /** A <code>CREATE INDEX</code> statement parsed from a CQL query. */
 class create_index_statement : public schema_altering_statement {
     const sstring _index_name;
     const std::vector<::shared_ptr<index_target::raw>> _raw_targets;
-    const ::shared_ptr<index_prop_defs> _properties;
+
+    // Options specific to this index.
+    const index_specific_prop_defs _idx_properties;
+    // Options corresponding to the underlying materialized view.
+    const view_prop_defs _view_properties;
+
     const bool _if_not_exists;
     cql_stats* _cql_stats = nullptr;
 
 public:
     create_index_statement(cf_name name, ::shared_ptr<index_name> index_name,
             std::vector<::shared_ptr<index_target::raw>> raw_targets,
-            ::shared_ptr<index_prop_defs> properties, bool if_not_exists);
+            index_specific_prop_defs idx_properties, view_prop_defs view_properties, bool if_not_exists);
 
     future<> check_access(query_processor& qp, const service::client_state& state) const override;
     void validate(query_processor&, const service::client_state& state) const override;
@@ -54,6 +61,7 @@ public:
         index_metadata index;
     };
     std::optional<base_schema_with_new_index> build_index_schema(data_dictionary::database db) const;
+    view_ptr create_view_for_index(const schema_ptr, const index_metadata&, const data_dictionary::database) const;
 private:
     void validate_for_local_index(const schema& schema) const;
     void validate_for_frozen_collection(const index_target& target) const;
