@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "dht/token.hh"
 #include "dht/decorated_key.hh"
 

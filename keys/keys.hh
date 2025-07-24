@@ -10,7 +10,7 @@
 
 #include "bytes.hh"
 #include "types/types.hh"
-#include "compound_compat.hh"
+#include "keys/compound_compat.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/hashing.hh"
 #include "utils/utf8.hh"

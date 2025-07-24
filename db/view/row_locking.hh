@@ -30,7 +30,7 @@
 #include "dht/decorated_key.hh"
 #include "utils/estimated_histogram.hh"
 #include "utils/latency.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 
 class row_locker {
 public:

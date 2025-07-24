@@ -9,7 +9,7 @@
 #pragma once
 
 #include "sstables/exceptions.hh"
-#include "clustering_bounds_comparator.hh"
+#include "keys/clustering_bounds_comparator.hh"
 #include <iosfwd>
 
 namespace sstables {

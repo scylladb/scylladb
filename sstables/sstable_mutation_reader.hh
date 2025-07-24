@@ -10,7 +10,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
-#include "keys.hh"
+#include "keys/keys.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/byteorder.hh>
 #include "index_reader.hh"

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
 #include "mutation_assertions.hh"
-#include "clustering_interval_set.hh"
+#include "keys/clustering_interval_set.hh"
 
 mutation_partition_assertion&
 mutation_partition_assertion::is_equal_to(const schema& s, const mutation_partition& other,

@@ -10,9 +10,9 @@
 
 #include <optional>
 #include "utils/hashing.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "mutation/tombstone.hh"
-#include "clustering_bounds_comparator.hh"
+#include "keys/clustering_bounds_comparator.hh"
 #include "mutation/position_in_partition.hh"
 
 /**

@@ -10,8 +10,8 @@
 
 #include "exceptions.hh"
 #include "mutation/mutation_fragment.hh"
-#include "clustering_ranges_walker.hh"
-#include "clustering_key_filter.hh"
+#include "keys/clustering_ranges_walker.hh"
+#include "keys/clustering_key_filter.hh"
 #include "readers/mutation_reader_fwd.hh"
 
 namespace sstables {

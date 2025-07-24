@@ -12,8 +12,8 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 
-#include "compound.hh"
-#include "compound_compat.hh"
+#include "keys/compound.hh"
+#include "keys/compound_compat.hh"
 #include "test/boost/range_assert.hh"
 #include "schema/schema_builder.hh"
 #include "dht/murmur3_partitioner.hh"

@@ -13,7 +13,7 @@
 #include <optional>
 
 #include "bytes_fwd.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "query-request.hh"
 #include "db/read_repair_decision.hh"
 #include "mutation/position_in_partition.hh"

@@ -12,7 +12,7 @@
 #include "sstables/key.hh"
 #include "utils/class_registrator.hh"
 #include "cdc/generation.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 
 namespace cdc {
 

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "clustering_ranges_walker.hh"
+#include "keys/clustering_ranges_walker.hh"
 #include "mutation/mutation_fragment.hh"
 
 template<typename T>

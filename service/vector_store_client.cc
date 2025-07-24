@@ -13,7 +13,7 @@
 #include "exceptions/exceptions.hh"
 #include "utils/sequential_producer.hh"
 #include "dht/i_partitioner.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "utils/rjson.hh"
 #include "schema/schema.hh"
 #include <charconv>

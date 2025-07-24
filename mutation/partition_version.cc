@@ -14,7 +14,7 @@
 #include "utils/assert.hh"
 #include "utils/coroutine.hh"
 #include "real_dirty_memory_accounter.hh"
-#include "clustering_interval_set.hh"
+#include "keys/clustering_interval_set.hh"
 
 static void remove_or_mark_as_unique_owner(partition_version* current, mutation_cleaner* cleaner)
 {

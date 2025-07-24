@@ -17,7 +17,7 @@
 #include "db/functions/function.hh"
 #include "db/functions/aggregate_function.hh"
 #include "db/consistency_level_type.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "dht/ring_position.hh"
 #include "enum_set.hh"
 #include "utils/interval.hh"

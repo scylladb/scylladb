@@ -11,7 +11,7 @@
 #include "test/lib/scylla_test_case.hh"
 
 #include "test/lib/simple_schema.hh"
-#include "clustering_ranges_walker.hh"
+#include "keys/clustering_ranges_walker.hh"
 
 using namespace std::chrono_literals;
 

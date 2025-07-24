@@ -14,7 +14,7 @@
 #include "test/lib/scylla_test_case.hh"
 #include <seastar/core/thread.hh>
 #include "schema/schema_builder.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "mutation/mutation_partition.hh"
 #include "mutation/partition_version.hh"
 #include "mutation/mutation.hh"

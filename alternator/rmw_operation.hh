@@ -15,7 +15,7 @@
 #include "consumed_capacity.hh"
 #include "executor.hh"
 #include "tracing/trace_state.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 
 namespace alternator {
 

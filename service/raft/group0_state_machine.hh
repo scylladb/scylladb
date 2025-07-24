@@ -11,7 +11,7 @@
 #include <seastar/core/abort_source.hh>
 
 #include "data_dictionary/data_dictionary.hh"
-#include "keys.hh"
+#include "keys/keys.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "raft/raft.hh"
 #include "service/raft/group0_state_id_handler.hh"
