@@ -36,7 +36,6 @@
 #include "db/system_keyspace.hh"
 #include "service/storage_proxy.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "partition_slice_builder.hh"
 #include "timestamp.hh"
 #include "utils/overloaded_functor.hh"
 #include "utils/to_string.hh"
