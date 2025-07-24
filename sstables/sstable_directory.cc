@@ -273,11 +273,6 @@ sstable_directory::process_descriptor(sstables::entry_descriptor desc,
     }
 }
 
-generation_type
-sstable_directory::highest_generation_seen() const {
-    return _max_generation_seen;
-}
-
 sstables::sstable_version_types
 sstable_directory::highest_version_seen() const {
     return _max_version_seen;
@@ -383,18 +378,6 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 
     auto msg = format("After {} scanned, {} descriptors found, {} different files found",
             _directory, _state->descriptors.size(), _state->generations_found.size());
-
-    if (!_state->generations_found.empty()) {
-        directory._max_generation_seen = std::ranges::fold_left(_state->generations_found | std::views::keys, sstables::generation_type{}, [] (generation_type a, generation_type b) {
-            return std::max<generation_type>(a, b);
-        });
-
-        msg = format("{}, highest generation seen: {}", msg, directory._max_generation_seen);
-    } else {
-        msg = format("{}, no numeric generation was seen", msg);
-    }
-
-    dirlog.debug("{}", msg);
 
     // _descriptors is everything with a TOC. So after we remove this, what's left is
     // SSTables for which a TOC was not found.
