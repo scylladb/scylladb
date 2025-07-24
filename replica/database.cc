@@ -2700,11 +2700,11 @@ future<> database::truncate_table_on_all_shards(sharded<database>& sharded_db, s
             auto& db = sharded_db.local();
             auto& cm = db.get_compaction_manager();
             co_await cf.parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
-                st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
+                st->cres.emplace_back(co_await cm.stop_and_disable_compaction("truncate", ts));
             });
             co_await coroutine::parallel_for_each(views, [&] (lw_shared_ptr<replica::table> v) -> future<> {
                 co_await v->parallel_foreach_table_state([&cm, &st] (compaction::table_state& ts) -> future<> {
-                    st->cres.emplace_back(co_await cm.stop_and_disable_compaction(ts));
+                    st->cres.emplace_back(co_await cm.stop_and_disable_compaction("truncate", ts));
                 });
             });
 
