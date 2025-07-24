@@ -922,7 +922,11 @@ void schema_applier::commit_tables_and_views() {
 
     for (auto& schema : views.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local(),
+            [f = diff.tables_and_views.local().committed_on_all_shards.get_shared_future()] mutable -> future<> {
+                return std::move(f);
+            }
+        );
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
@@ -978,6 +982,9 @@ future<> schema_applier::commit() {
     // with a new e_r_m instance.
     SCYLLA_ASSERT(this_shard_id() == 0);
     commit_on_shard(sharded_db.local());
+    if (utils::get_local_injector().enter("schema_applier_delay_between_commit_on_shards")) {
+        co_await seastar::sleep(std::chrono::seconds(1));
+    }
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);
     });
@@ -1009,6 +1016,8 @@ future<> schema_applier::finalize_tables_and_views() {
     }
 
     co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
+        diff.tables_and_views.local().committed_on_all_shards.set_value();
+
         const auto& tables = diff.tables_and_views.local().tables;
         const auto& views = diff.tables_and_views.local().views;
         for (auto& created_table : tables.created) {
@@ -1016,6 +1025,9 @@ future<> schema_applier::finalize_tables_and_views() {
         }
         for (auto& created_view : views.created) {
             co_await db.make_column_family_directory(created_view);
+
+            // ensure the view schema syncing we started earlier is complete before we finish.
+            co_await created_view->registry_entry()->maybe_sync([] { return make_ready_future(); });
         }
     });
 
