@@ -711,3 +711,57 @@ def test_move_tablets_invalid_table(rest_api, skip_without_tablets):
                          })
     assert resp.status_code == requests.codes.bad_request
     assert "Can't find a column family" in resp.json()["message"]
+
+
+def test_drop_quarantined_sstables(cql, this_dc, rest_api):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 1 }}") as keyspace:
+        schema = 'p int, v text, primary key (p)'
+        with new_test_table(cql, keyspace, schema) as t0:
+            stmt = cql.prepare(f"INSERT INTO {t0} (p, v) VALUES (?, ?)")
+            cql.execute(stmt, [0, 'hello'])
+
+            with new_test_table(cql, keyspace, schema) as t1:
+                stmt = cql.prepare(f"INSERT INTO {t1} (p, v) VALUES (?, ?)")
+                cql.execute(stmt, [1, 'world'])
+
+                test_tables = [t0.split('.')[1], t1.split('.')[1]]
+
+                resp = rest_api.send("POST", f"storage_service/keyspace_flush/{keyspace}")
+                resp.raise_for_status()
+
+                # Drop quarantined sstables from all keyspaces (no parameters)
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables")
+                resp.raise_for_status()
+
+                # Drop quarantined sstables from specific keyspace
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"keyspace": keyspace})
+                resp.raise_for_status()
+
+                # Drop quarantined sstables from specific table
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"keyspace": keyspace, "tables": test_tables[0]})
+                resp.raise_for_status()
+
+                # Drop quarantined sstables from multiple tables
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"keyspace": keyspace, "tables": f"{test_tables[0]},{test_tables[1]}"})
+                resp.raise_for_status()
+
+                # # Non-existing keyspace
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"keyspace": "non_existent_keyspace"})
+                assert resp.status_code == requests.codes.bad_request
+                assert resp.json()["message"] == "Can't find a keyspace non_existent_keyspace"
+
+                # Non-existing table
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"keyspace": keyspace, "tables": "non_existent_table"})
+                assert resp.status_code == requests.codes.bad_request
+                assert "Can't find a column family non_existent_table in keyspace" in resp.json()["message"]
+
+                # Mix of existing and non-existing tables
+                resp = rest_api.send("POST", "storage_service/drop_quarantined_sstables",
+                                   params={"keyspace": keyspace, "tables": f"{test_tables[0]},non_existent_table"})
+                assert resp.status_code == requests.codes.bad_request
+                assert "Can't find a column family non_existent_table in keyspace" in resp.json()["message"]

@@ -3177,6 +3177,38 @@
                ]
             }
          ]
+      },
+      {
+         "path":"/storage_service/drop_quarantined_sstables",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Drops all quarantined sstables in all keyspaces or specified keyspace and tables",
+               "type":"void",
+               "nickname":"drop_quarantined_sstables",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"keyspace",
+                     "description":"The keyspace name to drop quarantined sstables from.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  },
+                  {
+                     "name":"tables",
+                     "description":"Comma-separated table names to drop quarantined sstables from.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
       }
    ],
    "models":{
