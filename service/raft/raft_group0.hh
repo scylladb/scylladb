@@ -311,7 +311,13 @@ public:
     // Returns true after the group 0 server has been started.
     bool joined_group0() const;
 
+    // Can be used to check if the local node is the leader of group0.
+    // Those checks have relaxed timing guarantees.
+    // They are only eventually consistent with the "true" state of group0,
+    // and shouldn't be used if some strong consistency with the underlying
+    // raft mechanisms are needed.
     utils::observer<bool> observe_leadership(std::function<void(bool)>);
+    bool is_leader();
 
     // Returns scheduling group group0 is configured to run with
     seastar::scheduling_group get_scheduling_group() {

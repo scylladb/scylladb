@@ -4843,11 +4843,12 @@ future<std::vector<std::byte>> storage_service::train_dict(utils::chunked_vector
 
 future<> storage_service::publish_new_sstable_dict(table_id t_id, std::span<const std::byte> dict, service::raft_group0_client& group0_client) {
     co_await container().invoke_on(0, coroutine::lambda([t_id, dict, &group0_client] (storage_service& local_ss) -> future<> {
+        auto group0_holder = local_ss._group0->hold_group0_gate();
         while (true) {
             try {
                 auto name = fmt::format("sstables/{}", t_id);
                 slogger.debug("publish_new_sstable_dict: trying to publish the dict as {}", name);
-                auto batch = service::group0_batch(co_await group0_client.start_operation(local_ss.get_abort_source()));
+                auto batch = service::group0_batch(co_await group0_client.start_operation(local_ss._group0_as));
                 auto write_ts = batch.write_timestamp();
                 auto new_dict_ts = db_clock::now();
                 auto data = bytes(reinterpret_cast<const bytes::value_type*>(dict.data()), dict.size());
@@ -4855,7 +4856,7 @@ future<> storage_service::publish_new_sstable_dict(table_id t_id, std::span<cons
                 mutation publish_new_dict = co_await local_ss._sys_ks.local().get_insert_dict_mutation(name, std::move(data), this_host_id, new_dict_ts, write_ts);
                 batch.add_mutation(std::move(publish_new_dict), "publish new SSTable compression dictionary");
                 slogger.debug("publish_new_sstable_dict: committing");
-                co_await std::move(batch).commit(group0_client, local_ss.get_abort_source(), {});
+                co_await std::move(batch).commit(group0_client, local_ss._group0_as, {});
                 slogger.debug("publish_new_sstable_dict: finished");
                 break;
             } catch (const service::group0_concurrent_modification&) {
@@ -5398,8 +5399,8 @@ void storage_service::add_expire_time_if_found(locator::host_id endpoint, int64_
     }
 }
 
-bool storage_service::is_raft_leader() const noexcept {
-    return _group0->joined_group0() && _group0->group0_server().is_leader();
+bool storage_service::is_raft_leader() const {
+    return _group0->joined_group0() && _group0->is_leader();
 }
 
 future<> storage_service::shutdown_protocol_servers() {

@@ -144,6 +144,8 @@ future<> sstable_dict_autotrainer::run() {
             }
         } catch (const abort_requested_exception&) {
             alogger.debug("sstable_dict_autotrainer::run(): exiting");
+        } catch (const gate_closed_exception&) {
+            alogger.debug("sstable_dict_autotrainer::run(): exiting");
         } catch (...) {
             alogger.debug("sstable_dict_autotrainer::run(): tick() failed with: {}", std::current_exception());
         }
