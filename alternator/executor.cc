@@ -16,6 +16,7 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "mutation/tombstone.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -2225,24 +2226,28 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, std::move(c.value)));
         }
     }
+    auto attrs = attrs_column(*schema);
     if (!attrs_collector.empty()) {
         auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
-        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        row.cells().apply(attrs, std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
     // PutItem is supposed to completely replace the old item, so we need to
-    // also have a tombstone removing old cells. We can't use the timestamp
-    // ts, because when data and tombstone tie on timestamp, the tombstone
-    // wins. So we need to use ts-1. Note that we use this trick also in
-    // Scylla proper, to implement the operation to replace an entire
-    // collection ("UPDATE .. SET x = ..") - see
-    // cql3::update_parameters::make_tombstone_just_before().
-    if (use_partition_tombstone) {
-        m.partition().apply(tombstone(ts-1, gc_clock::now()));
-    } else {
-        row.apply(tombstone(ts-1, gc_clock::now()));
-    }
+    // also have a tombstone removing old cells. Important points:
+    // 1) We use a cell tombstone instead of a row, or partition, tombstone,
+    //    because the latter trigger a REMOVE CDC row, in addition to a
+    //    MODIFY/INSERT row. This resolves #6930.
+    // 2) We can't use the timestamp ts, because when data and tombstone tie on
+    //    timestamp, the tombstone wins. So we need to use ts-1. Note that we
+    //    use this trick also in Scylla proper, to implement the operation to
+    //    replace an entire collection ("UPDATE .. SET x = ..") - see
+    //    cql3::update_parameters::make_tombstone_just_before().
+    // 3) Alternator's schema is dynamic, therefore we store data in a map
+    //    in column :attrs. So, Alternator tables only have columns for pk, ck,
+    //    and :attrs. Since we're replacing a row, invalidating only :attrs is
+    //    enough.
+    row.cells().apply(attrs, collection_mutation_description{tombstone{ts - 1, gc_clock::now()}}.serialize(*attrs.type));
     return m;
 }
 
