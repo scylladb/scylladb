@@ -132,6 +132,14 @@ void validate_read_replicas(const locator::effective_replication_map& erm, const
     }
 }
 
+void remove_non_local_host_ids(HostIdVector auto& host_ids, const locator::effective_replication_map& erm) {
+    const auto my_id = erm.get_topology().my_host_id();
+    auto it = std::ranges::remove_if(host_ids, [&my_id](locator::host_id& id) { 
+        return id != my_id;
+    }).begin();
+    host_ids.erase(it, host_ids.end());
+}
+
 } // namespace
 
 namespace storage_proxy_stats {
@@ -238,6 +246,7 @@ class storage_proxy::remote {
     const gms::gossiper& _gossiper;
     migration_manager& _mm;
     sharded<db::system_keyspace>& _sys_ks;
+    sharded<paxos::paxos_store>& _paxos_store;
     raft_group0_client& _group0_client;
     topology_state_machine& _topology_state_machine;
     abort_source _group0_as;
@@ -251,8 +260,8 @@ class storage_proxy::remote {
 
 public:
     remote(storage_proxy& sp, netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
-                raft_group0_client& group0_client, topology_state_machine& tsm)
-        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _group0_client(group0_client), _topology_state_machine(tsm)
+                sharded<paxos::paxos_store>& paxos_store, raft_group0_client& group0_client, topology_state_machine& tsm)
+        : _sp(sp), _ms(ms), _gossiper(g), _mm(mm), _sys_ks(sys_ks), _paxos_store(paxos_store), _group0_client(group0_client), _topology_state_machine(tsm)
         , _truncate_gate("storage_proxy::remote::truncate_gate")
         , _connection_dropped(std::bind_front(&remote::connection_dropped, this))
         , _condrop_registration(_ms.when_connection_drops(_connection_dropped))
@@ -296,6 +305,10 @@ public:
 
     db::system_keyspace& system_keyspace() {
         return _sys_ks.local();
+    }
+
+    paxos::paxos_store& paxos_store() {
+        return _paxos_store.local();
     }
 
     // Note: none of the `send_*` functions use `remote` after yielding - by the first yield,
@@ -726,7 +739,7 @@ private:
                 fencing_token{},
                /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
                        const paxos::proposal& decision, clock_type::time_point timeout, fencing_token) {
-                     return paxos::paxos_state::learn(*p, _sys_ks.local(), std::move(s), decision, timeout, tr_state);
+                     return paxos::paxos_state::learn(*p, paxos_store(), std::move(s), decision, timeout, tr_state);
               },
               /* forward_fn */ [this] (shared_ptr<storage_proxy>&, locator::host_id addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
@@ -978,9 +991,9 @@ private:
         _sp.get_stats().replica_cross_shard_ops += !local;
         co_return co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
                                     cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
-                                    ballot, only_digest, da, timeout, src_addr, &sys_ks = _sys_ks] (storage_proxy& sp) -> future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> {
+                                    ballot, only_digest, da, timeout, src_addr, &paxos_store = _paxos_store] (storage_proxy& sp) -> future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> {
             tracing::trace_state_ptr tr_state = gt;
-            auto r = co_await paxos::paxos_state::prepare(sp, sys_ks.local(), tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout);
+            auto r = co_await paxos::paxos_state::prepare(sp, paxos_store.local(), tr_state, gs, *cmd, key, ballot, only_digest, da, *timeout);
             tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_addr);
             co_return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
         });
@@ -1010,7 +1023,7 @@ private:
         _sp.get_stats().replica_cross_shard_ops += !local;
         co_return co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, coroutine::lambda([gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(tr_state),
                                    proposal = std::move(proposal), timeout, token, this] (storage_proxy& sp) {
-            return paxos::paxos_state::accept(sp, _sys_ks.local(), gt, gs, token, proposal, *timeout);
+            return paxos::paxos_state::accept(sp, paxos_store(), gt, gs, token, proposal, *timeout);
         }));
     }
 
@@ -1043,9 +1056,9 @@ private:
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
         co_await smp::submit_to(shard, _sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
-                                    key = std::move(key), ballot, timeout, src_addr, &sys_ks = _sys_ks] () -> future<> {
+                                    key = std::move(key), ballot, timeout, src_addr, &paxos_store = _paxos_store] () -> future<> {
                 tracing::trace_state_ptr tr_state = gt;
-                co_await paxos::paxos_state::prune(sys_ks.local(), gs, key, ballot,  *timeout, tr_state);
+                co_await paxos::paxos_state::prune(paxos_store.local(), gs, key, ballot,  *timeout, tr_state);
                 tracing::trace(tr_state, "paxos_prune: handling is done, sending a response to /{}", src_addr);
             });
         co_return netw::messaging_service::no_wait();
@@ -1490,7 +1503,7 @@ public:
             const locator::effective_replication_map& erm, fencing_token) override {
         tracing::trace(tr_state, "Executing a learn locally");
         // TODO: Enforce per partition rate limiting in paxos
-        return paxos::paxos_state::learn(sp, sp.remote().system_keyspace(), _schema, *_proposal, timeout, tr_state);
+        return paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state);
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -2186,7 +2199,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 const auto& topo = get_effective_replication_map()->get_topology();
                 if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
-                    response = co_await paxos::paxos_state::prepare(*_proxy, _proxy->remote().system_keyspace(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
+                    response = co_await paxos::paxos_state::prepare(*_proxy, _proxy->remote().paxos_store(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
                 } else {
                     response = co_await _proxy->remote().send_paxos_prepare(peer, _timeout, tr_state, *_cmd, _key.key(), ballot, only_digest, da);
                 }
@@ -2346,7 +2359,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
             try {
                 if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", *proposal);
-                    accepted = co_await paxos::paxos_state::accept(*_proxy, _proxy->remote().system_keyspace(), tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
+                    accepted = co_await paxos::paxos_state::accept(*_proxy, _proxy->remote().paxos_store(), tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
                 } else {
                     accepted = co_await _proxy->remote().send_paxos_accept(peer, _timeout, tr_state, *proposal);
                 }
@@ -2510,7 +2523,7 @@ void paxos_response_handler::prune(utils::UUID ballot) {
     (void)parallel_for_each(_live_endpoints, [this, ballot, erm, my_address] (locator::host_id peer) mutable {
         if (peer == my_address) {
             tracing::trace(tr_state, "prune: prune {} locally", ballot);
-            return paxos::paxos_state::prune(_proxy->remote().system_keyspace(), _schema, _key.key(), ballot, _timeout, tr_state);
+            return paxos::paxos_state::prune(_proxy->remote().paxos_store(), _schema, _key.key(), ballot, _timeout, tr_state);
         } else {
             tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
             return _proxy->remote().send_paxos_prune(peer, _timeout, tr_state, _schema->version(), _key.key(), ballot);
@@ -2678,7 +2691,7 @@ future<result<>> storage_proxy::response_wait(storage_proxy::response_id_type id
         return _response_handlers.find(id)->second;
 }
 
-result<storage_proxy::response_id_type> storage_proxy::create_write_response_handler(locator::effective_replication_map_ptr ermp,
+result<storage_proxy::response_id_type> storage_proxy::make_write_response_handler(locator::effective_replication_map_ptr ermp,
                              db::consistency_level cl, db::write_type type, std::unique_ptr<mutation_holder> m,
                              host_id_vector_replica_set targets, const host_id_vector_topology_change& pending_endpoints, host_id_vector_topology_change dead_endpoints, tracing::trace_state_ptr tr_state,
                              storage_proxy::write_stats& stats, service_permit permit, db::per_partition_rate_limit::info rate_limit_info, is_cancellable cancellable)
@@ -3381,7 +3394,7 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
 
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::token& token, std::unique_ptr<mutation_holder> mh,
-        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable cancellable) {
+        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, is_cancellable cancellable, coordinator_mutate_options options) {
     replica::table& table = _db.local().find_column_family(s->id());
     auto erm = table.get_effective_replication_map();
     host_id_vector_replica_set natural_endpoints = erm->get_natural_replicas(token);
@@ -3407,6 +3420,11 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
         return std::ranges::find(natural_endpoints, p) != natural_endpoints.end();
     }).begin();
     pending_endpoints.erase(itend, pending_endpoints.end());
+
+    if (options.node_local_only) {
+        remove_non_local_host_ids(natural_endpoints, *erm);
+        remove_non_local_host_ids(pending_endpoints, *erm);
+    }
 
     auto all = natural_endpoints;
     std::ranges::copy(pending_endpoints, std::back_inserter(all));
@@ -3451,7 +3469,7 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
 
     db::assure_sufficient_live_nodes(cl, *erm, live_endpoints, pending_endpoints);
 
-    return create_write_response_handler(std::move(erm), cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
+    return make_write_response_handler(std::move(erm), cl, type, std::move(mh), std::move(live_endpoints), pending_endpoints,
             std::move(dead_endpoints), std::move(tr_state), get_stats(), std::move(permit), rate_limit_info, cancellable);
 }
 
@@ -3463,25 +3481,25 @@ storage_proxy::create_write_response_handler_helper(schema_ptr s, const dht::tok
  * to the hint method below (dead nodes).
  */
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+storage_proxy::create_write_response_handler(const mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
     return create_write_response_handler_helper(m.schema(), m.token(), std::make_unique<shared_mutation>(m), cl, type, tr_state,
-            std::move(permit), allow_limit, is_cancellable::no);
+            std::move(permit), allow_limit, is_cancellable::no, std::move(options));
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+storage_proxy::create_write_response_handler(const hint_wrapper& h, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
     return create_write_response_handler_helper(h.mut.schema(), h.mut.token(), std::make_unique<hint_mutation>(h.mut), cl, type, tr_state,
-            std::move(permit), allow_limit, is_cancellable::yes);
+            std::move(permit), allow_limit, is_cancellable::yes, std::move(options));
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const batchlog_replay_mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+storage_proxy::create_write_response_handler(const batchlog_replay_mutation& m, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
     return create_write_response_handler_helper(m.mut.schema(), m.mut.token(), std::make_unique<shared_mutation>(m.mut), cl, type, tr_state,
-            std::move(permit), allow_limit, is_cancellable::yes);
+            std::move(permit), allow_limit, is_cancellable::yes, std::move(options));
 }
 
 result<storage_proxy::response_id_type>
-storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
     host_id_vector_replica_set endpoints;
     const auto& m = mut.value;
     endpoints.reserve(m.size());
@@ -3492,21 +3510,21 @@ storage_proxy::create_write_response_handler(const read_repair_mutation& mut, db
     tracing::trace(tr_state, "Creating write handler for read repair token: {} endpoint: {}", mh->token(), endpoints);
 
     // No rate limiting for read repair
-    return create_write_response_handler(std::move(mut.ermp), cl, type, std::move(mh), std::move(endpoints), host_id_vector_topology_change(), host_id_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
+    return make_write_response_handler(std::move(mut.ermp), cl, type, std::move(mh), std::move(endpoints), host_id_vector_topology_change(), host_id_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
 }
 
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token>& meta,
-        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
     auto& [commit, s, h, t] = meta;
 
     return create_write_response_handler_helper(s, t, std::make_unique<cas_mutation>(std::move(commit), s, std::move(h)), cl,
-            db::write_type::CAS, tr_state, std::move(permit), allow_limit, is_cancellable::no);
+            db::write_type::CAS, tr_state, std::move(permit), allow_limit, is_cancellable::no, std::move(options));
 }
 
 result<storage_proxy::response_id_type>
 storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxos::proposal>, schema_ptr, shared_ptr<paxos_response_handler>, dht::token, host_id_vector_replica_set>& meta,
-        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
+        db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options) {
     auto& [commit, s, paxos_handler, token, endpoints] = meta;
 
     if (should_reject_due_to_view_backlog(endpoints, s)) {
@@ -3521,7 +3539,7 @@ storage_proxy::create_write_response_handler(const std::tuple<lw_shared_ptr<paxo
     auto ermp = paxos_handler->get_effective_replication_map();
 
     // No rate limiting for paxos (yet)
-    return create_write_response_handler(std::move(ermp), cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
+    return make_write_response_handler(std::move(ermp), cl, db::write_type::CAS, std::make_unique<cas_mutation>(std::move(commit), s, nullptr), std::move(endpoints),
                     host_id_vector_topology_change(), host_id_vector_topology_change(), std::move(tr_state), get_stats(), std::move(permit), std::monostate(), is_cancellable::no);
 }
 
@@ -3567,26 +3585,26 @@ storage_proxy::hint_to_dead_endpoints(response_id_type id, db::consistency_level
 }
 
 template<typename Range, typename CreateWriteHandler>
-future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler create_handler) {
+future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mutate_prepare(Range&& mutations, CreateWriteHandler create_handler) {
     // apply is used to convert exceptions to exceptional future
-    return futurize_invoke([this] (Range&& mutations, db::consistency_level cl, db::write_type type, service_permit permit, CreateWriteHandler create_handler) {
+    return futurize_invoke([this] (Range&& mutations, CreateWriteHandler create_handler) {
         unique_response_handler_vector ids;
         ids.reserve(std::distance(std::begin(mutations), std::end(mutations)));
         for (auto&& m : mutations) {
-            auto r_handler = create_handler(m, cl, type, permit);
+            auto r_handler = create_handler(m);
             if (!r_handler) {
                 return make_ready_future<result<unique_response_handler_vector>>(std::move(r_handler).as_failure());
             }
             ids.emplace_back(*this, std::move(r_handler).value());
         }
         return make_ready_future<result<unique_response_handler_vector>>(std::move(ids));
-    }, std::forward<Range>(mutations), cl, type, std::move(permit), std::move(create_handler));
+    }, std::forward<Range>(mutations), std::move(create_handler));
 }
 
 template<typename Range>
-future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit) {
-    return mutate_prepare<>(std::forward<Range>(mutations), cl, type, std::move(permit), [this, tr_state = std::move(tr_state), allow_limit] (const std::ranges::range_value_t<Range>& m, db::consistency_level cl, db::write_type type, service_permit permit) mutable {
-        return create_write_response_handler(m, cl, type, tr_state, std::move(permit), allow_limit);
+future<result<storage_proxy::unique_response_handler_vector>> storage_proxy::mutate_prepare(Range&& mutations, db::consistency_level cl, db::write_type type, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, coordinator_mutate_options options) {
+    return mutate_prepare<>(std::forward<Range>(mutations), [this, tr_state = std::move(tr_state), allow_limit, cl, type, permit = std::move(permit), options = std::move(options)] (const std::ranges::range_value_t<Range>& m) mutable {
+        return create_write_response_handler(m, cl, type, tr_state, permit, allow_limit, options);
     });
 }
 
@@ -3857,24 +3875,24 @@ future<> storage_proxy::mutate(utils::chunked_vector<mutation> mutations, db::co
             .then(utils::result_into_future<result<>>);
 }
 
-future<result<>> storage_proxy::mutate_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
+future<result<>> storage_proxy::mutate_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit, options = std::move(options)](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
-            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, std::move(tracker));
+            return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, std::move(tracker), std::move(options));
         });
     }
-    return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, nullptr);
+    return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, nullptr, std::move(options));
 }
 
-future<result<>> storage_proxy::do_mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker) {
+future<result<>> storage_proxy::do_mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, bool raw_counters, db::allow_per_partition_rate_limit allow_limit, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker, coordinator_mutate_options options) {
     auto mid = raw_counters ? mutations.begin() : std::ranges::partition(mutations, [] (auto&& m) {
         return m.schema()->is_counter();
     }).begin();
     return seastar::when_all_succeed(
         mutate_counters(std::ranges::subrange(mutations.begin(), mid), cl, tr_state, permit, timeout),
-        mutate_internal(std::ranges::subrange(mid, mutations.end()), cl, tr_state, permit, timeout, {}, std::move(cdc_tracker), allow_limit)
+        mutate_internal(std::ranges::subrange(mid, mutations.end()), cl, tr_state, permit, timeout, {}, std::move(cdc_tracker), allow_limit, std::move(options))
     ).then([] (std::tuple<result<>> res) {
         // For now, only mutate_internal returns a result<>
         return std::get<0>(std::move(res));
@@ -3899,7 +3917,8 @@ template<typename Range>
 future<result<>>
 storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit,
                                std::optional<clock_type::time_point> timeout_opt, std::optional<db::write_type> type_opt, lw_shared_ptr<cdc::operation_result_tracker> cdc_tracker,
-                               db::allow_per_partition_rate_limit allow_limit) {
+                               db::allow_per_partition_rate_limit allow_limit,
+                               coordinator_mutate_options options) {
     if (std::ranges::empty(mutations)) {
         return make_ready_future<result<>>(bo::success());
     }
@@ -3914,7 +3933,7 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracin
     utils::latency_counter lc;
     lc.start();
 
-    return mutate_prepare(mutations, cl, type, tr_state, std::move(permit), allow_limit).then(utils::result_wrap([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
+    return mutate_prepare(mutations, cl, type, tr_state, std::move(permit), allow_limit, std::move(options)).then(utils::result_wrap([this, cl, timeout_opt, tracker = std::move(cdc_tracker),
             tr_state] (storage_proxy::unique_response_handler_vector ids) mutable {
         register_cdc_operation_result_tracker(ids, tracker);
         return mutate_begin(std::move(ids), cl, tr_state, timeout_opt);
@@ -3926,13 +3945,13 @@ storage_proxy::mutate_internal(Range mutations, db::consistency_level cl, tracin
 future<result<>>
 storage_proxy::mutate_with_triggers(utils::chunked_vector<mutation> mutations, db::consistency_level cl,
     clock_type::time_point timeout,
-    bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
+    bool should_mutate_atomically, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
     warn(unimplemented::cause::TRIGGERS);
     if (should_mutate_atomically) {
         SCYLLA_ASSERT(!raw_counters);
-        return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit));
+        return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), std::move(options));
     }
-    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters);
+    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters, std::move(options));
 }
 
 /**
@@ -3945,8 +3964,8 @@ storage_proxy::mutate_with_triggers(utils::chunked_vector<mutation> mutations, d
  * @param consistency_level the consistency level for the operation
  */
 future<>
-storage_proxy::mutate_atomically(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
-    return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit))
+storage_proxy::mutate_atomically(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, coordinator_mutate_options options) {
+    return mutate_atomically_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), std::move(options))
             .then(utils::result_into_future<result<>>);
 }
 
@@ -4021,7 +4040,7 @@ static host_id_vector_replica_set endpoint_filter(
 }
 
 future<result<>>
-storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit) {
+storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, coordinator_mutate_options options) {
     utils::latency_counter lc;
     lc.start();
 
@@ -4036,12 +4055,13 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
         tracing::trace_state_ptr _trace_state;
         storage_proxy::stats& _stats;
         service_permit _permit;
+        coordinator_mutate_options _options;
 
         const utils::UUID _batch_uuid;
         const host_id_vector_replica_set _batchlog_endpoints;
 
     public:
-        context(storage_proxy & p, utils::chunked_vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
+        context(storage_proxy & p, utils::chunked_vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, coordinator_mutate_options options)
                 : _p(p)
                 , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG))
                 , _ermp(_p.local_db().find_column_family(_schema->id()).get_effective_replication_map())
@@ -4052,6 +4072,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
                 , _trace_state(std::move(tr_state))
                 , _stats(p.get_stats())
                 , _permit(std::move(permit))
+                , _options(std::move(options))
                 , _batch_uuid(utils::UUID_gen::get_time_UUID())
                 , _batchlog_endpoints(
                         [this]() -> host_id_vector_replica_set {
@@ -4082,8 +4103,8 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
         }
 
         future<result<>> send_batchlog_mutation(mutation m, db::consistency_level cl = db::consistency_level::ONE) {
-            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, cl, db::write_type::BATCH_LOG, _permit, [this] (const mutation& m, db::consistency_level cl, db::write_type type, service_permit permit) {
-                return _p.create_write_response_handler(_ermp, cl, type, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, std::move(permit), std::monostate(), is_cancellable::no);
+            return _p.mutate_prepare<>(std::array<mutation, 1>{std::move(m)}, [this, cl, permit = _permit] (const mutation& m) {
+                return _p.make_write_response_handler(_ermp, cl, db::write_type::BATCH_LOG, std::make_unique<shared_mutation>(m), _batchlog_endpoints, {}, {}, _trace_state, _stats, permit, std::monostate(), is_cancellable::no);
             }).then(utils::result_wrap([this, cl] (unique_response_handler_vector ids) {
                 _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                 return _p.mutate_begin(std::move(ids), cl, _trace_state, _timeout);
@@ -4116,7 +4137,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
         };
 
         future<result<>> run() {
-            return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit, db::allow_per_partition_rate_limit::no).then(utils::result_wrap([this] (unique_response_handler_vector ids) {
+            return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit, db::allow_per_partition_rate_limit::no, _options).then(utils::result_wrap([this] (unique_response_handler_vector ids) {
                 return sync_write_to_batchlog().then(utils::result_wrap([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
                     _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
@@ -4128,9 +4149,9 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
         }
     };
 
-    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl] (utils::chunked_vector<mutation> mutations, lw_shared_ptr<cdc::operation_result_tracker> tracker) mutable {
+    auto mk_ctxt = [this, tr_state, timeout, permit = std::move(permit), cl, options = std::move(options)] (utils::chunked_vector<mutation> mutations, lw_shared_ptr<cdc::operation_result_tracker> tracker) mutable {
       try {
-          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), std::move(tracker), cl, timeout, std::move(tr_state), std::move(permit)));
+          return make_ready_future<lw_shared_ptr<context>>(make_lw_shared<context>(*this, std::move(mutations), std::move(tracker), cl, timeout, std::move(tr_state), std::move(permit), std::move(options)));
       } catch(...) {
           return make_exception_future<lw_shared_ptr<context>>(std::current_exception());
       }
@@ -4211,11 +4232,8 @@ future<> storage_proxy::send_to_endpoint(
         timeout = clock_type::now() + 5min;
     }
 
-    return mutate_prepare(std::array{std::move(m)}, cl, type, /* does view building should hold a real permit */ empty_service_permit(),
-            [this, tr_state, erm = std::move(ermp), target = std::array{target}, pending_endpoints, &stats, cancellable] (
-                std::unique_ptr<mutation_holder>& m,
-                db::consistency_level cl,
-                db::write_type type, service_permit permit) mutable {
+    return mutate_prepare(std::array{std::move(m)},
+            [this, tr_state, erm = std::move(ermp), target = std::array{target}, pending_endpoints, &stats, cancellable, cl, type, /* does view building should hold a real permit */ permit = empty_service_permit()] (std::unique_ptr<mutation_holder>& m) mutable {
         host_id_vector_replica_set targets;
         targets.reserve(pending_endpoints.size() + 1);
         host_id_vector_topology_change dead_endpoints;
@@ -4226,7 +4244,7 @@ future<> storage_proxy::send_to_endpoint(
                 std::bind_front(&storage_proxy::is_alive, this, std::cref(*erm)));
         slogger.trace("Creating write handler with live: {}; dead: {}", targets, dead_endpoints);
         db::assure_sufficient_live_nodes(cl, *erm, targets, pending_endpoints);
-        return create_write_response_handler(
+        return make_write_response_handler(
             std::move(erm),
             cl,
             type,
@@ -4236,7 +4254,7 @@ future<> storage_proxy::send_to_endpoint(
             std::move(dead_endpoints),
             tr_state,
             stats,
-            std::move(permit),
+            permit,
             std::monostate(), // TODO: Pass the correct enforcement type
             cancellable);
     }).then(utils::result_wrap([this, cl, tr_state = std::move(tr_state), timeout = std::move(timeout)] (unique_response_handler_vector ids) mutable {
@@ -5758,12 +5776,13 @@ result<::shared_ptr<abstract_read_executor>> storage_proxy::get_read_executor(lw
         tracing::trace_state_ptr trace_state,
         const host_id_vector_replica_set& preferred_endpoints,
         bool& is_read_non_local,
-        service_permit permit) {
+        service_permit permit,
+        node_local_only node_local_only) {
     const dht::token& token = partition_range.start()->value().token();
     speculative_retry::type retry_type = schema->speculative_retry().get_type();
     std::optional<locator::host_id> extra_replica;
 
-    host_id_vector_replica_set all_replicas = get_endpoints_for_reading(schema->ks_name(), *erm, token);
+    host_id_vector_replica_set all_replicas = get_endpoints_for_reading(schema->ks_name(), *erm, token, node_local_only);
     // Check for a non-local read before heat-weighted load balancing
     // reordering of endpoints happens. The local endpoint, if
     // present, is always first in the list, as get_endpoints_for_reading()
@@ -5942,7 +5961,8 @@ storage_proxy::query_singular(lw_shared_ptr<query::read_command> cmd,
 
         auto r_read_executor = get_read_executor(cmd, erm, schema, std::move(pr), cl, repair_decision,
                                                  query_options.trace_state, replicas, is_read_non_local,
-                                                 query_options.permit);
+                                                 query_options.permit,
+                                                 query_options.node_local_only);
         if (!r_read_executor) {
             co_return std::move(r_read_executor).as_failure();
         }
@@ -6047,7 +6067,8 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
         uint64_t remaining_row_count,
         uint32_t remaining_partition_count,
         replicas_per_token_range preferred_replicas,
-        service_permit permit) {
+        service_permit permit,
+        node_local_only node_local_only) {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> results;
     schema_ptr schema = local_schema_registry().get(cmd->schema_version);
     auto p = shared_from_this();
@@ -6078,7 +6099,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
 
         while (i != ranges.end()) {
             dht::partition_range& range = *i;
-            host_id_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range));
+            host_id_vector_replica_set live_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(range), node_local_only);
             host_id_vector_replica_set merged_preferred_replicas = preferred_replicas_for_range(*i);
             host_id_vector_replica_set filtered_endpoints = filter_replicas_for_read(cl, *erm, live_endpoints, merged_preferred_replicas, pcf);
             std::vector<dht::token_range> merged_ranges{to_token_range(range)};
@@ -6094,7 +6115,7 @@ storage_proxy::query_partition_key_range_concurrent(storage_proxy::clock_type::t
                 {
                     const auto current_range_preferred_replicas = preferred_replicas_for_range(*i);
                     dht::partition_range& next_range = *i;
-                    host_id_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range));
+                    host_id_vector_replica_set next_endpoints = get_endpoints_for_reading(schema->ks_name(), *erm, end_token(next_range), node_local_only);
                     host_id_vector_replica_set next_filtered_endpoints = filter_replicas_for_read(cl, *erm, next_endpoints, current_range_preferred_replicas, pcf);
 
                     // Origin has this to say here:
@@ -6288,7 +6309,8 @@ storage_proxy::query_partition_key_range(lw_shared_ptr<query::read_command> cmd,
             cmd->get_row_limit(),
             cmd->partition_limit,
             std::move(query_options.preferred_replicas),
-            std::move(query_options.permit));
+            std::move(query_options.permit),
+            query_options.node_local_only);
 
     if (!wrapped_result) {
         co_return bo::failure(std::move(wrapped_result).assume_error());
@@ -6516,8 +6538,11 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
 
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
-        auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
+        if (!_features.lwt_with_tablets) {
+            auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
+        }
+        co_await remote().paxos_store().ensure_initialized(*schema, write_timeout);
     }
 
     SCYLLA_ASSERT(partition_ranges.size() == 1);
@@ -6706,11 +6731,14 @@ void storage_proxy::sort_endpoints_by_proximity(const locator::effective_replica
     }
 }
 
-host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token) const {
+host_id_vector_replica_set storage_proxy::get_endpoints_for_reading(const sstring& ks_name, const locator::effective_replication_map& erm, const dht::token& token, node_local_only node_local_only) const {
     auto endpoints = erm.get_replicas_for_reading(token);
     validate_read_replicas(erm, endpoints);
     auto it = std::ranges::remove_if(endpoints, std::not_fn(std::bind_front(&storage_proxy::is_alive, this, std::cref(erm)))).begin();
     endpoints.erase(it, endpoints.end());
+    if (node_local_only) {
+        remove_non_local_host_ids(endpoints, erm);
+    }
     sort_endpoints_by_proximity(erm, endpoints);
     return endpoints;
 }
@@ -6781,8 +6809,8 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
 }
 
 void storage_proxy::start_remote(netw::messaging_service& ms, gms::gossiper& g, migration_manager& mm, sharded<db::system_keyspace>& sys_ks,
-        raft_group0_client& group0_client, topology_state_machine& tsm) {
-    _remote = std::make_unique<struct remote>(*this, ms, g, mm, sys_ks, group0_client, tsm);
+        sharded<paxos::paxos_store>& paxos_store, raft_group0_client& group0_client, topology_state_machine& tsm) {
+    _remote = std::make_unique<struct remote>(*this, ms, g, mm, sys_ks, paxos_store, group0_client, tsm);
 }
 
 future<> storage_proxy::stop_remote() {

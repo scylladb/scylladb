@@ -928,7 +928,7 @@ future<> migration_manager::push_schema_mutation(locator::host_id id, const util
 }
 
 template<typename mutation_type>
-future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description) {
+future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description, std::optional<raft_timeout> timeout) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto schema_features = _feat.cluster_schema_features();
     auto adjusted_schema = db::schema_tables::adjust_schema_for_schema_features(std::move(schema), schema_features);
@@ -939,7 +939,7 @@ future<> migration_manager::announce_with_raft(utils::chunked_vector<mutation> s
         },
         guard, std::move(description));
 
-    return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as, raft_timeout{});
+    return _group0_client.add_entry(std::move(group0_cmd), std::move(guard), _as, timeout.value_or(raft_timeout{}));
 }
 
 future<> migration_manager::announce_without_raft(utils::chunked_vector<mutation> schema, group0_guard guard) {
@@ -1000,31 +1000,31 @@ static void add_committed_by_group0_flag(utils::chunked_vector<mutation>& schema
 
 // Returns a future on the local application of the schema
 template<typename mutation_type>
-future<> migration_manager::announce(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description) {
+future<> migration_manager::announce(utils::chunked_vector<mutation> schema, group0_guard guard, std::string_view description, std::optional<raft_timeout> timeout) {
     if (_feat.group0_schema_versioning) {
         schema.push_back(make_group0_schema_version_mutation(_storage_proxy.data_dictionary(), guard));
         add_committed_by_group0_flag(schema, guard);
     }
 
     if (guard.with_raft()) {
-        return announce_with_raft<mutation_type>(std::move(schema), std::move(guard), std::move(description));
+        return announce_with_raft<mutation_type>(std::move(schema), std::move(guard), std::move(description), std::move(timeout));
     } else {
         return announce_without_raft(std::move(schema), std::move(guard));
     }
 }
 template
-future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce_with_raft<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
 template
-future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce_with_raft<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout);
 
 template
-future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce<schema_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 template
-future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description);
+future<> migration_manager::announce<topology_change>(utils::chunked_vector<mutation> schema, group0_guard, std::string_view description, std::optional<raft_timeout> timeout = std::nullopt);
 
-future<group0_guard> migration_manager::start_group0_operation() {
+future<group0_guard> migration_manager::start_group0_operation(std::optional<raft_timeout> timeout) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    return _group0_client.start_operation(_as, raft_timeout{});
+    return _group0_client.start_operation(_as, timeout.value_or(raft_timeout{}));
 }
 
 /**

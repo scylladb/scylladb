@@ -340,6 +340,7 @@ public:
     future<> has_functions_access(const sstring& ks, auth::permission p) const;
     future<> has_function_access(const sstring& ks, const sstring& function_signature, auth::permission p) const;
 private:
+    future<> check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const;
     future<> has_access(const sstring& keyspace, auth::command_desc) const;
 
 public:

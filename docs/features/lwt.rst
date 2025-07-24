@@ -2,8 +2,6 @@
 Lightweight Transactions
 ========================
 
-.. note:: The LWT feature is not supported in keyspaces with :doc:`tablets</architecture/tablets>` enabled.
-
 There are cases when it is necessary to modify data based on its current state: that is, to perform an update that is executed only if a row does not exist or contains a certain value.
 :abbr:`LWTs (lightweight transactions)` provide this functionality by only allowing changes to data to occur if the condition provided evaluates as true.
 The conditional statements provide linearizable semantics thus allowing data to remain consistent.
@@ -139,7 +137,8 @@ A replica refuses to promise a ballot if it has already promised
 a newer one -- this locks out concurrent modification attempts and
 allows the coordinator to proceed with reading and updating a row
 without interference. The state of the protocol is persisted in
-system.paxos table, which is local to each replica.
+the :ref:`paxos state table <paxos-state-tables>`, which is local
+to each replica.
 
 Unlike Cassandra, ScyllaDB piggy-backs the old version of the row on
 response to "Prepare" request, so reading a row doesn't require
@@ -148,8 +147,8 @@ a separate message exchange.
 Once the coordinator gets a majority of promises from replicas,
 it evaluates the ``IF`` conditions, and if the result is true,
 sends an updated mutation to replicas.
-Replicas store the new row in system.paxos and acknowledge
-accepting it.
+Replicas store the new row in the :ref:`paxos state table <paxos-state-tables>` 
+and acknowledge accepting it.
 
 Having a majority of replicas accept the row satisfies the
 "quorum intersection" rule: as long as at least a majority of
@@ -163,7 +162,7 @@ table with the new row. This is done in "Learn" round.
 
 If the base table update is successful, the coordinator responds
 to the client. It's also safe to prune the state of the protocol
-from system.paxos.
+from the :ref:`paxos state table <paxos-state-tables>`.
 
 The size of the quorum impacts how many acknowledgements the
 coordinator must get before proceeding to the next round or
@@ -174,8 +173,8 @@ with ``SERIAL CONSISTENCY`` setting. For Learn, ScyllaDB's eventual
 Key differences between ScyllaDB and Cassandra Paxos implementations
 are in collapsing prepare and read actions into a single round, and
 also introducing an extra asynchronous "prune" round, which keeps
-system.paxos table small and thus reduces write amplification
-when it's compacted.
+the :ref:`paxos state table <paxos-state-tables>` small and thus
+reduces write amplification when it's compacted.
 
 .. include:: /rst_include/note-ttl-lwt.rst
 
@@ -477,6 +476,33 @@ of all columns used in conditional expressions of all conditional statements of 
         True | Invisible Man |     null |    null |     null | Leigh Whannell | Elisabeth Moss
 
 
+.. _paxos-state-tables:
+
+Paxos State Tables
+==================
+
+The Paxos protocol state for LWT is stored in dedicated internal tables.
+The specific table used depends on whether the user table is based on vnodes or tablets.
+
+For vnode-based tables, the Paxos state is stored in the local system table `system.paxos`.
+This table is automatically created and maintained by ScyllaDB on each node and holds Paxos
+state for all vnode-based user tables.
+
+For tablet-based tables, a separate Paxos state table is created per user table. The creation
+happens the first time an LWT is executed on the user table, which may introduce a small
+latency spike due to the table creation overhead. The table is placed in the same keyspace as the
+user table and follows the naming pattern `<user-table>$paxos`.
+
+The `$paxos` table uses the same set of tablets as the user table. This ensures that tablet
+operations — such as migration, split, or merge — are consistently applied to both the user table
+tablets and its corresponding `$paxos` table tablets. As a result, Paxos state remains intact
+and consistent during such operations.
+
+Access to the `$paxos` tables is restricted. ScyllaDB does not grant any explicit permissions on them.
+Only superusers can view these tables, and even they cannot execute `ALTER` or `DROP` commands.
+
+The `$paxos` table is automatically dropped when the user table is dropped.
+
 Error handling
 ==============
 
@@ -536,7 +562,7 @@ Other limitations are more minor:
 
 * While a non-LWT batch can be UNLOGGED, a conditional batch cannot;
 * IF conditions must be a perfect conjunct (... AND ... AND ...);
-* Conditional batches are always logged in system.paxos table, so UNLOGGED keyword is silently ignored for them.
+* Conditional batches are always logged in the :ref:`paxos state table <paxos-state-tables>`, so UNLOGGED keyword is silently ignored for them.
 
 Additional Information
 ======================
