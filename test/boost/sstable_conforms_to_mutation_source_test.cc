@@ -17,7 +17,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "db/row_cache.hh"
 #include "test/lib/simple_schema.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/random_schema.hh"

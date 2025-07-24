@@ -12,7 +12,7 @@
 #include "service/client_state.hh"
 #include "service/storage_proxy.hh"
 #include "dht/i_partitioner.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "query-result-reader.hh"
 #include "gc_clock.hh"
 #include "service_permit.hh"

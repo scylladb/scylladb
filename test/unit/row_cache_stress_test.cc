@@ -12,7 +12,7 @@
 #include <seastar/core/app-template.hh>
 #include "replica/memtable.hh"
 #include "db/row_cache.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "utils/assert.hh"
 #include "utils/int_range.hh"
 #include "utils/div_ceil.hh"

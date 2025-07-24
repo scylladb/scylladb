@@ -20,7 +20,7 @@
 #include "mutation/mutation_partition_serializer.hh"
 #include "query-result-reader.hh"
 #include "query_result_merger.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "schema/schema_registry.hh"
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"

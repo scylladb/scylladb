@@ -24,7 +24,7 @@
 #include "replica/database.hh"
 #include "release.hh"
 #include "db/config.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/memory.hh>
 #include <seastar/core/units.hh>

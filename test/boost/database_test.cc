@@ -31,7 +31,7 @@
 #include "replica/database.hh"
 #include "utils/assert.hh"
 #include "utils/lister.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "mutation/frozen_mutation.hh"
 #include "test/lib/mutation_source_test.hh"
 #include "schema/schema_builder.hh"

@@ -18,7 +18,7 @@
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
 #include "cql3/query_processor.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"
 #include "system_keyspace_view_types.hh"

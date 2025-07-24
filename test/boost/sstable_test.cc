@@ -29,7 +29,7 @@
 #include "replica/database.hh"
 #include "test/boost/sstable_test.hh"
 #include "test/lib/tmpdir.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "sstables/sstable_mutation_reader.hh"
 #include "sstables/binary_search.hh"
 

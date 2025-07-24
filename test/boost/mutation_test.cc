@@ -31,7 +31,7 @@
 #include "schema/schema_builder.hh"
 #include "query-result-set.hh"
 #include "query-result-reader.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "test/lib/tmpdir.hh"
 #include "compaction/compaction_manager.hh"
 
@@ -43,7 +43,7 @@
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/random_schema.hh"
 #include "test/lib/mutation_source_test.hh"
-#include "cell_locking.hh"
+#include "replica/cell_locking.hh"
 #include "test/lib/mutation_reader_assertions.hh"
 #include "test/lib/mutation_assertions.hh"
 #include "test/lib/random_utils.hh"

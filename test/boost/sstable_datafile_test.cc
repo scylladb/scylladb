@@ -36,7 +36,7 @@
 #include "test/lib/make_random_string.hh"
 #include "test/lib/simple_schema.hh"
 #include "dht/ring_position.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "replica/memtable-sstable.hh"
 
 #include <stdio.h>

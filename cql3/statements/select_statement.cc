@@ -38,7 +38,7 @@
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "view_info.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "cql3/untyped_result_set.hh"
 #include "db/timeout_clock.hh"
 #include "db/consistency_level_validations.hh"

@@ -23,7 +23,7 @@
 #include "replica/database.hh"
 #include "timestamp.hh"
 #include "schema/schema_builder.hh"
-#include "partition_slice_builder.hh"
+#include "replica/partition_slice_builder.hh"
 #include "readers/combined.hh"
 #include "replica/memtable-sstable.hh"
 #include "test/lib/index_reader_assertions.hh"

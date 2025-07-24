@@ -185,7 +185,7 @@ target_sources(scylla-main
     multishard_mutation_query.cc
     mutation_query.cc
     node_ops/task_manager_module.cc
-    partition_slice_builder.cc
+    replica/partition_slice_builder.cc
     querier.cc
     query.cc
     query_ranges_to_vnodes.cc
