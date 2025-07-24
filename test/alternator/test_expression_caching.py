@@ -1,3 +1,7 @@
+# Copyright 2025-present ScyllaDB
+#
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
 from contextlib import contextmanager
 from functools import cache
 from itertools import count
@@ -66,16 +70,7 @@ def set_a_value(table, key, value, pattern='', operation="update_item", conditio
     else:
         assert table.get_item(Key={'p': key}, ConsistentRead=True)['Item']['a'] == value
 
-@cache
-def scylla_shard_count(metrics):
-    import re
-    matches = re.findall(r',shard="(\d+)"', get_metrics(metrics))
-    if not matches:
-        return 2 # by default tests are run with "--smp 2"
-    return 1+max(int(n) for n in matches)
-
 # Test that repeated UpdateExpression is cached.
-@pytest.mark.xfail(reason="Not implemented yet")
 def test_caching_update_expression(cql, metrics, test_table_s):
     p = random_string()
     labels = {'shard': 0, 'expression': "UpdateExpression"}
@@ -103,7 +98,6 @@ def test_caching_update_expression(cql, metrics, test_table_s):
                 set_a_value(test_table_s, p, next(counter), pattern=i)
 
 # Test that repeated ConditionExpression is cached.
-@pytest.mark.xfail(reason="Not implemented yet")
 def test_caching_condition_expression(cql, metrics, test_table_s):
     p = random_string()
     labels = {'shard': 0, 'expression': "ConditionExpression"}
@@ -140,7 +134,6 @@ def test_caching_condition_expression(cql, metrics, test_table_s):
                 set_a_value(test_table_s, p, next(counter), pattern='D', operation="delete_item", condition_fails=False)
 
 # Test that repeated ProjectionExpression is cached.
-@pytest.mark.xfail(reason="Not implemented yet")
 def test_caching_projection_expression(cql, metrics, test_table_s):
     p = random_string()
     labels = {'shard': 0, 'expression': "ProjectionExpression"}
@@ -173,7 +166,6 @@ def test_caching_projection_expression(cql, metrics, test_table_s):
                             {test_table_s.name: { 'Keys': [{'p': p}], 'ProjectionExpression': 'a', 'ConsistentRead': True}})['Responses'][test_table_s.name] == [ret]
 
 # Test Query separately with all three possible expressions: KeyConditionExpression, FilterExpression, and ProjectionExpression.
-@pytest.mark.xfail(reason="Not implemented yet")
 def test_caching_query_expression(cql, metrics, test_table_s):
     p = random_string()
     labels = {'shard': 0}
@@ -189,7 +181,6 @@ def test_caching_query_expression(cql, metrics, test_table_s):
                 assert full_query(test_table_s, ProjectionExpression="a", KeyConditionExpression='p=:p', FilterExpression='a=:a', ExpressionAttributeValues={':p': p, ':a': 'hello'}) == [ret]
 
 # Test that validation errors will be reported correctly and will not affect cache.
-@pytest.mark.xfail(reason="Not implemented yet")
 def test_caching_invalid_expression(cql, metrics, test_table_s):
     p = random_string()
     labels = {'shard': 0}
