@@ -492,22 +492,31 @@ class fake_proxy {
                     auto do_io = [this, &addr, &dst_addr, port](connected_socket& src, connected_socket& dst) noexcept -> future<> {
                         try {
                             auto sin = src.input();
-                            auto dout = dst.output();
+                            auto dout = output_stream<char>(dst.output().detach(), 1024);
                             // note: have to have differing conditions for proxying
                             // and shutdown, and need to check inside look, because
                             // kmip connector caches connection -> not new socket.
-                            while (_go_on && _do_proxy && !sin.eof()) {
-                                auto buf = co_await sin.read();
-                                auto n = buf.size();
-                                testlog.trace("Read {} bytes: {}->{}:{}", n, addr, dst_addr, port);
-                                if (_do_proxy) {
-                                    co_await dout.write(std::move(buf));
-                                    co_await dout.flush();
-                                    testlog.trace("Wrote {} bytes: {}->{}:{}", n, addr, dst_addr, port);
+                            std::exception_ptr p;
+                            try {
+                                while (_go_on && _do_proxy && !sin.eof()) {
+                                    auto buf = co_await sin.read();
+                                    auto n = buf.size();
+                                    testlog.trace("Read {} bytes: {}->{}:{}", n, addr, dst_addr, port);
+                                    if (_do_proxy) {
+                                        co_await dout.write(std::move(buf));
+                                        co_await dout.flush();
+                                        testlog.trace("Wrote {} bytes: {}->{}:{}", n, addr, dst_addr, port);
+                                    }
                                 }
+                            } catch (...) {
+                                p = std::current_exception();
                             }
+                            co_await dout.flush();
                             co_await dout.close();
                             co_await sin.close();
+                            if (p) {
+                                std::rethrow_exception(p);
+                            }
                         } catch (...) {
                             testlog.warn("Exception running proxy {}:{}->{}: {}", dst_addr, port, _address, std::current_exception());
                         }
