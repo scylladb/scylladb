@@ -665,22 +665,22 @@ static future<bool> is_view_built(
 }
 
 void executor::notify_all_shards_of_newly_calculated_table_size(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl) {
-    auto &table = schema->table();
-    auto &describe_table_info = _describe_table_info_for_tables[&table];
+    auto cfid = schema->id();
+    auto &describe_table_info = _describe_table_info_for_tables[cfid];
     auto now = describe_table_info.size_in_bytes.set_now(size_in_bytes, ttl);
 
     (void)container().invoke_on_others(
-        [cfid = schema->id(), size_in_bytes, now] (executor& exec) {
+        [cfid, size_in_bytes, now] (executor& exec) {
             auto& db = exec._proxy.local_db();
             auto &table = db.find_column_family(cfid);
-            auto &describe_table_info = exec._describe_table_info_for_tables[&table];
+            auto &describe_table_info = exec._describe_table_info_for_tables[cfid];
             describe_table_info.size_in_bytes.set(size_in_bytes, now);
         });
 }
 
 future<> executor::fill_table_size(rjson::value &table_description, schema_ptr schema) {
-    auto &table = schema->table();
-    auto &describe_table_info = _describe_table_info_for_tables[&table];
+    auto cfid = schema->id();
+    auto &describe_table_info = _describe_table_info_for_tables[cfid];
     std::uint64_t total_size = 0;
     if (auto val = describe_table_info.size_in_bytes.get()) {
         total_size = *val;

@@ -17,6 +17,7 @@
 #include "service/client_state.hh"
 #include "service_permit.hh"
 #include "db/timeout_clock.hh"
+#include "schema/schema_fwd.hh"
 
 #include "alternator/error.hh"
 #include "stats.hh"
@@ -151,7 +152,7 @@ class executor : public peering_sharded_service<executor> {
     struct DescribeTableInfo {
         utils::simple_value_with_expiry<std::uint64_t> size_in_bytes;
     };
-    std::unordered_map<replica::table*, DescribeTableInfo> _describe_table_info_for_tables;
+    std::unordered_map<table_id, DescribeTableInfo> _describe_table_info_for_tables;
 
     void notify_all_shards_of_newly_calculated_table_size(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
     future<> fill_table_size(rjson::value &table_description, schema_ptr schema);
