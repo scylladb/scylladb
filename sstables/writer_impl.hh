@@ -49,6 +49,9 @@ struct sstable_writer::writer_impl {
     virtual stop_iteration consume_end_of_partition() = 0;
     virtual void consume_end_of_stream() = 0;
     virtual ~writer_impl() {}
+    void set_repaired_at(uint64_t repaired_at) {
+        _collector.set_repaired_at(repaired_at);
+    }
 };
 
 }
