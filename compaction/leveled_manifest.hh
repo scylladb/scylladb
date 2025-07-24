@@ -19,7 +19,7 @@
 #include "utils/log.hh"
 
 class leveled_manifest {
-    table_state& _table_s;
+    compaction_group_view& _table_s;
     schema_ptr _schema;
     std::vector<std::vector<sstables::shared_sstable>> _generations;
     uint64_t _max_sstable_size_in_bytes;
@@ -52,7 +52,7 @@ public:
     // level to be considered worth compacting.
     static constexpr float TARGET_SCORE = 1.001f;
 private:
-    leveled_manifest(table_state& table_s, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
+    leveled_manifest(compaction_group_view& table_s, int max_sstable_size_in_MB, const sstables::size_tiered_compaction_strategy_options& stcs_options)
         : _table_s(table_s)
         , _schema(table_s.schema())
         , _max_sstable_size_in_bytes(max_sstable_size_in_MB * 1024 * 1024)
@@ -77,7 +77,7 @@ public:
         return levels;
     }
 
-    static leveled_manifest create(table_state& table_s, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
+    static leveled_manifest create(compaction_group_view& table_s, std::vector<sstables::shared_sstable>& sstables, int max_sstable_size_in_mb,
             const sstables::size_tiered_compaction_strategy_options& stcs_options) {
         leveled_manifest manifest = leveled_manifest(table_s, max_sstable_size_in_mb, stcs_options);
 
