@@ -18,7 +18,15 @@ import pytest
 from botocore.exceptions import ClientError
 import re
 import time, datetime
-from test.alternator.util import multiset, create_test_table, new_test_table
+from test.alternator.util import multiset, create_test_table, new_test_table, random_string
+from test.cqlpy.util import config_value_context
+
+import requests
+
+# For a "cql" object connected to one node, find the REST API URL
+# with the same node and port 10000.
+def rest_api_url(cql):
+    return f'http://{cql.cluster.contact_points[0]}:10000'
 
 # Test that DescribeTable correctly returns the table's name and state
 def test_describe_table_basic(test_table):
@@ -75,7 +83,7 @@ def test_describe_table_creation_time(dynamodb):
 
     with new_test_table(dynamodb, **schema) as table1:
         # let's sleep few ms, so table2 creation time was always bigger, as we now return CreationDateTime in ms precision
-        time.sleep(0.002)    
+        time.sleep(0.002)
         with new_test_table(dynamodb, **schema) as table2:
             got1 = table1.meta.client.describe_table(TableName=table1.name)['Table']
             got2 = table2.meta.client.describe_table(TableName=table2.name)['Table']
@@ -112,12 +120,73 @@ def test_describe_table_item_count(test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
     assert 'ItemCount' in got
 
-# Similar test for estimated size in bytes - TableSizeBytes - which again,
-# may reflect the size as long as six hours ago.
-@pytest.mark.xfail(reason="DescribeTable does not return table size")
-def test_describe_table_size(test_table):
-    got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
-    assert 'TableSizeBytes' in got
+def test_describe_table_size_with_timeout_set_to_0(cql, dynamodb):
+    # UPDATE system.config SET value = 0 WHERE name = alternator_describe_table_info_timeout_in_seconds
+
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+    }
+
+    with config_value_context(cql, 'alternator_describe_table_info_timeout_in_seconds', '0'):
+        with new_test_table(dynamodb, **schema) as test_table:
+            got1 = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+            assert 'TableSizeBytes' in got1
+            assert got1['TableSizeBytes'] >= 0, (got1['TableSizeBytes'], )
+
+            for x in range(0, 128):
+                p = random_string()
+                c = random_string()
+                v = random_string()
+                test_table.put_item(Item={'p': p, 'c': c, 'v': v})
+
+            ks = 'alternator_' + test_table.name
+            cf = test_table.name
+            params = { 'cf': cf, "flush_memtables": True }
+            requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
+
+            got2 = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+            assert 'TableSizeBytes' in got2
+            assert got2['TableSizeBytes'] >= 0, (got1['TableSizeBytes'], got2['TableSizeBytes'])
+            assert got2['TableSizeBytes'] > got1['TableSizeBytes'], (got1['TableSizeBytes'], got2['TableSizeBytes'])
+
+def test_describe_table_size_with_1h_timeout(cql, dynamodb):
+    schema = {
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+    }
+
+    with config_value_context(cql, 'alternator_describe_table_info_timeout_in_seconds', '3600'):
+        with new_test_table(dynamodb, **schema) as test_table:
+            got1 = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+            assert 'TableSizeBytes' in got1
+            assert got1['TableSizeBytes'] >= 0, (got1['TableSizeBytes'], )
+
+            for x in range(0, 128):
+                p = random_string()
+                c = random_string()
+                v = random_string()
+                test_table.put_item(Item={'p': p, 'c': c, 'v': v})
+
+            ks = 'alternator_' + test_table.name
+            cf = test_table.name
+            params = { 'cf': cf, "flush_memtables": True }
+            requests.post(f'{rest_api_url(cql)}/storage_service/keyspace_compaction/{ks}', params=params)
+
+            got2 = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
+            assert 'TableSizeBytes' in got2
+            assert got2['TableSizeBytes'] >= 0, (got1['TableSizeBytes'], got2['TableSizeBytes'])
+            assert got2['TableSizeBytes'] == got1['TableSizeBytes'], (got1['TableSizeBytes'], got2['TableSizeBytes'])
 
 # Test the ProvisionedThroughput attribute returned by DescribeTable.
 # This is a very partial test: Our test table is configured without

@@ -196,12 +196,14 @@ static const rjson::value::Member& get_single_member(const rjson::value& v, cons
 
 executor::executor(gms::gossiper& gossiper,
          service::storage_proxy& proxy,
+         service::storage_service& ss,
          service::migration_manager& mm,
          db::system_distributed_keyspace& sdks,
          cdc::metadata& cdc_metadata,
          smp_service_group ssg,
          utils::updateable_value<uint32_t> default_timeout_in_ms)
     : _gossiper(gossiper),
+      _ss(ss),
       _proxy(proxy),
       _mm(mm),
       _sdks(sdks),
@@ -662,12 +664,48 @@ static future<bool> is_view_built(
 
 }
 
-static future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::storage_proxy& proxy, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
+void executor::notify_all_shards_of_newly_calculated_table_size(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl) {
+    auto cfid = schema->id();
+    auto &describe_table_info = _describe_table_info_for_tables[cfid];
+    auto now = describe_table_info.size_in_bytes.set_now(size_in_bytes, ttl);
+
+    (void)container().invoke_on_others(
+        [cfid, size_in_bytes, now] (executor& exec) {
+            auto& db = exec._proxy.local_db();
+            auto &table = db.find_column_family(cfid);
+            auto &describe_table_info = exec._describe_table_info_for_tables[cfid];
+            describe_table_info.size_in_bytes.set(size_in_bytes, now);
+        });
+}
+
+future<> executor::fill_table_size(rjson::value &table_description, schema_ptr schema) {
+    auto cfid = schema->id();
+    auto &describe_table_info = _describe_table_info_for_tables[cfid];
+    std::uint64_t total_size = 0;
+    if (auto val = describe_table_info.size_in_bytes.get()) {
+        total_size = *val;
+    }
+    else {
+        total_size = co_await _ss.estimate_total_sstable_volume(schema->id(), service::storage_service::ignore_errors::yes);
+        const auto timeout = std::chrono::seconds{ _proxy.data_dictionary().get_config().alternator_describe_table_info_timeout_in_seconds() };
+        // Note: we don't care when the notification of other shards will finish, as long as it will be done
+        // it's possible to get into race condition (next DescribeTable comes to other shard, that new shard doesn't have
+        // the size yet, so it will calculate it again) - this is not a problem, because it will call notify_all_shards_of_newly_calculated_table_size
+        // with ttl, which is extremely unlikely to be exactly the same as the previous one, all shards will keep the size coming with ttl that is bigger.
+        // In case of the same ttl, some shards will have different size, which means DescribeTable will return different values depending on the shard
+        // which is also fine, as the specification doesn't give precision guarantees of any kind.
+        (void)notify_all_shards_of_newly_calculated_table_size(schema, total_size, timeout);
+    }
+    rjson::add(table_description, "TableSizeBytes", total_size);
+}
+
+future<rjson::value> executor::fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit)
 {
     rjson::value table_description = rjson::empty_object();
     auto tags_ptr = db::get_tags_of_table(schema);
 
     rjson::add(table_description, "TableName", rjson::from_string(schema->cf_name()));
+    auto fill_table_size_job = fill_table_size(table_description, schema);
 
     auto creation_timestamp = get_table_creation_time(*schema);
     
@@ -711,9 +749,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
     rjson::add(table_description["ProvisionedThroughput"], "WriteCapacityUnits", wcu);
     rjson::add(table_description["ProvisionedThroughput"], "NumberOfDecreasesToday", 0);
 
-
-
-    data_dictionary::table t = proxy.data_dictionary().find_column_family(schema);
+    data_dictionary::table t = _proxy.data_dictionary().find_column_family(schema);
 
     if (tbl_status != table_status::deleting) {
         rjson::add(table_description, "CreationDateTime", rjson::value(creation_timestamp));
@@ -750,7 +786,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
                 // (for a built view) or CREATING+Backfilling (if view building
                 // is in progress).
                 if (!is_lsi) {
-                    if (co_await is_view_built(vptr, proxy, client_state, trace_state, permit)) {
+                    if (co_await is_view_built(vptr, _proxy, client_state, trace_state, permit)) {
                         rjson::add(view_entry, "IndexStatus", "ACTIVE");
                     } else {
                         rjson::add(view_entry, "IndexStatus", "CREATING");
@@ -778,9 +814,11 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
         }
         rjson::add(table_description, "AttributeDefinitions", std::move(attribute_definitions));
     }
-    executor::supplement_table_stream_info(table_description, *schema, proxy);
+    executor::supplement_table_stream_info(table_description, *schema, _proxy);
 
     // FIXME: still missing some response fields (issue #5026)
+    co_await std::move(fill_table_size_job);
+
     co_return table_description;
 }
 
@@ -800,7 +838,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
-    rjson::value table_description = co_await fill_table_description(schema, table_status::active, _proxy, client_state, trace_state, permit);
+    rjson::value table_description = co_await fill_table_description(schema, table_status::active, client_state, trace_state, permit);
     rjson::value response = rjson::empty_object();
     rjson::add(response, "Table", std::move(table_description));
     elogger.trace("returning {}", response);
@@ -862,7 +900,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     auto& p = _proxy.container();
 
     schema_ptr schema = get_table(_proxy, request);
-    rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, _proxy, client_state, trace_state, permit);
+    rjson::value table_description = co_await fill_table_description(schema, table_status::deleting, client_state, trace_state, permit);
     co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::DROP);
     co_await _mm.container().invoke_on(0, [&, cs = client_state.move_to_other_shard()] (service::migration_manager& mm) -> future<> {
         size_t retries = mm.get_concurrent_ddl_retries();
@@ -1408,7 +1446,7 @@ bytes extract_from_attrs_column_computation::compute_value(const schema&, const 
 }
 
 
-static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization) {
+future<executor::request_return_type> executor::create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
@@ -1600,7 +1638,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
 
     rjson::value* stream_specification = rjson::find(request, "StreamSpecification");
     if (stream_specification && stream_specification->IsObject()) {
-        if (executor::add_stream_options(*stream_specification, builder, sp)) {
+        if (executor::add_stream_options(*stream_specification, builder, _proxy)) {
             validate_cdc_log_name_length(builder.cf_name());
         }
     }
@@ -1622,6 +1660,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     co_await verify_create_permission(enforce_authorization, client_state);
 
     schema_ptr schema = builder.build();
+
     for (auto& view_builder : view_builders) {
         // Note below we don't need to add virtual columns, as all
         // base columns were copied to view. TODO: reconsider the need
@@ -1635,12 +1674,12 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         view_builder.with_view_info(schema, include_all_columns, ""/*where clause*/);
     }
 
-    size_t retries = mm.get_concurrent_ddl_retries();
+    size_t retries = _mm.get_concurrent_ddl_retries();
     for (;;) {
-        auto group0_guard = co_await mm.start_group0_operation();
+        auto group0_guard = co_await _mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
-        auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features());
+        auto ksm = create_keyspace_metadata(keyspace_name, _proxy, _gossiper, ts, tags_map, _proxy.features());
         // Alternator Streams doesn't yet work when the table uses tablets (#16317)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
@@ -1654,13 +1693,13 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             }
         }
         try {
-            schema_mutations = service::prepare_new_keyspace_announcement(sp.local_db(), ksm, ts);
+            schema_mutations = service::prepare_new_keyspace_announcement(_proxy.local_db(), ksm, ts);
         } catch (exceptions::already_exists_exception&) {
-            if (sp.data_dictionary().has_schema(keyspace_name, table_name)) {
+            if (_proxy.data_dictionary().has_schema(keyspace_name, table_name)) {
                 co_return api_error::resource_in_use(fmt::format("Table {} already exists", table_name));
             }
         }
-        if (sp.data_dictionary().try_find_table(schema->id())) {
+        if (_proxy.data_dictionary().try_find_table(schema->id())) {
             // This should never happen, the ID is supposed to be unique
             co_return api_error::internal(format("Table with ID {} already exists", schema->id()));
         }
@@ -1669,7 +1708,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         for (schema_builder& view_builder : view_builders) {
             schemas.push_back(view_builder.build());
         }
-        co_await service::prepare_new_column_families_announcement(schema_mutations, sp, *ksm, schemas, ts);
+        co_await service::prepare_new_column_families_announcement(schema_mutations, _proxy, *ksm, schemas, ts);
 
         // If a role is allowed to create a table, we must give it permissions to
         // use (and eventually delete) the specific table it just created (and
@@ -1693,7 +1732,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         }
         std::tie(schema_mutations, group0_guard) = co_await std::move(mc).extract();
         try {
-            co_await mm.announce(std::move(schema_mutations), std::move(group0_guard), fmt::format("alternator-executor: create {} table", table_name));
+            co_await _mm.announce(std::move(schema_mutations), std::move(group0_guard), fmt::format("alternator-executor: create {} table", table_name));
             break;
         }  catch (const service::group0_concurrent_modification& ex) {
             elogger.info("Failed to execute CreateTable {} due to concurrent schema modifications. {}.",
@@ -1705,9 +1744,9 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         }
     }
 
-    co_await mm.wait_for_schema_agreement(sp.local_db(), db::timeout_clock::now() + 10s, nullptr);
+    co_await _mm.wait_for_schema_agreement(_proxy.local_db(), db::timeout_clock::now() + 10s, nullptr);
     rjson::value status = rjson::empty_object();
-    executor::supplement_table_info(request, *schema, sp);
+    executor::supplement_table_info(request, *schema, _proxy);
     rjson::add(status, "TableDescription", std::move(request));
     co_return rjson::print(std::move(status));
 }
@@ -1716,9 +1755,9 @@ future<executor::request_return_type> executor::create_table(client_state& clien
     _stats.api_operations.create_table++;
     elogger.trace("Creating table {}", request);
 
-    co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), client_state_other_shard = client_state.move_to_other_shard(), enforce_authorization = bool(_enforce_authorization)]
+    co_return co_await _mm.container().invoke_on(0, [&, &exec = container(), tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), client_state_other_shard = client_state.move_to_other_shard(), enforce_authorization = bool(_enforce_authorization)]
                                         (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
-        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local(), enforce_authorization);
+        co_return co_await exec.local().create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), enforce_authorization);
     });
 }
 
