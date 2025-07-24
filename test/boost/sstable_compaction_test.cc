@@ -5198,7 +5198,7 @@ future<> run_controller_test(sstables::compaction_strategy_type compaction_strat
             .maintenance_sched_group = { default_scheduling_group() },
             .available_memory = available_memory,
         };
-        auto manager = compaction_manager(std::move(cfg), as, task_manager);
+        auto manager = compaction_manager(std::move(cfg), as, task_manager, nullptr);
         auto stop_manager = deferred_stop(manager);
 
         auto add_sstable = [&env] (table_for_tests& t, uint64_t data_size, int level) {
@@ -5559,7 +5559,7 @@ SEASTAR_THREAD_TEST_CASE(compaction_manager_stop_and_drain_race_test) {
     auto cfg = compaction_manager::config{ .available_memory = 1 };
     auto task_manager = tasks::task_manager({}, as);
     auto stop_task_manager = deferred_stop(task_manager);
-    auto cm = compaction_manager(cfg, as, task_manager);
+    auto cm = compaction_manager(cfg, as, task_manager, nullptr);
     auto stop_cm = deferred_stop(cm);
     cm.enable();
 
