@@ -282,6 +282,10 @@ experimental:
     instead of just a single MODIFY or INSERT.
     <https://github.com/scylladb/scylla/issues/6930>
     <https://github.com/scylladb/scylla/issues/6918>
+  * The optional ShardFilter parameter to DescribeStream, added to DynamoDB
+    in July 2025 to optimize shard discovery, is not yet implemented in
+    Alternator.
+    <https://github.com/scylladb/scylla/issues/25160>
 
 ## Unimplemented API features
 
