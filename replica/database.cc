@@ -81,6 +81,7 @@
 #include "readers/multi_range.hh"
 #include "readers/multishard.hh"
 #include "utils/labels.hh"
+#include "cql3/util.hh"
 
 #include <algorithm>
 
@@ -3363,11 +3364,29 @@ database::on_effective_service_levels_cache_reloaded() {
     co_return;
 }
 
-void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
-    SCYLLA_ASSERT(get_config().rf_rack_valid_keyspaces());
+void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr tmptr) const {
+    const auto& keyspaces = get_keyspaces();
+    std::vector<std::string_view> invalid_keyspaces{};
 
-    for (const auto& [name, info] : get_keyspaces()) {
-        locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
+    for (const auto& [name, info] : keyspaces) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy());
+        } catch (...) {
+            if (enforce_rf_rack_valid_keyspaces) {
+                throw;
+            }
+
+            invalid_keyspaces.push_back(std::string_view(name));
+        }
+    }
+
+    if (invalid_keyspaces.size() == 0) {
+        dblog.info("All keyspaces are RF-rack-valid");
+    } else {
+        dblog.warn("The following keyspaces are not RF-rack-valid: {}", invalid_keyspaces
+                | std::views::transform(cql3::util::maybe_quote)
+                | std::views::join_with(std::string_view(", "))
+                | std::ranges::to<std::string>());
     }
 }
 
