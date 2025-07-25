@@ -1081,8 +1081,10 @@ void dump_index_operation(schema_ptr schema, reader_permit permit, const std::ve
             auto pkey = idx_reader->get_partition_key();
 
             writer.StartObject();
-            writer.Key("key");
-            writer.DataKey(*schema, pkey);
+            if (pkey) {
+                writer.Key("key");
+                writer.DataKey(*schema, *pkey);
+            }
             writer.Key("pos");
             writer.Uint64(pos);
             writer.EndObject();

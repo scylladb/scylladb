@@ -1208,7 +1208,7 @@ private:
         }
         return (_index_in_current_partition
                 ? _index_reader->advance_to_next_partition()
-                : get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
+                : get_index_reader().advance_past_definitely_present_partition(*_current_partition_key)).then([this] {
             _index_in_current_partition = true;
             auto [start, end] = _index_reader->data_file_positions();
             if (end && start > *end) {
@@ -1229,7 +1229,7 @@ private:
             return read_from_datafile();
         }
         auto pk = _index_reader->get_partition_key();
-        auto key = dht::decorate_key(*_schema, std::move(pk));
+        auto key = dht::decorate_key(*_schema, std::move(pk.value()));
         _consumer.setup_for_partition(key.key());
         on_next_partition(std::move(key), tombstone(*tomb));
         return make_ready_future<>();
@@ -1299,7 +1299,7 @@ private:
         return [this] {
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
-                return get_index_reader().advance_to(*_current_partition_key);
+                return get_index_reader().advance_to_definitely_present_partition(*_current_partition_key);
             }
             return make_ready_future();
         }().then([this, pos] {
