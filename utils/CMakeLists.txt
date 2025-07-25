@@ -2,6 +2,9 @@ find_package(cryptopp REQUIRED)
 find_package(rapidxml REQUIRED)
 find_package(GnuTLS 3.3.26 REQUIRED)
 add_library(utils STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(utils REUSE_FROM scylla-main)
+endif()
 target_sources(utils
   PRIVATE
     UUID_gen.cc

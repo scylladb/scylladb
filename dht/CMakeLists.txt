@@ -1,6 +1,9 @@
 include(add_whole_archive)
 
 add_library(scylla_dht STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(scylla_dht REUSE_FROM scylla-main)
+endif()
 target_sources(scylla_dht
   PRIVATE
     boot_strapper.cc

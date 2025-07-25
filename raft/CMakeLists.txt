@@ -1,4 +1,7 @@
 add_library(raft STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(raft REUSE_FROM scylla-main)
+endif()
 target_sources(raft
   PRIVATE
     fsm.cc

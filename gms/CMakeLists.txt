@@ -1,4 +1,7 @@
 add_library(gms STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(gms REUSE_FROM scylla-main)
+endif()
 target_sources(gms
   PRIVATE
     application_state.cc

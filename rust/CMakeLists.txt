@@ -70,6 +70,9 @@ set_target_properties(Rust::rust_combined PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_BINARY_DIR}")
 
 add_library(wasmtime_bindings STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(wasmtime_bindings REUSE_FROM scylla-main)
+endif()
 target_sources(wasmtime_bindings
   PRIVATE
     ${cxx_header}
@@ -88,6 +91,9 @@ generate_cxxbridge(inc
   SOURCES inc_sources)
 
 add_library(inc STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(inc REUSE_FROM scylla-main)
+endif()
 target_sources(inc
   PRIVATE
     ${cxx_header}
