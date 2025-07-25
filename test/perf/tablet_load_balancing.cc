@@ -38,6 +38,8 @@ using namespace locator;
 using namespace replica;
 using namespace service;
 
+static seastar::logger simlblog("simlb");
+
 static seastar::abort_source aborted;
 
 static const sstring dc = "dc1";
@@ -100,7 +102,7 @@ void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     }
     for (auto table_id : plan.resize_plan().finalize_resize) {
         auto& old_tmap = tm.tablets().get_tablet_map(table_id);
-        testlog.info("Setting new tablet map of size {}", old_tmap.tablet_count() * 2);
+        simlblog.info("Setting new tablet map of size {}", old_tmap.tablet_count() * 2);
         tablet_map tmap(old_tmap.tablet_count() * 2);
         tm.tablets().set_tablet_map(table_id, std::move(tmap));
     }
@@ -108,13 +110,46 @@ void apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 
 // Reflects the plan in a given token metadata as if the migrations were fully executed.
 static
-void apply_plan(token_metadata& tm, const migration_plan& plan) {
+void apply_plan(token_metadata& tm, const migration_plan& plan, locator::load_stats& load_stats) {
     for (auto&& mig : plan.migrations()) {
         tm.tablets().mutate_tablet_map(mig.tablet.table, [&mig] (tablet_map& tmap) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
             tmap.set_tablet(mig.tablet.tablet, tinfo);
         });
+        // Update load_stats
+        if (mig.src.host != mig.dst.host) {
+            if (!load_stats.tablet_stats.contains(mig.src.host)) {
+                throw std::runtime_error(format("Source host not found in load_stats for migration {}", mig));
+            }
+            if (!load_stats.tablet_stats.contains(mig.dst.host)) {
+                throw std::runtime_error(format("Destination host not found in load_stats for migration {}", mig));
+            }
+
+            auto& src_stats = load_stats.tablet_stats.at(mig.src.host);
+            auto& dst_stats = load_stats.tablet_stats.at(mig.dst.host);
+
+            auto& tmap = tm.tablets().get_tablet_map(mig.tablet.table);
+            const range_based_tablet_id rb_tid{mig.tablet.table, tmap.get_token_range(mig.tablet.tablet)};
+
+            if (!src_stats.tablet_sizes.contains(rb_tid)) {
+                throw std::runtime_error(format("Tablet not found on source load_stats for migration: {}", mig));
+            }
+            if (dst_stats.tablet_sizes.contains(rb_tid)) {
+                throw std::runtime_error(format("Tablet already on destination load_stats for migration: {}", mig));
+            }
+
+            uint64_t used_disk_space = 0;
+            for (auto size : std::views::values(dst_stats.tablet_sizes)) {
+                used_disk_space += size;
+            }
+            const uint64_t tablet_size = src_stats.tablet_sizes.at(rb_tid);
+            if (dst_stats.effective_capacity < used_disk_space + tablet_size) {
+                throw std::runtime_error(format("Attempting to move tablet to host with insufficient disk capacity for migration: {}", mig));
+            }
+            dst_stats.tablet_sizes[rb_tid] = tablet_size;
+            src_stats.tablet_sizes.erase(rb_tid);
+        }
     }
     apply_resize_plan(tm, plan);
 }
@@ -135,7 +170,7 @@ struct rebalance_stats {
 };
 
 static
-rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_stats = {}, std::unordered_set<host_id> skiplist = {}) {
+rebalance_stats rebalance_tablets(cql_test_env& e, lw_shared_ptr<locator::load_stats> load_stats, std::unordered_set<host_id> skiplist = {}) {
     rebalance_stats stats;
     abort_source as;
 
@@ -153,6 +188,14 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
 
         auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
 
+        simlblog.debug("balance emited {} migrations", plan.migrations().size());
+        for (const auto& mig : plan.migrations()) {
+            dht::token_range range {stm.get()->tablets().get_tablet_map(mig.tablet.table).get_token_range(mig.tablet.tablet)};
+            sstring kind = mig.src.host == mig.dst.host ? "intra" : "     ";
+            simlblog.debug("  {} mig: {} src: {} dst: {} size: {}", kind, mig.tablet, mig.src, mig.dst,
+                            bytes2gb(load_stats->get_tablet_size(mig.src.host, {mig.tablet.table, range}, service::default_target_tablet_size)));
+        }
+
         auto end_time = std::chrono::steady_clock::now();
         auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;
 
@@ -163,7 +206,7 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
             .rebalance_count = 1,
         };
         stats += iteration_stats;
-        testlog.debug("Rebalance iteration {} took {:.3f} [s]: mig={}, bad={}, first_bad={}, eval={}, skiplist={}, skip: (load={}, rack={}, node={})",
+        simlblog.debug("Rebalance iteration {} took {:.3f} [s]: mig={}, bad={}, first_bad={}, eval={}, skiplist={}, skip: (load={}, rack={}, node={})",
                       i + 1, elapsed.count(),
                       lb_stats.migrations_produced,
                       lb_stats.bad_migrations,
@@ -180,12 +223,11 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
             // causing test flakiness.
             save_tablet_metadata(e.local_db(), stm.get()->tablets(), guard.write_timestamp()).get();
             e.get_storage_service().local().update_tablet_metadata({}).get();
-
-            testlog.info("Rebalance took {:.3f} [s] after {} iteration(s)", stats.elapsed_time.count(), i + 1);
+            simlblog.info("Rebalance took {:.3f} [s] after {} iteration(s)", stats.elapsed_time.count(), i + 1);
             return stats;
         }
         stm.mutate_token_metadata([&] (token_metadata& tm) {
-            apply_plan(tm, plan);
+            apply_plan(tm, plan, *load_stats);
             return make_ready_future<>();
         }).get();
     }
@@ -197,16 +239,16 @@ struct params {
     int nodes;
     std::optional<int> tablets1;
     std::optional<int> tablets2;
-    int rf1;
-    int rf2;
     int shards;
     int scale1 = 1;
     int scale2 = 1;
+    unsigned int seed;
+    std::vector<unsigned> capacities = {650};
+    bool high_tablet_size_variability = false;
 };
 
 struct table_balance {
     double shard_overcommit;
-    double best_shard_overcommit;
     double node_overcommit;
 };
 
@@ -227,8 +269,8 @@ template<>
 struct fmt::formatter<table_balance> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const table_balance& b, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{shard={:.2f} (best={:.2f}), node={:.2f}}}",
-                              b.shard_overcommit, b.best_shard_overcommit, b.node_overcommit);
+        return fmt::format_to(ctx.out(), "{{shard={:.2f} node={:.2f}}}",
+                              b.shard_overcommit, b.node_overcommit);
     }
 };
 
@@ -244,17 +286,49 @@ template<>
 struct fmt::formatter<params> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const params& p, FormatContext& ctx) const {
-        auto tablets1_per_shard = double(p.tablets1.value_or(0)) * p.rf1 / (p.nodes * p.shards);
-        auto tablets2_per_shard = double(p.tablets2.value_or(0)) * p.rf2 / (p.nodes * p.shards);
-        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), rf1={}, rf2={}, shards={}}}",
+        auto tablets1_per_shard = double(p.tablets1.value_or(0)) / (p.nodes * p.shards);
+        auto tablets2_per_shard = double(p.tablets2.value_or(0)) / (p.nodes * p.shards);
+        return fmt::format_to(ctx.out(), "{{iterations={}, nodes={}, tablets1={} ({:0.1f}/sh), tablets2={} ({:0.1f}/sh), shards={}, seed={}, capacities={}, high_tablet_size_variability={}}}",
                          p.iterations, p.nodes,
                          p.tablets1.value_or(0), tablets1_per_shard,
                          p.tablets2.value_or(0), tablets2_per_shard,
-                         p.rf1, p.rf2, p.shards);
+                         p.shards,
+                         p.seed, p.capacities, p.high_tablet_size_variability);
     }
 };
 
-future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware) {
+struct tablet_size_generator {
+    static constexpr uint64_t huge_tablet_size_threshold = default_target_tablet_size * 10;
+
+    size_t tablet_count = 0;
+    bool use_high_variability = false;
+
+    tests::random::stepped_int_distribution<size_t> moderate_variability {{
+        {97.9, {1,                                  default_target_tablet_size * 2}},
+        { 2.0, {default_target_tablet_size * 2 + 1, huge_tablet_size_threshold}},
+        { 0.1, {huge_tablet_size_threshold + 1,     huge_tablet_size_threshold * 5}},
+    }};
+
+    tests::random::stepped_int_distribution<size_t> high_variability {{
+        {90.0, {1,                                  default_target_tablet_size * 2}},
+        { 9.0, {default_target_tablet_size * 2 + 1, huge_tablet_size_threshold}},
+        { 1.0, {huge_tablet_size_threshold + 1,     huge_tablet_size_threshold * 5}},
+    }};
+
+    explicit tablet_size_generator(const params& p)
+        : use_high_variability(p.high_tablet_size_variability) {
+    }
+
+    uint64_t generate() {
+        if (use_high_variability) {
+            return high_variability(tests::random::gen());
+        }
+
+        return moderate_variability(tests::random::gen());
+    }
+};
+
+future<results> test_load_balancing_with_many_tables(params p) {
     auto cfg = tablet_cql_test_config();
     results global_res;
     co_await do_with_cql_env_thread([&] (auto& e) {
@@ -264,17 +338,20 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         topology_builder topo(e);
         std::vector<host_id> hosts;
-        locator::load_stats stats;
+        lw_shared_ptr<locator::load_stats> stats = make_lw_shared<locator::load_stats>();
+        stats->tablet_stats = tablet_load_stats_map{};
 
+        uint64_t total_capacity = 0;
         auto add_host = [&] {
+            static int added_hosts = 0;
             auto host = topo.add_node(service::node_state::normal, shard_count);
             hosts.push_back(host);
-            stats.capacity[host] = default_target_tablet_size * shard_count;
-            testlog.info("Added new node: {}", host);
-        };
-
-        auto make_stats = [&] {
-            return make_lw_shared<locator::load_stats>(stats);
+            const uint64_t capacity = p.capacities[added_hosts % p.capacities.size()] * 1024L * 1024L * 1024L * shard_count;
+            stats->capacity[host] = capacity;
+            stats->tablet_stats[host].effective_capacity = capacity;
+            total_capacity += capacity;
+            simlblog.info("Added new node: {}", host);
+            added_hosts++;
         };
 
         for (int i = 0; i < n_hosts; ++i) {
@@ -285,7 +362,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         auto bootstrap = [&] {
             add_host();
-            global_res.stats += rebalance_tablets(e, make_stats());
+            global_res.stats += rebalance_tablets(e, stats);
         };
 
         auto decommission = [&] (host_id host) {
@@ -294,64 +371,85 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 throw std::runtime_error(format("No such host: {}", host));
             }
             topo.set_node_state(host, service::node_state::decommissioning);
-            global_res.stats += rebalance_tablets(e, make_stats());
+            global_res.stats += rebalance_tablets(e, stats);
             if (stm.get()->tablets().has_replica_on(host)) {
                 throw std::runtime_error(format("Host {} still has replicas!", host));
             }
             topo.set_node_state(host, service::node_state::left);
-            testlog.info("Node decommissioned: {}", host);
+            simlblog.info("Node decommissioned: {}", host);
             hosts.erase(hosts.begin() + i);
+            total_capacity -= stats->capacity.at(host);
+            stats->tablet_stats.erase(host);
         };
 
-        auto ks1 = add_keyspace(e, {{topo.dc(), p.rf1}}, p.tablets1.value_or(1));
-        auto ks2 = add_keyspace(e, {{topo.dc(), p.rf2}}, p.tablets2.value_or(1));
+        auto ks1 = add_keyspace(e, {{topo.dc(), 1}}, p.tablets1.value_or(1));
+        auto ks2 = add_keyspace(e, {{topo.dc(), 1}}, p.tablets2.value_or(1));
         auto id1 = add_table(e, ks1).get();
         auto id2 = add_table(e, ks2).get();
         schema_ptr s1 = e.local_db().find_schema(id1);
         schema_ptr s2 = e.local_db().find_schema(id2);
 
+        std::unordered_map<table_id, uint64_t> table_sizes;
+
+        // generate tablet sizes
+        std::unordered_map<host_id, uint64_t> used_disk_space;
+        tablet_size_generator tsg(p);
+        for (auto&& [table, tmap] : stm.get()->tablets().all_tables_ungrouped()) {
+            tmap->for_each_tablet([&] (tablet_id tid, const tablet_info& ti) -> future<> {
+                for (const auto& replica : ti.replicas) {
+                    const uint64_t tablet_size = tsg.generate();
+                    used_disk_space[replica.host] += tablet_size;
+                    locator::tablet_load_stats& tls = stats->tablet_stats[replica.host];
+                    if (used_disk_space[replica.host] > tls.effective_capacity) {
+                        throw std::runtime_error("Not enough disk capacity to allocate tablets for the selected topology.");
+                    }
+                    locator::range_based_tablet_id rb_tid {table, tmap->get_token_range(tid)};
+                    tls.tablet_sizes[rb_tid] = tablet_size;
+                    table_sizes[table] += tablet_size;
+                    simlblog.debug("generated tablet size {} for {}:{}", tablet_size, table, tid);
+                }
+                return make_ready_future<>();
+            }).get();
+        }
+
         auto check_balance = [&] () -> cluster_balance {
             cluster_balance res;
 
-            testlog.debug("tablet metadata: {}", stm.get()->tablets());
+            simlblog.debug("tablet metadata: {}", stm.get()->tablets());
 
             int table_index = 0;
             for (auto s : {s1, s2}) {
-                load_sketch load(stm.get());
+                load_sketch load(stm.get(), stats);
                 load.populate(std::nullopt, s->id()).get();
 
-                min_max_tracker<uint64_t> shard_load_minmax;
-                min_max_tracker<uint64_t> node_load_minmax;
-                uint64_t sum_node_load = 0;
-                uint64_t shard_count = 0;
+                auto ideal_load = double(table_sizes[s->id()]) / total_capacity;
+                min_max_tracker<double> shard_load_minmax;
+                min_max_tracker<double> node_load_minmax;
+                double sum_node_load = 0;
                 for (auto h: hosts) {
                     auto minmax = load.get_shard_minmax(h);
                     auto node_load = load.get_load(h);
-                    auto avg_shard_load = load.get_real_avg_shard_load(h);
-                    auto overcommit = double(minmax.max()) / avg_shard_load;
+                    auto avg_tablet_count = load.get_real_avg_tablet_count(h);
+                    auto overcommit = minmax.max() / ideal_load;
                     shard_load_minmax.update(minmax.max());
-                    shard_count += load.get_shard_count(h);
-                    testlog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
-                                 h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), avg_shard_load, overcommit);
+                    simlblog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, avg_tablets={:.2f}, overcommit={:.2f}",
+                                 h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), avg_tablet_count, overcommit);
                     node_load_minmax.update(node_load);
                     sum_node_load += node_load;
                 }
 
-                auto avg_shard_load = double(sum_node_load) / shard_count;
-                auto shard_overcommit = shard_load_minmax.max() / avg_shard_load;
-                // Overcommit given the best distribution of tablets given current number of tablets.
-                auto best_shard_overcommit = div_ceil(sum_node_load, shard_count) / avg_shard_load;
-                testlog.info("Shard overcommit: {:.2f}, best={:.2f}", shard_overcommit, best_shard_overcommit);
+                // Overcommit given the best distribution of tablets given current table size.
+                auto avg_node_load = sum_node_load / hosts.size();
+                auto shard_overcommit = shard_load_minmax.max() / ideal_load;
+                simlblog.info("Shard overcommit: {}", shard_overcommit);
 
                 auto node_imbalance = node_load_minmax.max() - node_load_minmax.min();
-                auto avg_node_load = double(sum_node_load) / hosts.size();
-                auto node_overcommit = node_load_minmax.max() / avg_node_load;
-                testlog.info("Node imbalance: min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
+                auto node_overcommit = node_load_minmax.max() / ideal_load;
+                simlblog.info("Node imbalance: min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
                               node_load_minmax.min(), node_load_minmax.max(), node_imbalance, avg_node_load, node_overcommit);
 
                 res.tables[table_index++] = {
                     .shard_overcommit = shard_overcommit,
-                    .best_shard_overcommit = best_shard_overcommit,
                     .node_overcommit = node_overcommit
                 };
             }
@@ -362,17 +460,15 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 global_res.worst.tables[i].node_overcommit = std::max(global_res.worst.tables[i].node_overcommit, t.node_overcommit);
             }
 
-            testlog.info("Overcommit: {}", res);
+            simlblog.info("Overcommit: {}", res);
             return res;
         };
 
-        testlog.debug("tablet metadata: {}", stm.get()->tablets());
-
-        e.get_tablet_allocator().local().set_use_table_aware_balancing(tablet_aware);
+        simlblog.debug("tablet metadata: {}", stm.get()->tablets());
 
         check_balance();
 
-        rebalance_tablets(e, make_stats());
+        rebalance_tablets(e, stats);
 
         global_res.init = global_res.worst = check_balance();
 
@@ -388,59 +484,46 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 }
 
 future<> run_simulation(const params& p, const sstring& name = "") {
-    testlog.info("[run {}] params: {}", name, p);
+    simlblog.info("[run {}] params: {}", name, p);
 
-    auto total_tablet_count = p.tablets1.value_or(0) * p.rf1 + p.tablets2.value_or(0) * p.rf2;
-    testlog.info("[run {}] tablet count: {}", name, total_tablet_count);
-    testlog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
+    auto total_tablet_count = p.tablets1.value_or(0) + p.tablets2.value_or(0);
+    simlblog.info("[run {}] tablet count: {}", name, total_tablet_count);
+    simlblog.info("[run {}] tablet count / shard: {:.3f}", name, double(total_tablet_count) / (p.nodes * p.shards));
 
-    auto res = co_await test_load_balancing_with_many_tables(p, true);
-    testlog.info("[run {}] Overcommit       : init : {}", name, res.init);
-    testlog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
-    testlog.info("[run {}] Overcommit       : last : {}", name, res.last);
-    testlog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
+    auto res = co_await test_load_balancing_with_many_tables(p);
+    simlblog.info("[run {}] Overcommit       : init : {}", name, res.init);
+    simlblog.info("[run {}] Overcommit       : worst: {}", name, res.worst);
+    simlblog.info("[run {}] Overcommit       : last : {}", name, res.last);
+    simlblog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
                  res.stats.elapsed_time.count(), res.stats.max_rebalance_time.count(), res.stats.rebalance_count);
 
     if (res.stats.elapsed_time > seconds_double(1)) {
-        testlog.warn("[run {}] Scheduling took longer than 1s!", name);
+        simlblog.warn("[run {}] Scheduling took longer than 1s!", name);
     }
 
-    auto old_res = co_await test_load_balancing_with_many_tables(p, false);
-    testlog.info("[run {}] Overcommit (old) : init : {}", name, old_res.init);
-    testlog.info("[run {}] Overcommit (old) : worst: {}", name, old_res.worst);
-    testlog.info("[run {}] Overcommit (old) : last : {}", name, old_res.last);
-    testlog.info("[run {}] Overcommit       : time : {:.3f} [s], max={:.3f} [s], count={}", name,
-                 old_res.stats.elapsed_time.count(), old_res.stats.max_rebalance_time.count(), old_res.stats.rebalance_count);
-
     for (int i = 0; i < nr_tables; ++i) {
-        if (res.worst.tables[i].shard_overcommit > old_res.worst.tables[i].shard_overcommit) {
-            testlog.warn("[run {}] table{} shard overcommit worse!", name, i + 1);
-        }
         auto overcommit = res.worst.tables[i].shard_overcommit;
         if (overcommit > 1.2) {
-            testlog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
+            simlblog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
         }
     }
 }
 
-future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
+future<> run_simulations(const boost::program_options::variables_map& app_cfg, unsigned seed) {
     for (auto i = 0; i < app_cfg["runs"].as<int>(); i++) {
         auto shards = 1 << tests::random::get_int(0, 8);
-        auto rf1 = tests::random::get_int(1, 3);
-        auto rf2 = tests::random::get_int(1, 3);
         auto scale1 = 1 << tests::random::get_int(0, 5);
         auto scale2 = 1 << tests::random::get_int(0, 5);
         auto nodes = tests::random::get_int(3, 6);
         params p {
             .iterations = app_cfg["iterations"].as<int>(),
             .nodes = nodes,
-            .tablets1 = std::bit_ceil<size_t>(div_ceil(shards * nodes, rf1) * scale1),
-            .tablets2 = std::bit_ceil<size_t>(div_ceil(shards * nodes, rf2) * scale2),
-            .rf1 = rf1,
-            .rf2 = rf2,
+            .tablets1 = std::bit_ceil<size_t>(shards * nodes * scale1),
+            .tablets2 = std::bit_ceil<size_t>(shards * nodes * scale2),
             .shards = shards,
             .scale1 = scale1,
             .scale2 = scale2,
+            .seed = seed,
         };
 
         auto name = format("#{}", i);
@@ -459,35 +542,51 @@ int scylla_tablet_load_balancing_main(int argc, char** argv) {
             ("nodes", bpo::value<int>(), "Number of nodes in the cluster.")
             ("tablets1", bpo::value<int>(), "Number of tablets for the first table.")
             ("tablets2", bpo::value<int>(), "Number of tablets for the second table.")
-            ("rf1", bpo::value<int>(), "Replication factor for the first table.")
-            ("rf2", bpo::value<int>(), "Replication factor for the second table.")
             ("shards", bpo::value<int>(), "Number of shards per node.")
+            ("seed", bpo::value<unsigned>(), "Tablet size random generator seed.")
+            ("capacities", bpo::value<std::vector<unsigned>>()->multitoken(), "Disk capacity per shard in GB; can have muiltiple values.")
+            ("high_tablet_size_variability", bpo::value<bool>(), "Enable higher tablet size variability.")
             ("verbose", "Enables standard logging")
             ;
     return app.run(argc, argv, [&] {
         return seastar::async([&] {
             if (!app.configuration().contains("verbose")) {
-                auto testlog_level = logging::logger_registry().get_logger_level("testlog");
+                auto simlblog_level = logging::logger_registry().get_logger_level("simlb");
                 logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
-                logging::logger_registry().set_logger_level("testlog", testlog_level);
+                logging::logger_registry().set_logger_level("simlb", simlblog_level);
             }
             auto stop_test = defer([] {
                 aborted.request_abort();
             });
+
             logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
             try {
+                unsigned seed = 0;
+                if (app.configuration().contains("seed")) {
+                    seed = app.configuration()["seed"].as<unsigned>();
+                } else {
+                    seed = std::random_device{}();
+                }
+                testing::local_random_engine.seed(seed);
+
                 if (app.configuration().contains("runs")) {
-                    run_simulations(app.configuration()).get();
+                    run_simulations(app.configuration(), seed).get();
                 } else {
                     params p {
                         .iterations = app.configuration()["iterations"].as<int>(),
                         .nodes = app.configuration()["nodes"].as<int>(),
                         .tablets1 = app.configuration()["tablets1"].as<int>(),
                         .tablets2 = app.configuration()["tablets2"].as<int>(),
-                        .rf1 = app.configuration()["rf1"].as<int>(),
-                        .rf2 = app.configuration()["rf2"].as<int>(),
                         .shards = app.configuration()["shards"].as<int>(),
+                        .seed = seed,
                     };
+
+                    if (app.configuration().contains("capacities")) {
+                        p.capacities = app.configuration()["capacities"].as<std::vector<unsigned>>();
+                    }
+                    if (app.configuration().contains("high_tablet_size_variability")) {
+                        p.high_tablet_size_variability = app.configuration()["high_tablet_size_variability"].as<bool>();
+                    }
                     run_simulation(p).get();
                 }
             } catch (seastar::abort_requested_exception&) {

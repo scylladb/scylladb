@@ -611,6 +611,9 @@ public:
 
     named_value<bool> rf_rack_valid_keyspaces;
 
+    named_value<bool> force_capacity_based_balancing;
+    named_value<float> size_based_balance_threshold_percentage;
+
     static const sstring default_tls_priority;
 private:
     template<typename T>
