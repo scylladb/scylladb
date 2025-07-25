@@ -3255,9 +3255,13 @@ const db::commitlog::config& db::commitlog::active_config() const {
     return _segment_manager->cfg;
 }
 
+db::commitlog::segment_data_corruption_error::segment_data_corruption_error(std::string_view msg, uint64_t s)
+    : _msg(fmt::format("Segment data corruption: {}", msg))
+    , _bytes(s)
+{}
 
-db::commitlog::segment_truncation::segment_truncation(uint64_t pos) 
-    : _msg(fmt::format("Segment truncation at {}", pos))
+db::commitlog::segment_truncation::segment_truncation(std::string_view reason, uint64_t pos)
+    : _msg(fmt::format("Segment truncation at {}. Reason: {}", pos, reason))
     , _pos(pos)
 {}
 
@@ -3447,7 +3451,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
 
             while (rem < size) {
                 if (eof) {
-                    throw segment_truncation(block_boundry);
+                    auto reason = fmt::format("unexpected EOF, rem={}, size={}", rem, size);
+                    throw segment_truncation(std::move(reason), block_boundry);
                 }
 
                 auto block_size = alignment - initial.size_bytes();
@@ -3458,7 +3463,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
 
                 if (tmp.size_bytes() == 0) {
                     eof = true;
-                    throw segment_truncation(block_boundry);
+                    auto reason = fmt::format("read 0 bytes, while tried to read {}", block_size);
+                    throw segment_truncation(std::move(reason), block_boundry);
                 }
 
                 crc32_nbo crc;
@@ -3493,10 +3499,12 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                     auto checksum = crc.checksum();
 
                     if (check != checksum) {
-                        throw segment_data_corruption_error("Data corruption", alignment);
+                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}", check, checksum);
+                        throw segment_data_corruption_error(std::move(reason), alignment);
                     }
                     if (id != this->id) {
-                        throw segment_truncation(pos + rem);
+                        auto reason = fmt::format("IDs do not match: {} vs. {}", id, this->id);
+                        throw segment_truncation(std::move(reason), pos + rem);
                     }
                 }
                 tmp.remove_suffix(detail::sector_overhead_size);
@@ -3771,7 +3779,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                     co_await read_chunk();
                 }
                 if (corrupt_size > 0) {
-                    throw segment_data_corruption_error("Data corruption", corrupt_size);
+                    auto reason = fmt::format("corrupted size while reading file: {}", corrupt_size);
+                    throw segment_data_corruption_error(std::move(reason), corrupt_size);
                 }
             } catch (...) {
                 p = std::current_exception();

@@ -392,9 +392,7 @@ public:
     class segment_data_corruption_error: public segment_error {
         std::string _msg;
     public:
-        segment_data_corruption_error(std::string msg, uint64_t s)
-                : _msg(std::move(msg)), _bytes(s) {
-        }
+        segment_data_corruption_error(std::string_view msg, uint64_t s);
         uint64_t bytes() const {
             return _bytes;
         }
@@ -425,7 +423,7 @@ public:
         std::string _msg;
         uint64_t _pos;
     public:
-        segment_truncation(uint64_t);
+        segment_truncation(std::string_view reason, uint64_t position);
 
         uint64_t position() const;
         const char* what() const noexcept override;
