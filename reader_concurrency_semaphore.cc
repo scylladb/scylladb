@@ -499,12 +499,6 @@ public:
         return _ex;
     }
 
-    void check_abort() const {
-        if (_ex) {
-            std::rethrow_exception(_ex);
-        }
-    }
-
     query::max_result_size max_result_size() const {
         return _max_result_size;
     }
@@ -650,10 +644,6 @@ void reader_permit::set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept
 
 const std::exception_ptr& reader_permit::get_abort_exception() const noexcept {
     return _impl->get_abort_exception();
-}
-
-void reader_permit::check_abort() const {
-    return _impl->check_abort();
 }
 
 query::max_result_size reader_permit::max_result_size() const {
