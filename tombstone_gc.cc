@@ -40,10 +40,7 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_group0(schema_ptr s) 
     if (!_reconcile_history_maps) {
         return gc_clock::time_point::min();
     }
-    if (!_reconcile_history_maps->_group0_gc_time) {
-        return gc_clock::time_point::min();
-    }
-    return check_min(s, *_reconcile_history_maps->_group0_gc_time);
+    return check_min(s, _reconcile_history_maps->_group0_gc_time);
 }
 
 void tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
@@ -219,10 +216,7 @@ void tombstone_gc_state::update_group0_refresh_time(gc_clock::time_point refresh
     if (!_reconcile_history_maps) {
         on_fatal_internal_error(dblog, "group0_gc_time not found/created");
     }
-    if (!_reconcile_history_maps->_group0_gc_time) {
-        _reconcile_history_maps->_group0_gc_time = seastar::make_lw_shared<gc_clock::time_point>();
-    }
-    *_reconcile_history_maps->_group0_gc_time = refresh_time;
+    _reconcile_history_maps->_group0_gc_time = refresh_time;
 }
 
 static bool needs_repair_before_gc(const replica::database& db, sstring ks_name) {
