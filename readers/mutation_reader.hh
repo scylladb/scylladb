@@ -376,6 +376,10 @@ public:
             }
         }
 
+        std::exception_ptr get_abort_exception() const noexcept {
+            return _permit.get_abort_exception();
+        }
+
         void check_abort() {
             _permit.check_abort();
         }
