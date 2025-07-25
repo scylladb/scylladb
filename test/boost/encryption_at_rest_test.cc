@@ -1012,9 +1012,37 @@ static future<> test_broken_encrypted_commitlog(const test_provider_args& args, 
  */
 static future<> network_error_test_helper(const tmpdir& tmp, const std::string& host, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
     fake_proxy proxy(host);
+    std::exception_ptr p;
+    try {
+        auto [scopts, yaml] = make_opts(proxy);
 
-    auto [scopts, yaml] = make_opts(proxy);
+        test_provider_args args{
+            .tmp = tmp,
+            .extra_yaml = yaml,
+            .n_tables = 10, 
+            .before_create_table = [&](auto& env) {
+                // turn off proxy. all key resolution after this should fail
+                proxy.enable(false);
+                // wait for key cache expiry.
+                seastar::sleep(10ms).get();
+                // ensure commitlog will create a new segment on write -> eventual write failure
+                env.db().invoke_on_all([](replica::database& db) {
+                    return db.commitlog()->force_new_active_segment();
+                }).get();
+            },
+            .on_insert_exception = [&](auto&&) {
+                // once we get the exception we have to enable key resolution again, 
+                // otherwise we can't shut down cql test env.
+                proxy.enable(true);
+            },
+            .timeout = timeout_config{
+                // set really low write timeouts so we get a failure (timeout)
+                // when we fail to write to commitlog
+                100ms, 100ms, 100ms, 100ms, 100ms, 100ms, 100ms
+            },
+        };
 
+<<<<<<< HEAD
     test_provider_args args{
         .tmp = tmp,
         .extra_yaml = yaml,
@@ -1045,8 +1073,52 @@ static future<> network_error_test_helper(const tmpdir& tmp, const std::string& 
         co_await test_broken_encrypted_commitlog(args, scopts);
         , std::exception
     );
+||||||| parent of 8d37e5e24b (encryption_at_rest_test: Add exception handler to ensure proxy stop)
+    test_provider_args args{
+        .tmp = tmp,
+        .extra_yaml = yaml,
+        .n_tables = 10, 
+        .before_create_table = [&](auto& env) {
+            // turn off proxy. all key resolution after this should fail
+            proxy.enable(false);
+            // wait for key cache expiry.
+            seastar::sleep(10ms).get();
+            // ensure commitlog will create a new segment on write -> eventual write failure
+            env.db().invoke_on_all([](replica::database& db) {
+                return db.commitlog()->force_new_active_segment();
+            }).get();
+        },
+        .on_insert_exception = [&](auto&&) {
+            // once we get the exception we have to enable key resolution again, 
+            // otherwise we can't shut down cql test env.
+            proxy.enable(true);
+        },
+        .timeout = timeout_config{
+            // set really low write timeouts so we get a failure (timeout)
+            // when we fail to write to commitlog
+            100ms, 100ms, 100ms, 100ms, 100ms, 100ms, 100ms
+        },
+    };
+
+    BOOST_REQUIRE_THROW(
+        co_await test_broken_encrypted_commitlog(args, scopts);
+        , exceptions::mutation_write_timeout_exception
+    );
+=======
+        BOOST_REQUIRE_THROW(
+            co_await test_broken_encrypted_commitlog(args, scopts);
+            , exceptions::mutation_write_timeout_exception
+        );
+    } catch (...) {
+        p = std::current_exception();
+    }
+>>>>>>> 8d37e5e24b (encryption_at_rest_test: Add exception handler to ensure proxy stop)
 
     co_await proxy.stop();
+
+    if (p) {
+        std::rethrow_exception(p);
+    }
 }
 
 SEASTAR_TEST_CASE(test_kms_network_error, *check_run_test_decorator("ENABLE_KMS_TEST")) {
