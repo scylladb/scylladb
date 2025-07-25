@@ -35,24 +35,15 @@ repair_history_map_ptr tombstone_gc_state::get_repair_history_for_table(const ta
     return {};
 }
 
-seastar::lw_shared_ptr<gc_clock::time_point> tombstone_gc_state::get_group0_gc_time() const {
-    if (!_reconcile_history_maps) {
-        return {};
-    }
-    if (!_reconcile_history_maps->_group0_gc_time) {
-        return {};
-    }
-    return _reconcile_history_maps->_group0_gc_time;
-}
-
 gc_clock::time_point tombstone_gc_state::get_gc_before_for_group0(schema_ptr s) const {
     // use the reconcile mode for group0 tables with 0 propagation delay
-    auto gc_before = gc_clock::time_point::min();
-    auto m = get_group0_gc_time();
-    if (m) {
-        gc_before = *m;
+    if (!_reconcile_history_maps) {
+        return gc_clock::time_point::min();
     }
-    return check_min(s, gc_before);
+    if (!_reconcile_history_maps->_group0_gc_time) {
+        return gc_clock::time_point::min();
+    }
+    return check_min(s, *_reconcile_history_maps->_group0_gc_time);
 }
 
 void tombstone_gc_state::drop_repair_history_for_table(const table_id& id) {
