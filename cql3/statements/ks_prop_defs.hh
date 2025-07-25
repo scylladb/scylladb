@@ -50,6 +50,8 @@ public:
     static constexpr auto KW_TABLETS = "tablets";
 
     static constexpr auto REPLICATION_STRATEGY_CLASS_KEY = "class";
+    static constexpr auto DEFAULT_REPLICATION_STRATEGY_CLASS = "NetworkTopologyStrategy";
+
     static constexpr auto REPLICATION_FACTOR_KEY = "replication_factor";
 private:
     std::optional<sstring> _strategy_class;
@@ -60,6 +62,7 @@ public:
     void validate();
     std::map<sstring, sstring> get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
+    void set_default_replication_strategy_class_option();
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets = false) const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;

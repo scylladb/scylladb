@@ -46,6 +46,8 @@ public:
 protected:
     std::optional<sstring> get_simple(const sstring& name) const;
 
+    void remove_property(const sstring& name) const;
+
     void remove_from_map_if_exists(const sstring& name, const sstring& key) const;
 public:
     bool has_property(const sstring& name) const;
