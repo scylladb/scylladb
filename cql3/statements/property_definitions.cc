@@ -32,6 +32,10 @@ void property_definitions::add_property(const sstring& name, const std::map<sstr
     }
 }
 
+void property_definitions::remove_property(const sstring& name) {
+    _properties.erase(name);
+}
+
 void property_definitions::validate(const std::set<sstring>& keywords, const std::set<sstring>& exts, const std::set<sstring>& obsolete) const {
     for (auto&& kv : _properties) {
         auto&& name = kv.first;

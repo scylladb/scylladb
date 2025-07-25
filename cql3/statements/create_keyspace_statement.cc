@@ -39,6 +39,12 @@ create_keyspace_statement::create_keyspace_statement(const sstring& name, shared
     , _attrs{attrs}
     , _if_not_exists{if_not_exists}
 {
+    auto replication_options = _attrs->get_replication_options();
+    if (!replication_options.contains(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY)) {
+        replication_options[ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY] = "NetworkTopologyStrategy";
+        _attrs->remove_property(ks_prop_defs::KW_REPLICATION);
+        _attrs->add_property(ks_prop_defs::KW_REPLICATION, std::move(replication_options));
+    }
 }
 
 const sstring& create_keyspace_statement::keyspace() const
