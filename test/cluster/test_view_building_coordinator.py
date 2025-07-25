@@ -310,9 +310,13 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
     if change == "increase":
         node_count = 2
         rack_layout = ["rack1", "rack2"]
+        old_rf = ["rack1"]
+        new_rf = ["rack1", "rack2"]
     elif change == "decrease":
         node_count = 3
         rack_layout = ["rack1", "rack1", "rack2"]
+        old_rf = ["rack1", "rack2"]
+        new_rf = ["rack1"]
     else:
         assert False
 
@@ -322,9 +326,7 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
     cql, _ = await manager.get_ready_cql(servers)
     await disable_tablet_load_balancing_on_all_servers(manager)
 
-    rf = node_count - 1
-
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'enabled': true}}") as ks:
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {old_rf}}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
 
@@ -336,7 +338,6 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
 
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
 
-        new_rf = rf + 1 if change == "increase" else rf - 1
         await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {new_rf}}}")
 
         await unpause_view_building_tasks(manager)
