@@ -5620,9 +5620,12 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return update_topology_change_info(reason, acquire_merge_lock::no);
 }
 
-future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
+future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    auto tmptr = co_await get_mutable_token_metadata_ptr();
+    auto tmptr = pending_token_metadata;
+    if (!tmptr) {
+        tmptr = co_await get_mutable_token_metadata_ptr();
+    }
     if (hint) {
         co_await replica::update_tablet_metadata(_db.local(), _qp, tmptr->tablets(), hint);
     } else {
