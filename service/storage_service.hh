@@ -80,6 +80,9 @@ namespace view {
 class view_builder;
 class view_building_worker;
 }
+namespace schema_tables {
+class schema_applier;
+}
 }
 
 namespace netw {
@@ -260,7 +263,7 @@ public:
     future<> uninit_messaging_service();
 
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
-    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
+    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);
     future<> commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr);
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
 
@@ -311,6 +314,7 @@ private:
 
     friend struct ::node_ops_ctl;
     friend void check_raft_rpc_scheduling_group(storage_service&, std::string_view);
+    friend class db::schema_tables::schema_applier;
 public:
 
     const gms::gossiper& gossiper() const noexcept {
