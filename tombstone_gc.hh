@@ -47,7 +47,7 @@ public:
     // Separating the group0 GC time - it is not kept per table, but for the whole group0:
     // - the state_id of the last mutation applies to all group0 tables wrt. the tombstone GC
     // - we also always use the full token range for the group0 tables (so we don't need to store the token ranges)
-    seastar::lw_shared_ptr<gc_clock::time_point> _group0_gc_time;
+    gc_clock::time_point _group0_gc_time = gc_clock::time_point::min();
 };
 
 class tombstone_gc_options;
