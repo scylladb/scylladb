@@ -505,7 +505,7 @@ public:
     // vnode_effective_replication_map for the local shard.
     //
     // Therefore create should be called first on shard 0, then on all other shards.
-    future<vnode_erm_ptr> create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
+    future<vnode_erm_ptr> create_effective_replication_map(replication_strategy_ptr rs, const token_metadata_ptr& tmptr);
 
     future<> stop() noexcept;
 
