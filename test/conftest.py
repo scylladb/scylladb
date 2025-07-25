@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import time
 from argparse import BooleanOptionalAction
 from pathlib import Path
 from random import randint
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
+timeout_start_time = None
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--mode', choices=ALL_MODES, action="append", dest="modes",
@@ -78,6 +79,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                           " '--logger-log-level raft=trace --default-log-level error'")
     parser.addoption('--x-log2-compaction-groups', action="store", default="0", type=int,
                      help="Controls number of compaction groups to be used by Scylla tests. Value of 3 implies 8 groups.")
+    parser.addoption('--timeout', action='store', type=int, default=None,
+                     help='Global timeout in seconds for the test run')
 
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
@@ -170,6 +173,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
+    global timeout_start_time
+    if session.config.getoption("--timeout"):
+        timeout_start_time = time.monotonic()
+
     # test.py starts S3 mock and create/cleanup testlog by itself. Also, if we run with --collect-only option,
     # we don't need this stuff.
     if TEST_RUNNER != "pytest" or session.config.getoption("--collect-only"):
@@ -187,6 +194,13 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes(), gather_metrics=session.config.getoption("--gather-metrics"), save_log_on_success=session.config.getoption("save_log_on_success"),)
         start_3rd_party_services(tempdir_base=temp_dir, toxiproxy_byte_limit=session.config.getoption('byte_limit'))
 
+def pytest_runtest_setup(item) -> None:
+    global timeout_start_time
+    timeout_seconds = item.config.getoption("--timeout")
+    if timeout_seconds and timeout_start_time:
+        elapsed = time.monotonic() - timeout_start_time
+        if elapsed > timeout_seconds:
+            pytest.skip(f"Global timeout of {timeout_seconds}s reached. Skipping remaining tests.")
 
 def pytest_sessionfinish() -> None:
     if getattr(TestSuite, "artifacts", None) is not None:
