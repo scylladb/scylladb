@@ -359,6 +359,9 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair, s
             // if the option is not sane, repair_start() throws immediately, so
             // convert the exception to an HTTP error
             throw httpd::bad_param_exception(e.what());
+        } catch (const tablets_unsupported& e) {
+            throw base_exception("Cannot repair tablet keyspace. Use /storage_service/tablets/repair to repair tablet keyspaces.",
+                    http::reply::status_type::forbidden);
         }
     });
 

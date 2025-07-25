@@ -501,7 +501,6 @@ public:
 
     /// Returns the primary replica for the tablet
     tablet_replica get_primary_replica(tablet_id id) const;
-    tablet_replica get_primary_replica_within_dc(tablet_id id, const topology& topo, sstring dc) const;
 
     /// Returns the secondary replica for the tablet, which is assumed to be directly following the primary replica in the replicas vector
     /// \throws std::runtime_error if the tablet has less than 2 replicas.
