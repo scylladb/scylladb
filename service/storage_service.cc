@@ -5714,16 +5714,15 @@ future<> storage_service::keyspace_changed(const sstring& ks_name) {
     return update_topology_change_info(reason, acquire_merge_lock::no);
 }
 
-future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
+future<locator::mutable_token_metadata_ptr> storage_service::prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    auto tmptr = co_await get_mutable_token_metadata_ptr();
     if (hint) {
-        co_await replica::update_tablet_metadata(_db.local(), _qp, tmptr->tablets(), hint);
+        co_await replica::update_tablet_metadata(_db.local(), _qp, pending_token_metadata->tablets(), hint);
     } else {
-        tmptr->set_tablets(co_await replica::read_tablet_metadata(_qp));
+        pending_token_metadata->set_tablets(co_await replica::read_tablet_metadata(_qp));
     }
-    tmptr->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
-    co_return tmptr;
+    pending_token_metadata->tablets().set_balancing_enabled(_topology_state_machine._topology.tablet_balancing_enabled);
+    co_return pending_token_metadata;
 }
 
 future<> storage_service::commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr) {
@@ -5733,7 +5732,8 @@ future<> storage_service::commit_tablet_metadata(locator::mutable_token_metadata
 
 future<> storage_service::update_tablet_metadata(const locator::tablet_metadata_change_hint& hint) {
     co_await commit_tablet_metadata(
-            co_await prepare_tablet_metadata(hint));
+            co_await prepare_tablet_metadata(hint,
+                    co_await get_mutable_token_metadata_ptr()));
 }
 
 future<> storage_service::process_tablet_split_candidate(table_id table) noexcept {

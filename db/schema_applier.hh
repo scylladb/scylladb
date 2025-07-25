@@ -169,6 +169,9 @@ class schema_applier {
     std::set<sstring> _keyspaces;
     std::unordered_map<keyspace_name, table_selector> _affected_tables;
 
+    // Copy of token metadata used for schema change, it has two purposes:
+    // - makes sure all updated schema entities use the same metadata
+    // - allows to change tablets metadata without immediately committing it.
     locator::pending_token_metadata _pending_token_metadata;
     locator::tablet_metadata_change_hint _tablet_hint;
 
