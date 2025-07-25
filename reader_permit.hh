@@ -175,10 +175,6 @@ public:
     // If the permit is aborted, return the exception it was aborted with.
     const std::exception_ptr& get_abort_exception() const noexcept;
 
-    // If the read was aborted, throw the exception the read was aborted with.
-    // Otherwise no-op.
-    void check_abort() const;
-
     query::max_result_size max_result_size() const;
     void set_max_result_size(query::max_result_size);
 

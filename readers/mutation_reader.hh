@@ -380,10 +380,6 @@ public:
             return _permit.get_abort_exception();
         }
 
-        void check_abort() {
-            _permit.check_abort();
-        }
-
         db::timeout_clock::time_point timeout() const noexcept {
             return _permit.timeout();
         }
