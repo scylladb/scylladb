@@ -204,7 +204,7 @@ future<semaphore_units<>> client::claim_memory(size_t size) {
 }
 
 client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::yes, retry_strategy) {
+    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::no, retry_strategy) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -1214,8 +1214,9 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
                                 _get_cv.signal();
                                 utils::get_local_injector().inject("break_s3_inflight_req", [] {
-                                    // Inject retryable error after some data was already downloaded
-                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ThrottlingException"));
+                                    // Inject a non-`aws_error` after partial data download to verify proper
+                                    // handling and that the fiber retries missing chunks
+                                    throw std::system_error(ECONNRESET, std::system_category());
                                 });
                             }
                         } catch (...) {
@@ -1223,14 +1224,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         }
                         co_await in.close();
                         if (ex) {
-                            try {
-                                std::rethrow_exception(ex);
-                            } catch (const aws::aws_exception& aws_ex) {
-                                if (aws_ex.error().is_retryable()) {
-                                    throw filler_exception(format("{}", std::current_exception()).c_str());
-                                }
-                                throw;
+                            auto aws_ex = aws::aws_error::from_exception_ptr(ex);
+                            if (aws_ex.is_retryable()) {
+                                s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
+                                throw filler_exception(format("{}", ex).c_str());
                             }
+                            std::rethrow_exception(ex);
                         }
                     },
                     {},
