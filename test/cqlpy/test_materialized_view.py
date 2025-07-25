@@ -1128,6 +1128,7 @@ def test_base_partition_deletion_with_metrics(cql, test_keyspace, scylla_only, p
         insert = cql.prepare(f'INSERT INTO {table} (p1,p2,c) VALUES (?,?,?)')
         # The view partition key is a permutation of the base partition key.
         with new_materialized_view(cql, table, '*', '(p2,p1),c' if permuted else '(p1,p2),c', 'p1 is not null and p2 is not null and c is not null') as mv:
+            wait_for_view_built(cql, mv)
             # the metric total_view_updates_pushed_local is incremented by 1 for each 100 row view
             # updates, because it is collected in batches according to max_rows_for_view_updates.
             # To verify the behavior, we want the metric to increase by at least 2 without the optimization,
@@ -1197,6 +1198,7 @@ def test_base_partition_deletion_in_batch_with_delete_row_with_metrics(cql, test
         insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES (?,?,?)')
         # The view partition key is the same as the base partition key.
         with new_materialized_view(cql, table, '*', '(p,c),v', 'p is not null and c is not null and v is not null') as mv:
+            wait_for_view_built(cql, mv)
             N = 101 # See comment above
             for i in range(N):
                 cql.execute(insert, [1, 10, i])
@@ -1589,6 +1591,13 @@ def test_view_in_system_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as base:
         with new_materialized_view(cql, base, '*', 'v,p', 'v is not null and p is not null') as view:
             wait_for_view_built(cql, view)
+
+            # In view_building_coordinator path, `built_views` table is updated by view_building_worker,
+            # so there is a short window when a view is build (information is in view_build_status_v2)
+            # but it isn't marked in `built_views` locally.
+            # Doing read barrier is enough to ensure that the worker updated the table.
+            cql.execute("DROP TABLE IF EXISTS nosuchkeyspace.nosuchtable")
+
             res = [ f'{r.keyspace_name}.{r.view_name}' for r in cql.execute('select * from system.built_views')]
             assert view in res
             res = [ f'{r.table_name}.{r.index_name}' for r in cql.execute('select * from system."IndexInfo"')]

@@ -10,6 +10,7 @@
 
 #include "utils/assert.hh"
 #include "utils/from_chars_exactly.hh"
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/smp.hh>
@@ -203,13 +204,20 @@ public:
 
     public:
         template <typename Clock, typename Duration>
-        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout) {
+        future<> wait_for_message(std::chrono::time_point<Clock, Duration> timeout, abort_source* as = nullptr) {
             if (!_shared_data) {
                 on_internal_error(errinj_logger, "injection_shared_data is not initialized");
             }
+            auto abort = as ? as->subscribe([this] () noexcept {
+                _shared_data->received_message_cv.broadcast();
+            }) : optimized_optional<abort_source::subscription>{};
 
             try {
                 co_await _shared_data->received_message_cv.wait(timeout, [&] {
+                    if (as) {
+                        as->check();
+                    }
+
                     if (!_share_messages) {
                         bool wakes_up = _shared_data->shared_read_message_count < _shared_data->received_message_count;
                         if (wakes_up) {
@@ -221,6 +229,9 @@ public:
 
                     return _read_messages_counter < _shared_data->received_message_count;
                 });
+            }
+            catch (const abort_requested_exception&) {
+                throw;
             }
             catch (const std::exception& e) {
                 on_internal_error(errinj_logger, "Error injection wait_for_message timeout: " + std::string(e.what()));
@@ -400,6 +411,16 @@ public:
         errinj_logger.debug("Triggering sleep injection \"{}\" ({}ms)", name, duration.count());
         return seastar::sleep(duration);
     }
+
+    // \brief Inject an abortable sleep for milliseconds
+    [[gnu::always_inline]]
+    future<> inject(const std::string_view& name, const std::chrono::milliseconds duration, abort_source& as) {
+        if (!enter(name)) {
+            return make_ready_future<>();
+        }
+        errinj_logger.debug("Triggering abortable sleep injection \"{}\" ({}ms)", name, duration.count());
+        return seastar::sleep_abortable(duration, as);
+    }    
 
     // \brief Inject a sleep to deadline (timeout)
     template <typename Clock, typename Duration>
@@ -593,6 +614,13 @@ public:
     [[gnu::always_inline]]
     future<> inject(const std::string_view& name,
             const std::chrono::milliseconds duration) {
+        return make_ready_future<>();
+    }
+
+    // Inject abortable sleep
+    [[gnu::always_inline]]
+    future<> inject(const std::string_view& name,
+            const std::chrono::milliseconds duration, abort_source& as) {
         return make_ready_future<>();
     }
 
