@@ -119,6 +119,10 @@ logging::logger sstlog("sstable");
     on_internal_error(sstlog, std::move(ex));
 }
 
+[[noreturn, gnu::noinline]] void on_bti_parse_error(uint64_t pos) {
+    on_internal_error(sstlog, fmt::format("BTI parse error for node at pos {}", pos));
+}
+
 template <typename T>
 const char* nullsafe_typename(T* x) noexcept {
     try {
