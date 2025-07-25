@@ -566,6 +566,7 @@ scylla_tests = set([
     'test/boost/top_k_test',
     'test/boost/transport_test',
     'test/boost/bti_node_sink_test',
+    'test/boost/trie_traversal_test',
     'test/boost/trie_writer_test',
     'test/boost/symmetric_key_test',
     'test/boost/types_test',
