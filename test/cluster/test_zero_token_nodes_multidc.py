@@ -28,16 +28,15 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
     """
     normal_cfg = {'endpoint_snitch': 'GossipingPropertyFileSnitch', 'rf_rack_valid_keyspaces': rf_rack_valid_keyspaces}
     zero_token_cfg = normal_cfg | {'join_ring': False}
-    property_file_dc2 = {'dc': 'dc2', 'rack': 'rack'}
 
     logging.info('Creating dc1 with 2 token-owning nodes')
     servers = await manager.servers_add(2, config=normal_cfg, auto_rack_dc='dc1')
 
     normal_nodes_in_dc2 = 2 - zero_token_nodes
     logging.info(f'Creating dc2 with {normal_nodes_in_dc2} token-owning and {zero_token_nodes} zero-token nodes')
-    servers += await manager.servers_add(zero_token_nodes, config=zero_token_cfg, property_file=property_file_dc2)
+    servers += await manager.servers_add(zero_token_nodes, config=zero_token_cfg, property_file={'dc': 'dc2', 'rack': 'rack1'})
     if zero_token_nodes == 1:
-        servers.append(await manager.server_add(config=normal_cfg, property_file=property_file_dc2))
+        servers.append(await manager.server_add(config=normal_cfg, property_file={'dc': 'dc2', 'rack': 'rack2'}))
 
     logging.info('Creating connections to dc1 and dc2')
     dc1_cql = cluster_con([servers[0].ip_addr],
@@ -59,11 +58,11 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
 
     for rf in range(rf_range):
         failed = False
-        ks_name = await create_new_test_keyspace(dc2_cql, f"""WITH replication =
-                                     {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2, 'dc2': {rf}}}
-                                     AND tablets = {{ 'enabled': true }}""")
-        ks_names.append(ks_name)
         try:
+            ks_name = await create_new_test_keyspace(dc2_cql, f"""WITH replication =
+                                         {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2, 'dc2': {rf}}}
+                                         AND tablets = {{ 'enabled': true }}""")
+            ks_names.append(ks_name)
             await dc2_cql.run_async(
                 f'CREATE TABLE {ks_names[rf]}.tbl (cl int, zero_token boolean, v int, PRIMARY KEY (cl, zero_token))')
         except Exception:
