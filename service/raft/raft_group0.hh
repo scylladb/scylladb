@@ -133,7 +133,6 @@ class raft_group0 {
     future<> _leadership_monitor = make_ready_future<>();
     abort_source _leadership_monitor_as;
     utils::updateable_value_source<bool> _leadership_observable;
-    bool _aborted = false;
 
 public:
     // Passed to `setup_group0` when replacing a node.

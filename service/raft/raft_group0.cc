@@ -414,11 +414,6 @@ future<group0_info> persistent_discovery::run(
 }
 
 future<> raft_group0::abort() {
-    if (_aborted) {
-        co_return;
-    }
-    _aborted = true;
-
     co_await smp::invoke_on_all([this]() {
         return uninit_rpc_verbs(_ms.local());
     });

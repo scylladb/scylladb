@@ -4696,21 +4696,13 @@ future<> storage_service::drain() {
 }
 
 future<> storage_service::do_drain() {
-    // Need to stop transport before group0, otherwise RPCs may fail with raft_group_not_found.
     co_await stop_transport();
 
     // Drain view builder before group0, because the view builder uses group0 to coordinate view building.
     // Drain after transport is stopped, because view_builder::drain aborts view writes for user writes as well.
     co_await _view_builder.invoke_on_all(&db::view::view_builder::drain);
 
-    // group0 persistence relies on local storage, so we need to stop group0 first.
-    // This must be kept in sync with defer_verbose_shutdown for group0 in main.cc to
-    // handle the case when initialization fails before reaching drain_on_shutdown for ss.
-    _sl_controller.local().abort_group0_operations();
     co_await wait_for_group0_stop();
-    if (_group0) {
-        co_await _group0->abort();
-    }
 
     co_await tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown);
 
