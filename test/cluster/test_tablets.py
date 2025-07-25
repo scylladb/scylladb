@@ -14,7 +14,8 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
 from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.conftest import skip_mode
-from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, get_topology_coordinator
+from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, \
+    get_topology_coordinator, parse_replication_options
 from contextlib import nullcontext as does_not_raise
 import time
 import pytest
@@ -152,16 +153,22 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
     this_dc = res[0].data_center
 
     if direction == 'up':
+        rf_from_opt = "['rack1']"
+        rf_to_opt = "['rack1', 'rack2']"
         rf_from = 1
         rf_to = 2
     if direction == 'down':
-        rf_from = 2
+        rf_from_opt = "['rack1', 'rack2']"
+        rf_to_opt = "['rack1']"
+        rf_from= 2
         rf_to = 1
     if direction == 'none':
+        rf_from_opt = "['rack1']"
+        rf_to_opt = "['rack1']"
         rf_from = 1
         rf_to = 1
 
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': {rf_from}}}") as ks:
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': {rf_from_opt}}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.test_mv AS SELECT pk FROM {ks}.test WHERE pk IS NOT NULL PRIMARY KEY (pk)")
 
@@ -179,7 +186,7 @@ async def test_tablet_rf_change(manager: ManagerClient, direction):
         await check_allocated_replica(rf_from)
 
         logger.info(f"Altering RF {rf_from} -> {rf_to}")
-        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': {rf_to}}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', '{this_dc}': {rf_to_opt}}}")
 
         logger.info(f"Checking {rf_to} re-allocated replicas")
         await check_allocated_replica(rf_to)
@@ -271,8 +278,8 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
 
     logger.info("Creating a new cluster of 2 nodes in 1st DC and 2 nodes in 2nd DC")
     # we have to have at least 2 nodes in each DC if we want to try setting RF to 2 in each DC
-    await manager.servers_add(2, config=config, property_file={'dc': f'dc1', 'rack': 'myrack'})
-    await manager.servers_add(2, config=config, property_file={'dc': f'dc2', 'rack': 'myrack'})
+    await manager.servers_add(2, config=config, auto_rack_dc="dc1")
+    await manager.servers_add(2, config=config, auto_rack_dc="dc2")
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1}") as ks:
@@ -280,27 +287,29 @@ async def test_multidc_alter_tablets_rf(request: pytest.FixtureRequest, manager:
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
         with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
             # changing RF of dc2 from 0 to 2 should fail
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': 2}}")
+            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': ['rack1', 'rack2']}}")
 
         # changing RF of dc2 from 0 to 1 should succeed
-        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': 1}}")
+        await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': ['rack1']}}")
         # ensure that RFs of both DCs are equal to 1 now, i.e. that omitting dc1 in above command didn't change it
         res = await cql.run_async(f"SELECT * FROM system_schema.keyspaces  WHERE keyspace_name = '{ks}'")
-        assert res[0].replication['dc1'] == '1'
-        assert res[0].replication['dc2'] == '1'
+        repl = parse_replication_options(res[0].replication)
+        logger.info(f"repl = {repl}")
+        assert len(repl['dc1']) == 1
+        assert repl['dc2'] == ['rack1']
 
         # incrementing RF of 2 DCs at once should NOT succeed, because it'd leave 2 pending tablets replicas
         with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 2}}")
+            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2'], 'dc2': ['rack1', 'rack2']}}")
         # as above, but decrementing
         with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
             await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': 0}}")
         # as above, but decrement 1 RF and increment the other
         with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 0}}")
+            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': ['rack1','rack2'], 'dc2': 0}}")
         # as above, but RFs are swapped
         with pytest.raises(InvalidRequest, match="Only one DC's RF can be changed at a time and not by more than 1"):
-            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': 2}}")
+            await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 0, 'dc2': ['rack1', 'rack2']}}")
 
         # check that we can remove all replicas from dc2 by changing RF from 1 to 0
         await cql.run_async(f"alter keyspace {ks} with replication = {{'class': 'NetworkTopologyStrategy', 'dc2': 0}}")
