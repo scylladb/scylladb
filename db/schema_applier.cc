@@ -281,7 +281,7 @@ future<> schema_applier::merge_keyspaces()
                 schema_result_value_type{name, _after.keyspaces.at(name)}, sk_after_v);
         _affected_keyspaces.created.push_back(
                 co_await replica::database::prepare_create_keyspace_on_all_shards(
-                        sharded_db, _proxy, *ksm));
+                        sharded_db, _proxy, *ksm, _pending_token_metadata));
         _affected_keyspaces.names.created.insert(name);
     }
     for (auto& name : altered) {
@@ -291,7 +291,7 @@ future<> schema_applier::merge_keyspaces()
                 schema_result_value_type{name, _after.keyspaces.at(name)}, sk_after_v);
         _affected_keyspaces.altered.push_back(
                 co_await replica::database::prepare_update_keyspace_on_all_shards(
-                        sharded_db, *tmp_ksm));
+                        sharded_db, *tmp_ksm, _pending_token_metadata));
         _affected_keyspaces.names.altered.insert(name);
     }
     for (auto& key : _affected_keyspaces.names.dropped) {
@@ -666,7 +666,8 @@ future<> schema_applier::merge_tables_and_views()
 
     if (_tablet_hint) {
         slogger.info("Tablet metadata changed");
-        auto new_token_metadata = co_await _ss.local().prepare_tablet_metadata(_tablet_hint);
+        auto new_token_metadata = co_await _ss.local().prepare_tablet_metadata(
+                _tablet_hint, _pending_token_metadata.local());
         co_await _pending_token_metadata.assign(new_token_metadata);
     }
 }
@@ -853,6 +854,9 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
 
 future<> schema_applier::update() {
     _after = co_await get_schema_persisted_state();
+
+    co_await _pending_token_metadata.assign(
+            co_await _ss.local().get_mutable_token_metadata_ptr());
 
     co_await merge_keyspaces();
     co_await merge_types();
