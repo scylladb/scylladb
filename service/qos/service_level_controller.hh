@@ -114,6 +114,9 @@ public:
         virtual future<> commit_mutations(service::group0_batch&& mc, abort_source& as) const = 0;
 
         virtual bool is_v2() const = 0;
+        // Returns whether effective service level cache can be populated and used.
+        // This is equivalent to checking whether auth + raft have been migrated to raft.
+        virtual bool can_use_effective_service_level_cache() const = 0;
         // Returns v2(raft) data accessor. If data accessor is already a raft one, returns nullptr.
         virtual ::shared_ptr<service_level_distributed_data_accessor> upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const = 0;
     };
