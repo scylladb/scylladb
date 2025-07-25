@@ -140,7 +140,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
     auto limit = rjson::get_opt<int>(request, "Limit").value_or(100);
     auto streams_start = rjson::get_opt<stream_arn>(request, "ExclusiveStartStreamArn");
-    auto table = find_table(_proxy, request);
+    auto monitored_table = find_table(_proxy, request);
     auto db = _proxy.data_dictionary();
 
     if (limit < 1) {
@@ -149,10 +149,10 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
 
     std::vector<data_dictionary::table> cfs;
 
-    if (table) {
-        auto log_name = cdc::log_name(table->cf_name());
+    if (monitored_table) {
+        auto log_table_name = cdc::log_name(monitored_table->cf_name());
         try {
-            cfs.emplace_back(db.find_table(table->ks_name(), log_name));
+            cfs.emplace_back(db.find_table(monitored_table->ks_name(), log_table_name));
         } catch (data_dictionary::no_such_column_family&) {
             cfs.clear();
         }

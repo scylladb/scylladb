@@ -1419,7 +1419,6 @@ def test_stream_specification(test_table_stream_with_result, dynamodbstreams):
 # be missing? Or a "null" JSON type? Or an empty string? This test verifies
 # that the right answer is that NextShardIterator should be *missing*
 # (reproduces issue #7237).
-@pytest.mark.xfail(reason="disabled stream is deleted - issue #7239")
 def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
     table, arn = test_table_ss_keys_only
     shards_and_iterators = shards_and_latest_iterators(dynamodbstreams, arn)
@@ -1473,7 +1472,6 @@ def test_streams_closed_read(test_table_ss_keys_only, dynamodbstreams):
 # listed for the table, this ARN should continue to work, listing the
 # stream's shards should give an indication that they are all closed - but
 # all these shards should still be readable.
-@pytest.mark.xfail(reason="disabled stream is deleted - issue #7239")
 def test_streams_disabled_stream(test_table_ss_keys_only, dynamodbstreams):
     table, arn = test_table_ss_keys_only
     iterators = latest_iterators(dynamodbstreams, arn)
