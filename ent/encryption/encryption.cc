@@ -44,6 +44,8 @@
 #include "kms_host.hh"
 #include "gcp_key_provider.hh"
 #include "gcp_host.hh"
+#include "azure_key_provider.hh"
+#include "azure_host.hh"
 #include "bytes.hh"
 #include "utils/class_registrator.hh"
 #include "cql3/query_processor.hh"
@@ -70,6 +72,7 @@ static constexpr auto LOCAL_FILE_SYSTEM_KEY_PROVIDER_FACTORY = "LocalFileSystemK
 static constexpr auto KMIP_KEY_PROVIDER_FACTORY = "KmipKeyProviderFactory";
 static constexpr auto KMS_KEY_PROVIDER_FACTORY = "KmsKeyProviderFactory";
 static constexpr auto GCP_KEY_PROVIDER_FACTORY = "GcpKeyProviderFactory";
+static constexpr auto AZURE_KEY_PROVIDER_FACTORY = "AzureKeyProviderFactory";
 
 bytes base64_decode(const sstring& s, size_t off, size_t len) {
     if (off >= s.size()) {
@@ -276,6 +279,7 @@ class encryption_context_impl : public encryption_context {
     std::vector<std::unordered_map<sstring, shared_ptr<kmip_host>>> _per_thread_kmip_host_cache;
     std::vector<std::unordered_map<sstring, shared_ptr<kms_host>>> _per_thread_kms_host_cache;
     std::vector<std::unordered_map<sstring, shared_ptr<gcp_host>>> _per_thread_gcp_host_cache;
+    std::vector<std::unordered_map<sstring, shared_ptr<azure_host>>> _per_thread_azure_host_cache;
     std::vector<shared_ptr<encryption_schema_extension>> _per_thread_global_user_extension;
     std::unique_ptr<encryption_config> _cfg;
     sharded<cql3::query_processor>* _qp;;
@@ -291,6 +295,7 @@ public:
         , _per_thread_kmip_host_cache(smp::count)
         , _per_thread_kms_host_cache(smp::count)
         , _per_thread_gcp_host_cache(smp::count)
+        , _per_thread_azure_host_cache(smp::count)
         , _per_thread_global_user_extension(smp::count)
         , _cfg(std::move(cfg))
         , _qp(find_or_null<cql3::query_processor>(services))
@@ -328,6 +333,7 @@ public:
             map[KMIP_KEY_PROVIDER_FACTORY] = std::make_unique<kmip_key_provider_factory>();
             map[KMS_KEY_PROVIDER_FACTORY] = std::make_unique<kms_key_provider_factory>();
             map[GCP_KEY_PROVIDER_FACTORY] = std::make_unique<gcp_key_provider_factory>();
+            map[AZURE_KEY_PROVIDER_FACTORY] = std::make_unique<azure_key_provider_factory>();
 
             return map;
         }();
@@ -374,55 +380,38 @@ public:
         return k;
     }
 
-    shared_ptr<kmip_host> get_kmip_host(const sstring& host) override {
-        auto& cache = _per_thread_kmip_host_cache[this_shard_id()];
-        auto i = cache.find(host);
-        if (i != cache.end()) {
-            return i->second;
+    template<typename HostType, typename CacheType, typename ConfigType>
+    shared_ptr<HostType> get_host(const sstring& host, CacheType& cache, const ConfigType& config_map) {
+        auto& host_cache = cache[this_shard_id()];
+        auto it = host_cache.find(host);
+        if (it != host_cache.end()) {
+            return it->second;
         }
 
-        auto j = _cfg->kmip_hosts().find(host);
-        if (j != _cfg->kmip_hosts().end()) {
-            auto result = ::make_shared<kmip_host>(*this, host, j->second);
-            cache.emplace(host, result);
+        auto config_it = config_map.find(host);
+        if (config_it != config_map.end()) {
+            auto result = ::make_shared<HostType>(*this, host, config_it->second);
+            host_cache.emplace(host, result);
             return result;
         }
 
-        throw std::invalid_argument("No such host: "+ host);
+        throw std::invalid_argument("No such host: " + host);
+    }
+
+    shared_ptr<kmip_host> get_kmip_host(const sstring& host) override {
+        return get_host<kmip_host>(host, _per_thread_kmip_host_cache, _cfg->kmip_hosts());
     }
 
     shared_ptr<kms_host> get_kms_host(const sstring& host) override {
-        auto& cache = _per_thread_kms_host_cache[this_shard_id()];
-        auto i = cache.find(host);
-        if (i != cache.end()) {
-            return i->second;
-        }
-
-        auto j = _cfg->kms_hosts().find(host);
-        if (j != _cfg->kms_hosts().end()) {
-            auto result = ::make_shared<kms_host>(*this, host, j->second);
-            cache.emplace(host, result);
-            return result;
-        }
-
-        throw std::invalid_argument("No such host: "+ host);
+        return get_host<kms_host>(host, _per_thread_kms_host_cache, _cfg->kms_hosts());
     }
 
     shared_ptr<gcp_host> get_gcp_host(const sstring& host) override {
-        auto& cache = _per_thread_gcp_host_cache[this_shard_id()];
-        auto i = cache.find(host);
-        if (i != cache.end()) {
-            return i->second;
-        }
+        return get_host<gcp_host>(host, _per_thread_gcp_host_cache, _cfg->gcp_hosts());
+    }
 
-        auto j = _cfg->gcp_hosts().find(host);
-        if (j != _cfg->gcp_hosts().end()) {
-            auto result = ::make_shared<gcp_host>(*this, host, j->second);
-            cache.emplace(host, result);
-            return result;
-        }
-
-        throw std::invalid_argument("No such host: "+ host);
+    shared_ptr<azure_host> get_azure_host(const sstring& host) override {
+        return get_host<azure_host>(host, _per_thread_azure_host_cache, _cfg->azure_hosts());
     }
 
 
@@ -485,7 +474,8 @@ public:
             _per_thread_kmip_host_cache[this_shard_id()].clear();
             _per_thread_kms_host_cache[this_shard_id()].clear();
             _per_thread_gcp_host_cache[this_shard_id()].clear();
-            _per_thread_global_user_extension[this_shard_id()] = {};            
+            _per_thread_azure_host_cache[this_shard_id()].clear();
+            _per_thread_global_user_extension[this_shard_id()] = {};
         });
     }
 
@@ -1078,6 +1068,14 @@ future<seastar::shared_ptr<encryption_context>> register_extensions(const db::co
             // only pre-create on shard 0.
             co_await parallel_for_each(cfg.gcp_hosts(), [ctxt](auto& p) {
                 auto host = ctxt->get_gcp_host(p.first);
+                return host->init();
+            });
+        }
+
+        if (!cfg.azure_hosts().empty()) {
+            // only pre-create on shard 0.
+            co_await parallel_for_each(cfg.azure_hosts(), [ctxt](auto& p) {
+                auto host = ctxt->get_azure_host(p.first);
                 return host->init();
             });
         }

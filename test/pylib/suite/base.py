@@ -33,6 +33,7 @@ from test.pylib.minio_server import MinioServer
 from test.pylib.resource_gather import get_resource_gather, setup_cgroup
 from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
+from test.pylib.azure_vault_server_mock import MockAzureVaultServer
 from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
 
 if TYPE_CHECKING:
@@ -574,6 +575,14 @@ async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_li
     )
     await proxy_s3_server.start()
     TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+
+    azure_vault_server = MockAzureVaultServer(
+        host=await hosts.lease_host(),
+        port=5467,
+        logger=LogPrefixAdapter(logger=logging.getLogger("azure_vault"), extra={"prefix": "azure_vault"}),
+    )
+    await azure_vault_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, azure_vault_server.stop)
 
 
 def find_suite_config(path: pathlib.Path) -> pathlib.Path:
