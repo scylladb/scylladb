@@ -51,7 +51,7 @@ struct raft_server_for_group {
     std::unique_ptr<raft_ticker_type> ticker;
     raft_rpc& rpc;
     raft_sys_table_storage& persistence;
-    std::optional<seastar::future<>> aborted;
+    std::optional<seastar::shared_future<>> aborted;
     std::optional<utils::updateable_value<uint32_t>> default_op_timeout_in_ms;
 };
 
@@ -118,7 +118,6 @@ private:
 
     void init_rpc_verbs();
     seastar::future<> uninit_rpc_verbs();
-    seastar::future<> stop_servers() noexcept;
 
     raft_server_for_group& server_for_group(raft::group_id id);
 
@@ -138,17 +137,18 @@ public:
     // Called by sharded<>::stop()
     seastar::future<> stop();
 
-    // Stop the server for the given group and remove it from the registry.
-    // It differs from abort_server in that it waits for the server to stop
-    // and removes it from the registry.
-    seastar::future<> stop_server(raft::group_id gid, sstring reason);
+    // Aborts the server and returns a future that can be used to wait for completion.
+    // This function is idempotent: if the server is already aborting, the original
+    // abort future is returned.
+    future<> abort_server(raft::group_id gid, sstring reason = "");
+
+    // Destroys the server for the given group and removes it from the registry.
+    // The server must be aborted before this function is called, see the abort_server function.
+    // No further access to this server must occur after this point.
+    void destroy_server(raft::group_id gid);
 
     // Must not be called before `start`.
     const raft::server_id& get_my_raft_id();
-
-    // Called by before stopping the database.
-    // May be called multiple times.
-    seastar::future<> drain_on_shutdown() noexcept;
 
     raft_rpc& get_rpc(raft::group_id gid);
 
@@ -178,7 +178,6 @@ public:
     // Start raft server instance, store in the map of raft servers and
     // arm the associated timer to tick the server.
     future<> start_server_for_group(raft_server_for_group grp);
-    void abort_server(raft::group_id gid, sstring reason = "");
     unsigned shard_for_group(const raft::group_id& gid) const;
     shared_ptr<raft::failure_detector> failure_detector();
     direct_failure_detector::failure_detector& direct_fd() { return _direct_fd; }
