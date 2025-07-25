@@ -767,6 +767,11 @@ public:
         return _shadowable.tomb();
     }
 
+    // The tombstone value that is used for garbage collection.
+    tombstone tomb_for_gc() const {
+        return is_shadowable() ? _shadowable.tomb() : _regular;
+    }
+
     const gc_clock::time_point max_deletion_time() const {
         return std::max(_regular.deletion_time, _shadowable.tomb().deletion_time);
     }

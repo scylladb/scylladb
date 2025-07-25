@@ -962,7 +962,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(&_reconcile_history_maps) {
+    , _tombstone_gc_state(_shared_tombstone_gc_state) {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     register_metrics();
     // Bandwidth throttling is node-wide, updater is needed on single shard
@@ -985,7 +985,7 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
-    , _tombstone_gc_state(&_reconcile_history_maps) {
+    , _tombstone_gc_state(_shared_tombstone_gc_state) {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
     // No metric registration because this constructor is supposed to be used only by the testing
     // infrastructure.

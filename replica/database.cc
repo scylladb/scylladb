@@ -1892,13 +1892,20 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     co_return m;
 }
 
-api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
+max_purgeable memtable_list::get_max_purgeable(const dht::decorated_key& dk, is_shadowable is, api::timestamp_type max_seen_timestamp) const noexcept {
     const auto get_min_ts = [is] (const memtable& mt) {
         // see get_max_purgeable_timestamp() in compaction.cc for comments on choosing min timestamp
         return is ? mt.get_min_live_row_marker_timestamp() : mt.get_min_live_timestamp();
     };
+    const auto get_expiry_treshold = [s = _current_schema(), &dk] (const memtable& mt) -> max_purgeable::expiry_threshold_opt {
+        if (auto* snapshot = mt.get_tombstone_gc_state_snapshot(); snapshot) {
+            return snapshot->get_gc_before_for_key(s, dk, false);
+        }
+        return std::nullopt;
+    };
 
     auto min_live_ts = api::max_timestamp;
+    max_purgeable::expiry_threshold_opt min_expiry_treshold;
 
     for (const auto& mt : _memtables) {
         const auto mt_min_live_ts = get_min_ts(*mt);
@@ -1912,6 +1919,7 @@ api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& 
             continue;
         }
         min_live_ts = std::min(min_live_ts, mt_min_live_ts);
+        min_expiry_treshold = max_purgeable::combine_expiry_tresholds(min_expiry_treshold, get_expiry_treshold(*mt));
     }
 
     for (const auto& mt : _flushed_memtables_with_active_reads) {
@@ -1919,9 +1927,10 @@ api::timestamp_type memtable_list::min_live_timestamp(const dht::decorated_key& 
         // becomes empty after the merge to cache completes, so we only use the
         // min ts metadata.
         min_live_ts = std::min(min_live_ts, get_min_ts(mt));
+        min_expiry_treshold = max_purgeable::combine_expiry_tresholds(min_expiry_treshold, get_expiry_treshold(mt));
     }
 
-    return min_live_ts;
+    return max_purgeable(min_live_ts, min_expiry_treshold, max_purgeable::timestamp_source::memtable_possibly_shadowing_data);
 }
 
 future<> memtable_list::flush() {
@@ -1946,7 +1955,7 @@ future<> memtable_list::flush() {
 lw_shared_ptr<memtable> memtable_list::new_memtable() {
     return make_lw_shared<memtable>(_current_schema(), *_dirty_memory_manager,
             _table_shared_data,
-            _table_stats, this, _compaction_scheduling_group);
+            _table_stats, this, _compaction_scheduling_group, _shared_gc_state);
 }
 
 // Synchronously swaps the active memtable with a new, empty one,
@@ -2827,7 +2836,7 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, std:
     cf.set_truncation_time(truncated_at);
     co_await sys_ks.save_truncation_record(cf, truncated_at, rp);
 
-    auto& gc_state = get_compaction_manager().get_tombstone_gc_state();
+    auto& gc_state = get_compaction_manager().get_shared_tombstone_gc_state();
     gc_state.drop_repair_history_for_table(uuid);
 }
 
