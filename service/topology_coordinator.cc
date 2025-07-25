@@ -1913,6 +1913,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    void trigger_load_stats_refresh() {
+        (void)_tablet_load_stats_refresh.trigger().handle_exception([] (auto ep) {
+            rtlogger.warn("Error during tablet load stats refresh: {}", ep);
+        });
+    }
+
     future<> cancel_all_requests(group0_guard guard, std::unordered_set<raft::server_id> dead_nodes) {
         std::vector<canonical_mutation> muts;
         std::vector<raft::server_id> reject_join;
@@ -2393,10 +2399,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     muts.emplace_back(rtbuilder.build());
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                    "bootstrap: read fence completed");
-                    // Make sure the load balancer knows the capacity for the new node immediately.
-                    (void)_tablet_load_stats_refresh.trigger().handle_exception([] (auto ep) {
-                        rtlogger.warn("Error during tablet load stats refresh: {}", ep);
-                    });
+                    trigger_load_stats_refresh();
                     }
                     co_await _voter_handler.on_node_added(node.id, _as);
                     break;
@@ -2455,6 +2458,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(replaced_node_id.uuid()), muts);
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
                                                   "replace: read fence completed");
+                    trigger_load_stats_refresh();
                     }
                     co_await _voter_handler.on_node_added(node.id, _as);
                     break;
