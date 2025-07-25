@@ -2,7 +2,9 @@
  * Copyright (C) 2016 ScyllaDB
  */
 
-
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
 
 #include <boost/test/unit_test.hpp>
 #include <stdint.h>
