@@ -172,6 +172,9 @@ public:
 
     void set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept;
 
+    // If the permit is aborted, return the exception it was aborted with.
+    const std::exception_ptr& get_abort_exception() const noexcept;
+
     // If the read was aborted, throw the exception the read was aborted with.
     // Otherwise no-op.
     void check_abort() const;

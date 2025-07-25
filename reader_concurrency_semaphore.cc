@@ -495,6 +495,10 @@ public:
         return bool(_ex);
     }
 
+    const std::exception_ptr& get_abort_exception() const noexcept {
+        return _ex;
+    }
+
     void check_abort() const {
         if (_ex) {
             std::rethrow_exception(_ex);
@@ -642,6 +646,10 @@ const tracing::trace_state_ptr& reader_permit::trace_state() const noexcept {
 
 void reader_permit::set_trace_state(tracing::trace_state_ptr trace_ptr) noexcept {
     _impl->set_trace_state(std::move(trace_ptr));
+}
+
+const std::exception_ptr& reader_permit::get_abort_exception() const noexcept {
+    return _impl->get_abort_exception();
 }
 
 void reader_permit::check_abort() const {
