@@ -25,10 +25,11 @@ DescRowType = Any
 
 DEFAULT_SUPERUSER = "cassandra"
 # The prefix of the create statement returned by `DESC SCHEMA` and corresponding to a CDC log table.
-CDC_LOG_TABLE_DESC_PREFIX =                                                                 \
-                "/* Do NOT execute this statement! It's only for informational purposes.\n" \
-                "   A CDC log table is created automatically when the base is created.\n"   \
-                "\n"
+CDC_LOG_TABLE_DESC_PREFIX =                                                                \
+    "/* Do NOT execute this statement! It's only for informational purposes.\n"            \
+    "   A CDC log table is created automatically when creating the base with CDC\n"        \
+    "   enabled option or creating the vector index on the base table's vector column.\n"  \
+    "\n"
 CDC_LOG_TABLE_DESC_SUFFIX = "\n*/"
 
 def filter_non_default_user(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
