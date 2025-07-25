@@ -19,6 +19,7 @@ target_sources(sstables
     sstables_manager.cc
     sstable_version.cc
     storage.cc
+    trie/bti_node_sink.cc
     trie/trie_writer.cc
     writer.cc)
 target_include_directories(sstables
