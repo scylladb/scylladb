@@ -41,6 +41,8 @@ public:
 
     void add_property(const sstring& name, const std::map<sstring, sstring>& value);
 
+    void remove_property(const sstring& name);
+
     void validate(const std::set<sstring>& keywords, const std::set<sstring>& exts = {}, const std::set<sstring>& obsolete = {}) const;
 
 protected:

@@ -1930,7 +1930,7 @@ SEASTAR_TEST_CASE(test_validate_keyspace) {
             assert_that_failed(f);
             return e.execute_cql("create keyspace ks3 with replication = { 'replication_factor' : 1 };");
         }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
-            assert_that_failed(f);
+            BOOST_ASSERT(!f.failed());
             return e.execute_cql("create keyspace ks3 with rreplication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 };");
         }).then_wrapped([&e] (future<shared_ptr<cql_transport::messages::result_message>> f) {
             assert_that_failed(f);
