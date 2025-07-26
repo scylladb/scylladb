@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <optional>
+#include <string>
 #include <utility>
 #include <algorithm>
 
@@ -21,6 +23,7 @@
 #include "cdc/metadata.hh"
 #include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
+#include "gc_clock.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
@@ -344,7 +347,7 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
 
         if (key == "enabled") {
             if (is_true || is_false) {
-                enabled(is_true);
+                _enabled = is_true;
             } else {
                 throw exceptions::configuration_exception("Invalid value for CDC option \"enabled\": " + p.second);
             }
@@ -381,6 +384,15 @@ cdc::options::options(const std::map<sstring, sstring>& map) {
             if (_ttl < 0) {
                 throw exceptions::configuration_exception("Invalid CDC option: ttl must be >= 0");
             }
+        } else if (key == "switched_at") {
+            try {
+                int switched_at = std::stoull(p.second);
+                _switched_at = std::make_optional<gc_clock::time_point>(gc_clock::duration(switched_at));
+            } catch (std::invalid_argument& e) {
+                throw exceptions::configuration_exception("Invalid value for CDC option \"switched_at\": " + p.second);
+            } catch (std::out_of_range& e) {
+                throw exceptions::configuration_exception("Invalid CDC option: switched_at out of range");
+            }
         } else {
             throw exceptions::configuration_exception("Invalid CDC option: " + p.first);
         }
@@ -398,6 +410,7 @@ std::map<sstring, sstring> cdc::options::to_map() const {
         { "postimage", _postimage ? "true" : "false" },
         { "delta", fmt::format("{}", _delta_mode) },
         { "ttl", std::to_string(_ttl) },
+        { "switched_at", std::to_string(switched_at().time_since_epoch().count()) },
     };
 }
 

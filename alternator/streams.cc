@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <chrono>
 #include <type_traits>
 #include <boost/lexical_cast.hpp>
 #include <boost/io/ios_state.hpp>
@@ -21,6 +22,7 @@
 #include "cdc/cdc_options.hh"
 #include "cdc/metadata.hh"
 #include "db/system_distributed_keyspace.hh"
+#include "gc_clock.hh"
 #include "utils/UUID_gen.hh"
 #include "cql3/selection/selection.hh"
 #include "cql3/result_set.hh"
@@ -32,6 +34,8 @@
 
 #include "executor.hh"
 #include "data_dictionary/data_dictionary.hh"
+
+extern logging::logger elogger;
 
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
@@ -76,6 +80,7 @@ static db_clock::time_point as_timepoint(const table_id& tid) {
     return db_clock::time_point{utils::UUID_gen::unix_timestamp(tid.uuid())};
 }
 
+namespace alternator {
 /**
  * Note: scylla tables do not have a timestamp as such, 
  * but the UUID (for newly created tables at least) is 
@@ -89,7 +94,15 @@ static sstring stream_label(const schema& log_schema) {
     return seastar::json::formatter::to_json(tm);
 }
 
-namespace alternator {
+bool is_stream_visible(schema_ptr base_table, const data_dictionary::database& db) {
+    if (!base_table) {
+        return false;
+    }
+    gc_clock::duration alive_window_s = std::chrono::seconds(db.get_config().alternator_streams_postmortem_interval_s());
+    bool retention_period_not_expired =
+            base_table->cdc_options().has_switched_at() && base_table->cdc_options().switched_at() + alive_window_s < gc_clock::now();
+    return base_table->cdc_options().enabled() || retention_period_not_expired;
+}
 
 // stream arn _has_ to be 37 or more characters long. ugh...
 // see https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_streams_DescribeStream.html#API_streams_DescribeStream_RequestSyntax
@@ -126,7 +139,7 @@ public:
     }
 };
 
-}
+} // namespace alternator
 
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
@@ -198,7 +211,10 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
         if (!is_alternator_keyspace(ks_name)) {
             continue;
         }
-        if (cdc::is_log_for_some_table(db.real_database(), ks_name, cf_name)) {
+
+        schema_ptr base_table = cdc::get_base_table(db.real_database(), ks_name, cf_name);
+        // todo: czas jest zle serializowany?
+        // if (is_stream_visible(base_table, db)) {
             rjson::value new_entry = rjson::empty_object();
 
             last = i->schema()->id();
@@ -208,7 +224,7 @@ future<alternator::executor::request_return_type> alternator::executor::list_str
             rjson::push_back(streams, std::move(new_entry));
 
             --limit;
-        }
+        // }
     }
 
     rjson::add(ret, "Streams", std::move(streams));
@@ -502,6 +518,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
     // filter out cdc generations older than the table or now() - cdc::ttl (typically dynamodb_streams_max_window - 24h)
     auto low_ts = std::max(as_timepoint(schema->id()), db_clock::now() - ttl);
 
+    // TODO: to nie wyswietla cos?
     return _sdks.cdc_get_versioned_streams(low_ts, { normal_token_owners }).then([db, shard_start, limit, ret = std::move(ret), stream_desc = std::move(stream_desc)] (std::map<db_clock::time_point, cdc::streams_version> topologies) mutable {
 
         auto e = topologies.end();
@@ -539,9 +556,12 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         if (i != topologies.begin()) {
             prev = std::prev(i);
         }
+        
+        elogger.debug("siema version {} index {} token {}", shard_start.value().id.version(), shard_start.value().id.index(), shard_start.value().id.token());
 
         for (; limit > 0 && i != e; prev = i, ++i) {
             auto& [ts, sv] = *i;
+            elogger.debug("siema limit {} {}", limit, ts);
 
             last = std::nullopt;
 
@@ -556,6 +576,7 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
                 lo = std::upper_bound(lo, end, shard_start->id, id_cmp);
                 shard_start = std::nullopt;
             }
+            elogger.debug("siema lo {}", lo->index());
 
             if (lo != end && prev != e) {
                 // We want older stuff sorted in token order so we can find matching
