@@ -50,6 +50,10 @@ struct open_rt_marker {
 // to a start of some partition or to EOF,
 // while "position" means a position that corresponds either to the start of some partition,
 // to the start of some clustering entry, or to EOF.
+//
+// Note: even though some methods of the index are inexact (i.e. they advance the index to *some*
+// Data position close to the queried ring position), they are monotonic.
+// I.e. if B >= A, then advance(B) >= advance(A).
 class abstract_index_reader {
 public:
     virtual ~abstract_index_reader() = default;
@@ -58,19 +62,29 @@ public:
     // True iff lower bound is at EOF.
     virtual bool eof() const = 0;
 
-    // Advances lower bound to the first PK no smaller than pos.
-    // Returns true iff `key` is a partition key present in the sstable.
+    // If `key` is a partition key present in the sstable, advances lower bound to `key`.
+    // Otherwise advances lower bound to the some PK no greater than `key`.
+    // Returns `true` iff it's possible that `key` is a partition key present in the sstable.
+    // (In other words, if it returns `false`, then the key is definitely not present.
+    // Otherwise it's unknown if it's present).
     //
     // Precondition: pos >= lower bound
     //
     // Note: this is the most important and performance-sensitive method of the reader.
     // This is what's used by sstable readers to find positions for single-partition reads.
     virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key) = 0;
-    // Advances lower bound to the first PK no smaller than pos.
-    // Precondition: pos >= lower bound
-    virtual future<> advance_to(dht::ring_position_view pos) = 0;
-    // Advances lower bound to the first PK which lies inside or after the range.
+    // Advances lower bound to the first PK greater than dk.
+    //
+    // Preconditions: dk >= lower bound, dk is present in the sstable
+    virtual future<> advance_past_definitely_present_partition(const dht::decorated_key& dk) = 0;
+    // Advances lower bound to dk.
+    //
+    // Preconditions: dk >= lower bound, dk is present in the sstable
+    virtual future<> advance_to_definitely_present_partition(const dht::decorated_key& dk) = 0;
+    // Advances lower bound to the first PK which lies inside or after the range,
+    // or to some close predecessor of that optimal PK.
     // Advances upper bound to the first PK which lies after the range.
+    // or to some close successor of that optimal PK.
     // Preconditions:
     // 1. next lower bound >= lower bound
     // 2. next upper bound >= upper bound
@@ -123,11 +137,33 @@ public:
     virtual future<> read_partition_data() = 0;
     // Returns tombstone for the current partition,
     // if such information is available in the index.
+    //
+    // Note: it's an arbitrary decision of the writer of the index whether
+    // the the partition tombstone has been attached to a given index entry,
+    // and the user of the index reader should not assume that it has.
+    //
+    // The main use case for this information is reads which start in the
+    // middle of a large partition. The Data reader needs to know the partition
+    // header (full partition key and partition tombstone) to emit a partition,
+    // but the header is at the beginning of the partition, potentially far
+    // from the queried rows.
+    // Embedding the partition header in the index lets the Data reader skip
+    // avoid doing a separate disk read to get the header from the Data file.
+    //
+    // Thus, `partition_tombstone()` and `get_partition_key()` usually
+    // return an engaged optional at least for those partitions which have an
+    // intra-partition index (because that's when they can be used to skip
+    // a disk seek) but the reader shouldn't assume that. It should check
+    // if they are available, and if not, it should fall back to reading
+    // the partition header from the Data file.
+    //
     // Precondition: partition_data_ready()
     virtual std::optional<sstables::deletion_time> partition_tombstone() = 0;
-    // Returns the key for current partition.
+    // Returns the key for current partition of the lower bound,
+    // if available (se the comment for partition_tombstone) in the index.
+    //
     // Precondition: partition_data_ready()
-    virtual partition_key get_partition_key() = 0;
+    virtual std::optional<partition_key> get_partition_key() = 0;
     // Returns data file positions corresponding to the bounds.
     // End position may be unset
     virtual data_file_positions_range data_file_positions() const = 0;
@@ -985,7 +1021,7 @@ public:
 
     // Returns the key for current partition.
     // Can be called only when partition_data_ready().
-    partition_key get_partition_key() override {
+    std::optional<partition_key> get_partition_key() override {
         return _alloc_section(_region, [this] {
             index_entry& e = current_partition_entry(_lower_bound);
             return e.get_key().to_partition_key(*_sstable->_schema);
@@ -1075,6 +1111,14 @@ public:
             _lower_bound.element = indexable_element::cell;
             sstlog.trace("index {}: skipped to cell, _data_file_position={}", fmt::ptr(this), _lower_bound.data_file_position);
         });
+    }
+
+    future<> advance_past_definitely_present_partition(const dht::decorated_key& dk) override {
+        return advance_to(_lower_bound, dht::ring_position_view::for_after_key(dk));
+    }
+
+    future<> advance_to_definitely_present_partition(const dht::decorated_key& dk) override {
+        return advance_to(_lower_bound, dht::ring_position_view(dk, dht::ring_position_view::after_key::no));
     }
 
     // Like advance_to(dht::ring_position_view), but returns information whether the key was found
@@ -1195,12 +1239,6 @@ public:
     // Can be called only when !eof().
     future<> advance_to_next_partition() override {
         return advance_to_next_partition(_lower_bound);
-    }
-
-    // Positions the cursor on the first partition which is not smaller than pos (like std::lower_bound).
-    // Must be called for non-decreasing positions.
-    future<> advance_to(dht::ring_position_view pos) override {
-        return advance_to(_lower_bound, pos);
     }
 
     // Returns positions in the data file of the cursor.

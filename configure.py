@@ -551,6 +551,7 @@ scylla_tests = set([
     'test/boost/sstable_conforms_to_mutation_source_test',
     'test/boost/sstable_datafile_test',
     'test/boost/sstable_generation_test',
+    'test/boost/sstable_inexact_index_test',
     'test/boost/sstable_move_test',
     'test/boost/sstable_mutation_test',
     'test/boost/sstable_partition_index_cache_test',

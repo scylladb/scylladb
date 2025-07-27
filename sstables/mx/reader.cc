@@ -33,7 +33,7 @@ public:
         _permit.on_finish_sstable_read();
     }
 
-    void on_next_partition(dht::decorated_key, tombstone);
+    virtual data_consumer::proceed on_next_partition(dht::decorated_key, tombstone);
 };
 
 enum class row_processing_result {
@@ -298,7 +298,11 @@ public:
         auto pk = key.to_partition_key(*_schema);
         setup_for_partition(pk);
         auto dk = dht::decorate_key(*_schema, pk);
-        _reader->on_next_partition(std::move(dk), tombstone(deltime));
+
+        auto should_proceed = _reader->on_next_partition(std::move(dk), tombstone(deltime));
+        if (should_proceed == data_consumer::proceed::no) {
+            return data_consumer::proceed::no;
+        }
         return data_consumer::proceed(!_reader->is_buffer_full() && !need_preempt());
     }
 
@@ -1262,7 +1266,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     std::unique_ptr<abstract_index_reader> _index_reader;
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
-    const dht::partition_range& _pr;
+    std::reference_wrapper<const dht::partition_range> _pr;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
@@ -1283,11 +1287,13 @@ public:
                             streamed_mutation::forwarding fwd,
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon,
-                            integrity_check integrity)
+                            integrity_check integrity,
+                            std::unique_ptr<abstract_index_reader> ir = nullptr)
             : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
             , _slice_holder(std::move(slice))
             , _slice(_slice_holder.get())
             , _consumer(this, _schema, std::move(permit), _slice, std::move(trace_state), fwd, _sst)
+            , _index_reader(std::move(ir))
             // FIXME: I want to add `&& fwd_mr == mutation_reader::forwarding::no` below
             // but can't because many call sites use the default value for
             // `mutation_reader::forwarding` which is `yes`.
@@ -1297,6 +1303,7 @@ public:
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
             , _integrity(integrity) {
+        sstlog.trace("mx_sstable_mutation_reader {}: init with _pr={}", fmt::ptr(this), _pr.get());
         if (reversed()) {
             if (!_single_partition_read) {
                 on_internal_error(sstlog, format(
@@ -1343,7 +1350,8 @@ private:
         }
         return (_index_in_current_partition
                 ? _index_reader->advance_to_next_partition()
-                : get_index_reader().advance_to(dht::ring_position_view::for_after_key(*_current_partition_key))).then([this] {
+                : get_index_reader().advance_past_definitely_present_partition(*_current_partition_key))
+        .then([this] {
             _index_in_current_partition = true;
             auto [start, end] = _index_reader->data_file_positions();
             if (end && start > *end) {
@@ -1363,8 +1371,12 @@ private:
             sstlog.trace("reader {}: no tombstone", fmt::ptr(this));
             return read_from_datafile();
         }
-        auto pk = _index_reader->get_partition_key();
-        auto key = dht::decorate_key(*_schema, std::move(pk));
+        std::optional<partition_key> pk = _index_reader->get_partition_key();
+        if (!pk) {
+            sstlog.trace("reader {}: no partition key", fmt::ptr(this));
+            return read_from_datafile();
+        }
+        auto key = dht::decorate_key(*_schema, std::move(*pk));
         _consumer.setup_for_partition(key.key());
         on_next_partition(std::move(key), tombstone(*tomb));
         return make_ready_future<>();
@@ -1380,6 +1392,19 @@ private:
         _end_of_stream = true; // on_next_partition() will set it to true
         if (!_read_enabled) {
             sstlog.trace("reader {}: eof", fmt::ptr(this));
+            return make_ready_future<>();
+        }
+
+        if (_saved_partition_tombstone) {
+            // This is the special case where we ended reading last partition range
+            // only after parsing the partition key after the range,
+            // and then the reader was forwarded to that key.
+            // Since the parser can't be moved back, we serve the partition key
+            // and the tombstone that we saved after parsing.
+            auto tomb = *_saved_partition_tombstone;
+            _saved_partition_tombstone.reset();
+            sstlog.trace("reader {}: serving partition key {} due to _saved_partition_tombstone {}", fmt::ptr(this), *_current_partition_key, tomb);
+            on_next_partition(*_current_partition_key, tomb);
             return make_ready_future<>();
         }
 
@@ -1435,7 +1460,7 @@ private:
             if (!_index_in_current_partition) {
                 _index_in_current_partition = true;
                 // FIXME reversed multi partition reads
-                return get_index_reader().advance_to(*_current_partition_key);
+                return get_index_reader().advance_to_definitely_present_partition(*_current_partition_key);
             }
             return make_ready_future();
         }().then([this, pos = *pos] {
@@ -1501,7 +1526,7 @@ private:
 
         if (_single_partition_read) {
             _sst->get_stats().on_single_partition_read();
-            const auto& key = dht::ring_position_view(_pr.start()->value());
+            const auto& key = dht::ring_position_view(_pr.get().start()->value());
 
             const auto present = co_await get_index_reader().advance_lower_and_check_if_present(key);
 
@@ -1598,6 +1623,19 @@ public:
             _partition_finished = true;
         }
     }
+    // Advances the index to the first position
+    // which hasn't been crossed by the Data file parser yet.
+    future<> advance_index_until_unseen_partition() {
+        while (true) {
+            auto [start, end] = _index_reader->data_file_positions();
+            if (start >= _context->position()) {
+                sstlog.trace("mp_row_consumer_reader_mx {}: advance_index_until_unseen_partition(): advanced to {}", fmt::ptr(this), start);
+                co_return;
+            } else {
+                co_await _index_reader->advance_to_next_partition();
+            }
+        }
+    }
     virtual future<> fast_forward_to(const dht::partition_range& pr) override {
         if (reversed()) {
             // FIXME
@@ -1605,6 +1643,8 @@ public:
         }
 
         return maybe_initialize().then([this, &pr] (bool initialized) {
+            _pr = pr;
+            sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({})", fmt::ptr(this), _pr);
             if (!initialized) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -1618,9 +1658,54 @@ public:
                 return f1.then([this] {
                     auto [start, end] = _index_reader->data_file_positions();
                     parse_assert(bool(end), _sst->get_filename());
+                    sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr, start, *end, _context->position());
+                    if (start < _context->position()) {
+                        sstlog.trace("mp_row_consumer_reader_mx {}: _saved_partition_tombstone={}", fmt::ptr(this), _saved_partition_tombstone);
+                        // If we got here, the index returned a Data start which precedes
+                        // the data parser's position.
+                        // But by contract, fast_forward_to can only be used to move the reader forward.
+                        // The new range must lie after the old range.
+                        //
+                        // So there are two ways for this to happen:
+                        // 1. When reading the last range, the parser was advanced past the first
+                        // partition key lying after the range.
+                        // (This is signified by _saved_partition_tombstone).
+                        // And then, the reader was advanced to a new range that
+                        // to the best knowledge of the index, might contain that exact key.
+                        // In this case, we have to start reading from that key (which we have remembered).
+                        // 2. The parser was not advanced past the last range, but the inexact
+                        // index returned a start position for the new range which in reality
+                        // lies inside the old range. In this case, we should start reading
+                        // from the first partition with position greater or equal to the parser's position.
+
+                        // The index *could* be in the current position,
+                        // but setting `false` here is fine.
+                        // Worst case, the reader will forward the index to the current position again.
+                        // Lack of this optimization doesn't matter to a range read.
+                        _index_in_current_partition = false;
+                        if (_saved_partition_tombstone) {
+                            // Case 1 from the comment above.
+                            if (*end >= _context->position()) {
+                                _read_enabled = true;
+                                return _context->fast_forward_to(_context->position(), *end);
+                            } else {
+                                _read_enabled = false;
+                                return make_ready_future<>();
+                            }
+                        } else {
+                            // Case 2 from the comment above.
+                            return advance_index_until_unseen_partition().then([this] {
+                                auto [start, end] = _index_reader->data_file_positions();
+                                _read_enabled = true;
+                                _context->reset(indexable_element::partition);
+                                return _context->fast_forward_to(start, *end);
+                            });
+                        }
+                    }
                     if (start != *end) {
                         _read_enabled = true;
                         _index_in_current_partition = true;
+                        _saved_partition_tombstone.reset();
                         _context->reset(indexable_element::partition);
                         return _context->fast_forward_to(start, *end);
                     }
@@ -1718,6 +1803,48 @@ public:
             sstlog.warn("Failed closing of sstable_mutation_reader: {}. Ignored since the reader is already done.", ep);
         });
     }
+
+    data_consumer::proceed on_next_partition(dht::decorated_key key, tombstone tomb) override {
+        if (_pr.get().before(key, dht::ring_position_comparator(*_schema))) {
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key before range", fmt::ptr(this), key, _pr);
+            // If we got here, then the index returned a Data file range which
+            // includes some partitions before the queried range.
+            //
+            // A BTI index is inexact in general (it can return a Data file range
+            // which includes some partitions before and after the queried range),
+            // but it is guaranteed to return the exact position if it's queried
+            // for a key which is present in the sstable.
+            //
+            // So, for a single partition read, if we parsed a partition which is before
+            // the queried range, it means that the queried partition doesn't exist in the sstable.
+            // (I.e. the index gave us a false positive).
+            // In this case, the read is over. There's nothing to read.
+            //
+            // Otherwise, for range reads, we are going to skip this partition
+            // (i.e. advance the index to the range after `key`) and resume reading.
+            _end_of_stream = _single_partition_read;
+            _before_partition = false;
+            _partition_finished = true;
+            _current_partition_key = std::move(key);
+            return data_consumer::proceed::no;
+        } else if (_pr.get().after(key, dht::ring_position_comparator(*_schema))) {
+            // If we got here, then the index returned a Data file range which
+            // includes some partitions after the queried range.
+            // The read is over. The new key and everything after it should be ignored.
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key after range", fmt::ptr(this), key, _pr);
+            _end_of_stream = true;
+            // The read is over for now, but the reader can be later forwarded to the key we just read.
+            // The parser can't move backwards, so we have to remember the key and tombstone
+            // to handle that case.
+            _saved_partition_tombstone = tomb;
+            _current_partition_key = std::move(key);
+            return data_consumer::proceed::no;
+        } else {
+            // This is the normal path.
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, consuming key in range", fmt::ptr(this), key, _pr);
+            return mp_row_consumer_reader_mx::on_next_partition(std::move(key), tomb);
+        }
+    }
 };
 
 static mutation_reader make_reader(
@@ -1730,10 +1857,11 @@ static mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
-        integrity_check integrity) {
+        integrity_check integrity,
+        std::unique_ptr<abstract_index_reader> ir = nullptr) {
     return make_mutation_reader<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
-        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity);
+        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir));
 }
 
 mutation_reader make_reader(
@@ -1764,6 +1892,22 @@ mutation_reader make_reader(
         integrity_check integrity) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
             value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity);
+}
+
+mutation_reader make_reader_with_index_reader(
+        shared_sstable sstable,
+        schema_ptr schema,
+        reader_permit permit,
+        const dht::partition_range& range,
+        const query::partition_slice& slice,
+        tracing::trace_state_ptr trace_state,
+        streamed_mutation::forwarding fwd,
+        mutation_reader::forwarding fwd_mr,
+        read_monitor& monitor,
+        integrity_check integrity,
+        std::unique_ptr<abstract_index_reader> ir) {
+    return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
+            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir));
 }
 
 /// a reader which does not support seeking to given position.
@@ -1859,7 +2003,7 @@ mutation_reader make_full_scan_reader(
             std::move(trace_state), monitor, integrity);
 }
 
-void mp_row_consumer_reader_mx::on_next_partition(dht::decorated_key key, tombstone tomb) {
+data_consumer::proceed mp_row_consumer_reader_mx::on_next_partition(dht::decorated_key key, tombstone tomb) {
     _partition_finished = false;
     _before_partition = false;
     _end_of_stream = false;
@@ -1867,6 +2011,7 @@ void mp_row_consumer_reader_mx::on_next_partition(dht::decorated_key key, tombst
     push_mutation_fragment(
             mutation_fragment_v2(*_schema, _permit, partition_start(*_current_partition_key, tomb)));
     _sst->get_stats().on_partition_read();
+    return data_consumer::proceed::yes;
 }
 
 // A validating consumer implementing the Consumer concept of data_consume_rows_context_m.
@@ -1903,6 +2048,7 @@ private:
     mutation_fragment_stream_validator _validator;
     uint64_t _error_count = 0;
     std::optional<partition_key> _expected_pkey;
+    std::optional<partition_key> _last_pkey;
     std::optional<clustering_block> _expected_clustering_block;
     position_in_partition _current_pos;
     bool _stop_after_partition_header = false;
@@ -1976,6 +2122,9 @@ public:
     bool in_expected_clustering_block() const {
         return _expected_clustering_block && !_expected_clustering_block->done;
     }
+    partition_key get_last_pkey() {
+        return _last_pkey.value();
+    }
 
     void report_error(sstring what) {
         ++_error_count;
@@ -1983,10 +2132,10 @@ public:
     }
 
     data_consumer::proceed consume_partition_start(sstables::key_view key, sstables::deletion_time deltime) {
-        auto pk = key.to_partition_key(*_schema);
-        auto dk = dht::decorate_key(*_schema, pk);
+        _last_pkey = key.to_partition_key(*_schema);
+        auto dk = dht::decorate_key(*_schema, *_last_pkey);
         _current_pos = position_in_partition(position_in_partition::partition_start_tag_t{});
-        sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, pk, _expected_pkey);
+        sstlog.trace("validating_consumer {}: {}({}) _expected_pkey={}", fmt::ptr(this), __FUNCTION__, _last_pkey, _expected_pkey);
         validate_fragment_order(mutation_fragment_v2::kind::partition_start, {});
         if (_expected_pkey && !_expected_pkey->equal(*_schema, dk.key())) {
             report_error(format("mismatching index/data: partition mismatch: index: {}, data: {}", *_expected_pkey, dk.key()));
@@ -2120,6 +2269,8 @@ future<uint64_t> validate(
                 big_index_reader = nullptr;
             }
 
+            consumer.reset_index_expected_partition();
+
             if (idx_reader) {
                 co_await idx_reader->read_partition_data();
 
@@ -2129,15 +2280,21 @@ future<uint64_t> validate(
 
                 const auto index_pos = idx_reader->data_file_positions().start;
                 const auto data_pos = context->position();
-                sstlog.trace("validate(): index-data position check for partition {}: {} == {}", idx_reader->get_partition_key(), data_pos, index_pos);
+                auto pk = idx_reader->get_partition_key();
+
+                if (pk) {
+                    sstlog.trace("validate(): index-data position check for partition {}: {} == {}", *pk, data_pos, index_pos);
+                } else {
+                    sstlog.trace("validate(): index-data position check for a partition: {} == {}", data_pos, index_pos);
+                }
                 if (index_pos != data_pos) {
                     consumer.report_error(format("mismatching index/data: position mismatch: index: {}, data: {}", index_pos, data_pos));
                 }
                 current_partition_pos = data_pos;
 
-                consumer.set_index_expected_partition(idx_reader->get_partition_key());
-            } else {
-                consumer.reset_index_expected_partition();
+                if (pk) {
+                    consumer.set_index_expected_partition(*pk);
+                }
             }
 
             std::optional<clustered_index_cursor::entry_info> current_pi_block;
@@ -2192,8 +2349,8 @@ future<uint64_t> validate(
             // Check if promoted index still has more entries.
             if (idx_cursor && (current_pi_block = co_await idx_cursor->next_entry())) {
                 consumer.report_error(format("mismatching index/data: promoted index has more blocks, but it is end of partition {} ({})",
-                        idx_reader->get_partition_key().with_schema(*schema),
-                        idx_reader->get_partition_key()));
+                        consumer.get_last_pkey().with_schema(*schema),
+                        consumer.get_last_pkey()));
             }
 
             if (idx_reader) {

@@ -69,7 +69,9 @@ public:
         try {
             while (!ir->eof()) {
                 co_await ir->read_partition_data();
-                auto pk = ir->get_partition_key();
+                // In general the index might not be able to return the key,
+                // but this helper is only used for tests of indexes which are able to do that.
+                auto pk = ir->get_partition_key().value();
                 entries.emplace_back(index_entry{sstables::key::from_partition_key(*s, pk),
                                         pk, ir->get_promoted_index_size()});
                 co_await ir->advance_to_next_partition();
