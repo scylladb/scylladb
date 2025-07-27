@@ -8,6 +8,7 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include "locator/local_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
 #include <fmt/ranges.h>
@@ -495,9 +496,14 @@ stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(
     return stop_iteration::no;
 }
 
-vnode_effective_replication_map::~vnode_effective_replication_map() {
+static_effective_replication_map::~static_effective_replication_map() {
     if (is_registered()) {
         _factory->erase_effective_replication_map(this);
+    }
+}
+
+vnode_effective_replication_map::~vnode_effective_replication_map() {
+    if (is_registered()) {
         try {
             _factory->submit_background_work(clear_gently(std::move(_replication_map),
                 std::move(*_pending_endpoints),
@@ -531,19 +537,26 @@ future<static_effective_replication_map_ptr> effective_replication_map_factory::
         co_return erm;
     }
 
-    // try to find a reference erm on shard 0
-    // TODO:
-    // - use hash of key to distribute the load
-    // - instaintiate only on NUMA nodes
-    auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<static_effective_replication_map_ptr>> {
-        auto erm = ermf.find_effective_replication_map(key);
-        co_return make_foreign<static_effective_replication_map_ptr>(std::move(erm));
-    });
     mutable_static_effective_replication_map_ptr new_erm;
-    if (ref_erm) {
-        new_erm = co_await ref_erm->clone_gently(std::move(rs), std::move(tmptr));
+
+    if (rs->is_local()) {
+        // Local replication strategy does not benefit from cloning across shards
+        // to save an expensive calculate function like `calculate_vnode_effective_replication_map`
+        new_erm = make_local_effective_replication_map_ptr(std::move(rs), std::move(tmptr));
     } else {
-        new_erm = co_await calculate_vnode_effective_replication_map(std::move(rs), std::move(tmptr));
+        // try to find a reference erm on shard 0
+        // TODO:
+        // - use hash of key to distribute the load
+        // - instaintiate only on NUMA nodes
+        auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<static_effective_replication_map_ptr>> {
+            auto erm = ermf.find_effective_replication_map(key);
+            co_return make_foreign<static_effective_replication_map_ptr>(std::move(erm));
+        });
+        if (ref_erm) {
+            new_erm = co_await ref_erm->clone_gently(std::move(rs), std::move(tmptr));
+        } else {
+            new_erm = co_await calculate_vnode_effective_replication_map(std::move(rs), std::move(tmptr));
+        }
     }
     co_return insert_effective_replication_map(std::move(new_erm), std::move(key));
 }
@@ -568,7 +581,7 @@ static_effective_replication_map_ptr effective_replication_map_factory::insert_e
     return res;
 }
 
-bool effective_replication_map_factory::erase_effective_replication_map(vnode_effective_replication_map* erm) {
+bool effective_replication_map_factory::erase_effective_replication_map(static_effective_replication_map* erm) {
     const auto& key = erm->get_factory_key();
     auto it = _effective_replication_maps.find(key);
     if (it == _effective_replication_maps.end()) {

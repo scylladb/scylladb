@@ -220,7 +220,8 @@ future<> range_streamer::add_ranges(const sstring& keyspace_name, locator::stati
         throw std::runtime_error("Mixed sending and receiving is not supported");
     }
     _nr_rx_added++;
-    auto erm = ermp.get();
+    auto erm = ermp->maybe_as_vnode_effective_replication_map();
+    SCYLLA_ASSERT(erm != nullptr);
     auto ranges_for_keyspace = !is_replacing && use_strict_sources_for_ranges(keyspace_name, *erm)
         ? get_all_ranges_with_strict_sources_for(keyspace_name, erm, std::move(ranges), gossiper)
         : get_all_ranges_with_sources_for(keyspace_name, erm, std::move(ranges));

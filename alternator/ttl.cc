@@ -769,10 +769,14 @@ static future<bool> scan_table(
             }
         }
     } else {  // VNodes
-        locator::static_effective_replication_map_ptr erm =
+        locator::static_effective_replication_map_ptr ermp =
                 db.real_database().find_keyspace(s->ks_name()).get_static_effective_replication_map();
+        auto* erm = ermp->maybe_as_vnode_effective_replication_map();
+        if (!erm) {
+            on_internal_error(tlogger, format("Keyspace {} is local", s->ks_name()));
+        }
         auto my_host_id = erm->get_topology().my_host_id();
-        token_ranges_owned_by_this_shard my_ranges(s, co_await ranges_holder_primary::make(erm.get(), my_host_id));
+        token_ranges_owned_by_this_shard my_ranges(s, co_await ranges_holder_primary::make(erm, my_host_id));
         while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {
             // Note that because of issue #9167 we need to run a separate
             // query on each partition range, and can't pass several of
@@ -792,7 +796,7 @@ static future<bool> scan_table(
         // by tasking another node to take over scanning of the dead node's primary
         // ranges. What we do here is that this node will also check expiration
         // on its *secondary* ranges - but only those whose primary owner is down.
-        token_ranges_owned_by_this_shard my_secondary_ranges(s, co_await ranges_holder_secondary::make(erm.get(), my_host_id, gossiper));
+        token_ranges_owned_by_this_shard my_secondary_ranges(s, co_await ranges_holder_secondary::make(erm, my_host_id, gossiper));
         while (std::optional<dht::partition_range> range = my_secondary_ranges.next_partition_range()) {
             expiration_stats.secondary_ranges_scanned++;
             dht::partition_range_vector partition_ranges;

@@ -9,6 +9,7 @@
 #include "db/config.hh"
 #include "repair.hh"
 #include "gms/gossip_address_map.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "repair/row_level.hh"
 
 #include "locator/network_topology_strategy.hh"
@@ -1211,14 +1212,16 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     }
 
     auto germs = make_lw_shared(co_await locator::make_global_static_effective_replication_map(sharded_db, keyspace));
-    auto& erm = germs->get();
-    auto& topology = erm.get_token_metadata().get_topology();
-    auto my_host_id = erm.get_topology().my_host_id();
+    auto* ermp = germs->get().maybe_as_vnode_effective_replication_map();
 
-    if (erm.get_replication_strategy().is_local()) {
+    if (!ermp) {
         rlogger.info("repair[{}]: completed successfully: nothing to repair for keyspace {} with local replication strategy", id.uuid(), keyspace);
         co_return id.id;
     }
+
+    auto& erm = *ermp;
+    auto& topology = erm.get_token_metadata().get_topology();
+    auto my_host_id = erm.get_topology().my_host_id();
 
     if (!_gossiper.local().is_normal(my_host_id)) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
