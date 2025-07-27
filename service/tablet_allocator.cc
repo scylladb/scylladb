@@ -1187,6 +1187,11 @@ public:
         return {s, rs};
     }
 
+    const tablet_aware_replication_strategy* get_rs(table_id id) {
+        auto [s, rs] = get_schema_and_rs(id);
+        return rs;
+    }
+
     struct table_sizing {
         size_t current_tablet_count; // Tablet count in group0.
         size_t target_tablet_count; // Tablet count wanted by scheduler.
@@ -2107,11 +2112,16 @@ public:
         int max_rack_load;
         std::unordered_map<sstring, int> rack_load;
 
+        auto rs = get_rs(tablet.table);
+
         auto get_viable_targets = [&] () {
             std::unordered_set<host_id> viable_targets;
 
             for (auto&& [id, node] : nodes) {
                 if (node.dc() != src_info.dc() || node.drained) {
+                    continue;
+                }
+                if (rs->is_rack_based() && node.rack() != src_info.rack()) {
                     continue;
                 }
                 viable_targets.emplace(id);
@@ -2126,6 +2136,10 @@ public:
                         rack_load[node.rack()] += 1;
                     }
                 }
+            }
+
+            if (rs->is_rack_based()) {
+                return viable_targets;
             }
 
             // Drop targets which would increase max rack load.
@@ -2150,7 +2164,7 @@ public:
 
         if (dst_info.rack() != src_info.rack()) {
             auto targets = get_viable_targets();
-            if (!targets.contains(dst_info.id)) {
+            if (rs->is_rack_based() || !targets.contains(dst_info.id)) {
                 auto new_rack_load = rack_load[dst_info.rack()] + 1;
                 lblogger.debug("candidate tablet {} skipped because it would increase load on rack {} to {}, max={}",
                                tablet, dst_info.rack(), new_rack_load, max_rack_load);
@@ -3204,10 +3218,9 @@ public:
     // Allocate tablets for multiple new tables, which may be co-located with each other, or co-located with an existing base table.
     void allocate_tablets_for_new_tables(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
         locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
-        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
+        auto tm = _db.get_shared_token_metadata().get();
+        auto rs = abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, tm->get_topology());
         if (auto&& tablet_rs = rs->maybe_as_tablet_aware()) {
-            auto tm = _db.get_shared_token_metadata().get();
-
             std::unordered_map<table_id, schema_ptr> new_cfms_map;
             for (auto s : cfms) {
                 new_cfms_map[s->id()] = s;
@@ -3247,11 +3260,11 @@ public:
         }
     }
 
-    void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_families(const replica::database& db, const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         allocate_tablets_for_new_tables(ksm, cfms, muts, ts);
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+    void on_before_create_column_family(const replica::database& db, const keyspace_metadata& ksm, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         allocate_tablets_for_new_tables(ksm, {s.shared_from_this()}, muts, ts);
     }
 

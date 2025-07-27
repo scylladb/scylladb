@@ -10,6 +10,8 @@
 #include "locator/tablet_replication_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
+#include <algorithm>
+#include <exception>
 #include <fmt/ranges.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -19,6 +21,9 @@
 
 #include <boost/icl/interval.hpp>
 #include <boost/icl/interval_map.hpp>
+#include <stdexcept>
+#include <sys/types.h>
+#include <variant>
 
 namespace locator {
 
@@ -67,17 +72,19 @@ abstract_replication_strategy::abstract_replication_strategy(
     }
 }
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology* topo) {
     try {
-        return create_object<abstract_replication_strategy, replication_strategy_params>(strategy_name, std::move(params));
+        return create_object<abstract_replication_strategy, replication_strategy_params, const locator::topology*>(strategy_name, std::move(params), std::move(topo));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
 }
 
+// class registry signature must match the actual replication strategies' signature
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    replication_strategy_params>;
+    replication_strategy_params,
+    const topology*>;
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);
@@ -153,18 +160,38 @@ const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as
     return dynamic_cast<const tablet_aware_replication_strategy*>(this);
 }
 
-long abstract_replication_strategy::parse_replication_factor(sstring rf)
-{
-    if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
-        throw exceptions::configuration_exception(
-                format("Replication factor must be numeric and non-negative, found '{}'", rf));
-    }
-    try {
-        return std::stol(rf);
-    } catch (...) {
-        throw exceptions::configuration_exception(
-            sstring("Replication factor must be numeric; found ") + rf);
-    }
+void replication_factor_data::parse(const replication_strategy_config_option& rf, const std::unordered_set<sstring>& allowed_racks) {
+    rslogger.info("replication_factor_data::parse: {}: allowed_racks={}", rf, allowed_racks);
+    std::visit(overloaded_functor {
+        [&] (const sstring& rf) {
+            if (rf.empty()) {
+                throw exceptions::configuration_exception("Replication factor must be non-empty");
+            }
+            ssize_t rf_value = 0;
+            char* endptr = nullptr;
+            rf_value = std::strtol(rf.c_str(), &endptr, 0);
+            if (endptr && *endptr) {
+                throw exceptions::configuration_exception(format("Replication factor must be numeric: found '{}'", rf));
+            }
+            if (rf_value < 0) {
+                throw exceptions::configuration_exception(format("Replication factor must greater than or equal to 0: found '{}'", rf));
+            }
+            _data.emplace<size_t>(rf_value);
+        },
+        [&] (const std::vector<sstring>& racks) {
+            for (const auto& rack : racks) {
+                if (!allowed_racks.contains(rack) && !allowed_racks.empty()) {
+                    throw exceptions::configuration_exception(
+                        fmt::format("Unrecognized rack name '{}'. allowed_racks={}", rack, allowed_racks));
+                }
+            }
+            _data.emplace<std::vector<sstring>>(racks);
+        }
+    }, rf);
+}
+
+replication_factor_data abstract_replication_strategy::parse_replication_factor(const replication_strategy_config_option& rf, const std::unordered_set<sstring>& racks) {
+    return replication_factor_data(rf, racks);
 }
 
 static
@@ -693,4 +720,8 @@ auto fmt::formatter<locator::vnode_effective_replication_map::factory_key>::form
         sep = ',';
     }
     return out;
+}
+
+auto fmt::formatter<locator::replication_factor_data>::format(const locator::replication_factor_data& rf, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", rf.count());
 }

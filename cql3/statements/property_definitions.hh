@@ -27,19 +27,26 @@ namespace statements {
 class property_definitions {
 public:
     using map_type = std::map<sstring, sstring>;
-    using value_type = std::variant<sstring, map_type>;
+    using list_type = std::vector<sstring>;
+    using extended_map_type = std::map<sstring, std::variant<sstring, list_type>>;
+    using value_type = std::variant<sstring, extended_map_type>;
+    using properties_map_type = std::unordered_map<sstring, value_type>;
 protected:
 #if 0
     protected static final Logger logger = LoggerFactory.getLogger(PropertyDefinitions.class);
 #endif
 
-    mutable std::unordered_map<sstring, value_type> _properties;
+    mutable properties_map_type _properties;
 
     property_definitions();
 public:
     void add_property(const sstring& name, sstring value);
 
-    void add_property(const sstring& name, const std::map<sstring, sstring>& value);
+    void add_property(const sstring& name, const map_type& value) {
+        add_property(name, to_extended_map(value));
+    }
+
+    void add_property(const sstring& name, const extended_map_type& value);
 
     void validate(const std::set<sstring>& keywords, const std::set<sstring>& exts = {}, const std::set<sstring>& obsolete = {}) const;
 
@@ -52,7 +59,11 @@ public:
 
     std::optional<value_type> get(const sstring& name) const;
 
-    std::optional<std::map<sstring, sstring>> get_map(const sstring& name) const;
+    std::optional<extended_map_type> get_extended_map(const sstring& name) const;
+    std::optional<map_type> get_map(const sstring& name) const;
+
+    static map_type to_simple_map(const extended_map_type&);
+    static extended_map_type to_extended_map(const map_type&);
 
     sstring get_string(sstring key, sstring default_value) const;
 
