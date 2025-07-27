@@ -1215,7 +1215,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
     auto& topology = erm.get_token_metadata().get_topology();
     auto my_host_id = erm.get_topology().my_host_id();
 
-    if (erm.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+    if (erm.get_replication_strategy().is_local()) {
         rlogger.info("repair[{}]: completed successfully: nothing to repair for keyspace {} with local replication strategy", id.uuid(), keyspace);
         co_return id.id;
     }

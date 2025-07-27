@@ -144,6 +144,8 @@ public:
     bool uses_tablets() const { return _uses_tablets; }
     const tablet_aware_replication_strategy* maybe_as_tablet_aware() const;
 
+    bool is_local() const { return get_type() == replication_strategy_type::local; }
+
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Note: must be called with initialized, non-empty token_metadata.
     future<dht::token_range_vector> get_ranges(locator::host_id ep, token_metadata_ptr tmptr) const;

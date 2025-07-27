@@ -453,7 +453,7 @@ future<> global_cleanup_compaction_task_impl::run() {
         co_await coroutine::parallel_for_each(keyspaces, [&] (const sstring& ks) -> future<> {
             const auto& keyspace = db.find_keyspace(ks);
             const auto& replication_strategy = keyspace.get_replication_strategy();
-            if (replication_strategy.get_type() == locator::replication_strategy_type::local) {
+            if (replication_strategy.is_local()) {
                 // this keyspace does not require cleanup
                 co_return;
             }

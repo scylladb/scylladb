@@ -3519,7 +3519,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             const replica::keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
             // This is ugly, but it follows origin
             auto&& rs = ks.get_replication_strategy();  // clang complains about typeid(ks.get_replication_strategy());
-            if (typeid(rs) == typeid(locator::local_strategy)) {
+            if (rs.is_local()) {
                 throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
 

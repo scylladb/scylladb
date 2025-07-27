@@ -3369,7 +3369,7 @@ fencing_token storage_proxy::get_fence(const locator::effective_replication_map&
     // 6. The initial write handler wakes up. It sees that 6 > 5 and fails.
     // This scenario is only possible for local writes. Non-local writes never happen on the
     // bootstrapping node because it hasn't been published to clients yet.
-    return erm.get_replication_strategy().get_type() == locator::replication_strategy_type::local ?
+    return erm.get_replication_strategy().is_local() ?
             fencing_token{} : fencing_token{erm.get_token_metadata().get_version()};
 }
 
@@ -6812,7 +6812,7 @@ future<> storage_proxy::truncate_blocking(sstring keyspace, sstring cfname, std:
     slogger.debug("Starting a blocking truncate operation on keyspace {}, CF {}", keyspace, cfname);
 
     const replica::keyspace& ks = local_db().find_keyspace(keyspace);
-    if (ks.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+    if (ks.get_replication_strategy().is_local()) {
         co_await replica::database::truncate_table_on_all_shards(_db, remote().system_keyspace().container(), keyspace, cfname);
     } else if (ks.uses_tablets() && features().truncate_as_topology_operation) {
         co_await remote().truncate_with_tablets(std::move(keyspace), std::move(cfname), timeout_in_ms);

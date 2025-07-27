@@ -781,8 +781,8 @@ rest_force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>
         auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
         const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
-        if (rs.get_type() == locator::replication_strategy_type::local || !rs.is_vnode_based()) {
-            auto reason = rs.get_type() == locator::replication_strategy_type::local ? "require" : "support";
+        if (rs.is_local() || !rs.is_vnode_based()) {
+            auto reason = rs.is_local() ? "require" : "support";
             apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
             co_return json::json_return_type(0);
         }

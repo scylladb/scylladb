@@ -1296,7 +1296,7 @@ std::vector<sstring> database::get_non_local_strategy_keyspaces() const {
     std::vector<sstring> res;
     res.reserve(_keyspaces.size());
     for (auto const& i : _keyspaces) {
-        if (i.second.get_replication_strategy().get_type() != locator::replication_strategy_type::local) {
+        if (!i.second.get_replication_strategy().is_local()) {
             res.push_back(i.first);
         }
     }
@@ -1308,7 +1308,7 @@ std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() co
     res.reserve(_keyspaces.size());
     for (auto const& [name, ks] : _keyspaces) {
         auto&& rs = ks.get_replication_strategy();
-        if (rs.get_type() != locator::replication_strategy_type::local && rs.is_vnode_based()) {
+        if (!rs.is_local() && rs.is_vnode_based()) {
             res.push_back(name);
         }
     }
@@ -1320,7 +1320,7 @@ std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> databa
     res.reserve(_keyspaces.size());
     for (auto const& [name, ks] : _keyspaces) {
         auto&& rs = ks.get_replication_strategy();
-        if (rs.get_type() != locator::replication_strategy_type::local && !rs.is_per_table()) {
+        if (!rs.is_local() && !rs.is_per_table()) {
             res.emplace(name, ks.get_vnode_effective_replication_map());
         }
     }
