@@ -287,7 +287,7 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
         node3_shards[1]++;
 
         auto table = table_id(utils::make_random_uuid());
-        tab_meta.set_tablet_map(table, tmap);
+        tab_meta.set_tablet_map(table, std::move(tmap));
         tm.set_tablets(std::move(tab_meta));
         return make_ready_future<>();
     }).get();

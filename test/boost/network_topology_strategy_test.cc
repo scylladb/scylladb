@@ -526,7 +526,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
                 "NetworkTopologyStrategy", params);
         auto realloc_tab_awr_ptr = realloc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(realloc_tab_awr_ptr);
-        auto realloc_tmap = tab_awr_ptr->reallocate_tablets(s, stm.get(), tmap).get();
+        auto realloc_tmap = tab_awr_ptr->reallocate_tablets(s, stm.get(), std::move(tmap)).get();
         full_ring_check(realloc_tmap, realloc_ars_ptr, stm.get());
     }
 }
@@ -622,7 +622,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         auto inc_nts_ptr = dynamic_cast<const network_topology_strategy*>(inc_ars_ptr.get());
         auto inc_tab_awr_ptr = inc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(inc_tab_awr_ptr);
-        auto inc_tmap = inc_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap).get();
+        auto inc_tmap = inc_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap.clone_gently().get()).get();
         full_ring_check(inc_tmap, ars_ptr, stm.get());
         check_tablets_balance(inc_tmap, inc_nts_ptr, topo);
     }
@@ -636,7 +636,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         auto dec_nts_ptr = dynamic_cast<const network_topology_strategy*>(dec_ars_ptr.get());
         auto dec_tab_awr_ptr = dec_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(dec_tab_awr_ptr);
-        auto dec_tmap = dec_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap).get();
+        auto dec_tmap = dec_tab_awr_ptr->reallocate_tablets(s, tmptr, tmap.clone_gently().get()).get();
         full_ring_check(dec_tmap, ars_ptr, stm.get());
         check_tablets_balance(dec_tmap, dec_nts_ptr, topo);
     }
@@ -1309,10 +1309,9 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     auto view_tmap = tab_awr_ptr->allocate_tablets_for_new_table(view_schema, tmptr, 1).get();
     testlog.debug("view_table_id={}", view_table_id);
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.tablets().set_tablet_map(base_table_id, base_tmap);
-        tm.tablets().set_tablet_map(view_table_id, view_tmap);
-        return make_ready_future();
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        tm.tablets().set_tablet_map(base_table_id, co_await base_tmap.clone_gently());
+        tm.tablets().set_tablet_map(view_table_id, co_await view_tmap.clone_gently());
     }).get();
 
     tmptr = stm.get();
@@ -1463,10 +1462,9 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     auto view_tmap = tab_awr_ptr->allocate_tablets_for_new_table(view_schema, tmptr, 1).get();
     testlog.debug("view_table_id={}", view_table_id);
 
-    stm.mutate_token_metadata([&] (token_metadata& tm) {
-        tm.tablets().set_tablet_map(base_table_id, base_tmap);
-        tm.tablets().set_tablet_map(view_table_id, view_tmap);
-        return make_ready_future();
+    stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
+        tm.tablets().set_tablet_map(base_table_id, co_await base_tmap.clone_gently());
+        tm.tablets().set_tablet_map(view_table_id, co_await view_tmap.clone_gently());
     }).get();
 
     tmptr = stm.get();

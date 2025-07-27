@@ -449,16 +449,28 @@ class tablet_map {
 public:
     using tablet_container = utils::chunked_vector<tablet_info>;
 private:
+    using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
     // The implementation assumes that _tablets.size() is a power of 2:
     //
     //   _tablets.size() == 1 << _log2_tablets
     //
     tablet_container _tablets;
     size_t _log2_tablets; // log_2(_tablets.size())
-    std::unordered_map<tablet_id, tablet_transition_info> _transitions;
+    transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
     repair_scheduler_config _repair_scheduler_config;
+
+    // Internal constructor, used by clone() and clone_gently().
+    tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
+        resize_decision resize_decision, tablet_task_info resize_task_info, repair_scheduler_config repair_scheduler_config)
+        : _tablets(std::move(tablets))
+        , _log2_tablets(log2_tablets)
+        , _transitions(std::move(transitions))
+        , _resize_decision(resize_decision)
+        , _resize_task_info(std::move(resize_task_info))
+        , _repair_scheduler_config(std::move(repair_scheduler_config))
+    {}
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
     dht::token get_last_token(tablet_id id, size_t log2_tablets) const;
@@ -471,6 +483,15 @@ public:
     ///
     /// \param tablet_count The desired tablets to allocate. Must be a power of two.
     explicit tablet_map(size_t tablet_count);
+
+    tablet_map(tablet_map&&) = default;
+    tablet_map(const tablet_map&) = delete;
+
+    tablet_map& operator=(tablet_map&&) = default;
+    tablet_map& operator=(const tablet_map&) = delete;
+
+    tablet_map clone() const;
+    future<tablet_map> clone_gently() const;
 
     /// Returns tablet_id of a tablet which owns a given token.
     tablet_id get_tablet_id(token) const;
@@ -675,7 +696,6 @@ public:
     // Allow mutating a tablet_map
     // Uses the copy-modify-swap idiom.
     // If func throws, no changes are done to the tablet map.
-    void mutate_tablet_map(table_id, noncopyable_function<void(tablet_map&)> func);
     future<> mutate_tablet_map_async(table_id, noncopyable_function<future<>(tablet_map&)> func);
 
     future<> clear_gently();
