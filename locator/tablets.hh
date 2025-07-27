@@ -169,6 +169,7 @@ struct tablet_task_info {
     db_clock::time_point sched_time;
     std::unordered_set<locator::host_id> repair_hosts_filter;
     std::unordered_set<sstring> repair_dcs_filter;
+    std::unordered_set<table_id> tables_filter;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
     bool is_user_repair_request() const;
@@ -181,8 +182,10 @@ struct tablet_task_info {
     static tablet_task_info make_merge_request();
     static sstring serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter);
     static sstring serialize_repair_dcs_filter(std::unordered_set<sstring> filter);
+    static sstring serialize_tables_filter(std::unordered_set<table_id> filter);
     static std::unordered_set<locator::host_id> deserialize_repair_hosts_filter(sstring filter);
     static std::unordered_set<sstring> deserialize_repair_dcs_filter(sstring filter);
+    static std::unordered_set<table_id> deserialize_tables_filter(sstring filter);
 };
 
 using repair_time_map = std::unordered_map<table_id, db_clock::time_point>;

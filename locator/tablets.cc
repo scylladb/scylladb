@@ -1372,6 +1372,7 @@ auto fmt::formatter<locator::tablet_task_info>::format(const locator::tablet_tas
         {"sched_time", fmt::to_string(db_clock::to_time_t(info.sched_time))},
         {"repair_hosts_filter", locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)},
         {"repair_dcs_filter", locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)},
+        {"tables_filter", locator::tablet_task_info::serialize_tables_filter(info.tables_filter)},
     };
     return fmt::format_to(ctx.out(), "{}", rjson::print(rjson::from_string_map(ret)));
 };
@@ -1431,6 +1432,18 @@ sstring locator::tablet_task_info::serialize_repair_dcs_filter(std::unordered_se
     return res;
 }
 
+sstring locator::tablet_task_info::serialize_tables_filter(std::unordered_set<table_id> filter) {
+    sstring res = "";
+    bool first = true;
+    for (const auto& table : filter) {
+        if (!std::exchange(first, false)) {
+            res += ",";
+        }
+        res += table.to_sstring();
+    }
+    return res;
+}
+
 std::unordered_set<locator::host_id> locator::tablet_task_info::deserialize_repair_hosts_filter(sstring filter) {
     if (filter.empty()) {
         return {};
@@ -1448,6 +1461,16 @@ std::unordered_set<sstring> locator::tablet_task_info::deserialize_repair_dcs_fi
     sstring delim = ",";
     return std::ranges::views::split(filter, delim) | std::views::transform([](auto&& h) {
         return sstring{std::string_view{h}};
+    }) | std::ranges::to<std::unordered_set>();
+}
+
+std::unordered_set<table_id> locator::tablet_task_info::deserialize_tables_filter(sstring filter) {
+    if (filter.empty()) {
+        return {};
+    }
+    sstring delim = ",";
+    return std::ranges::views::split(filter, delim) | std::views::transform([](auto&& t) {
+        return table_id(utils::UUID(std::string_view{t}));
     }) | std::ranges::to<std::unordered_set>();
 }
 

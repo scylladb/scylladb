@@ -35,12 +35,12 @@ async def load_tablet_repair_time(cql, hosts, table_id):
 async def load_tablet_repair_task_infos(cql, host, table_id):
     repair_task_infos = {}
 
-    rows = await cql.run_async(f"SELECT last_token, repair_task_info from system.tablets where table_id = {table_id}", host=host)
+    rows = await cql.run_async(f"SELECT last_token, repair_task_info_v2 from system.tablets where table_id = {table_id}", host=host)
 
     for row in rows:
-        if row.repair_task_info is not None:
+        if row.repair_task_info_v2 is not None:
             key = str(row.last_token)
-            repair_task_infos[key] = row.repair_task_info
+            repair_task_infos[key] = row.repair_task_info_v2
 
     return repair_task_infos
 
@@ -67,13 +67,13 @@ async def create_table_insert_data_for_repair(manager, rf = 3 , tablets = 8, fas
     return (servers, cql, hosts, ks, table_id)
 
 async def get_tablet_task_id(cql, host, table_id, token):
-    rows = await cql.run_async(f"SELECT last_token, repair_task_info from system.tablets where table_id = {table_id}", host=host)
+    rows = await cql.run_async(f"SELECT last_token, repair_task_info_v2 from system.tablets where table_id = {table_id}", host=host)
     for row in rows:
         if row.last_token == token:
-            if row.repair_task_info == None:
+            if row.repair_task_info_v2 == None:
                 return None
             else:
-                return str(row.repair_task_info.tablet_task_id)
+                return str(row.repair_task_info_v2.tablet_task_id)
     return None
 
 async def create_table_insert_data_for_repair_multiple_rows(manager, rf = 3 , tablets = 8, cmdline = None):

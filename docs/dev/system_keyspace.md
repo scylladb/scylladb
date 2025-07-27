@@ -234,6 +234,7 @@ CREATE TABLE system.tablets (
     migration_task_info frozen<tablet_task_info>,
     new_replicas frozen<list<frozen<tuple<uuid, int>>>>,
     repair_task_info frozen<tablet_task_info>,
+    repair_task_info_v2 frozen<tablet_task_info_v2>,
     repair_time timestamp,
     repair_times map<uuid, timestamp>,
     replicas frozen<list<frozen<tuple<uuid, int>>>>,
@@ -257,6 +258,17 @@ CREATE TYPE system.tablet_task_info (
     repair_hosts_filter text,
     repair_dcs_filter text,
 )
+
+CREATE TYPE system.tablet_task_info_v2 (
+    request_type text,
+    tablet_task_id uuid,
+    request_time timestamp,
+    sched_nr bigint,
+    sched_time timestamp,
+    repair_hosts_filter text,
+    repair_dcs_filter text,
+    tables_filter text
+);
 ~~~
 
 Each partition (table_id) represents a tablet map of a given table.
@@ -292,6 +304,7 @@ Only tables which use tablet-based replication strategy have an entry here.
   * `sched_time` - The time the request has been scheduled by the repair scheduler.
   * `repair_hosts_filter` - Repair replicas listed in the comma-separated host_id list.
   * `repair_dcs_filter` - Repair replicas listed in the comma-separated DC list.
+  * `tables_filter` - Tables to repair listed in the comma-separated table list. Relevant when the tablet map is shared by multiple tables. If empty, repairs all tables that share the tablet map.
 
 `repair_scheduler_config` contains configuration for the repair scheduler. It contains the following values:
   * `auto_repair_enabled` - When set to true, auto repair is enabled. Disabled by default.

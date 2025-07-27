@@ -1245,7 +1245,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_new_replicas(last_token, tmap.get_tablet_info(gid.tablet).replicas)
                 .set_stage(last_token, locator::tablet_transition_stage::repair)
                 .set_transition(last_token, locator::tablet_transition_kind::repair)
-                .set_repair_task_info(last_token, repair_task_info)
+                .set_repair_task_info(last_token, repair_task_info, _feature_service)
                 .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()))
                 .build());
     }
@@ -1661,7 +1661,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::end_repair);
                         auto update = get_mutation_builder()
                                         .set_stage(last_token, locator::tablet_transition_stage::end_repair)
-                                        .del_repair_task_info(last_token)
+                                        .del_repair_task_info(last_token, _feature_service)
                                         .del_session(last_token);
                         // Skip update repair time in case hosts filter or dcs filter is set.
                         if (valid && is_filter_off) {

@@ -6615,7 +6615,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             auto last_token = tmap.get_last_token(tid);
             updates.emplace_back(
                 tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                    .set_repair_task_info(last_token, repair_task_info)
+                    .set_repair_task_info(last_token, repair_task_info, _feature_service)
                     .build());
         }
 
@@ -6684,7 +6684,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                            .del_repair_task_info(last_token);
+                            .del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
             }

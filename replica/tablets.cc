@@ -36,6 +36,9 @@ static thread_local auto repair_scheduler_config_type = user_type_impl::get_inst
 static thread_local auto tablet_task_info_type = user_type_impl::get_instance(
         "system", "tablet_task_info", {"request_type", "tablet_task_id", "request_time", "sched_nr", "sched_time", "repair_hosts_filter", "repair_dcs_filter"},
         {utf8_type, uuid_type, timestamp_type, long_type, timestamp_type, utf8_type, utf8_type}, false);
+static thread_local auto tablet_task_info_v2_type = user_type_impl::get_instance(
+        "system", "tablet_task_info_v2", {"request_type", "tablet_task_id", "request_time", "sched_nr", "sched_time", "repair_hosts_filter", "repair_dcs_filter", "tables_filter"},
+        {utf8_type, uuid_type, timestamp_type, long_type, timestamp_type, utf8_type, utf8_type, utf8_type}, false);
 static thread_local auto replica_type = tuple_type_impl::get_instance({uuid_type, int32_type});
 static thread_local auto replica_set_type = list_type_impl::get_instance(replica_type, false);
 static thread_local auto tablet_info_type = tuple_type_impl::get_instance({long_type, long_type, replica_set_type});
@@ -52,6 +55,7 @@ data_type get_tablet_info_type() {
 void tablet_add_repair_scheduler_user_types(const sstring& ks, replica::database& db) {
     db.find_keyspace(ks).add_user_type(repair_scheduler_config_type);
     db.find_keyspace(ks).add_user_type(tablet_task_info_type);
+    db.find_keyspace(ks).add_user_type(tablet_task_info_v2_type);
 }
 
 schema_ptr make_tablets_schema() {
@@ -76,6 +80,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_time", timestamp_type) // deprecated - replaced by repair_times
             .with_column("repair_times", repair_time_map_type)
             .with_column("repair_task_info", tablet_task_info_type)
+            .with_column("repair_task_info_v2", tablet_task_info_v2_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
@@ -105,6 +110,20 @@ data_value tablet_task_info_to_data_value(const locator::tablet_task_info& info)
         data_value(info.sched_time),
         data_value(locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)),
         data_value(locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)),
+    });
+    return result;
+};
+
+data_value tablet_task_info_v2_to_data_value(const locator::tablet_task_info& info) {
+    data_value result = make_user_value(tablet_task_info_v2_type, {
+        data_value(locator::tablet_task_type_to_string(info.request_type)),
+        data_value(info.tablet_task_id.uuid()),
+        data_value(info.request_time),
+        data_value(info.sched_nr),
+        data_value(info.sched_time),
+        data_value(locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)),
+        data_value(locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)),
+        data_value(locator::tablet_task_info::serialize_tables_filter(info.tables_filter)),
     });
     return result;
 };
@@ -162,7 +181,11 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         }
         if (features.tablet_repair_scheduler) {
             if (tablet.repair_task_info.is_valid()) {
-                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+                if (features.colocated_tablets) {
+                    m.set_clustered_cell(ck, "repair_task_info_v2", tablet_task_info_v2_to_data_value(tablet.repair_task_info), ts);
+                } else {
+                    m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+                }
             }
             if (tablet.repair_times.size()) {
                 if (features.colocated_tablets) {
@@ -304,15 +327,24 @@ tablet_mutation_builder::del_repair_time(dht::token last_token, table_id table, 
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::set_repair_task_info(dht::token last_token, locator::tablet_task_info repair_task_info) {
-    _m.set_clustered_cell(get_ck(last_token), "repair_task_info", tablet_task_info_to_data_value(repair_task_info), _ts);
+tablet_mutation_builder::set_repair_task_info(dht::token last_token, locator::tablet_task_info repair_task_info, const gms::feature_service& features) {
+    if (features.colocated_tablets) {
+        _m.set_clustered_cell(get_ck(last_token), "repair_task_info_v2", tablet_task_info_v2_to_data_value(repair_task_info), _ts);
+    } else {
+        _m.set_clustered_cell(get_ck(last_token), "repair_task_info", tablet_task_info_to_data_value(repair_task_info), _ts);
+    }
     return *this;
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::del_repair_task_info(dht::token last_token) {
-    auto col = _s->get_column_definition("repair_task_info");
-    _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+tablet_mutation_builder::del_repair_task_info(dht::token last_token, const gms::feature_service& features) {
+    // not sure from which column the repair task info came - delete both
+    if (features.colocated_tablets) {
+        auto col2 = _s->get_column_definition("repair_task_info_v2");
+        _m.set_clustered_cell(get_ck(last_token), *col2, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
+    auto col1 = _s->get_column_definition("repair_task_info");
+    _m.set_clustered_cell(get_ck(last_token), *col1, atomic_cell::make_dead(_ts, gc_clock::now()));
     return *this;
 }
 
@@ -399,6 +431,7 @@ repair_time_map deserialize_repair_time_map(cql3::untyped_result_set_row::view_t
 }
 
 locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
+    // handles values of both tablet_task_info_type and tablet_task_info_v2_type
     std::vector<data_value> dv = value_cast<user_type_impl::native_type>(v);
     auto result = locator::tablet_task_info{
         locator::tablet_task_type_from_string(value_cast<sstring>(dv[0])),
@@ -408,6 +441,7 @@ locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
         value_cast<db_clock::time_point>(dv[4]),
         locator::tablet_task_info::deserialize_repair_hosts_filter(value_cast<sstring>(dv[5])),
         locator::tablet_task_info::deserialize_repair_dcs_filter(value_cast<sstring>(dv[6])),
+        dv.size() > 7 ? locator::tablet_task_info::deserialize_tables_filter(value_cast<sstring>(dv[7])) : std::unordered_set<table_id>{},
     };
     return result;
 }
@@ -416,6 +450,12 @@ static
 locator::tablet_task_info deserialize_tablet_task_info(cql3::untyped_result_set_row::view_type raw_value) {
     return tablet_task_info_from_cell(
             tablet_task_info_type->deserialize_value(raw_value));
+}
+
+static
+locator::tablet_task_info deserialize_tablet_task_info_v2(cql3::untyped_result_set_row::view_type raw_value) {
+    return tablet_task_info_from_cell(
+            tablet_task_info_v2_type->deserialize_value(raw_value));
 }
 
 locator::repair_scheduler_config repair_scheduler_config_from_cell(const data_value& v) {
@@ -607,7 +647,9 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     }
 
     locator::tablet_task_info repair_task_info;
-    if (row.has("repair_task_info")) {
+    if (row.has("repair_task_info_v2")) {
+        repair_task_info = deserialize_tablet_task_info_v2(row.get_view("repair_task_info_v2"));
+    } else if (row.has("repair_task_info")) {
         repair_task_info = deserialize_tablet_task_info(row.get_view("repair_task_info"));
     }
 
