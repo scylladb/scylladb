@@ -1402,10 +1402,11 @@ locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(st
     return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
+locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(table_id table, std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
+    std::unordered_set<table_id> tables_filter = {table};
+    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter, tables_filter};
 }
 
 sstring locator::tablet_task_info::serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter) {

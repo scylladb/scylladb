@@ -6577,7 +6577,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
     }
 
-    auto repair_task_info = locator::tablet_task_info::make_user_repair_request(hosts_filter, dcs_filter);
+    auto repair_task_info = locator::tablet_task_info::make_user_repair_request(table, hosts_filter, dcs_filter);
     auto res = std::unordered_map<sstring, sstring>{{sstring("tablet_task_id"), repair_task_info.tablet_task_id.to_sstring()}};
 
     auto start = std::chrono::steady_clock::now();

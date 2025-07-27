@@ -174,7 +174,7 @@ struct tablet_task_info {
     bool is_valid() const;
     bool is_user_repair_request() const;
     bool selected_by_filters(const tablet_replica& replica, const topology& topo) const;
-    static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+    static tablet_task_info make_user_repair_request(table_id table, std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
     static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
     static tablet_task_info make_migration_request();
     static tablet_task_info make_intranode_migration_request();
