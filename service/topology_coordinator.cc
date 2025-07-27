@@ -1135,7 +1135,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         background_action_holder repair;
         std::unordered_map<locator::tablet_transition_stage, background_action_holder> barriers;
         // Record the repair_time returned by the repair_tablet rpc call
-        db_clock::time_point repair_time;
+        locator::repair_time_map repair_time;
     };
 
     std::unordered_map<locator::global_tablet_id, tablet_migration_state> _tablets;
@@ -1619,6 +1619,21 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         break;
                     }
                     if (advance_in_background(gid, tablet_state.repair, "repair", [&] () -> future<> {
+                        const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
+
+                        auto& tables_filter = tmap.get_tablet_info(gid.tablet).repair_task_info.tables_filter;
+                        auto repair_tables = std::invoke([&] {
+                            if (tables_filter.empty()) {
+                                return std::vector<table_id>(tables.begin(), tables.end()) ;
+                            } else {
+                                // intersect tables_filter with the existing tables in the group - ignore tables that appear
+                                // in the filter but may have been dropped.
+                                return tables
+                                    | std::views::filter([&tables_filter](table_id t) { return tables_filter.contains(t); })
+                                    | std::ranges::to<std::vector<table_id>>();
+                            }
+                        });
+
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
                         if (!valid) {
@@ -1641,17 +1656,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             }
                             dst = dst_opt.value().host;
                         }
-                        rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
-                        auto res = gids.size() > 1 ?
-                                co_await ser::storage_service_rpc_verbs::send_tablet_repair_colocated(&_messaging,
-                                    dst, _as, raft::server_id(dst.uuid()), gid, gids)
-                                : co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                    dst, _as, raft::server_id(dst.uuid()), gid);
-                        auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
-                        auto& tablet_state = _tablets[tablet];
-                        tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
-                        rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
-                                dst, tablet, duration, res.repair_time);
+                        for (auto t : repair_tables) {
+                            auto repair_tid = locator::global_tablet_id { t, tablet.tablet };
+                            rtlogger.info("Initiating tablet repair host={} tablet={}", dst, repair_tid);
+                            auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                        dst, _as, raft::server_id(dst.uuid()), repair_tid);
+                            auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
+                            auto& tablet_state = _tablets[tablet];
+                            tablet_state.repair_time[t] = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
+                            rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
+                                    dst, t, duration, res.repair_time);
+                        }
                     })) {
                         auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         bool valid = tinfo.repair_task_info.is_valid();
@@ -1666,10 +1681,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         // Skip update repair time in case hosts filter or dcs filter is set.
                         if (valid && is_filter_off) {
                             auto sched_time = tinfo.repair_task_info.sched_time;
-                            auto time = tablet_state.repair_time;
-                            rtlogger.debug("Set tablet repair time sched_time={} return_time={} set_time={}",
-                                    sched_time, tablet_state.repair_time, time);
-                            update.set_repair_time(last_token, gid.table, time, _feature_service);
+                            for (auto [t, time] : tablet_state.repair_time) {
+                                rtlogger.debug("Set tablet repair time table={} sched_time={} return_time={} set_time={}",
+                                        t, sched_time, tablet_state.repair_time, time);
+                                update.set_repair_time(last_token, t, time, _feature_service);
+                            }
                         }
                         updates.emplace_back(update.build());
                     }
