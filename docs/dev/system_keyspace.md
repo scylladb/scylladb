@@ -235,6 +235,7 @@ CREATE TABLE system.tablets (
     new_replicas frozen<list<frozen<tuple<uuid, int>>>>,
     repair_task_info frozen<tablet_task_info>,
     repair_time timestamp,
+    repair_times map<uuid, timestamp>,
     replicas frozen<list<frozen<tuple<uuid, int>>>>,
     session uuid,
     stage text,
@@ -279,7 +280,9 @@ Only tables which use tablet-based replication strategy have an entry here.
    (last_token(i-1), last_token(i)] for i > 0
 ```
 
-`repair_time` is the last time the tablet has been repaired.
+`repair_time` is the last time the tablet has been repaired. It is deprecated and replaced by `repair_times`.
+
+`repair_times` is a map that maps a table to the last time the table's tablet has been repaired. Since the tablet map can be shared by multiple co-located tables, each table that shares the tablet map can have a different repair time.
 
 `repair_task_info` contains the metadata for the task manager. It contains the following values:
   * `request_type` - The type of the request. It could be user_repair and auto_repair.

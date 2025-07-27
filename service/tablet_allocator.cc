@@ -7,6 +7,7 @@
  */
 
 #include "locator/tablets.hh"
+#include "replica/tablet_mutation_builder.hh"
 #include "replica/tablets.hh"
 #include "locator/tablet_replication_strategy.hh"
 #include "replica/database.hh"
@@ -3262,6 +3263,21 @@ public:
             auto tm = _db.get_shared_token_metadata().get();
             lblogger.debug("Dropping tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
             muts.emplace_back(make_drop_tablet_map_mutation(s.id(), ts));
+
+            // if this table is co-located with a base table, and we stored repair time for it
+            // in the base table's tablet map, remove it from the map.
+            if (auto base_table = tm->tablets().get_base_table(s.id()); base_table != s.id()) {
+                auto& tmap = tm->tablets().get_tablet_map(base_table);
+                for (auto tid : tmap.tablet_ids()) {
+                    seastar::thread::maybe_yield();
+                    auto& tablet_info = tmap.get_tablet_info(tid);
+                    if (tablet_info.repair_times.contains(s.id())) {
+                        muts.emplace_back(replica::tablet_mutation_builder(ts, base_table)
+                                .del_repair_time(tmap.get_last_token(tid), s.id(), _db.features())
+                                .build());
+                    }
+                }
+            }
         }
     }
 

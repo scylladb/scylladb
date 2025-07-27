@@ -21,14 +21,14 @@ async def load_tablet_repair_time(cql, hosts, table_id):
 
     for host in hosts:
         logging.debug(f'Query hosts={host}');
-        rows = await cql.run_async(f"SELECT last_token, repair_time from system.tablets where table_id = {table_id}", host=host)
+        rows = await cql.run_async(f"SELECT last_token, repair_times from system.tablets where table_id = {table_id}", host=host)
         all_rows += rows
     for row in all_rows:
         logging.debug(f"Got system.tablets={row}")
 
     for row in all_rows:
         key = str(row[0])
-        repair_time_map[key] = row[1]
+        repair_time_map[key] = row[1][table_id] if row[1] is not None and table_id in row[1] else None
 
     return repair_time_map
 

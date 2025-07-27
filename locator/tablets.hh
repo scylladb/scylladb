@@ -185,15 +185,17 @@ struct tablet_task_info {
     static std::unordered_set<sstring> deserialize_repair_dcs_filter(sstring filter);
 };
 
+using repair_time_map = std::unordered_map<table_id, db_clock::time_point>;
+
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;
-    db_clock::time_point repair_time;
+    repair_time_map repair_times;
     locator::tablet_task_info repair_task_info;
     locator::tablet_task_info migration_task_info;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info);
+    tablet_info(tablet_replica_set, repair_time_map, tablet_task_info, tablet_task_info);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;

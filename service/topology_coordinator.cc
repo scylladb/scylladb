@@ -1669,7 +1669,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             auto time = tablet_state.repair_time;
                             rtlogger.debug("Set tablet repair time sched_time={} return_time={} set_time={}",
                                     sched_time, tablet_state.repair_time, time);
-                            update.set_repair_time(last_token, time);
+                            update.set_repair_time(last_token, gid.table, time, _feature_service);
                         }
                         updates.emplace_back(update.build());
                     }
