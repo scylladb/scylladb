@@ -124,6 +124,13 @@ def get_repo_file(dir):
                     return match.group(2), match.group(1)
     return None, None
 
+def get_env_type(name):
+    if os.path.exists(name):
+        with open(name, 'r') as file:
+            platform = file.read().strip()
+            if platform:
+                return platform
+    return None
 
 def check_version(ar):
     if config and (not config.has_option("housekeeping", "check-version") or not config.getboolean("housekeeping", "check-version")):
@@ -172,6 +179,7 @@ parser.add_argument('-c', '--config', default="", help='An optional config file.
 parser.add_argument('--uuid', default="", help='A uuid for the requests')
 parser.add_argument('--uuid-file', default="", help='A uuid file for the requests')
 parser.add_argument('--repo-files', default="", help='The repository files that is been used for private repositories')
+parser.add_argument('--platform-file', default="/etc/scylla.d/housekeeping.env", help='an env file, allows to check version for a specific environment like AWS or GCP')
 parser.add_argument('--api-address', default="localhost:10000", help='The ip and port of the scylla api')
 
 subparsers = parser.add_subparsers(help='Available commands')
@@ -185,7 +193,7 @@ parser_system.set_defaults(func=check_version)
 args = parser.parse_args()
 quiet = args.quiet
 config = None
-repo_id = None
+repo_id = get_env_type(args.platform_file)
 repo_type = None
 
 if args.config != "":
@@ -203,6 +211,6 @@ if args.uuid_file != "":
     with open(args.uuid_file, 'r') as myfile:
         uid = myfile.read().replace('\n', '')
 api_address = args.api_address
-if args.repo_files != "":
+if not repo_id and args.repo_files != "":
     repo_type, repo_id = get_repo_file(args.repo_files)
 args.func(args)
