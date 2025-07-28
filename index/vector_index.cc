@@ -7,6 +7,8 @@
  */
 
 
+#include "cdc/cdc_options.hh"
+#include "cdc/log.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/util.hh"
 #include "exceptions/exceptions.hh"
@@ -85,6 +87,19 @@ void vector_index::validate(const schema &schema, cql3::statements::index_prop_d
     auto type = c_def->type;
     if (!type->is_vector() || static_cast<const vector_type_impl*>(type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
         throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
+    }
+
+    auto cdc_options = schema.cdc_options();
+    if (cdc_options.enabled()) {
+        auto ttl = cdc_options.ttl();
+        if (ttl && ttl < cdc::VS_TTL_SECONDS) {
+            throw exceptions::invalid_request_exception(format("CDC's TTL must be at least {} seconds (24 hours) to enable Vector Search.\n"
+                                                               "Check documentation on how to setup TTL - https://docs.scylladb.com/manual/branch-2025.2/features/cdc/cdc-intro.html#cdc-parameters", cdc::VS_TTL_SECONDS));
+        }
+        if (cdc_options.get_delta_mode() != cdc::delta_mode::full) {
+            throw exceptions::invalid_request_exception("CDC's delta mode must be set to 'full' to enable Vector Search.\n"
+                                                               "Check documentation on how to setup delta mode - https://docs.scylladb.com/manual/branch-2025.2/features/cdc/cdc-intro.html#cdc-parameters");
+        }
     }
 
     for (auto option: properties.get_raw_options()) {

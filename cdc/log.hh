@@ -55,6 +55,10 @@ struct operation_result_tracker;
 class db_context;
 class metadata;
 
+// The minimal TTL for the CDC used by Vector Search.
+// Required to ensure that the data is not deleted until the vector index is fully built.
+static constexpr int VS_TTL_SECONDS = 86400; // 24 hours
+
 bool is_log_name(const std::string_view& table_name);
 
 /// \brief CDC service, responsible for schema listeners
