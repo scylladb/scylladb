@@ -621,7 +621,7 @@ void effective_replication_map_factory::submit_background_work(future<> fut) {
     });
 }
 
-future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+future<> global_static_effective_replication_map::get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
     return sharded_db.invoke_on(0, [this, &sharded_db, keyspace_name] (replica::database& db) -> future<> {
         // To ensure we get the same effective_replication_map
         // on all shards, acquire the shared_token_metadata lock.
@@ -655,8 +655,8 @@ future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<repli
     });
 }
 
-future<global_vnode_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
-    global_vnode_effective_replication_map ret;
+future<global_static_effective_replication_map> make_global_static_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+    global_static_effective_replication_map ret;
     co_await ret.get_keyspace_erms(sharded_db, keyspace_name);
     co_return ret;
 }

@@ -427,14 +427,14 @@ inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy
 future<mutable_vnode_erm_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
 
 // Class to hold a coherent view of a keyspace
-// effective replication map on all shards
-class global_vnode_effective_replication_map {
+// static effective replication map on all shards
+class global_static_effective_replication_map {
     std::vector<foreign_ptr<vnode_erm_ptr>> _erms;
 
 public:
-    global_vnode_effective_replication_map() : _erms(smp::count) {}
-    global_vnode_effective_replication_map(global_vnode_effective_replication_map&&) = default;
-    global_vnode_effective_replication_map& operator=(global_vnode_effective_replication_map&&) = default;
+    global_static_effective_replication_map() : _erms(smp::count) {}
+    global_static_effective_replication_map(global_static_effective_replication_map&&) = default;
+    global_static_effective_replication_map& operator=(global_static_effective_replication_map&&) = default;
 
     future<> get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
 
@@ -451,7 +451,7 @@ public:
     }
 };
 
-future<global_vnode_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
+future<global_static_effective_replication_map> make_global_static_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
 
 } // namespace locator
 

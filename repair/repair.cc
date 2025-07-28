@@ -1210,7 +1210,7 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
         }
     }
 
-    auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
+    auto germs = make_lw_shared(co_await locator::make_global_static_effective_replication_map(sharded_db, keyspace));
     auto& erm = germs->get();
     auto& topology = erm.get_token_metadata().get_topology();
     auto my_host_id = erm.get_topology().my_host_id();
@@ -1482,7 +1482,7 @@ future<> repair::data_sync_repair_task_impl::run() {
     auto& keyspace = _status.keyspace;
     auto& sharded_db = rs.get_db();
     auto& db = sharded_db.local();
-    auto germs_fut = co_await coroutine::as_future(locator::make_global_effective_replication_map(sharded_db, keyspace));
+    auto germs_fut = co_await coroutine::as_future(locator::make_global_static_effective_replication_map(sharded_db, keyspace));
     if (germs_fut.failed()) {
         auto ex = germs_fut.get_exception();
         if (try_catch<data_dictionary::no_such_keyspace>(ex)) {
@@ -1621,7 +1621,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             auto nr_tables = get_nr_tables(db, keyspace_name);
           if (small_table_optimization) {
             try {
-                auto germs = make_lw_shared(locator::make_global_effective_replication_map(get_db(), keyspace_name).get());
+                auto germs = make_lw_shared(locator::make_global_static_effective_replication_map(get_db(), keyspace_name).get());
                 auto nodes = germs->get().get_token_metadata().get_normal_token_owners();
                 auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
                 auto nodes_vec = std::vector<locator::host_id>(nodes.begin(), nodes.end());
