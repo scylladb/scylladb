@@ -1,13 +1,13 @@
 .. |SCYLLA_NAME| replace:: ScyllaDB
 
-.. |SRC_VERSION| replace:: 2025.1
-.. |NEW_VERSION| replace:: 2025.2
+.. |SRC_VERSION| replace:: 2025.2
+.. |NEW_VERSION| replace:: 2025.3
 
 .. |ROLLBACK| replace:: rollback
 .. _ROLLBACK: ./#rollback-procedure
 
-.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2025.1 to 2025.2
-.. _SCYLLA_METRICS: ../metric-update-2025.1-to-2025.2
+.. |SCYLLA_METRICS| replace:: ScyllaDB Metrics Update - ScyllaDB 2025.2 to 2025.3
+.. _SCYLLA_METRICS: ../metric-update-2025.2-to-2025.3
 
 =======================================================================================
 Upgrade from |SCYLLA_NAME| |SRC_VERSION| to |SCYLLA_NAME| |NEW_VERSION|
@@ -43,14 +43,6 @@ We recommend upgrading the Monitoring Stack to the latest version.
 
 See the ScyllaDB Release Notes for the latest updates. The Release Notes are published 
 at the `ScyllaDB Community Forum <https://forum.scylladb.com/>`_.
-
-.. note::
-
-   If you previously upgraded from 2024.x to 2025.1 without enabling consistent
-   topology updates, ensure you enable the feature before you upgrade to 2025.2.
-   For instructions, see
-   `Enable Consistent Topology Updates <https://docs.scylladb.com/manual/branch-2025.1/upgrade/upgrade-guides/upgrade-guide-from-2024.x-to-2025.1/enable-consistent-topology.html>`_
-   in the upgrade guide for version 2025.1.
 
 Upgrade Procedure
 =================
@@ -158,7 +150,7 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
             .. code-block:: console
 
-               sudo wget -O /etc/apt/sources.list.d/scylla.list https://downloads.scylladb.com/deb/debian/scylla-2025.2.list
+               sudo wget -O /etc/apt/sources.list.d/scylla.list https://downloads.scylladb.com/deb/debian/scylla-2025.3.list
 
         #. Install the new ScyllaDB version:
 
@@ -176,7 +168,7 @@ You should take note of the current version in case you want to |ROLLBACK|_ the 
 
             .. code-block:: console
 
-               sudo curl -o /etc/yum.repos.d/scylla.repo -L https://downloads.scylladb.com/rpm/centos/scylla-2025.2.repo
+               sudo curl -o /etc/yum.repos.d/scylla.repo -L https://downloads.scylladb.com/rpm/centos/scylla-2025.3.repo
 
         #. Install the new ScyllaDB version:
 
