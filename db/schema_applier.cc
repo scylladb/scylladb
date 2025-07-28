@@ -45,7 +45,7 @@
 #include "utils/map_difference.hh"
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
-#include "frozen_schema.hh"
+#include "schema/frozen_schema.hh"
 #include "system_keyspace.hh"
 #include "system_distributed_keyspace.hh"
 #include "cql3/query_processor.hh"
