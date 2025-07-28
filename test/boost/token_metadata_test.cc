@@ -44,7 +44,7 @@ namespace {
         dc_rack_fn get_dc_rack_fn = get_dc_rack;
         tmptr->update_topology_change_info(get_dc_rack_fn).get();
         auto strategy = seastar::make_shared<Strategy>(replication_strategy_params(opts, std::nullopt));
-        return calculate_effective_replication_map(std::move(strategy), tmptr).get();
+        return calculate_vnode_effective_replication_map(std::move(strategy), tmptr).get();
     }
 }
 

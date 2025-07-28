@@ -352,7 +352,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
 
 static const auto default_replication_map_key = dht::token::from_int64(0);
 
-future<mutable_static_effective_replication_map_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
+future<mutable_static_effective_replication_map_ptr> calculate_vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
     replication_map replication_map;
     ring_mapping pending_endpoints;
     ring_mapping read_endpoints;
@@ -542,7 +542,7 @@ future<static_effective_replication_map_ptr> effective_replication_map_factory::
         new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
             std::move(local_data->pending_endpoints), std::move(local_data->read_endpoints), std::move(local_data->dirty_endpoints), rf);
     } else {
-        new_erm = co_await calculate_effective_replication_map(std::move(rs), std::move(tmptr));
+        new_erm = co_await calculate_vnode_effective_replication_map(std::move(rs), std::move(tmptr));
     }
     co_return insert_effective_replication_map(std::move(new_erm), std::move(key));
 }

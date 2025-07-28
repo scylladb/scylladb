@@ -163,7 +163,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     const auto& topo = tm.get_topology();
     strategy_sanity_check(ars_ptr, tmptr, options);
 
-    auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get();
+    auto erm = calculate_vnode_effective_replication_map(ars_ptr, tmptr).get();
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;
