@@ -118,6 +118,10 @@ async def test_tombstone_gc_for_streaming_and_repair(manager):
             else:
                 assert len(res) < 3
 
+    # Disable incremental repair so that the second repair can still work on the repaired data set
+    for node in [node1, node2]:
+        await manager.api.enable_injection(node.ip_addr, "repair_tablet_no_update_sstables_repair_at", False, {})
+
     # Initial start-condition check
     check_nodes_have_data(True, False)
 
