@@ -353,15 +353,7 @@ public:
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
     ~vnode_effective_replication_map();
 
-    struct cloned_data {
-        replication_map replication_map;
-        ring_mapping pending_endpoints;
-        ring_mapping read_endpoints;
-        std::unordered_set<locator::host_id> dirty_endpoints;
-    };
-    // boost::icl::interval_map is not no_throw_move_constructible -> can't return cloned_data by val,
-    // since future_state requires T to be no_throw_move_constructible.
-    future<std::unique_ptr<cloned_data>> clone_data_gently() const;
+    future<mutable_static_effective_replication_map_ptr> clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const;
 
     // get_primary_ranges() returns the list of "primary ranges" for the given
     // endpoint. "Primary ranges" are the ranges that the node is responsible

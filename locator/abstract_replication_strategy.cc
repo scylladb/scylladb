@@ -440,28 +440,32 @@ future<mutable_static_effective_replication_map_ptr> calculate_vnode_effective_r
         std::move(pending_endpoints), std::move(read_endpoints), std::move(dirty_endpoints), rf);
 }
 
-auto vnode_effective_replication_map::clone_data_gently() const -> future<std::unique_ptr<cloned_data>> {
-    auto result = std::make_unique<cloned_data>();
+future<mutable_static_effective_replication_map_ptr> vnode_effective_replication_map::clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const {
+    replication_map replication_map;
+    ring_mapping pending_endpoints;
+    ring_mapping read_endpoints;
+    std::unordered_set<locator::host_id> dirty_endpoints;
 
     for (auto& i : _replication_map) {
-        result->replication_map.emplace(i.first, i.second);
+        replication_map.emplace(i.first, i.second);
         co_await coroutine::maybe_yield();
     }
 
     for (const auto& i : *_pending_endpoints) {
-        *result->pending_endpoints += i;
+        *pending_endpoints += i;
         co_await coroutine::maybe_yield();
     }
 
     for (const auto& i : *_read_endpoints) {
-        *result->read_endpoints += i;
+        *read_endpoints += i;
         co_await coroutine::maybe_yield();
     }
 
     // no need to yield while copying since this is bound by nodes, not vnodes
-    result->dirty_endpoints = _dirty_endpoints;
+    dirty_endpoints = _dirty_endpoints;
 
-    co_return std::move(result);
+    co_return make_vnode_effective_replication_map_ptr(std::move(rs), std::move(tmptr), std::move(replication_map),
+        std::move(pending_endpoints), std::move(read_endpoints), std::move(dirty_endpoints), _replication_factor);
 }
 
 host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(const token& tok,
@@ -537,10 +541,7 @@ future<static_effective_replication_map_ptr> effective_replication_map_factory::
     });
     mutable_static_effective_replication_map_ptr new_erm;
     if (ref_erm) {
-        auto rf = ref_erm->get_replication_factor();
-        auto local_data = co_await ref_erm->clone_data_gently();
-        new_erm = make_vnode_effective_replication_map_ptr(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
-            std::move(local_data->pending_endpoints), std::move(local_data->read_endpoints), std::move(local_data->dirty_endpoints), rf);
+        new_erm = co_await ref_erm->clone_gently(std::move(rs), std::move(tmptr));
     } else {
         new_erm = co_await calculate_vnode_effective_replication_map(std::move(rs), std::move(tmptr));
     }
