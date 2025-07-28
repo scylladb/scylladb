@@ -418,7 +418,7 @@ public:
     }
 };
 
-inline mutable_static_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
+inline mutable_static_erm_ptr make_vnode_effective_replication_map_ptr(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
     ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(
             std::move(rs), std::move(tmptr), std::move(replication_map),

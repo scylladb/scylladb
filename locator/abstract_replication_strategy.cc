@@ -436,7 +436,7 @@ future<mutable_static_effective_replication_map_ptr> calculate_vnode_effective_r
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
-    co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map),
+    co_return make_vnode_effective_replication_map_ptr(std::move(rs), std::move(tmptr), std::move(replication_map),
         std::move(pending_endpoints), std::move(read_endpoints), std::move(dirty_endpoints), rf);
 }
 
@@ -539,7 +539,7 @@ future<static_effective_replication_map_ptr> effective_replication_map_factory::
     if (ref_erm) {
         auto rf = ref_erm->get_replication_factor();
         auto local_data = co_await ref_erm->clone_data_gently();
-        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
+        new_erm = make_vnode_effective_replication_map_ptr(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
             std::move(local_data->pending_endpoints), std::move(local_data->read_endpoints), std::move(local_data->dirty_endpoints), rf);
     } else {
         new_erm = co_await calculate_vnode_effective_replication_map(std::move(rs), std::move(tmptr));
