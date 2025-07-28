@@ -1644,7 +1644,7 @@ public:
 
         return maybe_initialize().then([this, &pr] (bool initialized) {
             _pr = pr;
-            sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({})", fmt::ptr(this), _pr);
+            sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({})", fmt::ptr(this), _pr.get());
             if (!initialized) {
                 _end_of_stream = true;
                 return make_ready_future<>();
@@ -1658,7 +1658,7 @@ public:
                 return f1.then([this] {
                     auto [start, end] = _index_reader->data_file_positions();
                     parse_assert(bool(end), _sst->get_filename());
-                    sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr, start, *end, _context->position());
+                    sstlog.trace("mp_row_consumer_reader_mx {}: fast_forward_to({}), index returned range [{}, {}), parser currently at {}", fmt::ptr(this), _pr.get(), start, *end, _context->position());
                     if (start < _context->position()) {
                         sstlog.trace("mp_row_consumer_reader_mx {}: _saved_partition_tombstone={}", fmt::ptr(this), _saved_partition_tombstone);
                         // If we got here, the index returned a Data start which precedes
@@ -1806,7 +1806,7 @@ public:
 
     data_consumer::proceed on_next_partition(dht::decorated_key key, tombstone tomb) override {
         if (_pr.get().before(key, dht::ring_position_comparator(*_schema))) {
-            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key before range", fmt::ptr(this), key, _pr);
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key before range", fmt::ptr(this), key, _pr.get());
             // If we got here, then the index returned a Data file range which
             // includes some partitions before the queried range.
             //
@@ -1831,7 +1831,7 @@ public:
             // If we got here, then the index returned a Data file range which
             // includes some partitions after the queried range.
             // The read is over. The new key and everything after it should be ignored.
-            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key after range", fmt::ptr(this), key, _pr);
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, skipping key after range", fmt::ptr(this), key, _pr.get());
             _end_of_stream = true;
             // The read is over for now, but the reader can be later forwarded to the key we just read.
             // The parser can't move backwards, so we have to remember the key and tombstone
@@ -1841,7 +1841,7 @@ public:
             return data_consumer::proceed::no;
         } else {
             // This is the normal path.
-            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, consuming key in range", fmt::ptr(this), key, _pr);
+            sstlog.trace("mp_row_consumer_reader_mx {}: on_next_partition({}), _pr={}, consuming key in range", fmt::ptr(this), key, _pr.get());
             return mp_row_consumer_reader_mx::on_next_partition(std::move(key), tomb);
         }
     }
