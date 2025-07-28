@@ -99,7 +99,7 @@ public:
 
     virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
 
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(schema_ptr schema) const override;
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const table_state& ts) const override;
 
     friend class ::incremental_backlog_tracker;
 };
