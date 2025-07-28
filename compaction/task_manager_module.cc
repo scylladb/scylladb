@@ -495,7 +495,7 @@ future<> table_cleanup_keyspace_compaction_task_impl::run() {
     // it is the responsibility of the system operator to not
     // perform additional incompatible range movements during cleanup.
     auto get_owned_ranges = [&] (std::string_view ks_name) -> future<owned_ranges_ptr> {
-        const auto& erm = _db.find_keyspace(ks_name).get_vnode_effective_replication_map();
+        const auto& erm = _db.find_keyspace(ks_name).get_static_effective_replication_map();
         co_return compaction::make_owned_ranges_ptr(co_await _db.get_keyspace_local_ranges(erm));
     };
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
@@ -575,7 +575,7 @@ future<> table_upgrade_sstables_compaction_task_impl::run() {
         if (ks.get_replication_strategy().is_per_table()) {
             co_return nullptr;
         }
-        const auto& erm = ks.get_vnode_effective_replication_map();
+        const auto& erm = ks.get_static_effective_replication_map();
         co_return compaction::make_owned_ranges_ptr(co_await _db.get_keyspace_local_ranges(erm));
     };
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);

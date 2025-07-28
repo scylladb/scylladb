@@ -1282,7 +1282,7 @@ SEASTAR_TEST_CASE(upgrade_sstables) {
         e.db().invoke_on_all([] (replica::database& db) -> future<> {
             auto& cm = db.get_compaction_manager();
             for (auto& [ks_name, ks] : db.get_keyspaces()) {
-                const auto& erm = ks.get_vnode_effective_replication_map();
+                const auto& erm = ks.get_static_effective_replication_map();
                 auto owned_ranges_ptr = compaction::make_owned_ranges_ptr(co_await db.get_keyspace_local_ranges(erm));
                 for (auto& [cf_name, schema] : ks.metadata()->cf_meta_data()) {
                     auto& t = db.find_column_family(schema->id());

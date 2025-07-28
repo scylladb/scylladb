@@ -465,7 +465,7 @@ const data_dictionary::user_types_storage& database::user_types() const noexcept
     return *_user_types;
 }
 
-locator::vnode_effective_replication_map_ptr keyspace::get_vnode_effective_replication_map() const {
+locator::vnode_effective_replication_map_ptr keyspace::get_static_effective_replication_map() const {
     // FIXME: Examine all users.
     if (get_replication_strategy().is_per_table()) {
         on_internal_error(dblog, format("Tried to obtain per-keyspace effective replication map of {} but it's per-table", _metadata->name()));
@@ -1042,7 +1042,7 @@ void database::add_column_family(keyspace& ks, schema_ptr schema, column_family:
         }
         erm = pt_rs->make_replication_map(schema->id(), metadata_ptr);
     } else {
-        erm = ks.get_vnode_effective_replication_map();
+        erm = ks.get_static_effective_replication_map();
     }
     // avoid self-reporting
     auto& sst_manager = get_sstables_manager(*schema);
@@ -1321,7 +1321,7 @@ std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> databa
     for (auto const& [name, ks] : _keyspaces) {
         auto&& rs = ks.get_replication_strategy();
         if (!rs.is_local() && !rs.is_per_table()) {
-            res.emplace(name, ks.get_vnode_effective_replication_map());
+            res.emplace(name, ks.get_static_effective_replication_map());
         }
     }
     return res;

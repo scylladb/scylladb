@@ -1412,7 +1412,8 @@ public:
         return _replication_strategy;
     }
 
-    locator::vnode_effective_replication_map_ptr get_vnode_effective_replication_map() const;
+    // Get the keyspace static effective replication map, for non-tablets keyspaces
+    locator::vnode_effective_replication_map_ptr get_static_effective_replication_map() const;
 
     bool uses_tablets() const {
         return _replication_strategy->uses_tablets();

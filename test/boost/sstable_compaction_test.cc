@@ -2224,7 +2224,7 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
             auto close_cf = deferred_stop(cf);
             cf->start();
 
-            const auto& erm = db.find_keyspace(ks_name).get_vnode_effective_replication_map();
+            const auto& erm = db.find_keyspace(ks_name).get_static_effective_replication_map();
             auto local_ranges = compaction::make_owned_ranges_ptr(db.get_keyspace_local_ranges(erm).get());
             auto descriptor = sstables::compaction_descriptor({sst}, compaction_descriptor::default_level,
                 compaction_descriptor::default_max_sstable_bytes, run_identifier, compaction_type_options::make_cleanup(), std::move(local_ranges));

@@ -3524,7 +3524,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             }
 
             if (table_name.empty()) {
-                erm = ks.get_vnode_effective_replication_map();
+                erm = ks.get_static_effective_replication_map();
             } else {
                 auto& cf = ss._db.local().find_column_family(keyspace_name, table_name);
                 erm = cf.get_effective_replication_map();
@@ -3543,7 +3543,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             }
             keyspace_name = "system_traces";
             const auto& ks = ss._db.local().find_keyspace(keyspace_name);
-            erm = ks.get_vnode_effective_replication_map();
+            erm = ks.get_static_effective_replication_map();
         }
 
         // The following loops seems computationally heavy, but it's not as bad.
@@ -3840,7 +3840,7 @@ future<> storage_service::decommission() {
 
                 auto non_system_keyspaces = db.get_non_local_vnode_based_strategy_keyspaces();
                 for (const auto& keyspace_name : non_system_keyspaces) {
-                    if (ss._db.local().find_keyspace(keyspace_name).get_vnode_effective_replication_map()->has_pending_ranges(ss.get_token_metadata_ptr()->get_my_id())) {
+                    if (ss._db.local().find_keyspace(keyspace_name).get_static_effective_replication_map()->has_pending_ranges(ss.get_token_metadata_ptr()->get_my_id())) {
                         throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
                     }
                 }
@@ -7709,7 +7709,7 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
     if (ks.uses_tablets()) {
         replicas = table.get_effective_replication_map()->get_natural_replicas(token);
     } else {
-        replicas = ks.get_vnode_effective_replication_map()->get_natural_replicas(token);
+        replicas = ks.get_static_effective_replication_map()->get_natural_replicas(token);
     }
     return replicas | std::views::transform([&] (locator::host_id id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>();
 }
@@ -7871,7 +7871,7 @@ storage_service::topology_change_kind storage_service::upgrade_state_to_topology
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
     return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
         const auto my_id = ss.get_token_metadata().get_my_id();
-        const auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_vnode_effective_replication_map()->has_pending_ranges(my_id);
+        const auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_static_effective_replication_map()->has_pending_ranges(my_id);
         const bool is_bootstrap_mode = ss._operation_mode == mode::BOOTSTRAP;
         slogger.debug("is_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
                 keyspace, is_bootstrap_mode, pending_ranges);
