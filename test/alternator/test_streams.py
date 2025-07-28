@@ -636,13 +636,16 @@ def compare_events(expected_events, output, mode):
     # then we remove this matched even from expected_events_map)
     for event in output:
         # In DynamoDB, eventSource is 'aws:dynamodb'. We decided to set it to
-        # a *different* value - 'scylladb:alternator'. Issue #6931.
+        # a *different* value - 'scylladb:alternator'. Reproduces #6931.
         assert 'eventSource' in event
-        # Alternator is missing "awsRegion", which makes little sense for it
-        # (although maybe we should have provided the DC name). Issue #6931.
-        #assert 'awsRegion' in event
-        # Alternator is also missing the "eventVersion" entry. Issue #6931.
-        #assert 'eventVersion' in event
+        # For lack of a direct equivalent of a region, Alternator provides the
+        # DC name instead. Reproduces #6931.
+        assert 'awsRegion' in event
+        # The default DC name for simple snitch.
+        assert event['awsRegion'] == 'datacenter1'
+        # Reproduces #6931.
+        assert 'eventVersion' in event
+        assert event['eventVersion'] is not None
         # Check that eventID appears, but can't check much on what it is.
         assert 'eventID' in event
         op = event['eventName']
@@ -665,8 +668,9 @@ def compare_events(expected_events, output, mode):
         # some libraries rely on this. This reproduces issue #7158:
         assert 'SequenceNumber' in record
         assert record['SequenceNumber'].isdecimal()
-        # Alternator doesn't set the SizeBytes member. Issue #6931.
-        #assert 'SizeBytes' in record
+        # Reproduces #6931.
+        assert 'SizeBytes' in record
+        assert record['SizeBytes'] > 0
         if mode == 'KEYS_ONLY':
             assert not 'NewImage' in record
             assert not 'OldImage' in record
