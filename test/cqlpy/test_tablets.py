@@ -313,24 +313,6 @@ def test_tablets_are_dropped_when_dropping_index(cql, test_keyspace, drop_index,
         raise e
 
 
-# FIXME: LWT is not supported with tablets yet. See #18066
-# Until the issue is fixed, test that a LWT query indeed fails as expected
-def test_lwt_support_with_tablets(cql, test_keyspace, skip_without_tablets):
-    with new_test_table(cql, test_keyspace, "key int PRIMARY KEY, val int") as table:
-        cql.execute(f"INSERT INTO {table} (key, val) VALUES(1, 0)")
-        with pytest.raises(InvalidRequest, match=f"{table}.*LWT is not yet supported with tablets"):
-            cql.execute(f"INSERT INTO {table} (key, val) VALUES(1, 1) IF NOT EXISTS")
-        # The query is rejected during the execution phase,
-        # so preparing the LWT query is expected to succeed.
-        stmt = cql.prepare(f"UPDATE {table} SET val = 1 WHERE KEY = ? IF EXISTS")
-        with pytest.raises(InvalidRequest, match=f"{table}.*LWT is not yet supported with tablets"):
-            cql.execute(stmt, [1])
-        with pytest.raises(InvalidRequest, match=f"{table}.*LWT is not yet supported with tablets"):
-            cql.execute(f"DELETE FROM {table} WHERE key = 1 IF EXISTS")
-        res = cql.execute(f"SELECT val FROM {table} WHERE key = 1").one()
-        assert res.val == 0
-
-
 def test_tablet_options(cql, skip_without_tablets):
     def describe_table(cql, table):
         return cql.execute(f"DESC TABLE {table}").one().create_statement

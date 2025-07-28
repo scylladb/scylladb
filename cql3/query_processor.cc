@@ -785,7 +785,8 @@ query_options query_processor::make_internal_options(
         const statements::prepared_statement::checked_weak_ptr& p,
         const std::vector<data_value_or_unset>& values,
         db::consistency_level cl,
-        int32_t page_size) const {
+        int32_t page_size,
+        service::node_local_only node_local_only) const {
     if (p->bound_names.size() != values.size()) {
         throw std::invalid_argument(
                 format("Invalid number of values. Expecting {:d} but got {:d}", p->bound_names.size(), values.size()));
@@ -812,16 +813,16 @@ query_options query_processor::make_internal_options(
         }, var);
         ++ni;
     }
-    if (page_size > 0) {
-        lw_shared_ptr<service::pager::paging_state> paging_state;
-        db::consistency_level serial_consistency = db::consistency_level::SERIAL;
-        api::timestamp_type ts = api::missing_timestamp;
-        return query_options(
-                cl,
-                std::move(bound_values),
-                cql3::query_options::specific_options{page_size, std::move(paging_state), serial_consistency, ts});
-    }
-    return query_options(cl, std::move(bound_values));
+    return query_options(
+            cl,
+            std::move(bound_values),
+            cql3::query_options::specific_options {
+                .page_size = page_size,
+                .state = {},
+                .serial_consistency = db::consistency_level::SERIAL,
+                .timestamp = api::missing_timestamp,
+                .node_local_only = node_local_only
+            });
 }
 
 statements::prepared_statement::checked_weak_ptr query_processor::prepare_internal(const sstring& query_string) {

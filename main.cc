@@ -110,6 +110,7 @@
 #include "service/raft/raft_group_registry.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "service/raft/raft_group0.hh"
+#include "service/paxos/paxos_state.hh"
 #include "gms/gossip_address_map.hh"
 #include "utils/alien_worker.hh"
 #include "utils/advanced_rpc_compressor.hh"
@@ -1941,8 +1942,16 @@ sharded<locator::shared_token_metadata> token_metadata;
             });
             static seastar::sharded<memory_threshold_guard> mtg;
             mtg.start(cfg->large_memory_allocation_warning_threshold()).get();
+
+            checkpoint(stop_signal, "initializing paxos store");
+            static seastar::sharded<service::paxos::paxos_store> paxos_store;
+            paxos_store.start(std::ref(sys_ks), std::ref(feature_service), std::ref(db), std::ref(mm)).get();
+            auto stop_paxos_store = defer_verbose_shutdown("paxos store", [] {
+                paxos_store.stop().get();
+            });
+
             checkpoint(stop_signal, "initializing storage proxy RPC verbs");
-            proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks), std::ref(group0_client), std::ref(tsm)).get();
+            proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks), std::ref(paxos_store), std::ref(group0_client), std::ref(tsm)).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });

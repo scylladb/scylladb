@@ -104,11 +104,10 @@ def test_streams_enable_error_with_tablets(dynamodb):
         with pytest.raises(ClientError, match='ValidationException.*tablets'):
             table.update(StreamSpecification={'StreamEnabled': True, 'StreamViewType': 'KEYS_ONLY'});
 
-# Currently, LWT is not supported for tablets because of known bugs
-# (see #18068). We still allow creating an Alternator table with
-# tablets and using LWT for write isolation (always_use_lwt),
-# but the writes themselves will fail. When #18068 is fixed, this
-# test should be fixed to expect success - not failure.
+# For a while (see #18068) it was possible to create an Alternator table with
+# tablets enabled and choose LWT for write isolation (always_use_lwt)
+# but the writes themselves failed. This test verifies that this is no longer
+# the case, and the LWT writes succeed even when tables are used.
 def test_alternator_tablets_and_lwt(dynamodb):
     schema = {
         'Tags': [
@@ -118,10 +117,9 @@ def test_alternator_tablets_and_lwt(dynamodb):
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
     with new_test_table(dynamodb, **schema) as table:
         assert uses_tablets(dynamodb, table)
-        # This put_item should pass after #18068 is fixed:
-        with pytest.raises(ClientError, match="InternalServerError"):
-            table.put_item(Item={'p': 'hello'})
-            assert table.get_item(Key={'p': 'hello'})['Item'] == {'p': 'hello'}
+        # This put_item() failed before #18068 was fixed:
+        table.put_item(Item={'p': 'hello'})
+        assert table.get_item(Key={'p': 'hello'}, ConsistentRead=True)['Item'] == {'p': 'hello'}
 
 # An Alternator table created tablets and with a write isolation
 # mode that doesn't use LWT ("forbid_rmw") works normally, even
