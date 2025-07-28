@@ -56,8 +56,12 @@ migration_manager::migration_manager(migration_notifier& notifier, gms::feature_
           _notifier(notifier)
         , _group0_barrier(this_shard_id() == 0 ?
             std::function<future<>()>([this] () -> future<> {
+                if ((co_await _group0_client.get_group0_upgrade_state()).second == group0_upgrade_state::use_pre_raft_procedures) {
+                    on_internal_error(mlogger, "Trying to pull schema over raft while in pre raft procedures");
+                }
+
                 // This will run raft barrier and will sync schema with the leader
-                return with_scheduling_group(_storage_proxy.get_db().local().get_gossip_scheduling_group(), [this] {
+                co_await with_scheduling_group(_storage_proxy.get_db().local().get_gossip_scheduling_group(), [this] {
                     return start_group0_operation().discard_result();
                 });
             }) :
@@ -1113,9 +1117,6 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     // `_enable_schema_pulls` may change concurrently with this function (but only from `true` to `false`).
     bool use_raft = !_enable_schema_pulls;
     if ((!s || !s->is_synced()) && use_raft) {
-        if ((co_await _group0_client.get_group0_upgrade_state()).second == group0_upgrade_state::use_pre_raft_procedures) {
-            on_internal_error(mlogger, "Trying to pull schema over raft while in pre raft procedures");
-        }
         // Schema is synchronized through Raft, so perform a group 0 read barrier.
         // Batch the barriers so we don't invoke them redundantly.
         mlogger.trace("Performing raft read barrier because schema is not synced, version: {}", v);
