@@ -15,6 +15,7 @@
 
 namespace service {
 class storage_proxy;
+class storage_service;
 class migration_manager;
 class memory_limiter;
 }
@@ -57,6 +58,7 @@ class server;
 class controller : public protocol_server {
     sharded<gms::gossiper>& _gossiper;
     sharded<service::storage_proxy>& _proxy;
+    sharded<service::storage_service>& _ss;
     sharded<service::migration_manager>& _mm;
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     sharded<cdc::generation_service>& _cdc_gen_svc;
@@ -74,6 +76,7 @@ public:
     controller(
         sharded<gms::gossiper>& gossiper,
         sharded<service::storage_proxy>& proxy,
+        sharded<service::storage_service>& ss,
         sharded<service::migration_manager>& mm,
         sharded<db::system_distributed_keyspace>& sys_dist_ks,
         sharded<cdc::generation_service>& cdc_gen_svc,
