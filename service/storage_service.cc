@@ -5247,7 +5247,8 @@ future<> storage_service::unbootstrap() {
         std::unordered_map<sstring, std::unordered_multimap<dht::token_range, locator::host_id>> ranges_to_stream;
 
         auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-        for (const auto& [keyspace_name, erm] : ks_erms) {
+        for (const auto& [keyspace_name, ermp] : ks_erms) {
+            auto* erm = ermp.get();
             auto ranges_mm = co_await get_changed_ranges_for_leaving(erm, my_host_id());
             if (slogger.is_enabled(logging::log_level::debug)) {
                 std::vector<wrapping_interval<token>> ranges;
@@ -5278,7 +5279,8 @@ future<> storage_service::unbootstrap() {
 future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, locator::host_id leaving_node) {
     auto my_address = my_host_id();
     auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-    for (const auto& [keyspace_name, erm] : ks_erms) {
+    for (const auto& [keyspace_name, ermp] : ks_erms) {
+        auto* erm = ermp.get();
         std::unordered_multimap<dht::token_range, locator::host_id> changed_ranges = co_await get_changed_ranges_for_leaving(erm, leaving_node);
         dht::token_range_vector my_new_ranges;
         for (auto& x : changed_ranges) {
