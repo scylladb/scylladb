@@ -12,7 +12,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/util/log.hh>
 
-#include "generic_server.hh"
+#include "transport/generic_server.hh"
 #include "utils/assert.hh"
 
 using namespace generic_server;

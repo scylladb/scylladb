@@ -178,7 +178,7 @@ target_sources(scylla-main
     duration.cc
     exceptions/exceptions.cc
     frozen_schema.cc
-    generic_server.cc
+    transport/generic_server.cc
     debug.cc
     init.cc
     keys/keys.cc

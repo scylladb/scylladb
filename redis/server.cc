@@ -8,7 +8,7 @@
 
 #include "redis/server.hh"
 
-#include "generic_server.hh"
+#include "transport/generic_server.hh"
 #include "redis/request.hh"
 #include "redis/reply.hh"
 
