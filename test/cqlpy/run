@@ -1,22 +1,12 @@
 #!/usr/bin/env python3
 
 import sys
+import os
 
 import run   # run.py in this directory
 
-print('Scylla is: ' + run.find_scylla() + '.')
-
-ssl = '--ssl' in sys.argv
-if ssl:
-    cmd = run.run_scylla_ssl_cql_cmd
-    check_cql = run.check_ssl_cql
-else:
-    cmd = run.run_scylla_cmd
-    check_cql = run.check_cql
-
-# If the first option (TODO: improve the command line processing this up)
-# is "--release", download that release (see fetch_scylla.py for supported
-# release numbers), and use that.
+# If the first option is "--release", download that release (see
+# fetch_scylla.py for supported release numbers), and use that.
 # The downloaded Scylla will be cached in the directory build/<release>,
 # where <release> is the specific release downloaded (e.g., if the user
 # asks "--release 2022.1" and the downloaded release is 2022.1.9, it
@@ -27,6 +17,15 @@ if len(sys.argv) > 1 and sys.argv[1] == '--release':
     cmd = lambda pid, dir: run.run_precompiled_scylla_cmd(exe, pid, dir)
     check_cql = run.check_cql
     sys.argv = sys.argv[0:1] + sys.argv[3:]
+    os.environ['SCYLLA'] = exe # so find_scylla() prints the right one
+elif '--ssl' in sys.argv:
+    cmd = run.run_scylla_ssl_cql_cmd
+    check_cql = run.check_ssl_cql
+else:
+    cmd = run.run_scylla_cmd
+    check_cql = run.check_cql
+
+print('Scylla is: ' + run.find_scylla() + '.')
 
 # If the "--vnodes" option is given, drop the "tablets" experimental
 # feature (turned on in run.py) so that all tests will be run with the
