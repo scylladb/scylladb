@@ -17,11 +17,13 @@
 #include "service/client_state.hh"
 #include "service_permit.hh"
 #include "db/timeout_clock.hh"
+#include "schema/schema_fwd.hh"
 
 #include "alternator/error.hh"
 #include "stats.hh"
 #include "utils/rjson.hh"
 #include "utils/updateable_value.hh"
+#include "utils/simple_value_with_expiry.hh"
 
 #include "tracing/trace_state.hh"
 
@@ -40,6 +42,7 @@ namespace cql3::selection {
 
 namespace service {
     class storage_proxy;
+    class storage_service;
 }
 
 namespace cdc {
@@ -56,6 +59,7 @@ class schema_builder;
 
 namespace alternator {
 
+enum class table_status;
 class rmw_operation;
 
 namespace parsed {
@@ -135,6 +139,7 @@ using attrs_to_get = attribute_path_map<std::monostate>;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
+    service::storage_service& _ss;
     service::storage_proxy& _proxy;
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
@@ -144,6 +149,14 @@ class executor : public peering_sharded_service<executor> {
     // forwarding Alternator request between shards - if necessary for LWT.
     smp_service_group _ssg;
 
+    struct DescribeTableInfo {
+        utils::simple_value_with_expiry<std::uint64_t> size_in_bytes;
+    };
+    std::unordered_map<table_id, DescribeTableInfo> _describe_table_info_for_tables;
+
+    future<> notify_all_shards_of_newly_calculated_table_size(schema_ptr schema, std::uint64_t size_in_bytes, std::chrono::nanoseconds ttl);
+    future<> delete_cache_entry_on_all_shards(schema_ptr schema);
+    future<> fill_table_size(rjson::value &table_description, schema_ptr schema, bool deleting);
 public:
     using client_state = service::client_state;
     // request_return_type is the return type of the executor methods, which
@@ -169,6 +182,7 @@ public:
 
     executor(gms::gossiper& gossiper,
              service::storage_proxy& proxy,
+             service::storage_service& ss,
              service::migration_manager& mm,
              db::system_distributed_keyspace& sdks,
              cdc::metadata& cdc_metadata,
@@ -218,7 +232,9 @@ private:
     friend class rmw_operation;
 
     static void describe_key_schema(rjson::value& parent, const schema&, std::unordered_map<std::string,std::string> * = nullptr);
-
+    future<rjson::value> fill_table_description(schema_ptr schema, table_status tbl_status, service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit);
+    future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, bool enforce_authorization);
+    
 public:
     static void describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>&);
 
