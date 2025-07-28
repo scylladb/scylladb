@@ -40,7 +40,7 @@ namespace {
     }
 
     template <typename Strategy>
-    mutable_vnode_erm_ptr create_erm(mutable_token_metadata_ptr tmptr, replication_strategy_config_options opts = {}) {
+    mutable_static_erm_ptr create_erm(mutable_token_metadata_ptr tmptr, replication_strategy_config_options opts = {}) {
         dc_rack_fn get_dc_rack_fn = get_dc_rack;
         tmptr->update_topology_change_info(get_dc_rack_fn).get();
         auto strategy = seastar::make_shared<Strategy>(replication_strategy_params(opts, std::nullopt));
@@ -232,7 +232,7 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
     token_metadata->update_normal_tokens({t10}, e3_id).get();
     token_metadata->add_bootstrap_token(t100, e1_id);
 
-    auto check_endpoints = [](mutable_vnode_erm_ptr erm, int64_t t,
+    auto check_endpoints = [](mutable_static_erm_ptr erm, int64_t t,
         host_id_vector_replica_set expected_replicas,
         seastar::compat::source_location sl = seastar::compat::source_location::current())
     {
@@ -245,7 +245,7 @@ SEASTAR_THREAD_TEST_CASE(test_endpoints_for_reading_when_bootstrap_with_replicas
         BOOST_REQUIRE_EQUAL(expected_set, actual_set);
     };
 
-    auto check_no_endpoints = [](mutable_vnode_erm_ptr erm, int64_t t,
+    auto check_no_endpoints = [](mutable_static_erm_ptr erm, int64_t t,
         seastar::compat::source_location sl = seastar::compat::source_location::current())
     {
         BOOST_TEST_INFO("line: " << sl.line());

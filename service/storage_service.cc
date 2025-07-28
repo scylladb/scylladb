@@ -3118,7 +3118,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
     pending_token_metadata_ptr.resize(smp::count);
-    std::vector<std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr>> pending_effective_replication_maps;
+    std::vector<std::unordered_map<sstring, locator::static_effective_replication_map_ptr>> pending_effective_replication_maps;
     pending_effective_replication_maps.resize(smp::count);
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms;
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms;

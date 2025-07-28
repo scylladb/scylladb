@@ -104,7 +104,7 @@ public:
         _source_filters.emplace(std::move(filter));
     }
 
-    future<> add_ranges(const sstring& keyspace_name, locator::vnode_effective_replication_map_ptr erm, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing);
+    future<> add_ranges(const sstring& keyspace_name, locator::static_effective_replication_map_ptr erm, dht::token_range_vector ranges, gms::gossiper& gossiper, bool is_replacing);
     void add_tx_ranges(const sstring& keyspace_name, std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint);
     void add_rx_ranges(const sstring& keyspace_name, std::unordered_map<locator::host_id, dht::token_range_vector> ranges_per_endpoint);
 private:

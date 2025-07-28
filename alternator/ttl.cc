@@ -769,7 +769,7 @@ static future<bool> scan_table(
             }
         }
     } else {  // VNodes
-        locator::vnode_effective_replication_map_ptr erm =
+        locator::static_effective_replication_map_ptr erm =
                 db.real_database().find_keyspace(s->ks_name()).get_static_effective_replication_map();
         auto my_host_id = erm->get_topology().my_host_id();
         token_ranges_owned_by_this_shard my_ranges(s, co_await ranges_holder_primary::make(erm.get(), my_host_id));

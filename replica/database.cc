@@ -465,7 +465,7 @@ const data_dictionary::user_types_storage& database::user_types() const noexcept
     return *_user_types;
 }
 
-locator::vnode_effective_replication_map_ptr keyspace::get_static_effective_replication_map() const {
+locator::static_effective_replication_map_ptr keyspace::get_static_effective_replication_map() const {
     // FIXME: Examine all users.
     if (get_replication_strategy().is_per_table()) {
         on_internal_error(dblog, format("Tried to obtain per-keyspace effective replication map of {} but it's per-table", _metadata->name()));
@@ -857,7 +857,7 @@ future<> database::modify_keyspace_on_all_shards(sharded<database>& sharded_db, 
 
 future<keyspace_change> database::prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const {
     auto strategy = keyspace::create_replication_strategy(metadata);
-    locator::vnode_effective_replication_map_ptr erm = nullptr;
+    locator::static_effective_replication_map_ptr erm = nullptr;
     if (!strategy->is_per_table()) {
         erm = co_await ks.create_effective_replication_map(strategy,
             get_shared_token_metadata());
@@ -1315,8 +1315,8 @@ std::vector<sstring> database::get_non_local_vnode_based_strategy_keyspaces() co
     return res;
 }
 
-std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
-    std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> res;
+std::unordered_map<sstring, locator::static_effective_replication_map_ptr> database::get_non_local_strategy_keyspaces_erms() const {
+    std::unordered_map<sstring, locator::static_effective_replication_map_ptr> res;
     res.reserve(_keyspaces.size());
     for (auto const& [name, ks] : _keyspaces) {
         auto&& rs = ks.get_replication_strategy();
@@ -1392,12 +1392,12 @@ keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata)
     return abstract_replication_strategy::create_replication_strategy(metadata->strategy_name(), params);
 }
 
-future<locator::vnode_effective_replication_map_ptr> keyspace::create_effective_replication_map(locator::replication_strategy_ptr strategy, const locator::shared_token_metadata& stm) const {
+future<locator::static_effective_replication_map_ptr> keyspace::create_effective_replication_map(locator::replication_strategy_ptr strategy, const locator::shared_token_metadata& stm) const {
     co_return co_await _erm_factory.create_effective_replication_map(strategy, stm.get());
 }
 
 void
-keyspace::update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm) {
+keyspace::update_effective_replication_map(locator::static_effective_replication_map_ptr erm) {
     _effective_replication_map = std::move(erm);
 }
 
@@ -2841,7 +2841,7 @@ const sstring& database::get_snitch_name() const {
     return _cfg.endpoint_snitch();
 }
 
-future<dht::token_range_vector> database::get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm) {
+future<dht::token_range_vector> database::get_keyspace_local_ranges(locator::static_effective_replication_map_ptr erm) {
     co_return co_await erm->get_ranges(erm->get_topology().my_host_id());
 }
 
