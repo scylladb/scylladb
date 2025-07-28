@@ -884,6 +884,7 @@ rf_rack_valid_keyspaces: false
 # Maximum number of items in single BatchWriteItem command. Default is 100.
 # Note: DynamoDB has a hard-coded limit of 25.
 # alternator_max_items_in_batch_write: 100
+# alternator_describe_table_info_cache_validity_in_seconds: 21600
 
 #
 # Vector Store options
