@@ -17,6 +17,7 @@
 #include <unordered_set>
 #include <exception>
 #include <filesystem>
+#include <concepts>
 
 #include <fmt/ranges.h>
 
@@ -632,8 +633,8 @@ static void write(fragmented_temporary_buffer::ostream& out, T value) {
     out.write(reinterpret_cast<const char*>(&v), sizeof(v));
 }
 
-template<typename T, typename Input>
-std::enable_if_t<std::is_fundamental<T>::value, T> read(Input& in) {
+template<std::integral T, typename Input>
+T read(Input& in) {
     return net::ntoh(in.template read<T>());
 }
 
