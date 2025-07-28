@@ -507,7 +507,7 @@ public:
     // static_effective_replication_map for the local shard.
     //
     // Therefore create should be called first on shard 0, then on all other shards.
-    future<static_erm_ptr> create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
+    future<static_erm_ptr> create_static_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
 
     future<> stop() noexcept;
 

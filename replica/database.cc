@@ -1393,7 +1393,7 @@ keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata)
 }
 
 future<locator::static_effective_replication_map_ptr> keyspace::create_effective_replication_map(locator::replication_strategy_ptr strategy, const locator::shared_token_metadata& stm) const {
-    co_return co_await _erm_factory.create_effective_replication_map(strategy, stm.get());
+    co_return co_await _erm_factory.create_static_effective_replication_map(strategy, stm.get());
 }
 
 void
