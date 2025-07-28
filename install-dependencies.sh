@@ -39,6 +39,9 @@ debian_base_packages=(
     python3-pyparsing
     python3-colorama
     python3-tabulate
+    python3-pytest
+    python3-pytest-asyncio
+    python3-pytest-timeout
     libsnappy-dev
     libjsoncpp-dev
     rapidjson-dev
@@ -90,6 +93,7 @@ fedora_packages=(
     python3-boto3
     python3-pytest
     python3-pytest-asyncio
+    python3-pytest-timeout
     python3-redis
     python3-unidiff
     python3-humanfriendly
