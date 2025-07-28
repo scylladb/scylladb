@@ -1395,10 +1395,10 @@ public:
 
     static locator::replication_strategy_ptr create_replication_strategy(
             lw_shared_ptr<keyspace_metadata> metadata);
-    future<locator::static_effective_replication_map_ptr> create_effective_replication_map(
+    future<locator::static_effective_replication_map_ptr> create_static_effective_replication_map(
             locator::replication_strategy_ptr strategy,
             const locator::shared_token_metadata& stm) const;
-    void update_effective_replication_map(locator::static_effective_replication_map_ptr erm);
+    void update_static_effective_replication_map(locator::static_effective_replication_map_ptr erm);
 
     /**
      * This should not really be return by reference, since replication

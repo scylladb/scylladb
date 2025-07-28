@@ -3236,7 +3236,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             auto& erms = pending_effective_replication_maps[this_shard_id()];
             for (auto it = erms.begin(); it != erms.end(); ) {
                 auto& ks = db.find_keyspace(it->first);
-                ks.update_effective_replication_map(std::move(it->second));
+                ks.update_static_effective_replication_map(std::move(it->second));
                 it = erms.erase(it);
             }
 
