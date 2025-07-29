@@ -83,6 +83,7 @@ auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> f
         if (lowres_clock::now() - begin > timeout) {
             co_return false;
         }
+        co_await seastar::yield();
     }
     co_return true;
 }
@@ -90,6 +91,39 @@ auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> f
 auto print_addr(const inet_address& addr) -> sstring {
     return format("{}", addr);
 }
+
+
+auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) -> future<schema_ptr> {
+    co_await env.execute_cql(fmt::format(R"(
+        create table {}.{} (
+            pk1 tinyint, pk2 tinyint,
+            ck1 tinyint, ck2 tinyint,
+            embedding vector<float, 3>,
+            primary key ((pk1, pk2), ck1, ck2))
+    )",
+            ks, cf));
+    co_return env.local_db().find_schema(ks, cf);
+}
+
+
+auto configure(service::vector_store_client& vs, std::map<std::string, std::optional<std::string>> dns) -> service::vector_store_client& {
+    vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(10));
+    vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(20));
+    vector_store_client_tester::set_http_request_retries(vs, 3);
+    vector_store_client_tester::set_dns_resolver(vs, [dns](auto const& host) -> future<std::optional<inet_address>> {
+        auto addr = dns.at(host);
+        if (!addr) {
+            co_return std::nullopt;
+        }
+        co_return inet_address(*addr);
+    });
+    return vs;
+}
+
+auto configure(service::vector_store_client& vs) -> service::vector_store_client& {
+    return configure(vs, {});
+}
+
 
 } // namespace
 
@@ -130,17 +164,9 @@ BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
 SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
     auto cfg = config();
     cfg.vector_store_uri.set("http://good.authority.here:6080");
-
     auto vs = vector_store_client{cfg};
-    BOOST_CHECK(!vs.is_disabled());
 
-    vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(2000));
-    vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
-    vector_store_client_tester::set_dns_resolver(vs, [](auto const& host) -> future<std::optional<inet_address>> {
-        BOOST_CHECK_EQUAL(host, "good.authority.here");
-        co_return inet_address("127.0.0.1");
-    });
-
+    configure(vs, {{"good.authority.here", "127.0.0.1"}});
     vs.start_background_tasks();
 
     auto as = abort_source();
@@ -155,18 +181,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
 SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
     auto cfg = config();
     cfg.vector_store_uri.set("http://good.authority.here:6080");
-
-
     auto vs = vector_store_client{cfg};
-    BOOST_CHECK(!vs.is_disabled());
 
-    vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(2000));
-    vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
-    vector_store_client_tester::set_dns_resolver(vs, [](auto const& host) -> future<std::optional<inet_address>> {
-        BOOST_CHECK_EQUAL(host, "good.authority.here");
-        co_return std::nullopt;
-    });
-
+    configure(vs, {{"good.authority.here", std::nullopt}});
     vs.start_background_tasks();
 
     auto as = abort_source();
@@ -180,12 +197,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     auto cfg = config();
     cfg.vector_store_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
-    BOOST_CHECK(!vs.is_disabled());
-
-    vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(10));
-    vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(20));
     auto count = 0;
-    vector_store_client_tester::set_dns_resolver(vs, [&count](auto const& host) -> future<std::optional<inet_address>> {
+
+    vector_store_client_tester::set_dns_resolver(configure(vs), [&count](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
         count++;
         if (count % 3 != 0) {
@@ -193,7 +207,6 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
         }
         co_return inet_address(format("127.0.0.{}", count));
     });
-
     vs.start_background_tasks();
 
     auto as = abort_source();
@@ -227,17 +240,13 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
     auto cfg = config();
     cfg.vector_store_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
-    BOOST_CHECK(!vs.is_disabled());
-
-    vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(10));
-    vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
     auto count = 0;
-    vector_store_client_tester::set_dns_resolver(vs, [&count](auto const& host) -> future<std::optional<inet_address>> {
+
+    vector_store_client_tester::set_dns_resolver(configure(vs), [&count](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
         count++;
         co_return inet_address("127.0.0.1");
     });
-
     vs.start_background_tasks();
     co_await sleep(std::chrono::milliseconds(20)); // wait for the first DNS refresh
 
@@ -268,16 +277,12 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
     auto cfg = config();
     cfg.vector_store_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
-    BOOST_CHECK(!vs.is_disabled());
 
-    vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(10));
-    vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
-    vector_store_client_tester::set_dns_resolver(vs, [](auto const& host) -> future<std::optional<inet_address>> {
+    vector_store_client_tester::set_dns_resolver(configure(vs), [](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
         co_await sleep(std::chrono::milliseconds(100));
         co_return inet_address("127.0.0.1");
     });
-
     vs.start_background_tasks();
 
     auto as = abort_source();
@@ -293,15 +298,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
 
 SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
     co_await do_with_cql_env([](cql_test_env& env) -> future<> {
-        co_await env.execute_cql(R"(
-            create table ks.vs (
-                pk1 tinyint, pk2 tinyint,
-                ck1 tinyint, ck2 tinyint,
-                embedding vector<float, 3>,
-                primary key ((pk1, pk2), ck1, ck2))
-        )");
-
-        auto schema = env.local_db().find_schema("ks", "vs");
+        auto schema = co_await create_test_table(env, "ks", "vs");
         auto& vs = env.local_qp().vector_store_client();
 
         auto as = abort_source();
@@ -316,26 +313,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
     cfg.db_config->vector_store_uri.set("http://bad.authority.here:6080");
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
-                co_await env.execute_cql(R"(
-                    create table ks.vs (
-                        pk1 tinyint, pk2 tinyint,
-                        ck1 tinyint, ck2 tinyint,
-                        embedding vector<float, 3>,
-                        primary key ((pk1, pk2), ck1, ck2))
-                )");
-
-                auto schema = env.local_db().find_schema("ks", "vs");
+                auto schema = co_await create_test_table(env, "ks", "vs");
                 auto& vs = env.local_qp().vector_store_client();
 
-                vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(1000));
-                vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
-                vector_store_client_tester::set_http_request_retries(vs, 3);
-                vector_store_client_tester::set_dns_resolver(vs, [](auto const& host) -> future<std::optional<inet_address>> {
-                    BOOST_CHECK_EQUAL(host, "bad.authority.here");
-                    co_return std::nullopt;
-                });
-
-                vs.start_background_tasks();
+                configure(vs, {{"bad.authority.here", std::nullopt}}).start_background_tasks();
 
                 auto as = abort_source();
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as);
@@ -350,26 +331,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
     cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
-                co_await env.execute_cql(R"(
-                    create table ks.vs (
-                        pk1 tinyint, pk2 tinyint,
-                        ck1 tinyint, ck2 tinyint,
-                        embedding vector<float, 3>,
-                        primary key ((pk1, pk2), ck1, ck2))
-                )");
-
-                auto schema = env.local_db().find_schema("ks", "vs");
+                auto schema = co_await create_test_table(env, "ks", "vs");
                 auto& vs = env.local_qp().vector_store_client();
 
-                vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(1000));
-                vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
-                vector_store_client_tester::set_http_request_retries(vs, 3);
-                vector_store_client_tester::set_dns_resolver(vs, [](auto const& host) -> future<std::optional<inet_address>> {
-                    BOOST_CHECK_EQUAL(host, "good.authority.here");
-                    co_return inet_address("127.0.0.1");
-                });
-
-                vs.start_background_tasks();
+                configure(vs, {{"good.authority.here", "127.0.0.1"}}).start_background_tasks();
 
                 auto as = abort_source();
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as);
@@ -384,32 +349,21 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
     cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
-                co_await env.execute_cql(R"(
-                    create table ks.vs (
-                        pk1 tinyint, pk2 tinyint,
-                        ck1 tinyint, ck2 tinyint,
-                        embedding vector<float, 3>,
-                        primary key ((pk1, pk2), ck1, ck2))
-                )");
-
-                auto schema = env.local_db().find_schema("ks", "vs");
+                auto schema = co_await create_test_table(env, "ks", "vs");
                 auto& vs = env.local_qp().vector_store_client();
 
-                vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(10));
-                vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
-                vector_store_client_tester::set_http_request_retries(vs, 3);
+                configure(vs);
                 vector_store_client_tester::set_dns_resolver(vs, [](auto const& host) -> future<std::optional<inet_address>> {
                     BOOST_CHECK_EQUAL(host, "good.authority.here");
                     co_await sleep(std::chrono::milliseconds(100));
                     co_return inet_address("127.0.0.1");
                 });
-
                 vs.start_background_tasks();
 
                 auto as = abort_source();
                 auto timeout = timer([&as]() {
-                        as.request_abort();
-                        });
+                    as.request_abort();
+                });
                 timeout.arm(std::chrono::milliseconds(10));
                 auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as);
                 BOOST_REQUIRE(!keys);
@@ -439,26 +393,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
     cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr.port()));
     co_await do_with_cql_env(
             [&ann_replies](cql_test_env& env) -> future<> {
-                co_await env.execute_cql(R"(
-                    create table ks.vs (
-                        pk1 tinyint, pk2 tinyint,
-                        ck1 tinyint, ck2 tinyint,
-                        embedding vector<float, 3>,
-                        primary key ((pk1, pk2), ck1, ck2))
-                )");
-
-                auto schema = env.local_db().find_schema("ks", "vs");
+                auto schema = co_await create_test_table(env, "ks", "idx");
                 auto& vs = env.local_qp().vector_store_client();
 
-                vector_store_client_tester::set_dns_refresh_interval(vs, std::chrono::milliseconds(1000));
-                vector_store_client_tester::set_wait_for_client_timeout(vs, std::chrono::milliseconds(100));
-                vector_store_client_tester::set_http_request_retries(vs, 3);
-                vector_store_client_tester::set_dns_resolver(vs, [](auto const& host) -> future<std::optional<inet_address>> {
-                    BOOST_CHECK_EQUAL(host, "good.authority.here");
-                    co_return inet_address("127.0.0.1");
-                });
-
-                vs.start_background_tasks();
+                configure(vs, {{"good.authority.here", "127.0.0.1"}}).start_background_tasks();
 
                 // set the wrong idx (wrong endpoint) - service should return 404
                 auto as = abort_source();
