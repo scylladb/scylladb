@@ -13,7 +13,10 @@
 
 #include "bytes_ostream.hh"
 #include "concrete_types.hh"
+#include "types/collection.hh"
+#include "types/listlike_partial_deserializing_iterator.hh"
 #include "types/types.hh"
+#include "utils/managed_bytes.hh"
 #include "utils/multiprecision_int.hh"
 
 logging::logger cblogger("comparable_bytes");
@@ -888,13 +891,13 @@ void decode_component(const abstract_type& type, managed_bytes_view& comparable_
 }
 
 // Encodes a single null element of a multi-component type into a byte-comparable format.
-[[maybe_unused]] static void encode_null_component(bytes_ostream& out) {
+static void encode_null_component(bytes_ostream& out) {
     // Write the NULL component marker
     write_native_int(out, NEXT_COMPONENT_NULL);
 }
 
 // Decodes a single null element of a multi-component type.
-[[maybe_unused]] static void decode_null_component(bytes_ostream& out) {
+static void decode_null_component(bytes_ostream& out) {
     // Write -1 as length for null value encoded as 4-byte big endian.
     static const auto null_length = [] {
         std::array<char, 4> arr{};
@@ -926,6 +929,38 @@ static stop_iteration decode_marker_and_component(const abstract_type& type, man
         // This should not happen unless the encoding scheme has changed
         throw_with_backtrace<marshal_exception>("decode_next_component - unexpected component marker in collection");
     }
+}
+
+// Encode a set or a list type into byte comparable format.
+// The collection is encoded as a sequence of components, each preceded by a header.
+// The component header is either NEXT_COMPONENT_NULL or NEXT_COMPONENT, depending on whether the element is null or not.
+// The collection is terminated with a TERMINATOR byte.
+static void encode_set_or_list_type(const listlike_collection_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    const auto& elements_type = *type.get_elements_type();
+    using llpdi = listlike_partial_deserializing_iterator;
+    for (auto it = llpdi::begin(serialized_bytes_view); it != llpdi::end(serialized_bytes_view); it++) {
+        // Read the serialized bytes from the collection value and write it in byte comparable format.
+        if ((*it).has_value()) {
+            encode_component(elements_type, (*it).value(), out);
+        } else {
+            encode_null_component(out);
+        }
+    }
+    write_native_int(out, TERMINATOR);
+}
+
+// Decode set or list type from byte comparable format.
+static void decode_set_or_list_type(const listlike_collection_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    const auto& elements_type = *type.get_elements_type();
+    // Create a place holder for the size of the collection.
+    // The size will be written later after decoding all the elements.
+    auto collection_size_ptr = reinterpret_cast<char*>(out.write_place_holder(sizeof(int32_t)));
+    int32_t collection_size = 0;
+    while (decode_marker_and_component<true>(elements_type, comparable_bytes_view, out) == stop_iteration::no) {
+        collection_size++;
+    }
+
+    write_be(collection_size_ptr, collection_size);
 }
 
 // to_comparable_bytes_visitor provides methods to
@@ -1002,6 +1037,11 @@ struct to_comparable_bytes_visitor {
 
     void operator()(const inet_addr_type_impl&) {
         escape_zeros(serialized_bytes_view, out);
+    }
+
+    // encode sets and lists
+    void operator()(const listlike_collection_type_impl& type) {
+        encode_set_or_list_type(type, serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -1102,6 +1142,11 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const inet_addr_type_impl&) {
         unescape_zeros(comparable_bytes_view, out);
+    }
+
+    // decode sets and lists
+    void operator()(const listlike_collection_type_impl& type) {
+        decode_set_or_list_type(type, comparable_bytes_view, out);
     }
 
     // TODO: Handle other types
