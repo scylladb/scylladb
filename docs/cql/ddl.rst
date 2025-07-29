@@ -119,9 +119,10 @@ name                 kind       mandatory   default   description
 ``tablets``          *map*      no                    Enables or disables tablets for the keyspace (see :ref:`tablets <tablets>`)
 =================== ========== =========== ========= ===================================================================
 
-The ``replication`` property is mandatory and must at least contains the ``'class'`` sub-option, which defines the
-replication strategy class to use. The rest of the sub-options depend on what replication
-strategy is used. By default, ScyllaDB supports the following ``'class'``:
+The ``replication`` property is mandatory. It contains the ``'class'`` sub-option, which defines the replication strategy class to use.
+If ``'class'`` is not specified, it defaults to ``'NetworkTopologyStrategy'``.
+The rest of the sub-options depend on what replication strategy is used.
+By default, ScyllaDB supports the following ``'class'``:
 
 .. _replication-strategy:
 
@@ -199,6 +200,14 @@ An example that excludes a datacenter while using ``replication_factor``::
 
     CREATE KEYSPACE excalibur
         WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor' : 3, 'DC2': 0} ;
+
+    DESCRIBE KEYSPACE excalibur
+        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3'} AND durable_writes = true;
+
+An example that excludes class and uses only datacenter options::
+
+    CREATE KEYSPACE excalibur
+        WITH replication = {'DC1': '3'} ;
 
     DESCRIBE KEYSPACE excalibur
         CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3'} AND durable_writes = true;
