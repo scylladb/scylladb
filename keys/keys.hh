@@ -150,7 +150,7 @@ class compound_wrapper {
 protected:
     managed_bytes _bytes;
 protected:
-    compound_wrapper(managed_bytes&& b) : _bytes(std::move(b)) {}
+    constexpr compound_wrapper(managed_bytes&& b) : _bytes(std::move(b)) {}
 
     static inline const auto& get_compound_type(const schema& s) {
         return TopLevel::get_compound_type(s);
@@ -174,8 +174,8 @@ public:
         return with_schema_wrapper(s, *static_cast<const TopLevel*>(this));
     }
 
-    static TopLevel make_empty() {
-        return from_exploded(std::vector<bytes>());
+    static constexpr TopLevel make_empty() {
+        return TopLevel::from_bytes(managed_bytes());
     }
 
     static TopLevel make_empty(const schema&) {
@@ -574,7 +574,7 @@ template <typename TopLevel, typename TopLevelView, typename FullTopLevel>
 class prefix_compound_wrapper : public compound_wrapper<TopLevel, TopLevelView> {
     using base = compound_wrapper<TopLevel, TopLevelView>;
 protected:
-    prefix_compound_wrapper(managed_bytes&& b) : base(std::move(b)) {}
+    constexpr prefix_compound_wrapper(managed_bytes&& b) : base(std::move(b)) {}
 public:
     using prefix_view_type = prefix_view_on_prefix_compound<TopLevel>;
 
@@ -844,7 +844,7 @@ public:
 };
 
 class clustering_key_prefix : public prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key> {
-    explicit clustering_key_prefix(managed_bytes&& b)
+    explicit constexpr clustering_key_prefix(managed_bytes&& b)
             : prefix_compound_wrapper<clustering_key_prefix, clustering_key_prefix_view, clustering_key>(std::move(b))
     { }
 public:
@@ -875,7 +875,7 @@ public:
     using compound = lw_shared_ptr<compound_type<allow_prefixes::yes>>;
 
     static clustering_key_prefix from_bytes(const managed_bytes& b) { return clustering_key_prefix(managed_bytes(b)); }
-    static clustering_key_prefix from_bytes(managed_bytes&& b) { return clustering_key_prefix(std::move(b)); }
+    static constexpr clustering_key_prefix from_bytes(managed_bytes&& b) { return clustering_key_prefix(std::move(b)); }
     static clustering_key_prefix from_bytes(managed_bytes_view b) { return clustering_key_prefix(managed_bytes(b)); }
     static clustering_key_prefix from_bytes(bytes_view b) {
         return clustering_key_prefix(managed_bytes(b));
