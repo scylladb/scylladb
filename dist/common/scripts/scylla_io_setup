@@ -18,6 +18,7 @@ import logging
 import sys
 import scylla_blocktune as blocktune
 
+logging.basicConfig(level = logging.INFO)
 
 # Regular expression helpers
 # non-advancing comment matcher
@@ -173,19 +174,62 @@ def run_iotune():
 
             configure_iotune_open_fd_limit(cpudata.nr_shards())
 
-            try:
-                subprocess.check_call([bindir() + "/iotune",
-                                       "--format", "envfile",
-                                       "--options-file", etcdir() + "/scylla.d/io.conf",
-                                       "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
-            except Exception as e:
-                logging.error(e)
-                logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
-                              "This is a non-supported setup, and performance is expected to be very bad.\n"
-                              "For better performance, placing your data on XFS-formatted directories is required.\n"
-                              "To override this error, enable developer mode as follow:\n"
-                              "sudo %s/scylla_dev_mode_setup --developer-mode 1", data_dirs, scriptsdir())
-                sys.exit(1)
+            io_properties_path = os.path.join(etcdir(), "scylla.d", "io_properties.yaml")
+            def exec_iotune(read_bufsize=None, write_bufsize=None, iops_only=False):
+                args = [
+                    bindir() + "/iotune",
+                    "--format", "envfile",
+                    "--options-file", os.path.join(etcdir(), "scylla.d", "io.conf"),
+                    "--properties-file", io_properties_path,
+                ]
+                if iops_only:
+                    args += ["--run-iops-only"]
+                if read_bufsize is not None:
+                    args += ["--random-read-io-buffer-size", str(read_bufsize)]
+                if write_bufsize is not None:
+                    args += ["--random-write-io-buffer-size", str(write_bufsize)]
+
+                try:
+                    subprocess.check_call(args + iotune_args)
+                except Exception as e:
+                    logging.error(e)
+                    logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
+                                    "This is a non-supported setup, and performance is expected to be very bad.\n"
+                                    "For better performance, placing your data on XFS-formatted directories is required.\n"
+                                    "To override this error, enable developer mode as follow:\n"
+                                    "sudo %s/scylla_dev_mode_setup --developer-mode 1", data_dirs, scriptsdir())
+                    sys.exit(1)
+
+            def extract_iops(iops_key):
+                with open(io_properties_path) as f:
+                    data = yaml.safe_load(f)
+                    return int(data['disks'][0].get(iops_key, 0))
+
+            buffer_sizes = [512, 1024, 2048, 4096]
+
+            best_read_iops = 0
+            best_read_buf = None
+            best_write_iops = 0
+            best_write_buf = None
+            logging.info("Running I/O tuning with different buffer sizes to find optimal read/write IOPS...")
+            for bufsize in buffer_sizes:
+                logging.info(f"Testing buffer size: {bufsize} bytes")
+                exec_iotune(read_bufsize=bufsize, write_bufsize=bufsize, iops_only=True)
+                read_iops = extract_iops('read_iops')
+                if read_iops > best_read_iops:
+                    best_read_iops = read_iops
+                    best_read_buf = bufsize
+                write_iops = extract_iops('write_iops')
+                if write_iops > best_write_iops:
+                    best_write_iops = write_iops
+                    best_write_buf = bufsize
+                logging.info(f"Buffer size {bufsize} bytes rendered: read_iops={read_iops}, write_iops={write_iops}")
+
+            logging.info(f"Achieved best IOPS: read_iops={best_read_iops} write_iops={best_write_iops}, with buffer sizes read={best_read_buf}, write={best_write_buf}")
+
+            # Final run with best read & write buffers
+            logging.info("Running final I/O tuning with best read/write buffer sizes...")
+            exec_iotune(read_bufsize=best_read_buf, write_bufsize=best_write_buf)
 
 if __name__ == "__main__":
     if not is_nonroot() and not is_container() and os.getuid() > 0:
