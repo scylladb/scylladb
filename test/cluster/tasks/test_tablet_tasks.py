@@ -426,7 +426,8 @@ async def test_tablet_resize_task(manager: ManagerClient):
         async def wait_and_check_status(server, type, keyspace, table):
             task = (await wait_tasks_created(tm, server, module_name, 1, type, keyspace, table))[0]
             status = await tm.get_task_status(server.ip_addr, task.task_id)
-            check_task_status(status, ["running"], type, "table", False, keyspace, table, [0, 1, 2])
+            # With incremental repair, we have doubled the tasks for repaired and unrepaired set
+            check_task_status(status, ["running"], type, "table", False, keyspace, table, [0, 1, 2, 3, 4])
 
         await wait_and_check_status(servers[0], "split", keyspace, table2)
         await wait_and_check_status(servers[0], "merge", keyspace, table1)
@@ -482,8 +483,10 @@ async def test_tablet_resize_list(manager: ManagerClient):
 
         status1 = await tm.get_task_status(servers[1].ip_addr, task0.task_id)
         status0 = await tm.get_task_status(servers[0].ip_addr, task0.task_id)
-        assert len(status0.children_ids) == 2
-        assert status0.children_ids == status1.children_ids
+        children_ids_len1 = len(status1.children_ids)
+        children_ids_len0 = len(status0.children_ids)
+        assert 0 < children_ids_len1 and children_ids_len1 <= children_ids_len0 and children_ids_len0 <= 4
+        assert all(child_id in status0.children_ids for child_id in status1.children_ids)
 
         await disable_injection(manager, servers, injection)
 
@@ -525,7 +528,8 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
 
         async def wait_for_task(task_id):
             status = await tm.wait_for_task(servers[0].ip_addr, task_id)
-            check_task_status(status, ["suspended"], "split", "table", False, keyspace, table1, [0, 1, 2])
+            # With incremental repair, we have doubled the tasks for repaired and unrepaired set
+            check_task_status(status, ["suspended"], "split", "table", False, keyspace, table1, [0, 1, 2, 3, 4])
 
         await asyncio.gather(revoke_resize(log, mark), wait_for_task(task0.task_id))
 
