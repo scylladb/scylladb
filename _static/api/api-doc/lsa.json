@@ -1,0 +1,29 @@
+{
+  "apiVersion":"0.0.1",
+  "swaggerVersion":"1.2",
+  "basePath":"{{Protocol}}://{{Host}}",
+  "resourcePath":"/lsa",
+  "produces":[
+    "application/json"
+  ],
+  "apis":[
+    {
+      "path":"/lsa/compact",
+      "operations":[
+        {
+          "method":"POST",
+          "summary":"Force compaction of all regions",
+          "type":"void",
+          "nickname":"lsa_compact",
+          "produces":[
+            "application/json"
+          ],
+          "parameters":[
+          ]
+        }
+      ]
+    }
+  ],
+  "models":{
+  }
+}
