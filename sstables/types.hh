@@ -311,7 +311,9 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     uint32_t sstable_level;
     // There is not meaningful value to put in this field, since we have no
     // incremental repair. Before we have it, let's set it to 0.
-    uint64_t repaired_at = 0;
+    // According to architecture/sstable/sstable3/sstables-3-statistics.rst,
+    // the repaired_at is a int64_t value.
+    int64_t repaired_at = 0;
     disk_array<uint32_t, disk_string<uint16_t>> min_column_names;
     disk_array<uint32_t, disk_string<uint16_t>> max_column_names;
     bool has_legacy_counter_shards;

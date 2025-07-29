@@ -25,8 +25,10 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
         uint64_t estimated_partitions,
         stream_reason reason,
         sstables::offstrategy offstrategy,
-        service::frozen_topology_guard frozen_guard) {
-    return [&db, &vb = vb.container(), estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard] (mutation_reader reader) -> future<> {
+        service::frozen_topology_guard frozen_guard,
+        std::optional<int64_t> repaired_at,
+        lw_shared_ptr<sstables::sstable_list> sstable_list_to_mark_as_repaired) {
+    return [&db, &vb = vb.container(), estimated_partitions, reason, offstrategy, origin = std::move(origin), frozen_guard, repaired_at, sstable_list_to_mark_as_repaired] (mutation_reader reader) -> future<> {
         std::exception_ptr ex;
         try {
             if (current_scheduling_group() != db.local().get_streaming_scheduling_group()) {
@@ -46,7 +48,8 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
             // means partition estimation shouldn't be adjusted.
             const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
             mutation_reader_consumer consumer =
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, origin = std::move(origin), offstrategy] (mutation_reader reader) {
+                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, origin = std::move(origin),
+                offstrategy, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
                     sst = use_view_update_path ? cf->make_streaming_staging_sstable() : cf->make_streaming_sstable_for_write();
@@ -61,13 +64,19 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                 return sst->write_components(std::move(reader), adjusted_estimated_partitions, s,
                                              cfg, encoding_stats{}).then([sst] {
                     return sst->open_data();
-                }).then([cf, sst, offstrategy, origin] {
+                }).then([cf, sst, offstrategy, origin, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] -> future<> {
+                    if (repaired_at && sstables::repair_origin == origin) {
+                        sst->being_repaired = frozen_guard;
+                        if (sstable_list_to_mark_as_repaired) {
+                            sstable_list_to_mark_as_repaired->insert(sst);
+                        }
+                    }
                     if (offstrategy && sstables::repair_origin == origin) {
                         sstables::sstlog.debug("Enabled automatic off-strategy trigger for table {}.{}",
                                 cf->schema()->ks_name(), cf->schema()->cf_name());
                         cf->enable_off_strategy_trigger();
                     }
-                    return cf->add_sstable_and_update_cache(sst, offstrategy);
+                    co_await cf->add_sstable_and_update_cache(sst, offstrategy);
                 }).then([cf, s, sst, use_view_update_path, &vb]() mutable -> future<> {
                     if (!use_view_update_path) {
                         return make_ready_future<>();
