@@ -235,7 +235,7 @@ sstring read_file(std::filesystem::path path) {
 std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view schema_str) {
     cql3::cql_stats cql_stats;
 
-    gms::feature_service feature_service(gms::feature_config_from_db_config(cfg));
+    gms::feature_service feature_service({get_disabled_features_from_db_config(cfg)});
     feature_service.enable(feature_service.supported_feature_set()).get();
     feature_service.views_with_tablets.enable();
 
@@ -468,7 +468,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     }
 
     auto user_type_storage = std::make_shared<single_keyspace_user_types_storage>(std::move(utm));
-    gms::feature_service features(gms::feature_config_from_db_config(dbcfg));
+    gms::feature_service features({get_disabled_features_from_db_config(dbcfg)});
     db::schema_ctxt ctxt(dbcfg, user_type_storage, features);
 
     if (empty(tables)) {
@@ -498,7 +498,7 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
 
     db::nop_large_data_handler large_data_handler;
     db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
-    gms::feature_service feature_service(gms::feature_config_from_db_config(dbcfg));
+    gms::feature_service feature_service({get_disabled_features_from_db_config(dbcfg)});
     cache_tracker tracker;
     sstables::directory_semaphore dir_sem(1);
     abort_source abort;

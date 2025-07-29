@@ -35,6 +35,7 @@ class bad_configuration_error : public std::exception {};
 [[nodiscard]] std::set<gms::inet_address> get_seeds_from_db_config(const db::config& cfg,
                                                                    gms::inet_address broadcast_address,
                                                                    bool fail_on_lookup_error);
+[[nodiscard]] std::set<sstring> get_disabled_features_from_db_config(const db::config& cfg, std::set<sstring> disabled = {});
 
 class service_set {
 public:

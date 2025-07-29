@@ -12,6 +12,7 @@
 #include <seastar/core/app-template.hh>
 #include <seastar/util/closeable.hh>
 
+#include "init.hh"
 #include "db/config.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "gms/feature_service.hh"
@@ -85,7 +86,8 @@ int main(int ac, char ** av) {
             compressor_tracker.start([] { return utils::walltime_compressor_tracker::config{}; }).get();
             auto stop_compressor_tracker = deferred_stop(compressor_tracker);
 
-            auto cfg = gms::feature_config_from_db_config(db::config(), {});
+            gms::feature_config cfg;
+            cfg.disabled_features = get_disabled_features_from_db_config(db::config());
             feature_service.start(cfg).get();
 
             gossip_address_map.start().get();

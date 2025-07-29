@@ -553,7 +553,8 @@ private:
 
             auto stop_configurables = defer_verbose_shutdown("configurables", [&] { notify_set.notify_all(configurable::system_state::stopped).get(); });
 
-            gms::feature_config fcfg = gms::feature_config_from_db_config(*cfg, cfg_in.disabled_features);
+            gms::feature_config fcfg;
+            fcfg.disabled_features = get_disabled_features_from_db_config(*cfg, cfg_in.disabled_features);
             _feature_service.start(fcfg).get();
             auto stop_feature_service = defer_verbose_shutdown("feature service", [this] { _feature_service.stop().get(); });
 
