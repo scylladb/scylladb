@@ -258,16 +258,16 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
 
 future<> service::stop() {
     _as.request_abort();
+
     // Only one of the shards has the listener registered, but let's try to
     // unregister on each one just to make sure.
-    return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
-        if (_permissions_cache) {
-            return _permissions_cache->stop();
-        }
-        return make_ready_future<>();
-    }).then([this] {
-        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
-    });
+    co_await _mnotifier.unregister_listener(_migration_listener.get());
+
+    if (_permissions_cache) {
+        co_await _permissions_cache->stop();
+    }
+
+    co_await when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
 }
 
 future<> service::ensure_superuser_is_created() {
