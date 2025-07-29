@@ -141,6 +141,11 @@ private:
         bool scheduling_groups_exhausted = false;
     };
 
+    struct auth_service_getter {
+        auth::service& service;
+        seastar::gate::holder _;
+    };
+
     std::unique_ptr<global_controller_data> _global_controller_db;
 
     static constexpr shard_id global_controller = 0;
@@ -154,7 +159,10 @@ private:
     std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
     service_level _default_service_level;
     service_level_distributed_data_accessor_ptr _sl_data_accessor;
+
+    // This should NOT be accessed directly. Use `get_auth_service()` instead!
     sharded<auth::service>& _auth_service;
+
     locator::shared_token_metadata& _token_metadata;
     std::chrono::time_point<seastar::lowres_clock> _last_successful_config_update;
     unsigned _logged_intervals;
@@ -419,6 +427,15 @@ private:
 
     future<std::vector<cql3::description>> describe_created_service_levels() const;
     future<std::vector<cql3::description>> describe_attached_service_levels();
+
+    /**
+     *  Getter for `_auth_service.local()`. It shouldn't be accessed any other way.
+     *
+     *  Returns `std::nullopt` if and only if `auth::service` is stopping or has already been stopped.
+     *
+     *  Precondition: `_auth_service` has been initialized and started.
+     */
+    future<std::optional<auth_service_getter>> get_auth_service();
 
 public:
 

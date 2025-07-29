@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "auth/service.hh"
 #include "cql3/util.hh"
 #include "utils/assert.hh"
 #include <chrono>
@@ -303,15 +304,29 @@ future<> service_level_controller::update_service_levels_cache(qos::query_contex
 
 future<> service_level_controller::update_effective_service_levels_cache() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
-    
+
+    // This is a place where it's okay to access `_auth_service` directly.
+    // We're not using the underlying `auth::service` here.
     if (!_auth_service.local_is_initialized()) {
         // Because cache update is triggered in `topology_state_load()`, auth service
         // might be not initialized yet.
         co_return;
     }
+
+    std::optional<auth_service_getter> maybe_auth_service = co_await get_auth_service();
+    if (!maybe_auth_service.has_value()) {
+        // Do not update the cache: `auth::service` has been stopped, which means that
+        // the node is stopping. There's no point in doing that, and we cannot access
+        // `auth::service` anyway.
+        sl_logger.info("Not updating effective service levels cache due to the node shutting down");
+        co_return;
+    }
+
+    auto& [auth_service, _] = *maybe_auth_service;
+
     auto units = co_await get_units(_global_controller_db->notifications_serializer, 1);
 
-    auto& role_manager = _auth_service.local().underlying_role_manager();
+    auto& role_manager = auth_service.underlying_role_manager();
     const auto all_roles = co_await role_manager.query_all();
     const auto hierarchy = co_await role_manager.query_all_directly_granted();
     // includes only roles with attached service level
@@ -391,7 +406,14 @@ future<std::optional<service_level_options>> service_level_controller::find_effe
             ? std::optional<service_level_options>(effective_sl_it->second)
             : std::nullopt;
     } else {
-        auto& role_manager = _auth_service.local().underlying_role_manager();
+        std::optional<auth_service_getter> maybe_auth_service = co_await get_auth_service();
+        if (!maybe_auth_service.has_value()) {
+            throw std::runtime_error("Scylla is stopping and cannot fetch the requested service level");
+        }
+
+        auto& [auth_service, _] = *maybe_auth_service;
+
+        auto& role_manager = auth_service.underlying_role_manager();
         auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
 
         // converts a list of roles into the chosen service level.
@@ -639,8 +661,15 @@ future<> service_level_controller::drop_distributed_service_level(sstring name, 
             throw nonexistant_service_level_exception(name);
         }
     }
+
+    std::optional<auth_service_getter> maybe_auth_service = co_await get_auth_service();
+    if (!maybe_auth_service.has_value()) {
+        throw std::runtime_error("Scylla is stopping and cannot drop the specified service level");
+    }
+
+    auto& [auth_service, _] = *maybe_auth_service;
     
-    auto& role_manager = _auth_service.local().underlying_role_manager();
+    auto& role_manager = auth_service.underlying_role_manager();
     auto attributes = co_await role_manager.query_attribute_for_all("service_level");
 
     co_await coroutine::parallel_for_each(attributes, [&role_manager, name, &mc] (auto&& attr) {
@@ -986,7 +1015,14 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
 }
 
 future<std::vector<cql3::description>> service_level_controller::describe_attached_service_levels() {
-    const auto attached_service_levels = co_await _auth_service.local().underlying_role_manager().query_attribute_for_all("service_level");
+    std::optional<auth_service_getter> maybe_auth_service = co_await get_auth_service();
+    if (!maybe_auth_service.has_value()) {
+        throw std::runtime_error("Scylla is stopping and cannot describe attached service levels");
+    }
+
+    auto& [auth_service, _] = *maybe_auth_service;
+
+    const auto attached_service_levels = co_await auth_service.underlying_role_manager().query_attribute_for_all("service_level");
 
     std::vector<cql3::description> result{};
     result.reserve(attached_service_levels.size());
@@ -1039,6 +1075,32 @@ get_service_level_distributed_data_accessor_for_current_version(
     } else {
         co_return static_pointer_cast<qos::service_level_controller::service_level_distributed_data_accessor>(
             make_shared<qos::standard_service_level_distributed_data_accessor>(sys_dist_ks));
+    }
+}
+
+future<std::optional<service_level_controller::auth_service_getter>> service_level_controller::get_auth_service() {
+    SCYLLA_ASSERT(_auth_service.local_is_initialized());
+    auto& auth_service = _auth_service.local();
+
+    try {
+        seastar::gate::holder pass = auth_service.get_access();
+
+        switch (auth_service.get_status()) {
+            case auth::service::status::inactive:
+                // Ignore the status and access it anyway.
+                // FIXME: scylladb/scylladb#25282.
+                [[fallthrough]];
+            case auth::service::status::working:
+                // The service is up and running, so we can access it without any problem.
+                co_return auth_service_getter{auth_service, std::move(pass)};
+            case auth::service::status::stopping:
+                on_internal_error(sl_logger,
+                        "We should not get here! As long as we have the gate holder above, "
+                        "`auth::service` should NOT be able to even initiate the stopping procedure");
+        }
+    } catch (const gate_closed_exception& e) {
+        sl_logger.debug("The access gate is closed: {}", e.what());
+        co_return std::nullopt;
     }
 }
 
