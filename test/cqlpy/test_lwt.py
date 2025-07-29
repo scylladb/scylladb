@@ -167,3 +167,45 @@ def test_lwt_not_in(cql, table1, cassandra_bug):
     rs = list(cql.execute(f'UPDATE {table1} SET r=NULL WHERE p={p} AND c=1 IF r NOT IN (NULL, 7, 8)'))
     for r in rs:
         assert r.applied == False
+
+# Currently in Cassandra and in Scylla (see discussion in #24229), the full
+# LWT "IF" syntax is allowed on UPDATE and DELETE, but only the IF NOT EXISTS
+# condition is allowed for INSERT. This test confirms that INSERT with
+# IF NOT EXISTS works correctly, in other words, it:
+# 1. Returns a response with a boolean "applied" attribute.
+# 2. Doesn't do anything (and returns applied=False) when the row already
+#    exists.
+def test_lwt_insert_if_not_exists(cql, table1):
+    p = unique_key_int()
+    # The row doesn't yet exist, IF NOT EXISTS will insert it.
+    rs = list(cql.execute(f'INSERT INTO {table1}(p, c, r) values ({p}, 1, 1) IF NOT EXISTS'))
+    assert len(rs) == 1
+    assert rs[0].applied
+    assert list(cql.execute(f'SELECT * FROM {table1} WHERE p={p}')) == [(p, 1, None, 1)]
+    # Try again to insert the same row with IF NOT EXISTS, it won't do it,
+    # and the row won't change:
+    rs = list(cql.execute(f'INSERT INTO {table1}(p, c, r) values ({p}, 1, 2) IF NOT EXISTS'))
+    assert len(rs) == 1
+    assert not rs[0].applied
+    assert list(cql.execute(f'SELECT * FROM {table1} WHERE p={p}')) == [(p, 1, None, 1)]
+
+# Similarly to the above test, INSERT JSON should also accept IF NOT EXISTS
+# and work as expected with it. Reproduces issue #8682.
+@pytest.mark.xfail(reason="issue #8682")
+def test_lwt_insert_json_if_not_exists(cql, table1):
+    p = unique_key_int()
+    # The row doesn't yet exist, IF NOT EXISTS will insert it.
+    rs = list(cql.execute("""INSERT INTO %s JSON '{"p": %s, "c": 1, "r": 1}' IF NOT EXISTS""" % (table1, p)))
+    # The following assert failed in #8682 (INSERT didn't return a response
+    # row).
+    assert len(rs) == 1
+    assert rs[0].applied
+    assert list(cql.execute(f'SELECT * FROM {table1} WHERE p={p}')) == [(p, 1, None, 1)]
+    # Try again to insert the same row with IF NOT EXISTS, it won't do it,
+    # and the row won't change:
+    rs = list(cql.execute("""INSERT INTO %s JSON '{"p": %s, "c": 1, "r": 2}' IF NOT EXISTS""" % (table1, p)))
+    assert len(rs) == 1
+    assert not rs[0].applied
+    # The following assert failed in #8682 (the INSERT was done despite the
+    # row existing).
+    assert list(cql.execute(f'SELECT * FROM {table1} WHERE p={p}')) == [(p, 1, None, 1)]
