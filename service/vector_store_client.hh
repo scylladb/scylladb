@@ -80,9 +80,7 @@ public:
     auto stop() -> future<>;
 
     /// Check if the vector_store_client is disabled.
-    auto is_disabled() const {
-        return !bool{_impl};
-    }
+    auto is_disabled() const -> bool;
 
     /// Get the current host name.
     [[nodiscard]] auto host() const -> std::expected<host_name, disabled>;
@@ -109,4 +107,3 @@ struct vector_store_client_tester {
 };
 
 } // namespace service
-
