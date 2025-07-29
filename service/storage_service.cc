@@ -4715,7 +4715,7 @@ future<> storage_service::do_drain() {
     _sl_controller.local().abort_group0_operations();
     co_await wait_for_group0_stop();
     if (_group0) {
-        co_await _group0->abort();
+        co_await _group0->abort_and_drain();
     }
 
     co_await tracing::tracing::tracing_instance().invoke_on_all(&tracing::tracing::shutdown);

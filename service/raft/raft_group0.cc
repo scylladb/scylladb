@@ -251,7 +251,8 @@ raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, 
     auto* cl = qp.proxy().get_db().local().schema_commitlog();
     auto config = raft::server::configuration {
         .on_background_error = [gid, this](std::exception_ptr e) {
-            _raft_gr.abort_server(gid, fmt::format("background error, {}", e));
+            // The future will be waited indirectly in raft_group0::abort_and_drain.
+            (void)_raft_gr.abort_server(gid, fmt::format("background error, {}", e));
             _status_for_monitoring = status_for_monitoring::aborted;
         }
     };
@@ -413,26 +414,51 @@ future<group0_info> persistent_discovery::run(
     }
 }
 
-future<> raft_group0::abort() {
-    if (_aborted) {
-        co_return;
+future<> raft_group0::abort_and_drain() {
+    if (!_aborted) {
+        // Async lambdas are destroyed at the first co_await,
+        // so accessing lambda-local state (like 'this') afterward would result
+        // in use-after-free. To avoid that, we delegate to a helper function,
+        // do_abort_and_drain().
+
+        _aborted = futurize_invoke([this]() { return do_abort_and_drain(); });
     }
-    _aborted = true;
-    group0_log.debug("Raft group0 service is aborting...");
+    return _aborted->get_future();
+}
 
-    co_await smp::invoke_on_all([this]() {
-        return uninit_rpc_verbs(_ms.local());
-    });
+future<> raft_group0::do_abort_and_drain() {
+    group0_log.debug("Aborting raft group0 service...");
 
-    _leadership_monitor_as.request_abort();
+    // abort_server() may already be running in the background if triggered by the 
+    // on_background_error callback. We wait for that to complete. This code 
+    // shouldn't normally throw, but we wrap it in try/catch just in case, to ensure 
+    // we still wait for the background abort.
 
-    co_await _shutdown_gate.close();
+    try {
+        co_await smp::invoke_on_all([this]() {
+            return uninit_rpc_verbs(_ms.local());
+        });
 
-    co_await std::move(_leadership_monitor);
+        _leadership_monitor_as.request_abort();
 
-    co_await stop_group0();
+        co_await _shutdown_gate.close();
 
-    group0_log.debug("Raft group0 service is aborted");
+        co_await std::move(_leadership_monitor);
+    } catch (...) {
+        rslog.warn("Failed to abort raft group0: {}", std::current_exception());
+    }
+
+    if (auto* group0_id = std::get_if<raft::group_id>(&_group0)) {
+        co_await _raft_gr.abort_server(*group0_id, "raft group0 is aborted");
+    }
+
+    group0_log.debug("Raft group0 service aborted");
+}
+
+void raft_group0::destroy() {
+    if (auto* group0_id = std::get_if<raft::group_id>(&_group0)) {
+        _raft_gr.destroy_server(*group0_id);
+    }
 }
 
 future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
@@ -863,12 +889,6 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
             upgrade_to_group0(ss, qp, mm, topology_change_enabled).get();
         });
     });
-}
-
-future<> raft_group0::stop_group0() {
-    if (auto* group0_id = std::get_if<raft::group_id>(&_group0)) {
-        co_await _raft_gr.stop_server(*group0_id, "raft group0 is stopped");
-    }
 }
 
 bool raft_group0::is_member(raft::server_id id, bool include_voters_only) {

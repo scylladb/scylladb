@@ -16,6 +16,7 @@
 #include "idl/raft.dist.hh"
 #include "utils/composite_abort_source.hh"
 #include "utils/error_injection.hh"
+#include "seastar/core/shared_future.hh"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
@@ -246,37 +247,15 @@ future<> raft_group_registry::uninit_rpc_verbs() {
     ).discard_result();
 }
 
-static void ensure_aborted(raft_server_for_group& server_for_group, sstring reason) {
-    if (!server_for_group.aborted) {
-        server_for_group.aborted = server_for_group.server->abort(std::move(reason))
-            .handle_exception([gid = server_for_group.gid] (std::exception_ptr ex) {
-                rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
-            });
-    }
-}
-
-future<> raft_group_registry::stop_server(raft::group_id gid, sstring reason) {
-    auto it = _servers.find(gid);
-
+void raft_group_registry::destroy_server(raft::group_id gid) {
+    const auto it = _servers.find(gid);
     if (it == _servers.end()) {
-        throw raft_group_not_found(gid);
+        on_internal_error(rslog, format("destroy_server(): no server for group {}", gid));
     }
-
-    auto srv = std::move(it->second);
+    if (!it->second.aborted || !it->second.aborted->available()) {
+        on_internal_error(rslog, format("destroy_server(): the server for group {} is not aborted", gid));
+    }
     _servers.erase(it);
-    ensure_aborted(srv, std::move(reason));
-    co_await std::move(*srv.aborted);
-}
-
-future<> raft_group_registry::stop_servers() noexcept {
-    gate g;
-    for (auto it = _servers.begin(); it != _servers.end(); it = _servers.erase(it)) {
-        ensure_aborted(it->second, "raft group registry is stopped");
-        auto aborted = std::move(it->second.aborted);
-        // discarded future is waited via g.close()
-        (void)std::move(aborted)->finally([rsfg = std::move(it->second), gh = g.hold()]{});
-    }
-    co_await g.close();
 }
 
 seastar::future<> raft_group_registry::start() {
@@ -297,13 +276,11 @@ const raft::server_id& raft_group_registry::get_my_raft_id() {
 }
 
 seastar::future<> raft_group_registry::stop() {
-    co_await drain_on_shutdown();
+    if (_servers.size() > 0) {
+        on_internal_error(rslog, format("stop(): server for group {} is not destroyed", _servers.begin()->first));
+    }
     co_await uninit_rpc_verbs();
     _direct_fd_subscription.reset();
-}
-
-seastar::future<> raft_group_registry::drain_on_shutdown() noexcept {
-    return stop_servers();
 }
 
 raft_server_for_group& raft_group_registry::server_for_group(raft::group_id gid) {
@@ -405,13 +382,21 @@ future<> raft_group_registry::start_server_for_group(raft_server_for_group new_g
     }
 }
 
-void raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
+future<> raft_group_registry::abort_server(raft::group_id gid, sstring reason) {
     // abort_server could be called from on_background_error for group0
     // when the server has not yet been added to _servers.
     // In this case we won't find gid in the if below.
     if (const auto it = _servers.find(gid); it != _servers.end()) {
-        ensure_aborted(it->second, std::move(reason));
+        auto& [gid, s] = *it;
+        if (!s.aborted) {
+            s.aborted = s.server->abort(std::move(reason))
+                .handle_exception([gid] (std::exception_ptr ex) {
+                    rslog.warn("Failed to abort raft group server {}: {}", gid, ex);
+                });
+        }
+        return s.aborted->get_future();
     }
+    return make_ready_future<>();
 }
 
 unsigned raft_group_registry::shard_for_group(const raft::group_id& gid) const {

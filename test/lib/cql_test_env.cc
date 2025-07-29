@@ -994,13 +994,6 @@ private:
             auto shutdown_db = defer_verbose_shutdown("database tables", [this] {
                 _db.invoke_on_all(&replica::database::shutdown).get();
             });
-            // XXX: drain_on_shutdown raft before stopping the database and
-            // query processor. Group registry stop raft groups
-            // when stopped, and until then the groups may use
-            // the database and the query processor.
-            auto drain_raft = defer_verbose_shutdown("raft group registry servers", [this] {
-                _group0_registry.invoke_on_all(&service::raft_group_registry::drain_on_shutdown).get();
-            });
 
             _view_update_generator.invoke_on_all(&db::view::view_update_generator::start).get();
 
@@ -1047,7 +1040,8 @@ private:
 
             group0_service.start().get();
             auto stop_group0_service = defer_verbose_shutdown("group 0 service", [&group0_service] {
-                group0_service.abort().get();
+                group0_service.abort_and_drain().get();
+                group0_service.destroy();
             });
 
             _ss.local().set_group0(group0_service);
