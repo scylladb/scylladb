@@ -23,6 +23,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "schema/schema_registry.hh"
+#include "utils/chunked_vector.hh"
 
 BOOST_AUTO_TEST_SUITE(repair_test)
 
@@ -93,7 +94,7 @@ repair_rows_on_wire make_random_repair_rows_on_wire(random_mutation_generator& g
         m->apply(mut);
         auto reader = mutation_fragment_v1_stream(m2->make_mutation_reader(s, permit));
         auto close_reader = deferred_close(reader);
-        std::list<frozen_mutation_fragment> mfs;
+        utils::chunked_vector<frozen_mutation_fragment> mfs;
         reader.consume_pausable([s, &mfs](mutation_fragment mf) {
             if ((mf.is_partition_start() && !mf.as_partition_start().partition_tombstone()) || mf.is_end_of_partition()) {
                 // Stream of mutations coming from the wire doesn't contain partition_end

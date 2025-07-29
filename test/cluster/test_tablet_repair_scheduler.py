@@ -8,11 +8,12 @@ from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, Host
 from test.cluster.conftest import skip_mode
-from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, get_tablet_task_id, load_tablet_repair_task_infos
+from test.pylib.repair import load_tablet_repair_time, create_table_insert_data_for_repair, create_table_insert_data_for_repair_multiple_rows, get_tablet_task_id, load_tablet_repair_task_infos
 from test.pylib.rest_client import inject_error_one_shot, read_barrier
 from test.cluster.util import create_new_test_keyspace
 
 from cassandra.cluster import Session as CassandraSession
+from cassandra.query import SimpleStatement, ConsistencyLevel
 
 import pytest
 import asyncio
@@ -336,3 +337,81 @@ async def test_tablet_repair_hosts_and_dcs_filter(manager: ManagerClient):
 
     row_num_after = [get_repair_row_from_disk(server) for server in servers]
     check_repairs(row_num_before, row_num_after, [0, 2])
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_multiple_rows(manager: ManagerClient):
+    cmdline = ["--hinted-handoff-enabled", "0"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair_multiple_rows(manager, cmdline=cmdline)
+    token = 'all'
+    nr_keys = 100
+    nr_cluster_keys = 100
+    rows = [(pk, ck, pk) for pk in range(nr_keys) for ck in range(nr_cluster_keys)]
+
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await asyncio.gather(
+        *[
+            cql.run_async(
+                f"INSERT INTO {ks}.test (pk, ck, data) VALUES ({pk}, {ck}, {pk});"
+            )
+            for pk in range(nr_keys)
+            for ck in range(nr_cluster_keys)
+        ]
+    )
+    await manager.server_start(servers[1].server_id)
+    await inject_error_on(manager, "row_level_repair_max_fragments_nr", servers, params={'value':'9'})
+    await inject_error_on(manager, "row_level_repair_max_fragments_size", servers, params={'value':'1000'})
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.server_stop_gracefully(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[2].server_id)
+
+    hosts = await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 60)
+    results = await cql.run_async(SimpleStatement(f"SELECT * from {ks}.test", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+    rows_query = [(r.pk, r.ck, r.data) for r in results]
+    assert sorted(rows) == sorted(rows_query)
+
+async def run_tablet_repair_multiple_rows_merge(manager: ManagerClient, inject_error_name: str, inject_value: str):
+    cmdline = ["--hinted-handoff-enabled", "0"]
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair_multiple_rows(manager, cmdline=cmdline)
+    token = 'all'
+    nr_keys = 100
+    nr_cluster_keys = 100
+    rows = [(pk, ck, 3) for pk in range(nr_keys) for ck in range(nr_cluster_keys)]
+
+    async def insert_rows(value, cl = ConsistencyLevel.ONE):
+        await asyncio.gather(*[
+            cql.run_async(
+                SimpleStatement(
+                    f"INSERT INTO {ks}.test (pk, ck, data) VALUES ({pk}, {ck}, {value});",
+                    consistency_level=cl
+                )
+            )
+            for pk in range(nr_keys) for ck in range(nr_cluster_keys)
+        ])
+
+    await insert_rows(1, ConsistencyLevel.THREE)
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await insert_rows(2, ConsistencyLevel.TWO)
+    await manager.server_stop_gracefully(servers[2].server_id)
+    await insert_rows(3, ConsistencyLevel.ONE)
+    await manager.server_start(servers[2].server_id)
+    await manager.server_start(servers[1].server_id)
+    await inject_error_on(manager, inject_error_name, servers, params={'value': inject_value})
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    await manager.server_stop_gracefully(servers[0].server_id)
+    await manager.server_stop_gracefully(servers[2].server_id)
+
+    hosts = await wait_for_cql_and_get_hosts(cql, [servers[1]], time.time() + 60)
+    results = await cql.run_async(SimpleStatement(f"SELECT * from {ks}.test", consistency_level=ConsistencyLevel.ONE), host=hosts[0])
+    rows_query = [(r.pk, r.ck, r.data) for r in results]
+    assert sorted(rows) == sorted(rows_query)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_multiple_rows_merge_fragments_nr(manager: ManagerClient):
+    await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_nr", "10")
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablet_repair_multiple_rows_merge_fragments_size(manager: ManagerClient):
+    await run_tablet_repair_multiple_rows_merge(manager, "row_level_repair_max_fragments_size", "1000")

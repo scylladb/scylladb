@@ -63,6 +63,7 @@
 #include "repair/reader.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/xx_hasher.hh"
+#include "utils/error_injection.hh"
 
 extern logging::logger rlogger;
 
@@ -638,10 +639,17 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
         for (auto it = rows.begin(); it != rows.end(); it = rows.erase(it)) {
             auto x = std::move(*it);
 
-            dht::decorated_key dk = dht::decorate_key(*s, x.get_key());
-            if (!(dk_ptr && dk_ptr->dk.equal(*s, dk))) {
-                dk_ptr = make_lw_shared<const decorated_key_with_hash>(*s, dk, seed);
+            if (dk_ptr && x.use_last_partition_key()) {
+                // Use previous partition key when an empty partition is received
+            } else {
+                dht::decorated_key dk = dht::decorate_key(*s, x.get_key());
+                if (!(dk_ptr && dk_ptr->dk.equal(*s, dk))) {
+                    dk_ptr = make_lw_shared<const decorated_key_with_hash>(*s, dk, seed);
+                    // Reset last_mf only when new partition is seen
+                    last_mf = {};
+                }
             }
+
             auto& mutation_fragments = x.get_mutation_fragments();
             if (is_master) {
                 for (auto fmfit = mutation_fragments.begin(); fmfit != mutation_fragments.end(); fmfit = mutation_fragments.erase(fmfit)) {
@@ -660,7 +668,6 @@ future<std::list<repair_row>> to_repair_rows_list(repair_rows_on_wire rows, sche
                     co_await coroutine::maybe_yield();
                 }
             } else {
-                last_mf = {};
                 for (auto fmfit = mutation_fragments.begin(); fmfit != mutation_fragments.end(); fmfit = mutation_fragments.erase(fmfit)) {
                     auto fmf = std::move(*fmfit);
 
@@ -1442,30 +1449,70 @@ private:
         co_await do_apply_rows(std::move(row_diff), update_working_row_buf::no);
     }
 
+    struct fragments_limiter {
+        sstring ks;
+        sstring cf;
+        size_t max_fragments_size;
+        size_t max_fragments_nr;
+        size_t fragments_size = 0;
+        size_t fragments_nr = 0;
+        // Max fragments size and number are allowed in a single repair_row_on_wire
+        // which is sent as a rpc stream message
+        static constexpr size_t _max_fragments_size = 240 * 1024;
+        static constexpr size_t _max_fragments_nr = 32 * 1024;
+        fragments_limiter(sstring keyspace, sstring table)
+            : ks(keyspace)
+            , cf(table) {
+            max_fragments_size = _max_fragments_size;
+            max_fragments_nr = _max_fragments_nr;
+            auto inject_max_fragments_size = utils::get_local_injector().inject_parameter<uint32_t>("row_level_repair_max_fragments_size");
+            if (inject_max_fragments_size) {
+                max_fragments_size = *inject_max_fragments_size;
+                rlogger.info("Set inject_max_fragments_size {} for table={}.{}", max_fragments_size, ks, cf);
+            }
+            auto inject_max_fragments_nr = utils::get_local_injector().inject_parameter<uint32_t>("row_level_repair_max_fragments_nr");
+            if (inject_max_fragments_nr) {
+                max_fragments_nr = *inject_max_fragments_nr;
+                rlogger.info("Set inject_max_fragments_nr {} for table={}.{}", max_fragments_nr, ks, cf);
+            }
+        }
+        void reset(size_t size) {
+            fragments_size = size;
+            fragments_nr = 1;
+        };
+        void add(size_t size) {
+            fragments_size += size;
+            ++fragments_nr;
+        }
+        bool no_split(size_t size) {
+            return (fragments_size + size) < max_fragments_size && (fragments_nr + 1) < max_fragments_nr;
+        }
+    };
+
     future<repair_rows_on_wire> to_repair_rows_on_wire(std::list<repair_row> row_list) {
         lw_shared_ptr<const decorated_key_with_hash> last_dk_with_hash;
         repair_rows_on_wire rows;
         size_t row_bytes = co_await get_repair_rows_size(row_list);
         _metrics.tx_row_nr += row_list.size();
         _metrics.tx_row_bytes += row_bytes;
+        fragments_limiter limiter(_schema->ks_name(), _schema->cf_name());
+        auto msg_split_feature = bool(_db.local().features().repair_msg_split);
         while (!row_list.empty()) {
             repair_row r = std::move(row_list.front());
             row_list.pop_front();
             const auto& dk_with_hash = r.get_dk_with_hash();
-            // No need to search from the beginning of the rows. Look at the end of repair_rows_on_wire is enough.
-            if (rows.empty()) {
-                auto pk = dk_with_hash->dk.key();
-                last_dk_with_hash = dk_with_hash;
-                rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
+            auto mf = std::move(r.get_frozen_mutation());
+            const auto size = mf.representation().size();
+            bool same_pk = !rows.empty() && last_dk_with_hash && dk_with_hash->dk.tri_compare(*_schema, last_dk_with_hash->dk) == 0;
+
+            if (same_pk && (!msg_split_feature || limiter.no_split(size))) {
+                limiter.add(size);
+                rows.back().push_mutation_fragment(std::move(mf));
             } else {
-                auto& row = rows.back();
-                if (last_dk_with_hash && dk_with_hash->dk.tri_compare(*_schema, last_dk_with_hash->dk) == 0) {
-                    row.push_mutation_fragment(std::move(r.get_frozen_mutation()));
-                } else {
-                    auto pk = dk_with_hash->dk.key();
-                    last_dk_with_hash = dk_with_hash;
-                    rows.push_back(repair_row_on_wire(std::move(pk), {std::move(r.get_frozen_mutation())}));
-                }
+                last_dk_with_hash = dk_with_hash;
+                limiter.reset(size);
+                auto r = same_pk && msg_split_feature ? repair_row_on_wire({std::move(mf)}) : repair_row_on_wire(dk_with_hash->dk.key(), {std::move(mf)});
+                rows.push_back(std::move(r));
             }
             co_await coroutine::maybe_yield();
         }
