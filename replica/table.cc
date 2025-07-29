@@ -1369,12 +1369,7 @@ future<>
 table::add_sstables_and_update_cache(const std::vector<sstables::shared_sstable>& ssts) {
     constexpr bool do_not_trigger_compaction = false;
     for (auto& sst : ssts) {
-        try {
-            co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no, do_not_trigger_compaction);
-        } catch (...) {
-            tlogger.error("Failed to load SSTable {}: {}", sst->toc_filename(), std::current_exception());
-            throw;
-        }
+        co_await do_add_sstable_and_update_cache(sst, sstables::offstrategy::no, do_not_trigger_compaction);
     }
     trigger_compaction();
 }
