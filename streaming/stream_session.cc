@@ -264,13 +264,14 @@ void stream_manager::init_messaging_service_handler(abort_source& as) {
                     make_generating_reader_v1(s, permit, std::move(get_next_mutation_fragment)),
                     make_streaming_consumer(estimated_partitions, reason, topo_guard),
                     std::move(op)
-                ).then_wrapped(std::ref(result_handling)).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) {
+                ).then_wrapped(std::ref(result_handling)).handle_exception([s, plan_id, from, sink] (std::exception_ptr ep) mutable -> future<> {
                     auto level = seastar::log_level::error;
                     if (try_catch<seastar::rpc::closed_error>(ep)) {
                         level = seastar::log_level::debug;
                     }
                     sslog.log(level, "[Stream #{}] Failed to handle STREAM_MUTATION_FRAGMENTS (respond phase) for ks={}, cf={}, peer={}: {}",
                             plan_id, s->ks_name(), s->cf_name(), from, ep);
+                    co_await sink.close();
                 });
             });
           } catch (...) {
