@@ -237,7 +237,7 @@ private:
     template<typename TaskType, typename... Args>
     requires std::derived_from<TaskType, compaction_task_executor> &&
             std::derived_from<TaskType, compaction_task_impl>
-    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(tasks::task_info info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
+    future<compaction_manager::compaction_stats_opt> perform_task_on_all_files(sstring reason, tasks::task_info info, table_state& t, sstables::compaction_type_options options, owned_ranges_ptr owned_ranges_ptr, get_candidates_func get_func, Args... args);
 
     future<compaction_stats_opt> rewrite_sstables(compaction::table_state& t, sstables::compaction_type_options options, owned_ranges_ptr, get_candidates_func, tasks::task_info info,
                                                   can_purge_tombstones can_purge = can_purge_tombstones::yes, sstring options_desc = "");
@@ -386,10 +386,10 @@ public:
 
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
-    future<compaction_reenabler> stop_and_disable_compaction(compaction::table_state& t);
+    future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::table_state& t);
 
     // Run a function with compaction temporarily disabled for a table T.
-    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func);
+    future<> run_with_compaction_disabled(compaction::table_state& t, std::function<future<> ()> func, sstring reason = "custom operation");
 
     void plug_system_keyspace(db::system_keyspace& sys_ks) noexcept;
     future<> unplug_system_keyspace() noexcept;
