@@ -48,18 +48,9 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
             }
             e = {};
             co_return co_await http.make_request(req, handler, std::nullopt, as);
-        } catch (const aws::aws_exception& ex) {
-            e = std::current_exception();
-            request_ex = ex;
-        } catch (const std::system_error& ex) {
-            e = std::current_exception();
-            request_ex = aws_exception(aws_error::from_system_error(ex));
-        } catch (const std::exception& ex) {
-            e = std::current_exception();
-            request_ex = aws_exception(aws_error::from_maybe_nested_exception(ex));
         } catch (...) {
             e = std::current_exception();
-            request_ex = aws_exception(aws_error{aws_error_type::UNKNOWN, format("{}", e), retryable::no});
+            request_ex = aws_exception(aws_error::from_exception_ptr(e));
         }
 
         if (!co_await _retry_strategy.should_retry(request_ex.error(), retries)) {
