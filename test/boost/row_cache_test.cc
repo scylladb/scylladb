@@ -5348,4 +5348,88 @@ SEASTAR_TEST_CASE(test_populating_reader_tombstone_gc_with_data_in_memtable) {
     });
 }
 
+SEASTAR_TEST_CASE(test_cache_tombstone_gc_memtable_overlap_check_elision) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        const auto table_name = "tbl";
+
+        // Can use tablets and RF=1 after #21623 is fixed.
+        env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int, ck int, v int, PRIMARY KEY (pk, ck))"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}", keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        const auto dks = get_local_int32_dks(tbl, 2);
+        const auto pk_value = dks.front().value;
+        const auto dk = dks.front().dk;
+
+        // Write dead row
+        env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = {} AND ck = 1", keyspace_name, table_name, pk_value)).get();
+
+        // Flush it to disk
+        replica::database::flush_table_on_all_shards(env.db(), schema->id()).get();
+
+        const auto regular_query = seastar::format("SELECT * FROM {}.{} WHERE pk = {}", keyspace_name, table_name, pk_value);
+        const auto fragments_query = seastar::format("SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE pk = {} AND mutation_source = 'row-cache' AND partition_region = 2 AND ck = 1 ",
+                keyspace_name, table_name, pk_value);
+
+        // Populate this dead row in the cache
+        assert_that(env.execute_cql(regular_query).get())
+            .is_rows()
+            .is_empty();
+        // Check it is actually there
+        assert_that(env.execute_cql(fragments_query).get())
+            .is_rows()
+            .with_size(1)
+            .with_columns_of_row(0)
+            .with_typed_column<sstring>("metadata", [] (const sstring& v) {
+                testlog.info("mutation fragments metadata: {}", v);
+                auto metadata = rjson::parse(v);
+                return metadata.IsObject() && metadata.HasMember("tombstone");
+            });
+
+        // We add a repair which ... happened in the future. Allows us to avoid sleeps.
+        // After this the dead row becomes eligible for GC.
+        repair_table(env, schema->id(), gc_clock::now() + std::chrono::seconds(10));
+
+        check_tombstone_is_gc_candidate(env, schema, dk, fmt::to_string(pk_value), "row-cache", partition_region::clustered);
+
+        // We need to flush the memtable *after* the repair, so the new memtable
+        // has an expiry treshold which includes it. For this we need to write
+        // something into the memtable first, Scylla will refuse to flush it if empty.
+        env.execute_cql(seastar::format("INSERT INTO {}.{} (pk, ck, v) VALUES ({}, 1, 1)", keyspace_name, table_name, dks.back().value)).get();
+        replica::database::flush_table_on_all_shards(env.db(), schema->id()).get();
+
+        // Write live row into the new memtable, with old timestamp.
+        // Normally this should block the GC of the tombstone in cache, but the
+        // check should be elided because of the memtable's expiry treshold.
+        const auto& v_def = *schema->get_column_definition(to_bytes("v"));
+        const auto ck = clustering_key::from_exploded(*schema, { int32_type->decompose(99) });
+        const auto past_ts = api::timestamp_type(100);
+
+        mutation m(schema, dk);
+        m.set_clustered_cell(ck, v_def, atomic_cell::make_live(*v_def.type, past_ts, int32_type->decompose(0)));
+        db.apply(schema, freeze(m), {}, db::commitlog_force_sync::no, db::no_timeout).get();
+
+        // Should GC the dead row, even though memtable has overlapping row, as far as timestamps are concerned.
+        assert_that(env.execute_cql(regular_query).get())
+            .is_rows()
+            .with_size(1)
+            .with_columns_of_row(0)
+            .with_typed_column<int32_t>("pk", pk_value)
+            .with_typed_column<int32_t>("ck", 99)
+            .with_typed_column<int32_t>("v", 0);
+        // Check no fragments in cache for the dead row after GC
+        assert_that(env.execute_cql(fragments_query).get())
+            .is_rows()
+            .is_empty();
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
