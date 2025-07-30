@@ -586,7 +586,7 @@ private:
     // Check whether the topology version from the token is greater than or equal to 
     // the current fencing_version obtained from shared_token_metadata. 
     // If it is lower, the function returns a non-empty optional.
-    std::optional<replica::stale_topology_exception> apply_fence(fencing_token token,
+    std::optional<replica::stale_topology_exception> check_fence(fencing_token token,
         locator::host_id caller_address) const noexcept;
     // Do the same when the future is resolved without exception.
     template <typename T>
