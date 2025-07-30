@@ -41,10 +41,24 @@ seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_pt
     }
     co_return should_retry;
 }
-seastar::future<seastar::input_stream<char>> default_aws_retry_strategy::analyze_reply(std::optional<seastar::http::reply::status_type>,
-                                                                                       const seastar::http::reply&,
+seastar::future<seastar::input_stream<char>> default_aws_retry_strategy::analyze_reply(std::optional<seastar::http::reply::status_type> expected,
+                                                                                       const seastar::http::reply& rep,
                                                                                        seastar::input_stream<char>&& in) const {
-    co_return std::move(in);
+    auto _in = std::move(in);
+    auto status_class = seastar::http::reply::classify_status(rep._status);
+
+    if (status_class != seastar::http::reply::status_class::informational && status_class != seastar::http::reply::status_class::success) {
+        std::optional<aws_error> possible_error = aws_error::parse(co_await seastar::util::read_entire_stream_contiguous(_in));
+        if (possible_error) {
+            throw aws_exception(std::move(possible_error.value()));
+        }
+        throw aws_exception(aws_error::from_http_code(rep._status));
+    }
+
+    if (expected.has_value() && rep._status != *expected) {
+        throw seastar::httpd::unexpected_status_error(rep._status);
+    }
+    co_return std::move(_in);
 }
 
 } // namespace aws
