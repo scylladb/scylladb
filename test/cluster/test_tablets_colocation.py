@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
-from test.pylib.util import wait_for
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 import time
@@ -419,6 +419,8 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
 
         # Start node 2 back up
         await manager.server_start(servers[1].server_id)
+        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        await manager.servers_see_each_other(servers)
 
         # At this point, node 2 is missing pk=2
         # Verify that pk=2 is missing on node 2 before repair
