@@ -681,15 +681,32 @@ query_processor::prepare(sstring query_string, service::query_state& query_state
 
 future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
-    using namespace cql_transport::messages;
-    return prepare_one<result_message::prepared::cql>(
-            std::move(query_string),
-            client_state,
-            d,
-            [d] (std::string_view query_string, std::string_view keyspace) {
-                return compute_id(query_string, keyspace, d);
-            },
-            prepared_cache_key_type::cql_id);
+    try {
+        auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
+        auto prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
+                auto prepared = get_statement(query_string, client_state, d);
+                prepared->calculate_metadata_id();
+                auto bound_terms = prepared->statement->get_bound_terms();
+                if (bound_terms > std::numeric_limits<uint16_t>::max()) {
+                    throw exceptions::invalid_request_exception(
+                            format("Too many markers(?). {:d} markers exceed the allowed maximum of {:d}",
+                                bound_terms,
+                                std::numeric_limits<uint16_t>::max()));
+                }
+                SCYLLA_ASSERT(bound_terms == prepared->bound_names.size());
+                return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
+            });
+
+        const auto& warnings = prep_ptr->warnings;
+        const auto msg = ::make_shared<result_message::prepared::cql>(prepared_cache_key_type::cql_id(key), std::move(prep_ptr),
+                    client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
+        for (const auto& w : warnings) {
+            msg->add_warning(w);
+        }
+        co_return ::shared_ptr<cql_transport::messages::result_message::prepared>(std::move(msg));
+    } catch(typename prepared_statements_cache::statement_is_too_big&) {
+        throw prepared_statement_is_too_big(query_string);
+    }
 }
 
 static std::string hash_target(std::string_view query_string, std::string_view keyspace) {
