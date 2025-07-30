@@ -4947,56 +4947,68 @@ mutation create_mutation_with_rows(const schema& schema, const dht::decorated_ke
 
 using apply_delete_fn = std::function<void(mutation&, const clustering_key&, const column_definition&, tombstone)>;
 
+void repair_table(cql_test_env& env, table_id tid, gc_clock::time_point repair_time) {
+    const auto repair_range = dht::token_range::make(dht::first_token(), dht::last_token());
+    env.db().invoke_on_all([&] (replica::database& db) {
+        auto& tbl = db.find_column_family(tid);
+        tbl.get_compaction_manager().get_tombstone_gc_state().update_repair_time(tbl.schema()->id(), repair_range, repair_time);
+    }).get();
+}
+
+void check_tombstone_is_gc_candidate(cql_test_env& env, table_id tid, const dht::decorated_key& dk, tombstone tomb) {
+    env.db().invoke_on_all([&] (replica::database& db) {
+        auto s = db.find_column_family(tid).schema();
+        const auto gc_state = db.get_compaction_manager().get_tombstone_gc_state();
+        const auto gc_before = gc_state.get_gc_before_for_key(s, dk, gc_clock::now());
+        BOOST_REQUIRE_LE(tomb.deletion_time.time_since_epoch().count(), gc_before.time_since_epoch().count());
+    }).get();
+}
+
 void run_cache_tombstone_gc_overlap_checks_scenario(
         cql_test_env& env,
-        std::function<void(cql_test_env&, replica::table&, api::timestamp_type, tombstone, apply_delete_fn)> scenario,
+        std::function<void(cql_test_env&, replica::table&, std::vector<decorated_key_with_value>, api::timestamp_type, tombstone, apply_delete_fn)> scenario,
         std::string_view scenario_name,
         apply_delete_fn apply_delete) {
     testlog.info("Running scenario {}", scenario_name);
 
-    const auto table_name = scenario_name;
+    const auto keyspace_name = scenario_name;
+    const auto table_name = "tbl";
 
-    env.execute_cql(std::format("CREATE TABLE ks.{} (pk int, ck1 int, ck2 int, v text, PRIMARY KEY (pk, ck1, ck2))"
+    // Can use tablets and RF=1 after #21623 is fixed.
+    env.execute_cql(std::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+    env.execute_cql(std::format("CREATE TABLE {}.{} (pk int, ck1 int, ck2 int, v text, PRIMARY KEY (pk, ck1, ck2))"
             " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
-            " AND tombstone_gc = {{'mode': 'immediate', 'propagation_delay_in_seconds': 0}}", table_name)).get();
+            " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}", keyspace_name, table_name)).get();
 
     replica::database& db = env.local_db();
 
-    auto& tbl = db.find_column_family("ks", table_name);
+    auto& tbl = db.find_column_family(keyspace_name, table_name);
     const auto schema = tbl.schema();
 
-    BOOST_REQUIRE(tbl.uses_tablets());
+    BOOST_REQUIRE(!tbl.uses_tablets());
 
-    const auto& tablet_map = db.get_token_metadata().tablets().get_tablet_map(schema->id());
-    BOOST_REQUIRE_EQUAL(tablet_map.tablet_count(), 1);
+    const auto dks = get_local_int32_dks(tbl, 2);
 
-    const auto replica_shard = tablet_map.tablets().front().replicas.front().shard;
+    const api::timestamp_type live_timestamp = 100;
+    const api::timestamp_type dead_timestamp = live_timestamp + 100;
 
-    smp::submit_to(replica_shard, [&env, scenario, table_name, apply_delete] {
-        return async([&] {
-            replica::database& db = env.local_db();
-            auto& tbl = db.find_column_family("ks", table_name);
+    const auto deletion_time = gc_clock::now() - std::chrono::seconds(10);
+    const auto tomb = tombstone(dead_timestamp, deletion_time);
 
-            const api::timestamp_type live_timestamp = 100;
-            const api::timestamp_type dead_timestamp = live_timestamp + 100;
-
-            const auto deletion_time = gc_clock::now() - std::chrono::seconds(10);
-            const auto tomb = tombstone(dead_timestamp, deletion_time);
-
-            scenario(env, tbl, live_timestamp, tomb, apply_delete);
-        });
-    }).get();
+    scenario(env, tbl, dks, live_timestamp, tomb, apply_delete);
 }
 
 void test_cache_tombstone_gc_overlap_checks_single_row_scenario(cql_test_env& env, replica::table& tbl,
-        api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
+        std::vector<decorated_key_with_value> dks, api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
     replica::database& db = env.local_db();
 
     const auto schema = tbl.schema();
     const auto& v_def = *schema->get_column_definition(to_bytes("v"));
+    const auto keyspace_name = schema->ks_name();
     const auto table_name = schema->cf_name();
 
-    auto dks = get_local_int32_dks(tbl, 1);
     const auto& [dk, pk] = dks.front();
 
     auto ck = clustering_key::from_exploded(*schema, { int32_type->decompose(100), int32_type->decompose(0) });
@@ -5006,27 +5018,31 @@ void test_cache_tombstone_gc_overlap_checks_single_row_scenario(cql_test_env& en
 
     db.apply(schema, freeze(dead_row_mut), {}, db::commitlog_force_sync::no, db::no_timeout).get();
 
-    db.flush("ks", table_name).get();
+    db.flush(keyspace_name, table_name).get();
+
+    repair_table(env, schema->id(), gc_clock::now() + std::chrono::seconds(1));
+
+    check_tombstone_is_gc_candidate(env, schema->id(), dk, tomb);
 
     auto live_row_mut = create_mutation_with_rows(*schema, dk, 100, 1, "value", live_timestamp);
 
     db.apply(schema, freeze(live_row_mut), {}, db::commitlog_force_sync::no, db::no_timeout).get();
 
-    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk)).get()).is_rows().is_empty();
-    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk)).get()).is_rows().is_empty();
+    assert_that(env.execute_cql(format("SELECT * FROM {}.{} WHERE pk = {}", keyspace_name, table_name, pk)).get()).is_rows().is_empty();
+    assert_that(env.execute_cql(format("SELECT * FROM {}.{} WHERE pk = {}", keyspace_name, table_name, pk)).get()).is_rows().is_empty();
 }
 
 template <typename MemtableFlushPolicy>
 void test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario(cql_test_env& env, replica::table& tbl,
-        api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
+        std::vector<decorated_key_with_value> dks, api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
     replica::database& db = env.local_db();
 
     const auto schema = tbl.schema();
     const auto& v_def = *schema->get_column_definition(to_bytes("v"));
 
+    const auto keyspace_name = schema->ks_name();
     const auto table_name = schema->cf_name();
 
-    auto dks = get_local_int32_dks(tbl, 1);
     const auto& [dk, pk] = dks.front();
 
     auto pr = dht::partition_range::make_singular(dk);
@@ -5042,7 +5058,11 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario(c
     auto mut_v2 = create_mutation_with_rows(*schema, dk, ck1, 30, sstring(1024, '2'), live_timestamp);
 
     db.apply({ freeze(dead_row_mut), freeze(mut_v1) }, db::no_timeout).get();
-    db.flush("ks", table_name).get();
+    db.flush(keyspace_name, table_name).get();
+
+    repair_table(env, schema->id(), gc_clock::now() + std::chrono::seconds(1));
+
+    check_tombstone_is_gc_candidate(env, schema->id(), dk, tomb);
 
     db.apply({ freeze(mut_v2) }, db::no_timeout).get();
 
@@ -5056,10 +5076,10 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario(c
 
     reader2.fill_buffer().get();
 
-    MemtableFlushPolicy flush_policy(db, table_name);
+    MemtableFlushPolicy flush_policy(db, keyspace_name, table_name);
 
     // read 3
-    auto res = env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk)).get();
+    auto res = env.execute_cql(format("SELECT * FROM {}.{} WHERE pk = {}", keyspace_name, table_name, pk)).get();
 
     mutation expected_result(schema, dk);
     expected_result.apply(mut_v2);
@@ -5081,15 +5101,15 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_singular_reads_scenario(c
 
 template <typename MemtableFlushPolicy>
 void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(cql_test_env& env, replica::table& tbl,
-        api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
+        std::vector<decorated_key_with_value> dks, api::timestamp_type live_timestamp, tombstone tomb, apply_delete_fn apply_delete) {
     replica::database& db = env.local_db();
 
     const auto schema = tbl.schema();
     const auto& v_def = *schema->get_column_definition(to_bytes("v"));
 
+    const auto keyspace_name = schema->ks_name();
     const auto table_name = schema->cf_name();
 
-    auto dks = get_local_int32_dks(tbl, 2);
     const auto& [dk1, pk1] = dks[0];
     const auto& [dk2, pk2] = dks[1];
 
@@ -5108,15 +5128,19 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(c
 
     // Get the first version of partitions + deleted row to the disk.
     db.apply({ freeze(mut1_v1), freeze(mut2_dead_row), freeze(mut2_v1) }, db::no_timeout).get();
-    db.flush("ks", table_name).get();
+    db.flush(keyspace_name, table_name).get();
+
+    repair_table(env, schema->id(), gc_clock::now() + std::chrono::seconds(1));
+
+    check_tombstone_is_gc_candidate(env, schema->id(), dk2, tomb);
 
     db.apply({ freeze(mut1_v2), freeze(mut2_v2) }, db::no_timeout).get();
 
     // Make sure both partitions are in the cache
     testlog.info("pre-populate partition {}", pk1);
-    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", table_name, pk1, ck1, 0)).get()).is_rows();
+    assert_that(env.execute_cql(format("SELECT * FROM {}.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", keyspace_name, table_name, pk1, ck1, 0)).get()).is_rows();
     testlog.info("pre-populate partition {}", pk2);
-    assert_that(env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", table_name, pk2, ck1, 0)).get()).is_rows();
+    assert_that(env.execute_cql(format("SELECT * FROM {}.{} WHERE pk = {} AND ck1 = {} and ck2 = {}", keyspace_name, table_name, pk2, ck1, 0)).get()).is_rows();
 
     testlog.info("read 1");
     auto reader1 = tbl.make_reader_v2(
@@ -5138,11 +5162,11 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(c
 
     reader2.fill_buffer().get();
 
-    MemtableFlushPolicy flush_policy(db, table_name);
+    MemtableFlushPolicy flush_policy(db, keyspace_name, table_name);
 
     // read 3
     testlog.info("read 3");
-    auto res = env.execute_cql(format("SELECT * FROM ks.{} WHERE pk = {}", table_name, pk2)).get();
+    auto res = env.execute_cql(format("SELECT * FROM {}.{} WHERE pk = {}", keyspace_name, table_name, pk2)).get();
 
     mutation expected_mut2(schema, dk2);
     expected_mut2.apply(mut2_v2);
@@ -5166,13 +5190,10 @@ void test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario(c
 }
 
 future<> test_cache_tombstone_gc_overlap_checks(apply_delete_fn apply_delete) {
-    cql_test_config cfg;
-    cfg.initial_tablets = 1;
-
     struct flush_completely_policy {
-        flush_completely_policy(replica::database& db, std::string_view table_name) {
+        flush_completely_policy(replica::database& db, std::string_view keyspace_name, std::string_view table_name) {
             testlog.info("Creating flush_completely_policy");
-            db.flush("ks", sstring(table_name)).get();
+            db.flush(sstring(keyspace_name), sstring(table_name)).get();
         }
     };
 
@@ -5181,14 +5202,14 @@ future<> test_cache_tombstone_gc_overlap_checks(apply_delete_fn apply_delete) {
     class flush_halfway_policy {
         future<> _fut;
     public:
-        flush_halfway_policy(replica::database& db, std::string_view table_name) : _fut(make_ready_future<>()) {
+        flush_halfway_policy(replica::database& db, std::string_view keyspace_name, std::string_view table_name) : _fut(make_ready_future<>()) {
             testlog.info("Creating flush_halfway_policy");
 
             auto& err_inj = utils::get_local_injector();
 
-            err_inj.enable(injection_point_name, false, {{"table_name", seastar::format("ks.{}", table_name)}});
+            err_inj.enable(injection_point_name, false, {{"table_name", seastar::format("{}.{}", keyspace_name, table_name)}});
 
-            _fut = db.flush("ks", sstring(table_name));
+            _fut = db.flush(sstring(keyspace_name), sstring(table_name));
 
             while (!err_inj.get_injection_parameters(injection_point_name).contains("suspended")) {
                 sleep(1s).get();
@@ -5214,7 +5235,7 @@ future<> test_cache_tombstone_gc_overlap_checks(apply_delete_fn apply_delete) {
         run_cache_tombstone_gc_overlap_checks_scenario(env, test_cache_tombstone_gc_overlap_checks_concurrent_scanning_reads_scenario<flush_halfway_policy>,
                 "concurrent_scanning_reads_scenario_2", apply_delete);
 #endif
-    }, cfg);
+    });
 }
 
 SEASTAR_TEST_CASE(test_cache_partition_tombstone_gc_overlap_checks) {
