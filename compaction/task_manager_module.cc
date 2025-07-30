@@ -316,7 +316,7 @@ future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_in
 
 future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const {
     if (cdata.compaction_size == 0) {
-        co_return get_binary_progress();
+        co_return tasks::task_manager::task::progress{};
     }
 
     co_return tasks::task_manager::task::progress{

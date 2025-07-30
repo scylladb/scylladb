@@ -121,13 +121,6 @@ future<std::optional<double>> task_manager::task::impl::expected_total_workload(
     return make_ready_future<std::optional<double>>(std::nullopt);
 }
 
-task_manager::task::progress task_manager::task::impl::get_binary_progress() const {
-    return tasks::task_manager::task::progress{
-        .completed = is_complete(),
-        .total = 1.0
-    };
-}
-
 future<task_manager::task::progress> task_manager::task::impl::get_progress() const {
     if (is_done()) {
         co_return co_await _children.get_progress(_status.progress_units);
