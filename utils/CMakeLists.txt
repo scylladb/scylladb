@@ -55,8 +55,6 @@ target_sources(utils
     rest/client.cc
     s3/aws_error.cc
     s3/client.cc
-    s3/retryable_http_client.cc
-    s3/retry_strategy.cc
     s3/default_aws_retry_strategy.cc
     s3/s3_retry_strategy.cc
     s3/credentials_providers/aws_credentials_provider.cc
