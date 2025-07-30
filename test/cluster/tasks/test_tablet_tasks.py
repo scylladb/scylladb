@@ -482,7 +482,9 @@ async def test_tablet_resize_list(manager: ManagerClient):
 
         status1 = await tm.get_task_status(servers[1].ip_addr, task0.task_id)
         status0 = await tm.get_task_status(servers[0].ip_addr, task0.task_id)
-        assert len(status0.children_ids) == 2
+        children_ids_len = len(status0.children_ids)
+        # With incremental repair, we have doubled the tasks for repaired and unrepaired set
+        assert children_ids in [2, 4]
         assert status0.children_ids == status1.children_ids
 
         await disable_injection(manager, servers, injection)
