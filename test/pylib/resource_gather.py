@@ -80,7 +80,7 @@ class ResourceGather(ABC):
         if self.own_loop:
             self.loop.close()
 
-    def  run_process(self, args: list[str], timeout: float, env: dict = None) -> tuple[subprocess.Popen[str], str]:
+    def run_process(self, args: list[str], timeout: float, output_file: Path, env: dict = None) -> subprocess.Popen[str]:
 
         args = shlex.split(' '.join(args))
         if env:
@@ -89,23 +89,23 @@ class ResourceGather(ABC):
             env = os.environ.copy()
         p = subprocess.Popen(
             args,
-            stdout=subprocess.PIPE,
+            stdout=output_file.open('w'),
             stderr=subprocess.STDOUT,
             bufsize=1,
             text=True,
+            close_fds=True,
             env=env,
             preexec_fn = self.put_process_to_cgroup
         )
         try:
-            stdout, stderr = p.communicate(timeout=timeout)
+            p.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             logger.critical(f"Process {args} timed out")
-            stdout = p.stdout.read()
             p.kill()
         except KeyboardInterrupt:
             p.kill()
             raise
-        return p, stdout
+        return p
 
     def make_cgroup(self) -> None:
         pass
@@ -165,18 +165,18 @@ class ResourceGatherOn(ResourceGather):
                 self._parse_cpu_stat(file, test_metrics)
         return test_metrics
 
-    def run_process(self, args: list[str], timeout, env: dict = None):
+    def run_process(self, args: list[str], timeout: float, output_file: Path, env: dict = None) -> subprocess.Popen[str]:
         stop_monitoring = asyncio.Event()
 
         self.test.time_start = time.time()
         test_resource_watcher = self.cgroup_monitor(test_event=stop_monitoring)
         try:
-            p, stdout = super().run_process(args, timeout, env)
+            p = super().run_process(args, timeout, output_file, env)
         finally:
             stop_monitoring.set()
             self.test.time_end = time.time()
             self.loop.run_until_complete(asyncio.gather(test_resource_watcher))
-        return p, stdout
+        return p
 
     def write_metrics_to_db(self, metrics: Metric, success: bool = False) -> None:
         metrics.success = success
