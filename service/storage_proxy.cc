@@ -533,7 +533,7 @@ private:
         auto op = _sp.start_write();
 
         const auto fence = fence_opt.value_or(fencing_token{});
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
+        if (auto stale = _sp.check_fence(fence, src_addr)) {
             co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
                 make_exception_ptr(std::move(*stale)));
         }
@@ -550,7 +550,7 @@ private:
         });
         auto& sp = _sp;
         co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
+        if (auto stale = _sp.check_fence(fence, src_addr)) {
             co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
                 make_exception_ptr(std::move(*stale)));
         }
@@ -607,7 +607,7 @@ private:
 
         co_await utils::get_local_injector().inject("storage_proxy_write_response_pause", utils::wait_for_message(5min));
 
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
+        if (auto stale = _sp.check_fence(fence, src_addr)) {
             errors.count += (forward_host_id.size() + 1);
             errors.local = std::move(*stale);
         } else {
@@ -904,14 +904,14 @@ private:
 
         const auto fence = fence_opt.value_or(fencing_token{});
 
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
+        if (auto stale = _sp.check_fence(fence, src_addr)) {
             co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), std::make_exception_ptr(std::move(*stale)));
         }
 
         auto f = co_await coroutine::as_future(do_query());
         tracing::trace(trace_state_ptr, "{} handling is done, sending a response to /{}", verb, src_addr);
 
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
+        if (auto stale = _sp.check_fence(fence, src_addr)) {
             co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), std::make_exception_ptr(std::move(*stale)));
         }
 
@@ -3339,7 +3339,7 @@ storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracin
 }
 
 std::optional<replica::stale_topology_exception>
-storage_proxy::apply_fence(fencing_token token, locator::host_id caller_address) const noexcept {
+storage_proxy::check_fence(fencing_token token, locator::host_id caller_address) const noexcept {
     const auto fence_version = _shared_token_metadata.get_fence_version();
     if (!token || token.topology_version >= fence_version) {
         return std::nullopt;
@@ -3361,7 +3361,7 @@ future<T> storage_proxy::apply_fence(future<T> future, fencing_token fence, loca
         if (f.failed()) {
             return std::move(f);
         }
-        auto stale = apply_fence(fence, caller_address);
+        auto stale = check_fence(fence, caller_address);
         return stale ? make_exception_future<T>(std::move(*stale)) : std::move(f);
     });
 }
