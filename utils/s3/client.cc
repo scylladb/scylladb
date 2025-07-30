@@ -311,13 +311,23 @@ future<> client::make_request(http::request req, http::experimental::client::rep
     });
 }
 
+future<> client::make_request(http::request req, reply_handler_ext handle_ex, const http::experimental::retry_strategy& rs, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+    co_await authorize(req);
+    auto& gc = find_or_create_client(std::make_unique<aws::s3_retry_strategy>([this]() -> future<> {
+        auto units = co_await get_units(_creds_sem, 1);
+        co_await update_credentials_and_rearm();
+    }));
+    auto handle = [&gc, handle = std::move(handle_ex)](const http::reply& rep, input_stream<char>&& in) { return handle(gc, rep, std::move(in)); };
+    co_await gc.http.make_request(std::move(req), std::move(handle), rs, std::move(expected), as);
+}
+
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
     co_await authorize(req);
     auto& gc = find_or_create_client(std::make_unique<aws::s3_retry_strategy>([this]() -> future<> {
         auto units = co_await get_units(_creds_sem, 1);
         co_await update_credentials_and_rearm();
     }));
-    auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
+    auto handle = [&gc, handle = std::move(handle_ex)](const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
     co_await gc.http.make_request(std::move(req), std::move(handle), std::move(expected), as).handle_exception([](auto ex) {
