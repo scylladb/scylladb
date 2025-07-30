@@ -9,8 +9,10 @@
 #include "instance_profile_credentials_provider.hh"
 #include "utils/http.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
 #include <rapidjson/document.h>
 #include <rapidjson/error/en.h>
+#include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
 
@@ -29,9 +31,10 @@ future<> instance_profile_credentials_provider::reload() {
 static constexpr auto EC2_SECURITY_CREDENTIALS_RESOURCE = "/latest/meta-data/iam/security-credentials";
 
 future<> instance_profile_credentials_provider::update_credentials() {
-    auto factory = std::make_unique<utils::http::dns_connection_factory>(ec2_metadata_ip, port, false, ec2_md_logger);
-    retryable_http_client http_client(std::move(factory), 1, retryable_http_client::ignore_exception, http::experimental::client::retry_requests::yes, retry_strategy);
-
+    http::experimental::client http_client(std::make_unique<utils::http::dns_connection_factory>(ec2_metadata_ip, port, false, ec2_md_logger),
+                                           1,
+                                           1_MiB,
+                                           std::make_unique<default_aws_retry_strategy>());
     auto req = http::request::make("PUT", ec2_metadata_ip, "/latest/api/token");
     req._headers["x-aws-ec2-metadata-token-ttl-seconds"] = format("{}", session_duration);
 
