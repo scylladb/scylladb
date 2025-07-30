@@ -24,6 +24,7 @@
 #include "auth/role_manager.hh"
 #include "auth/common.hh"
 #include "cql3/description.hh"
+#include "seastar/core/gate.hh"
 #include "seastarx.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "utils/alien_worker.hh"
@@ -75,6 +76,14 @@ public:
 /// peering_sharded_service inheritance is needed to be able to access shard local authentication service
 /// given an object from another shard. Used for bouncing lwt requests to correct shard.
 class service final : public seastar::peering_sharded_service<service> {
+public:
+    enum class status {
+        inactive,   // `auth::service` has not been started yet.
+        working,    // `auth::service` has been started and is working.
+        stopping,   // `auth::service` has been asked to stopped or has been stopped already.
+    };
+
+private:
     utils::loading_cache_config _loading_cache_config;
     std::unique_ptr<permissions_cache> _permissions_cache;
 
@@ -103,6 +112,35 @@ class service final : public seastar::peering_sharded_service<service> {
     maintenance_socket_enabled _used_by_maintenance_socket;
 
     abort_source _as;
+
+    /// Users of `auth::service` should go through this gate via `auth::service::get_access`
+    /// before accessing it. It'll be closed when `auth::service` is asked to stop.
+    ///
+    /// Context:
+    ///
+    /// `auth::service` and its contents are accessed by `service::qos::service_level_controller`
+    /// when updating the service level cache (cf. `service_level_controller::update_effective_service_levels_cache`).
+    /// However, `auth::service` is started after the node has jointed the cluster; see the commit
+    ///     562caaf6c61f75fb6e1849c70e18fcb57b6aeb46
+    /// for more details on that.
+    ///
+    /// Because we keep initialization and de-initialization paired in `main.cc`, that implies
+    /// that `auth::service` will be stopped BEFORE `service_level_controller` is.
+    /// As a result, the cache may still be reloaded in between those two events
+    /// and effectively lead to a segmentation fault or other issues. We've already experienced
+    /// them; see issue: scylladb/scylladb#24792.
+    ///
+    /// This gate is supposed to prevent that and that's its sole purpose.
+    ///
+    /// It's now necessary for `service_level_controller` to take go through this gate
+    /// whenever it wants to reload the cache. Before accessing any member of `auth::service`,
+    /// it must make sure that the status (`_status`) of `auth::service` is equal to
+    /// `status::working`. Otherwise, it should avoid doing anything to it.
+    ///
+    /// Ditch this once it stops being necessary.
+    seastar::named_gate _access_gate;
+
+    status _status;
 
 public:
     service(
@@ -133,6 +171,10 @@ public:
     future<> start(::service::migration_manager&, db::system_keyspace&);
 
     future<> stop();
+
+    status get_status() const noexcept {
+        return _status;
+    }
 
     future<> ensure_superuser_is_created();
 
@@ -203,6 +245,10 @@ public:
 
     future<> commit_mutations(::service::group0_batch&& mc) {
         return std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
+    }
+
+    seastar::gate::holder get_access() {
+        return seastar::gate::holder{_access_gate};
     }
 
 private:

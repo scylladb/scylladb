@@ -178,7 +178,9 @@ service::service(
             , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
             , _permissions_cache_update_interval_in_ms_observer(_qp.db().get_config().permissions_update_interval_in_ms.observe(_permissions_cache_cfg_cb))
             , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb))
-            , _used_by_maintenance_socket(used_by_maintenance_socket) {}
+            , _used_by_maintenance_socket(used_by_maintenance_socket)
+            , _access_gate("auth_service_access_gate")
+            , _status(status::inactive) {}
 
 service::service(
         utils::loading_cache_config c,
@@ -254,9 +256,14 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
         _mnotifier.register_listener(_migration_listener.get());
         return make_ready_future<>();
     });
+
+    _status = status::working;
 }
 
 future<> service::stop() {
+    co_await _access_gate.close();
+    _status = status::stopping;
+
     _as.request_abort();
 
     // Only one of the shards has the listener registered, but let's try to
