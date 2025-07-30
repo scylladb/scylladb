@@ -292,8 +292,6 @@ client::group_client& client::find_or_create_client(std::unique_ptr<seastar::htt
         }
 
         throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
-    } catch (const filler_exception&) {
-        throw;
     } catch (...) {
         auto e = std::current_exception();
         throw storage_io_error {EIO, format("S3 error ({})", e)};
