@@ -129,6 +129,10 @@ task_manager::task::progress task_manager::task::impl::get_binary_progress() con
 }
 
 future<task_manager::task::progress> task_manager::task::impl::get_progress() const {
+    if (is_done()) {
+        co_return co_await _children.get_progress(_status.progress_units);
+    }
+
     std::optional<double> expected_workload = co_await expected_total_workload();
     if (!expected_workload && _children.size() == 0) {
         co_return task_manager::task::progress{};
