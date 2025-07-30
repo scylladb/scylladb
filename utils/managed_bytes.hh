@@ -177,8 +177,8 @@ class managed_bytes {
     // -1 -> layout 2 (single_chunk_blob_storage)
     // -2 -> layout 3 (multi_chunk_blob_storage)
     union u {
-        u() {}
-        ~u() {}
+        constexpr u() {}
+        constexpr ~u() {}
         bytes_view::value_type inline_data[max_inline_size]; // Stores the data directly. Size is in inline_size.
         single_chunk_blob_storage::ref_type single_chunk_ref; // Points to external storage and stores the data size.
         multi_chunk_blob_storage::ref_type multi_chunk_ref; // Points to external storage.
@@ -186,10 +186,10 @@ class managed_bytes {
     int8_t _inline_size = 0;
 
 private:
-    bool is_multi_chunk() const noexcept {
+    constexpr bool is_multi_chunk() const noexcept {
         return _inline_size < -1;
     }
-    bool is_single_chunk() const noexcept {
+    constexpr bool is_single_chunk() const noexcept {
         return _inline_size == -1;
     }
     bool is_inline() const noexcept {
@@ -216,7 +216,7 @@ public:
     using size_type = multi_chunk_blob_storage::size_type;
     struct initialized_later {};
 
-    managed_bytes() = default;
+    constexpr managed_bytes() = default;
 
     managed_bytes(const multi_chunk_blob_storage::char_type* ptr, size_type size)
         : managed_bytes(bytes_view(ptr, size)) {}
@@ -264,7 +264,7 @@ public:
 
     managed_bytes(std::initializer_list<bytes::value_type> b) : managed_bytes(b.begin(), b.size()) {}
 
-    ~managed_bytes() noexcept {
+    constexpr ~managed_bytes() noexcept {
         if (is_multi_chunk()) {
             free_chain(_u.multi_chunk_ref);
         } else if (is_single_chunk()) {
@@ -276,10 +276,16 @@ public:
     // Defined later in the file because it depends on managed_bytes_mutable_view.
     managed_bytes(const managed_bytes& o);
 
-    managed_bytes(managed_bytes&& o) noexcept {
+    constexpr managed_bytes(managed_bytes&& o) noexcept {
         // Microoptimization: we use memcpy instead of assignments because
         // the compiler refuses the merge the load/stores otherwise for some reason.
-        std::memcpy(reinterpret_cast<char*>(this), &o, sizeof(managed_bytes));
+        if (!std::is_constant_evaluated()) {
+            std::memcpy(reinterpret_cast<char*>(this), &o, sizeof(managed_bytes));
+        } else {
+            // constexpr-friendly version.
+            _u = o._u;
+            _inline_size = o._inline_size;
+        }
         o._inline_size = 0;
         if (is_multi_chunk()) {
             _u.multi_chunk_ref.ptr->backref = &_u.multi_chunk_ref;
