@@ -17,16 +17,16 @@ namespace aws {
 static logging::logger s3_retry_logger("s3_retry_strategy");
 
 s3_retry_strategy::s3_retry_strategy(credentials_refresher creds_refresher, unsigned max_retries, unsigned scale_factor)
-    : default_retry_strategy(max_retries, scale_factor), _creds_refresher(std::move(creds_refresher)) {
+    : default_aws_retry_strategy(max_retries, scale_factor), _creds_refresher(std::move(creds_refresher)) {
 }
 
-seastar::future<bool> s3_retry_strategy::should_retry(const aws_error& error, unsigned attempted_retries) const {
-    if (attempted_retries < _max_retries && error.get_error_type() == aws_error_type::EXPIRED_TOKEN) {
+seastar::future<bool> s3_retry_strategy::should_retry(std::exception_ptr error, unsigned attempted_retries) const {
+    if (auto err = aws_error::from_exception_ptr(error); attempted_retries < _max_retries && err.get_error_type() == aws_error_type::EXPIRED_TOKEN) {
         s3_retry_logger.info("Credentials are expired, renewing");
         co_await _creds_refresher();
         co_return true;
     }
-    co_return co_await default_retry_strategy::should_retry(error, attempted_retries);
+    co_return co_await default_aws_retry_strategy::should_retry(error, attempted_retries);
 }
 
 } // namespace aws

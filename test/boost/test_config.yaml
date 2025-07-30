@@ -48,6 +48,6 @@ custom_args:
     bloom_filter_test:
         - '-c1'
     s3_test:
-        - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_retry_strategy=trace'
+        - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_http_retry_strategy=trace'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test

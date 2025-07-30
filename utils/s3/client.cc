@@ -88,7 +88,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::experimental::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -206,8 +206,10 @@ future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::no, retry_strategy) {
+client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f,
+                                   unsigned max_conn,
+                                   std::unique_ptr<seastar::http::experimental::retry_strategy> retry_strategy)
+    : http(std::move(f), max_conn, 1_MiB, std::move(retry_strategy)) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -215,11 +217,11 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     auto ep_label = sm::label("endpoint")(host);
     auto sg_label = sm::label("class")(class_name);
     metrics.add_group("s3", {
-        sm::make_gauge("nr_connections", [this] { return retryable_client.get_http_client().connections_nr(); },
+        sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
                 sm::description("Total number of connections"), {ep_label, sg_label}),
-        sm::make_gauge("nr_active_connections", [this] { return retryable_client.get_http_client().connections_nr() - retryable_client.get_http_client().idle_connections_nr(); },
+        sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
                 sm::description("Total number of connections with running requests"), {ep_label, sg_label}),
-        sm::make_counter("total_new_connections", [this] { return retryable_client.get_http_client().total_new_connections_nr(); },
+        sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
                 sm::description("Total number of new connections created so far"), {ep_label, sg_label}),
         sm::make_counter("total_read_requests", [this] { return read_stats.ops; },
                 sm::description("Total number of object read requests"), {ep_label, sg_label}),
@@ -236,7 +238,7 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     });
 }
 
-client::group_client& client::find_or_create_client() {
+client::group_client& client::find_or_create_client(std::unique_ptr<seastar::http::experimental::retry_strategy> rs) {
     auto sg = current_scheduling_group();
     auto it = _https.find(sg);
     if (it == _https.end()) [[unlikely]] {
@@ -247,7 +249,7 @@ client::group_client& client::find_or_create_client() {
         unsigned max_connections = _cfg->max_connections.has_value() ? *_cfg->max_connections : std::max((unsigned)(sg.get_shares() / 100), 1u);
         it = _https.emplace(std::piecewise_construct,
             std::forward_as_tuple(sg),
-            std::forward_as_tuple(std::move(factory), max_connections, *_retry_strategy)
+            std::forward_as_tuple(std::move(factory), max_connections, std::move(rs))
         ).first;
 
         it->second.register_metrics(sg.name(), _host);
@@ -300,17 +302,27 @@ client::group_client& client::find_or_create_client() {
 
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
     co_await authorize(req);
-    auto& gc = find_or_create_client();
-    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+    auto& gc = find_or_create_client(std::make_unique<aws::s3_retry_strategy>([this]() -> future<> {
+        auto units = co_await get_units(_creds_sem, 1);
+        co_await update_credentials_and_rearm();
+    }));
+    co_await gc.http.make_request(std::move(req), std::move(handle), std::move(expected), as).handle_exception([](auto ex) {
+        map_s3_client_exception(std::move(ex));
+    });
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
     co_await authorize(req);
-    auto& gc = find_or_create_client();
+    auto& gc = find_or_create_client(std::make_unique<aws::s3_retry_strategy>([this]() -> future<> {
+        auto units = co_await get_units(_creds_sem, 1);
+        co_await update_credentials_and_rearm();
+    }));
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+    co_await gc.http.make_request(std::move(req), std::move(handle), std::move(expected), as).handle_exception([](auto ex) {
+        map_s3_client_exception(std::move(ex));
+    });
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
@@ -1746,7 +1758,7 @@ future<> client::close() {
         _creds_update_timer.cancel();
     }
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
-        co_await it.second.retryable_client.close();
+        co_await it.second.http.close();
     });
 }
 
