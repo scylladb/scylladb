@@ -414,12 +414,6 @@ future<group0_info> persistent_discovery::run(
 }
 
 future<> raft_group0::abort() {
-    if (_aborted) {
-        co_return;
-    }
-    _aborted = true;
-    group0_log.debug("Raft group0 service is aborting...");
-
     co_await smp::invoke_on_all([this]() {
         return uninit_rpc_verbs(_ms.local());
     });
@@ -431,8 +425,6 @@ future<> raft_group0::abort() {
     co_await std::move(_leadership_monitor);
 
     co_await stop_group0();
-
-    group0_log.debug("Raft group0 service is aborted");
 }
 
 future<> raft_group0::start_server_for_group0(raft::group_id group0_id, service::storage_service& ss, cql3::query_processor& qp, service::migration_manager& mm, bool topology_change_enabled) {
