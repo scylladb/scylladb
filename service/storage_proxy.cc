@@ -3372,6 +3372,11 @@ future<T> storage_proxy::apply_fence_on_ready(future<T> future, fencing_token fe
     });
 }
 
+future<> storage_proxy::apply_fence(std::optional<fencing_token> fence, locator::host_id caller_address) const {
+    auto stale = fence ? check_fence(*fence, caller_address) : std::nullopt;
+    return stale ? make_exception_future<>(std::move(*stale)) : make_ready_future<>();
+}
+
 template <typename T>
 requires (
     std::is_same_v<T, replica::exception_variant> ||
