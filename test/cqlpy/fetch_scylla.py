@@ -101,9 +101,10 @@ def download_scylla(release, dir):
     def comparison_key(x):
         x = x[1:].replace('.', '-').split('-')[0]
         if x.startswith('rc'):
-            return '00~'+x
+            # 0~rc1 came before 0, so let's add /, which is before 0
+            return '/0~'+x
         elif x.startswith('0~rc'):
-            return '0'+x
+            return '/'+x
         else:
             return '%02d' % (int(x))
     candidates = sorted(candidates, key=comparison_key, reverse=True)
