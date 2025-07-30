@@ -11,8 +11,11 @@
 #include "utils/UUID.hh"
 #include "utils/http.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
+
 #include <rapidxml.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
 
@@ -21,7 +24,7 @@ namespace aws {
 static logging::logger sts_logger("sts");
 
 sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const std::string& _host, unsigned _port, bool _is_secured)
-    : sts_host(_host), port(_port), is_secured(_is_secured) {
+    : sts_host(_host), port(_port) {
 }
 
 sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const std::string& _region, const std::string& _role_arn)
