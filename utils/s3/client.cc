@@ -1217,14 +1217,14 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                       _range);
                         }
                         auto in = std::move(in_);
-                            while (_buffers_size < _max_buffers_size && !_is_finished) {
-                                utils::get_local_injector().inject("kill_s3_inflight_req", [] {
-                                    // Inject non-retryable error to emulate source failure
-                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
-                                });
-                                auto start = s3_clock::now();
-                                s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
-                                temporary_buffer<char> buf;
+                        while (_buffers_size < _max_buffers_size && !_is_finished) {
+                            utils::get_local_injector().inject("kill_s3_inflight_req", [] {
+                                // Inject non-retryable error to emulate source failure
+                                throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
+                            });
+                            auto start = s3_clock::now();
+                            s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
+                            temporary_buffer<char> buf;
                                 auto units = try_get_units(_client->_memory, _socket_buff_size);
                                 if (_buffers.empty() || units) {
                                     buf = co_await in.read();
@@ -1235,30 +1235,30 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 } else {
                                     break;
                                 }
-                                auto buff_size = buf.size();
-                                gc.read_stats.update(buff_size, s3_clock::now() - start);
-                                _range += buff_size;
-                                _buffers_size += buff_size;
-                                if (buff_size == 0 && _range.length() == 0) {
-                                    s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                    _buffers.emplace_back(std::move(buf), std::move(units));
-                                    _get_cv.signal();
-                                    _is_finished = true;
-                                    break;
-                                }
-                                if (buff_size == 0) {
-                                    // The requested range is fully downloaded
-                                    break;
-                                }
-                                s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
+                            auto buff_size = buf.size();
+                            gc.read_stats.update(buff_size, s3_clock::now() - start);
+                            _range += buff_size;
+                            _buffers_size += buff_size;
+                            if (buff_size == 0 && _range.length() == 0) {
+                                s3l.trace("Fiber for object '{}' signals EOS", _object_name);
                                 _buffers.emplace_back(std::move(buf), std::move(units));
                                 _get_cv.signal();
-                                utils::get_local_injector().inject("break_s3_inflight_req", [] {
-                                    // Inject a non-`aws_error` after partial data download to verify proper
-                                    // handling and that the fiber retries missing chunks
-                                    throw std::system_error(ECONNRESET, std::system_category());
-                                });
+                                _is_finished = true;
+                                break;
                             }
+                            if (buff_size == 0) {
+                                // The requested range is fully downloaded
+                                break;
+                            }
+                            s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
+                            _buffers.emplace_back(std::move(buf), std::move(units));
+                            _get_cv.signal();
+                            utils::get_local_injector().inject("break_s3_inflight_req", [] {
+                                // Inject a non-`aws_error` after partial data download to verify proper
+                                // handling and that the fiber retries missing chunks
+                                throw std::system_error(ECONNRESET, std::system_category());
+                            });
+                        }
                         co_await in.close();
                     },
                     rs,
