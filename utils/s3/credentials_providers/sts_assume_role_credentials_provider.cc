@@ -11,8 +11,11 @@
 #include "utils/UUID.hh"
 #include "utils/http.hh"
 #include "utils/s3/client.hh"
+#include "utils/s3/default_aws_retry_strategy.hh"
+
 #include <rapidxml.h>
 #include <seastar/core/coroutine.hh>
+#include <seastar/http/client.hh>
 #include <seastar/http/request.hh>
 #include <seastar/util/short_streams.hh>
 
@@ -41,8 +44,8 @@ future<> sts_assume_role_credentials_provider::update_credentials() {
     req.set_query_param("Action", "AssumeRole");
     req.set_query_param("RoleSessionName", format("{}", utils::make_random_uuid()));
     req.set_query_param("RoleArn", role_arn);
-    auto factory = std::make_unique<utils::http::dns_connection_factory>(sts_host, port, is_secured, sts_logger);
-    retryable_http_client http_client(std::move(factory), 1, retryable_http_client::ignore_exception, http::experimental::client::retry_requests::yes, retry_strategy);
+    http::experimental::client http_client(
+        std::make_unique<utils::http::dns_connection_factory>(sts_host, port, is_secured, sts_logger), 1, 1024, std::make_unique<default_aws_retry_strategy>());
     co_await http_client.make_request(
         std::move(req),
         [this](const http::reply&, input_stream<char>&& in) -> future<> {
