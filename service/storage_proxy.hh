@@ -625,6 +625,17 @@ private:
     template <typename T>
     future<T> apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) const;
 
+    // Checks the fence_token and, if it is stale, returns a stale_topology_exception
+    // wrapped in a replica::exception_variant.
+    // If T is a tuple containing replica::exception_variant, the function returns a
+    // default-constructed tuple with the exception assigned to the corresponding element.
+    template <typename T>
+    requires (
+        std::is_same_v<T, replica::exception_variant> ||
+        requires(T t) { std::get<replica::exception_variant>(t); }
+    )
+    std::optional<future<T>> apply_fence_result(std::optional<fencing_token> fence, locator::host_id caller_address) const;
+
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 
