@@ -8,7 +8,6 @@
 
 #pragma once
 #include "aws_credentials_provider.hh"
-#include "utils/s3/retry_strategy.hh"
 
 namespace aws {
 
@@ -28,7 +27,6 @@ private:
     seastar::future<> update_credentials();
     s3::aws_credentials parse_creds(seastar::sstring& body);
 
-    default_retry_strategy retry_strategy;
     std::string sts_host;
     std::string role_arn;
     unsigned port{443};
