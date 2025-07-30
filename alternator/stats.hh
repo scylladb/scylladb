@@ -101,6 +101,20 @@ public:
     uint64_t wcu_total[NUM_TYPES] = {0};
     // CQL-derived stats
     cql3::cql_stats cql_stats;
+
+    enum expression_types {
+        UPDATE_EXPRESSION,
+        CONDITION_EXPRESSION,
+        PROJECTION_EXPRESSION,
+        NUM_EXPRESSION_TYPES
+    };
+    struct {
+        struct {
+            uint64_t hits = 0;
+            uint64_t misses = 0;
+        } requests[NUM_EXPRESSION_TYPES];
+        uint64_t evictions = 0;
+    } expression_cache;
 };
 
 struct table_stats {
