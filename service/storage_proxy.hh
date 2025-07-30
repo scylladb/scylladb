@@ -582,15 +582,15 @@ private:
     // Applies mutations on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(utils::chunked_vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
-    // Confirm whether the topology version from the token is greater than or equal
-    // to the current fencing_version sourced from shared_token_metadata.
-    // If it is not, the function will return an engaged optional.
-    template<typename ID>
+
+    // Check whether the topology version from the token is greater than or equal to 
+    // the current fencing_version obtained from shared_token_metadata. 
+    // If it is lower, the function returns a non-empty optional.
     std::optional<replica::stale_topology_exception> apply_fence(fencing_token token,
-        ID caller_address) const noexcept;
+        locator::host_id caller_address) const noexcept;
     // Do the same when the future is resolved without exception.
-    template <typename T, typename ID>
-    future<T> apply_fence(future<T> future, fencing_token fence, ID caller_address) const;
+    template <typename T>
+    future<T> apply_fence(future<T> future, fencing_token fence, locator::host_id caller_address) const;
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 
