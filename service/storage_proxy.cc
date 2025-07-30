@@ -153,7 +153,7 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 }
 
 template<typename ResultType>
-static future<ResultType> encode_replica_exception_for_rpc(gms::feature_service& features, std::exception_ptr eptr) {
+static future<ResultType> encode_replica_exception_for_rpc(const gms::feature_service& features, std::exception_ptr eptr) {
     if (features.typed_errors_in_read_rpc) {
         if (auto ex = replica::try_encode_replica_exception(eptr); ex) {
             if constexpr (std::is_same_v<ResultType, replica::exception_variant>) {
@@ -169,7 +169,7 @@ static future<ResultType> encode_replica_exception_for_rpc(gms::feature_service&
 }
 
 template<utils::Tuple ResultTuple, utils::Tuple SourceTuple>
-static future<ResultTuple> add_replica_exception_to_query_result(gms::feature_service& features, future<SourceTuple>&& f) {
+static future<ResultTuple> add_replica_exception_to_query_result(const gms::feature_service& features, future<SourceTuple>&& f) {
     if (!f.failed()) {
         return make_ready_future<ResultTuple>(utils::tuple_insert<ResultTuple>(f.get(), replica::exception_variant{}));
     }
@@ -538,10 +538,8 @@ private:
         // fenced writes.
         auto op = _sp.start_write();
 
-        const auto fence = fence_opt.value_or(fencing_token{});
-        if (auto stale = _sp.check_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
-                make_exception_ptr(std::move(*stale)));
+        if (auto f = _sp.apply_fence_result<replica::exception_variant>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
 
         utils::chunked_vector<frozen_mutation_and_schema> mutations;
@@ -556,10 +554,11 @@ private:
         });
         auto& sp = _sp;
         co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
-        if (auto stale = _sp.check_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
-                make_exception_ptr(std::move(*stale)));
+
+        if (auto f = _sp.apply_fence_result<replica::exception_variant>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
+
         co_return replica::exception_variant{};
     }
 
@@ -911,17 +910,15 @@ private:
             }
         };
 
-        const auto fence = fence_opt.value_or(fencing_token{});
-
-        if (auto stale = _sp.check_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), std::make_exception_ptr(std::move(*stale)));
+        if (auto f = _sp.apply_fence_result<Result>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
 
         auto f = co_await coroutine::as_future(do_query());
         tracing::trace(trace_state_ptr, "{} handling is done, sending a response to /{}", verb, src_addr);
 
-        if (auto stale = _sp.check_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), std::make_exception_ptr(std::move(*stale)));
+        if (auto f = _sp.apply_fence_result<Result>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
 
         co_return co_await add_replica_exception_to_query_result<Result>(p->features(), std::move(f));
@@ -3373,6 +3370,19 @@ future<T> storage_proxy::apply_fence_on_ready(future<T> future, fencing_token fe
         auto stale = check_fence(fence, caller_address);
         return stale ? make_exception_future<T>(std::move(*stale)) : std::move(f);
     });
+}
+
+template <typename T>
+requires (
+    std::is_same_v<T, replica::exception_variant> ||
+    requires(T t) { std::get<replica::exception_variant>(t); }
+)
+std::optional<future<T>> storage_proxy::apply_fence_result(std::optional<fencing_token> fence, locator::host_id caller_address) const {
+    auto stale = fence ? check_fence(*fence, caller_address) : std::nullopt;
+    if (stale) {
+        return encode_replica_exception_for_rpc<T>(features(), std::make_exception_ptr(std::move(*stale)));
+    }
+    return std::nullopt;
 }
 
 fencing_token storage_proxy::get_fence(const locator::effective_replication_map& erm) {
