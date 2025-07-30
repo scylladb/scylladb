@@ -33,7 +33,6 @@ private:
     std::string role_arn;
     unsigned port{443};
     static constexpr unsigned session_duration{43200};
-    bool is_secured{true};
 };
 
 } // namespace aws
