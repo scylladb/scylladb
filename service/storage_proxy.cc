@@ -4332,8 +4332,7 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
 {
     // extra-datacenter replicas, grouped by dc
     std::unordered_map<sstring, host_id_vector_replica_set> dc_groups;
-    std::vector<std::pair<const sstring, host_id_vector_replica_set>> local;
-    local.reserve(3);
+    utils::small_vector<host_id_vector_replica_set, 3> local;
 
     auto handler_ptr = get_write_response_handler(response_id);
     auto& stats = handler_ptr->stats();
@@ -4367,21 +4366,20 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
             const auto& dc = node->dc_rack().dc;
             // read repair writes do not go through coordinator since mutations are per destination
             if (handler.read_repair_write() || dc == local_dc) {
-                local.emplace_back("", host_id_vector_replica_set({dest}));
+                local.emplace_back(host_id_vector_replica_set({dest}));
             } else {
                 dc_groups[dc].push_back(dest);
             }
         }
     } else {
         // There is only one target replica and it is me
-        local.emplace_back("", handler.get_targets());
+        local.emplace_back(handler.get_targets());
     }
 
-    using dc_and_address = std::pair<const sstring, host_id_vector_replica_set>;
-    auto all = utils::small_vector<dc_and_address*, 10>();
+    auto all = utils::small_vector<host_id_vector_replica_set*, 10>();
     all.reserve(local.size() + dc_groups.size());
     std::ranges::copy(local | std::views::transform([] (auto& x) { return &x; }), std::back_inserter(all));
-    std::ranges::copy(dc_groups | std::views::transform([] (auto& x) { return &x; }), std::back_inserter(all));
+    std::ranges::copy(dc_groups | std::views::transform([] (auto& x) { return &x.second; }), std::back_inserter(all));
 
     auto my_address = my_host_id(*handler._effective_replication_map_ptr);
 
@@ -4408,8 +4406,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
     };
 
     // OK, now send and/or apply locally
-    for (typename decltype(dc_groups)::value_type& dc_targets : all | std::views::transform([](dc_and_address* p) -> dc_and_address& { return *p; })) {
-        auto& forward = dc_targets.second;
+    for (auto* dc_targets_ptr : all) {
+        auto& forward = *dc_targets_ptr;
         // last one in forward list is a coordinator
         auto coordinator = forward.back();
         forward.pop_back();
