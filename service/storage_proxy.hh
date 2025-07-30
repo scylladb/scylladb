@@ -625,6 +625,13 @@ private:
     template <typename T>
     future<T> apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) const;
 
+    // Checks the fence_token and, if it is stale, returns a failed future containing
+    // a stale_topology_exception.
+    // The function returns a future (instead of void) for two reasons:
+    //   * constructing a failed future is less expensive than throwing an exception
+    //   * it maintains consistency with other apply_fence functions
+    future<> apply_fence(std::optional<fencing_token> fence, locator::host_id caller_address) const;
+
     // Checks the fence_token and, if it is stale, returns a stale_topology_exception
     // wrapped in a replica::exception_variant.
     // If T is a tuple containing replica::exception_variant, the function returns a
