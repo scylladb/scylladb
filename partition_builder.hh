@@ -14,7 +14,7 @@
 #include "mutation/tombstone.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/range_tombstone.hh"
-#include "collection_mutation.hh"
+#include "mutation/collection_mutation.hh"
 
 // Partition visitor which builds mutation_partition corresponding to the data its fed with.
 class partition_builder final : public mutation_partition_visitor {

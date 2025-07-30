@@ -170,9 +170,9 @@ target_sources(scylla-main
     bytes.cc
     client_data.cc
     clocks-impl.cc
-    collection_mutation.cc
+    mutation/collection_mutation.cc
     compress.cc
-    converting_mutation_partition_applier.cc
+    mutation/converting_mutation_partition_applier.cc
     counters.cc
     sstable_dict_autotrainer.cc
     duration.cc
