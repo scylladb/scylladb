@@ -50,10 +50,7 @@ async def test_lwt(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    config = {
-        'rf_rack_valid_keyspaces': False
-    }
-    servers = await manager.servers_add(3, cmdline=cmdline, config=config)
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     quorum = len(hosts) // 2 + 1
@@ -132,10 +129,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    config = {
-        'rf_rack_valid_keyspaces': False
-    }
-    servers = await manager.servers_add(3, cmdline=cmdline, config=config)
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
     cql = manager.get_cql()
 
     async def set_injection(set_to: list[ServerInfo], injection: str):
@@ -171,7 +165,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
         await cql.run_async(lwt1, host=hosts[0])
 
         # Step3: start n4, migrate the single table tablet from n2 to n4.
-        servers += [await manager.server_add(cmdline=cmdline, config=config)]
+        servers += [await manager.server_add(cmdline=cmdline, property_file={'dc': 'my_dc', 'rack': 'rack2'})]
         n4_host_id = await manager.get_host_id(servers[3].server_id)
         logger.info("Migrating the tablet from n2 to n4")
         n2_host_id = await manager.get_host_id(servers[1].server_id)
@@ -208,7 +202,6 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_no_lwt_with_tablets_feature(manager: ManagerClient):
     config = {
-        'rf_rack_valid_keyspaces': False,
         'error_injections_at_startup': [
             {
                 'name': 'suppress_features',
@@ -252,10 +245,7 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    config = {
-        'rf_rack_valid_keyspaces': False
-    }
-    servers = await manager.servers_add(3, cmdline=cmdline, config=config)
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc='my_dc')
     cql = manager.get_cql()
 
     logger.info("Resolve hosts")
@@ -301,7 +291,9 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
             use_host_id=True,
             wait_replaced_dead=True
         )
-        servers += [await manager.server_add(replace_cfg=replace_cfg, cmdline=cmdline, config=config)]
+        servers += [await manager.server_add(replace_cfg=replace_cfg,
+                                             cmdline=cmdline,
+                                             property_file={'dc': 'my_dc', 'rack': 'rack1'})]
         # Check we've actually run rebuild
         logs = []
         for s in servers:
@@ -332,11 +324,8 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    config = {
-        'rf_rack_valid_keyspaces': False
-    }
 
-    server = await manager.server_add(cmdline=cmdline, config=config)
+    server = await manager.server_add(cmdline=cmdline)
     cql = manager.get_cql()
 
     logger.info("Create a keyspace")
@@ -377,7 +366,6 @@ async def test_lwt_concurrent_base_table_recreation(manager: ManagerClient):
 async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClient, build_mode):
     timeout = 10000 if build_mode == 'debug' else 1000
     config = {
-        'rf_rack_valid_keyspaces': False,
         'write_request_timeout_in_ms': timeout,
         'error_injections_at_startup': [
             {
@@ -414,11 +402,8 @@ async def test_lwt_for_tablets_is_not_supported_without_raft(manager: ManagerCli
     cmdline = [
         '--logger-log-level', 'paxos=trace'
     ]
-    config = {
-        'rf_rack_valid_keyspaces': False
-    }
 
-    servers = [await manager.server_add(cmdline=cmdline, config=config)]
+    servers = [await manager.server_add(cmdline=cmdline)]
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
@@ -456,7 +441,6 @@ async def test_paxos_state_table_permissions(manager: ManagerClient):
         '--logger-log-level', 'paxos=trace'
     ]
     config = {
-        'rf_rack_valid_keyspaces': False,
         'authenticator': 'PasswordAuthenticator',
         'authorizer': 'CassandraAuthorizer'
     }
