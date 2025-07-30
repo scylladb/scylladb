@@ -285,6 +285,7 @@ def run_scylla_cmd(pid, dir):
         '--rpc-address', ip,
         '--listen-address', ip,
         '--prometheus-address', ip,
+        '--webshell-address', ip,
         '--seed-provider-parameters', 'seeds=' + ip,
         '--workdir', dir,
         '--auto-snapshot', '0',
