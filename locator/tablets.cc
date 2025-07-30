@@ -1283,7 +1283,12 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
             }
         }
 
-        const size_t rf = nts.get_replication_factor(dc);
+        auto rf_data = nts.get_replication_factor_data(dc);
+        if (!rf_data || rf_data->is_rack_based()) {
+            continue;
+        }
+
+        auto rf = rf_data->count();
 
         // We must not allow for a keyspace to become RF-rack-invalid. Any attempt at that must be rejected.
         // For more context, see: scylladb/scylladb#23276.
