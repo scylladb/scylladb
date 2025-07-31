@@ -33,9 +33,7 @@ bool sts_assume_role_credentials_provider::is_time_to_refresh() const {
 }
 
 future<> sts_assume_role_credentials_provider::reload() {
-    if (is_time_to_refresh() || !creds) {
-        co_await update_credentials();
-    }
+    co_await update_credentials();
 }
 
 future<> sts_assume_role_credentials_provider::update_credentials() {
