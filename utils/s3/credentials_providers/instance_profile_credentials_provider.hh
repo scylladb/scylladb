@@ -22,7 +22,6 @@ public:
     [[nodiscard]] const char* get_name() const override { return "instance_profile_credentials_provider"; }
 
 protected:
-    [[nodiscard]] bool is_time_to_refresh() const;
     seastar::future<> reload() override;
 
 private:
