@@ -110,6 +110,7 @@ public:
 connection::connection(server& server, connected_socket&& fd, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
     : _conns_cpu_concurrency{sem, std::move(initial_sem_units), false}
     , _server{server}
+    , _connections_list_entry(_server._connections_list.emplace(*this))
     , _fd{std::move(fd)}
     , _read_buf(data_source(std::make_unique<counted_data_source_impl>(_fd.input().detach(), _conns_cpu_concurrency)))
     , _write_buf(output_stream<char>(data_sink(std::make_unique<counted_data_sink_impl>(_fd.output().detach(), _conns_cpu_concurrency)), 8192, output_stream_options{.batch_flushes = true}))
@@ -117,18 +118,10 @@ connection::connection(server& server, connected_socket&& fd, named_semaphore& s
     , _hold_server(_server._gate)
 {
     ++_server._total_connections;
-    _server._connections_list.push_back(*this);
 }
 
 connection::~connection()
 {
-    server::connections_list_t::iterator iter = _server._connections_list.iterator_to(*this);
-    for (auto&& gi : _server._gentle_iterators) {
-        if (gi.iter == iter) {
-            gi.iter++;
-        }
-    }
-    _server._connections_list.erase(iter);
 }
 
 connection::execute_under_tenant_type
@@ -145,14 +138,9 @@ void connection::switch_tenant(execute_under_tenant_type exec) {
 }
 
 future<> server::for_each_gently(noncopyable_function<void(connection&)> fn) {
-    _gentle_iterators.emplace_front(*this);
-    std::list<gentle_iterator>::iterator gi = _gentle_iterators.begin();
-    return seastar::do_until([ gi ] { return gi->iter == gi->end; },
-        [ gi, fn = std::move(fn) ] {
-            fn(*(gi->iter++));
-            return make_ready_future<>();
-        }
-    ).finally([ this, gi ] { _gentle_iterators.erase(gi); });
+    return _connections_list.for_each_gently([fn = std::move(fn)](std::reference_wrapper<connection> c) {
+        fn(c.get());
+    });
 }
 
 static bool is_broken_pipe_or_connection_reset(std::exception_ptr ep) {
@@ -321,11 +309,10 @@ future<> server::shutdown() {
     size_t nr_conn = 0;
     auto nr_conn_total = _connections_list.size();
     _logger.debug("shutdown connection nr_total={}", nr_conn_total);
-    co_await for_each_gently([&nr_conn, nr_conn_total, this](connection& c) {
-        c.shutdown();
+    co_await for_each_gently([this, &nr_conn, nr_conn_total] (std::reference_wrapper<connection> c) {
+        c.get().shutdown();
         _logger.debug("shutdown connection {} out of {} done", ++nr_conn, nr_conn_total);
     });
-
     _abort_source.request_abort();
 }
 

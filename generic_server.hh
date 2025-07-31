@@ -12,9 +12,9 @@
 
 #include "seastarx.hh"
 #include "utils/updateable_value.hh"
+#include "utils/scoped_item_list.hh"
 
 #include <cstdint>
-#include <list>
 
 #include <seastar/core/file-types.hh>
 #include <seastar/core/future.hh>
@@ -23,8 +23,6 @@
 #include <seastar/net/api.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/core/semaphore.hh>
-
-#include <boost/intrusive/list.hpp>
 
 namespace generic_server {
 
@@ -38,7 +36,7 @@ class server;
 // Protocol specific classes are expected to override the `process_request`
 // member function to perform request processing. This base class provides a
 // `_read_buf` and a `_write_buf` for reading requests and writing responses.
-class connection : public boost::intrusive::list_base_hook<> {
+class connection {
     friend class server;
 public:
     using connection_process_loop = noncopyable_function<future<> ()>;
@@ -53,6 +51,8 @@ public:
     execute_under_tenant_type _execute_under_current_tenant = no_tenant();
 protected:
     server& _server;
+    utils::scoped_item_list<std::reference_wrapper<connection>>::handle _connections_list_entry;
+
     connected_socket _fd;
     input_stream<char> _read_buf;
     output_stream<char> _write_buf;
@@ -113,15 +113,7 @@ protected:
     uint64_t _shed_connections = 0;
     uint64_t _blocked_connections = 0;
     future<> _listeners_stopped = make_ready_future<>();
-    using connections_list_t = boost::intrusive::list<connection>;
-    connections_list_t _connections_list;
-    struct gentle_iterator {
-        connections_list_t::iterator iter, end;
-        gentle_iterator(server& s) : iter(s._connections_list.begin()), end(s._connections_list.end()) {}
-        gentle_iterator(const gentle_iterator&) = delete;
-        gentle_iterator(gentle_iterator&&) = delete;
-    };
-    std::list<gentle_iterator> _gentle_iterators;
+    utils::scoped_item_list<std::reference_wrapper<connection>> _connections_list;
     std::vector<server_socket> _listeners;
     shared_ptr<seastar::tls::server_credentials> _credentials;
     seastar::abort_source _abort_source;

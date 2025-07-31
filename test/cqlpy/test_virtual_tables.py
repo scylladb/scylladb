@@ -78,6 +78,9 @@ def test_clients(scylla_only, cql):
         'username',
     ])
     cls = list(cql.execute(f"SELECT {columns} FROM system.clients"))
+    # There must be at least one connection - the one that sent this SELECT
+    # request.
+    assert len(cls) > 0
     for cl in cls:
         assert(cl[0] == '127.0.0.1')
         assert(cl[2] == 'cql')

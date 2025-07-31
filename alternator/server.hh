@@ -9,6 +9,7 @@
 #pragma once
 
 #include "alternator/executor.hh"
+#include "utils/scoped_item_list.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/http/httpd.hh>
@@ -19,6 +20,8 @@
 #include "utils/small_vector.hh"
 #include "utils/updateable_value.hh"
 #include <seastar/core/units.hh>
+
+struct client_data;
 
 namespace alternator {
 
@@ -74,12 +77,30 @@ class server : public peering_sharded_service<server> {
     };
     json_parser _json_parser;
 
+    // The server maintains a list of ongoing requests, that are being handled
+    // by handle_api_request(). It uses this list in get_client_data(), which
+    // is called when reading the "system.clients" virtual table.
+    struct ongoing_request {
+        socket_address _client_address;
+        sstring _user_agent;
+        sstring _username;
+        scheduling_group _scheduling_group;
+        bool _is_https;
+        client_data make_client_data() const;
+    };
+    utils::scoped_item_list<ongoing_request> _ongoing_requests;
+
 public:
     server(executor& executor, service::storage_proxy& proxy, gms::gossiper& gossiper, auth::service& service, qos::service_level_controller& sl_controller);
 
     future<> init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
             utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests);
     future<> stop();
+    // get_client_data() is called (on each shard separately) when the virtual
+    // table "system.clients" is read. It is expected to generate a list of
+    // clients connected to this server (on this shard). This function is
+    // called by alternator::controller::get_client_data().
+    future<utils::chunked_vector<client_data>> get_client_data();
 private:
     void set_routes(seastar::httpd::routes& r);
     // If verification succeeds, returns the authenticated user's username
