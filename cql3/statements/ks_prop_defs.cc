@@ -153,7 +153,11 @@ ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
     std::map<sstring, sstring> replication_opts, storage_opts, tablets_opts, durable_writes_opts;
 
     auto read_property_into = [] (auto& map, const sstring& name, const sstring& value, const sstring& tag) {
-        map[name.substr(sstring(tag).size() + 1)] = value;
+        auto prefix = sstring(tag) + ":";
+        if (!name.starts_with(prefix)) {
+            throw std::runtime_error(seastar::format("ks_prop_defs: Expected name to start with \"{}\", but got: \"{}\"", prefix, name));
+        }
+        map[name.substr(prefix.size())] = value;
     };
 
     for (const auto& [name, value] : options) {
