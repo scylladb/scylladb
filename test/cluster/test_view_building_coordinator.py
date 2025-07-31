@@ -54,12 +54,12 @@ async def unpause_view_build_coordinator(manager: ManagerClient):
     await asyncio.gather(*(manager.api.message_injection(s.ip_addr, VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP) for s in servers))
     await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, VIEW_BUILDING_COORDINATOR_PAUSE_MAIN_LOOP) for s in servers))
 
-async def pause_view_building_tasks(manager: ManagerClient, token: int | None = None):
+async def pause_view_building_tasks(manager: ManagerClient, token: int | None = None, pause_all: bool = True):
     servers = await manager.running_servers()
     params = {}
     if token is not None:
         params["token"] = token
-    await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK, one_shot=True, parameters=params) for s in servers))
+    await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, VIEW_BUILDING_WORKER_PAUSE_BUILD_RANGE_TASK, one_shot=pause_all, parameters=params) for s in servers))
 
 async def unpause_view_building_tasks(manager: ManagerClient):
     servers = await manager.running_servers()
