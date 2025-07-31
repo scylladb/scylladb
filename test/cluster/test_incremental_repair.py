@@ -20,6 +20,8 @@ import subprocess
 import json
 import socket
 import random
+import requests
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +141,22 @@ def get_scylla_path(cql):
 
     assert False, f"Failed to find and verify Scylla executable path after {max_retries} attempts."
 
+def get_metrics(server, metric_name):
+    num = 0
+    metrics = requests.get(f"http://{server.ip_addr}:9180/metrics").text
+    logger.info(f"Got for {metric_name=} {metrics=}");
+    pattern = re.compile(rf"^{metric_name}")
+    for metric in metrics.split('\n'):
+        if pattern.match(metric) is not None:
+            num += int(metric.split()[1])
+    return num
+
+def get_incremental_repair_sst_skipped_bytes(server):
+    return get_metrics(server, "scylla_repair_inc_sst_skipped_bytes")
+
+def get_incremental_repair_sst_read_bytes(server):
+    return get_metrics(server, "scylla_repair_inc_sst_read_bytes")
+
 async def get_sstables_for_server(manager, server, ks):
     node_workdir = await manager.server_get_workdir(server.server_id)
     sstables = get_sstables(node_workdir, ks, 'test')
@@ -191,6 +209,35 @@ async def preapre_cluster_for_incremental_repair(manager, nr_keys = 100 , cmdlin
     for s in servers:
         logs.append(await manager.server_open_log(s.server_id))
     return servers, cql, hosts, ks, table_id, logs, repaired_keys,  unrepaired_keys, current_key, token
+
+@pytest.mark.asyncio
+async def test_tablet_repair_sstable_skipped_read_metrics(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id, logs, _, _, _, token = await preapre_cluster_for_incremental_repair(manager)
+
+    await insert_keys(cql, ks, 0, 100)
+
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    skipped_bytes = get_incremental_repair_sst_skipped_bytes(servers[0])
+    read_bytes = get_incremental_repair_sst_read_bytes(servers[0])
+    # Nothing to skip. Repair all data.
+    assert skipped_bytes == 0
+    assert read_bytes > 0
+
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    skipped_bytes2 = get_incremental_repair_sst_skipped_bytes(servers[0])
+    read_bytes2 = get_incremental_repair_sst_read_bytes(servers[0])
+    # Skip all. Nothing to repair
+    assert skipped_bytes2 > 0
+    assert read_bytes2 == read_bytes
+
+    await insert_keys(cql, ks, 200, 300)
+
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    skipped_bytes3 = get_incremental_repair_sst_skipped_bytes(servers[0])
+    read_bytes3 = get_incremental_repair_sst_read_bytes(servers[0])
+    # Both skipped and read bytes should grow
+    assert skipped_bytes3 > skipped_bytes2
+    assert read_bytes3 > read_bytes2
 
 @pytest.mark.asyncio
 async def test_tablet_incremental_repair(manager: ManagerClient):
