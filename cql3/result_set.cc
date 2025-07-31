@@ -46,14 +46,6 @@ void metadata::add_non_serialized_column(lw_shared_ptr<column_specification> nam
     _column_info->_names.emplace_back(std::move(name));
 }
 
-bool metadata::all_in_same_cf() const {
-    if (_flags.contains<flag::NO_METADATA>()) {
-        return false;
-    }
-
-    return column_specification::all_in_same_table(_column_info->_names);
-}
-
 void metadata::set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state) {
     _flags.set<flag::HAS_MORE_PAGES>();
     _paging_state = std::move(paging_state);

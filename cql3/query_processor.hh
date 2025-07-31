@@ -529,58 +529,6 @@ private:
     future<::shared_ptr<cql_transport::messages::result_message>> execute_with_guard(
         std::function<future<::shared_ptr<cql_transport::messages::result_message>>(service::query_state&, ::shared_ptr<cql_statement>, const query_options&, std::optional<service::group0_guard>)> fn,
         ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options);
-
-    ///
-    /// \tparam ResultMsgType type of the returned result message (CQL)
-    /// \tparam PreparedKeyGenerator a function that generates the prepared statement cache key for given query and
-    ///         keyspace
-    /// \tparam IdGetter a function that returns the corresponding prepared statement ID (CQL) for a given
-    ////        prepared statement cache key
-    /// \param query_string
-    /// \param client_state
-    /// \param id_gen prepared ID generator, called before the first deferring
-    /// \param id_getter prepared ID getter, passed to deferred context by reference. The caller must ensure its
-    ////       liveness.
-    /// \return
-    template <typename ResultMsgType, typename PreparedKeyGenerator, typename IdGetter>
-    future<::shared_ptr<cql_transport::messages::result_message::prepared>>
-    prepare_one(
-            sstring query_string,
-            const service::client_state& client_state,
-            dialect d,
-            PreparedKeyGenerator&& id_gen,
-            IdGetter&& id_getter) {
-        return do_with(
-                id_gen(query_string, client_state.get_raw_keyspace()),
-                std::move(query_string),
-                [this, &client_state, &id_getter, d](const prepared_cache_key_type& key, const sstring& query_string) {
-            return _prepared_cache.get(key, [this, &query_string, &client_state, d] {
-                auto prepared = get_statement(query_string, client_state, d);
-                prepared->calculate_metadata_id();
-                auto bound_terms = prepared->statement->get_bound_terms();
-                if (bound_terms > std::numeric_limits<uint16_t>::max()) {
-                    throw exceptions::invalid_request_exception(
-                            format("Too many markers(?). {:d} markers exceed the allowed maximum of {:d}",
-                                   bound_terms,
-                                   std::numeric_limits<uint16_t>::max()));
-                }
-                SCYLLA_ASSERT(bound_terms == prepared->bound_names.size());
-                return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
-            }).then([&key, &id_getter, &client_state] (auto prep_ptr) {
-                const auto& warnings = prep_ptr->warnings;
-                const auto msg =
-                        ::make_shared<ResultMsgType>(id_getter(key), std::move(prep_ptr),
-                            client_state.is_protocol_extension_set(cql_transport::cql_protocol_extension::LWT_ADD_METADATA_MARK));
-                for (const auto& w : warnings) {
-                    msg->add_warning(w);
-                }
-                return make_ready_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(std::move(msg));
-            }).handle_exception_type([&query_string] (typename prepared_statements_cache::statement_is_too_big&) {
-                return make_exception_future<::shared_ptr<cql_transport::messages::result_message::prepared>>(
-                        prepared_statement_is_too_big(query_string));
-            });
-        });
-    };
 };
 
 class query_processor::migration_subscriber : public service::migration_listener {

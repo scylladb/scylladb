@@ -74,9 +74,6 @@ public:
 
     void add_non_serialized_column(lw_shared_ptr<column_specification> name);
 
-private:
-    bool all_in_same_cf() const;
-
 public:
     void set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state);
     void maybe_set_paging_state(lw_shared_ptr<const service::pager::paging_state> paging_state);
