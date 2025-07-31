@@ -90,6 +90,14 @@ sstring single_quote(const std::string_view s);
 // indicates its incorrectness (for example using other units than microseconds).
 void validate_timestamp(const db::config& config, const query_options& options, const std::unique_ptr<attributes>& attrs);
 
+template<typename T>
+std::vector<T> to_vector(const std::vector<data_value>& values) {
+    std::vector<T> ann_vector;
+    ann_vector.reserve(values.size());
+    std::ranges::transform(values, std::back_inserter(ann_vector), [](const auto& v) { return value_cast<T>(v); });
+    return ann_vector;
+}
+
 } // namespace util
 
 } // namespace cql3
