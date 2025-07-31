@@ -856,7 +856,7 @@ async def assert_tablet_count_metric_value_for_shards(manager: ManagerClient, se
     metrics = await manager.metrics.query(server.ip_addr)
     for shard_id in range(0, len(expected_count_per_shard)):
         expected_tablet_count = expected_count_per_shard[shard_id]
-        tablet_count = metrics.get(name=tablet_count_metric_name, labels=None, shard=str(shard_id))
+        tablet_count = metrics.get(tablet_count_metric_name, {'shard':str(shard_id)})
         assert int(tablet_count) == expected_tablet_count
 
 async def get_tablet_tokens_from_host_on_shard(manager: ManagerClient, server: ServerInfo, keyspace_name: str, table_name: str, shard: int) -> list[int]:
