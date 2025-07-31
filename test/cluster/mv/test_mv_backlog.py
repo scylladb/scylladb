@@ -147,8 +147,8 @@ async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> Non
 
             # Measure the total delay before the second write, and the number of delayed writes
             local_metrics = await manager.metrics.query(srv_base.ip_addr)
-            before_computed_delay = local_metrics.get(delay_metric_name, {'shard': str(shard)}) or 0.0
-            before_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, {'shard': str(shard)}) or 0.0
+            before_computed_delay = local_metrics.get(delay_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
+            before_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
 
             # Do the second write, as mentioned previously
             await cql.run_async(stmt, [0, 0, ''], host=host_base)
@@ -156,8 +156,8 @@ async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> Non
             # Make sure that there is exactly one throttled write and calculate a delay for it.
             # If we're testing the 0ms delay, instead make sure that there were no delayed writes.
             local_metrics = await manager.metrics.query(srv_base.ip_addr)
-            after_computed_delay = local_metrics.get(delay_metric_name, {'shard': str(shard)}) or 0.0
-            after_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, {'shard': str(shard)}) or 0.0
+            after_computed_delay = local_metrics.get(delay_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
+            after_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
 
             if delay_limit == 0:
                 assert after_total_throttled_writes == before_total_throttled_writes
