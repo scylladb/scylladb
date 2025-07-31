@@ -583,14 +583,48 @@ private:
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(utils::chunked_vector<mutation> mutation, tracing::trace_state_ptr tr_state, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info);
 
-    // Check whether the topology version from the token is greater than or equal to 
-    // the current fencing_version obtained from shared_token_metadata. 
-    // If it is lower, the function returns a non-empty optional.
+    // The functions below implement fencing support in storage_proxy.
+    //
+    // Workflow overview:
+    //   * A request coordinator (either regular CL-based or LWT) captures a strong pointer
+    //     to the current ERM (Effective Replication Map). Holding this reference prevents
+    //     topology changes from completing until the ongoing operation finishes, ensuring
+    //     a consistent replica topology during the request.
+    // *   The topology coordinator waits for request coordinators to release ERMs
+    //     from older topology versions. This is handled in global_token_metadata_barrier
+    //     via the barrier_and_drain command on replicas.
+    //   * The wait may fail (e.g., due to connectivity issues between the topology coordinator
+    //     and a request coordinator). In such cases, problematic nodes are "fenced out":
+    //     the fence_version on all other nodes is updated to the new, incremented topology version.
+    //   * When a request coordinator contacts replicas, it sends its topology version in a fencing_token.
+    //     The replica verifies that the token’s version is not older than the replicas' fencing version.
+    //     If it is older, this means the coordinator was fenced out, and the replica
+    //     must reject the request.
+    //   * Replicas must validate the fencing token both before and after accessing local data.
+    //     This ensures that if the coordinator is fenced out mid-request, the replica does not
+    //     return success, which would incorrectly contribute to achieving the target CL. Otherwise,
+    //     the user might observe successful writes that are not readable after the topology
+    //     operation completes.
+
+    // This is the main function that other functions call. It compares the version from the 
+    // fencing_token with the fence_version on the local node/shard and returns an instance of
+    // stale_topology_exception if the request coordinator is lagging behind.
     std::optional<replica::stale_topology_exception> check_fence(fencing_token token,
         locator::host_id caller_address) const noexcept;
-    // Do the same when the future is resolved without exception.
+
+    // Checks the fence_token when the future is ready.
+    //
+    // This function is used in cases where performing a fence check before local data access
+    // would be redundant:
+    //   * On coordinators: there is no need to check the fencing_token before execution because
+    //     the coordinator has just captured an ERM with the latest topology version, ensuring
+    //     that the node’s topology version cannot be smaller than its fence_version.
+    //   * In receive_mutation_handler: the fence_token is already checked once in handle_write
+    //     before execution. The "after" check should only run when applying mutations locally;
+    //     forwarded mutations perform their own fence_token checks.
     template <typename T>
-    future<T> apply_fence(future<T> future, fencing_token fence, locator::host_id caller_address) const;
+    future<T> apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) const;
+
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 

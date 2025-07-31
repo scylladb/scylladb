@@ -699,7 +699,7 @@ private:
                 fence.value_or(fencing_token{}),
                 /* apply_fn */ [smp_grp, rate_limit_info, src_addr] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout, fencing_token fence) {
-                    return p->apply_fence(p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info), fence, src_addr);
+                    return p->apply_fence_on_ready(p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info), fence, src_addr);
                 },
                 /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, locator::host_id addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
@@ -1306,7 +1306,7 @@ public:
         auto m = _mutations[my_id];
         if (m) {
             tracing::trace(tr_state, "Executing a mutation locally");
-            return sp.apply_fence(sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, my_id);
+            return sp.apply_fence_on_ready(sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, my_id);
         }
         return make_ready_future<>();
     }
@@ -1358,7 +1358,7 @@ public:
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, fencing_token fence) override {
         tracing::trace(tr_state, "Executing a mutation locally");
-        return sp.apply_fence(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, sp.my_host_id(erm));
+        return sp.apply_fence_on_ready(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, sp.my_host_id(erm));
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1390,7 +1390,7 @@ public:
             const locator::effective_replication_map& erm, fencing_token fence) override {
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
-        return sp.apply_fence(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, sp.my_host_id(erm));
+        return sp.apply_fence_on_ready(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, sp.my_host_id(erm));
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -3362,7 +3362,7 @@ storage_proxy::check_fence(fencing_token token, locator::host_id caller_address)
 }
 
 template <typename T>
-future<T> storage_proxy::apply_fence(future<T> future, fencing_token fence, locator::host_id caller_address) const {
+future<T> storage_proxy::apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) const {
     if (!fence) {
         return std::move(future);
     }
@@ -3796,7 +3796,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             // entry to the phased barrier into the function, but the function is called from the RPC
             // handler as well and there it is more complicated. See FIXME there.
             auto op = start_write();
-            co_await apply_fence(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
+            co_await apply_fence_on_ready(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = mutations
@@ -5327,7 +5327,7 @@ protected:
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
+            return _proxy->apply_fence_on_ready(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             const bool format_reverse_required = cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             cmd = format_reverse_required ? reversed(::make_lw_shared(*cmd)) : cmd;
@@ -5352,7 +5352,7 @@ protected:
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
+            return _proxy->apply_fence_on_ready(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
@@ -5364,7 +5364,7 @@ protected:
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
-            return _proxy->apply_fence(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
+            return _proxy->apply_fence_on_ready(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
                         timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
