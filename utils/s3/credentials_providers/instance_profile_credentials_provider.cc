@@ -27,9 +27,7 @@ bool instance_profile_credentials_provider::is_time_to_refresh() const {
 }
 
 future<> instance_profile_credentials_provider::reload() {
-    if (is_time_to_refresh() || !creds) {
-        co_await update_credentials();
-    }
+    co_await update_credentials();
 }
 
 static constexpr auto EC2_SECURITY_CREDENTIALS_RESOURCE = "/latest/meta-data/iam/security-credentials";
