@@ -15,6 +15,16 @@ def test_create_and_drop_keyspace(cql, this_dc):
     cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
+# Trying to create a keyspace without specifying the replication strategy
+# should result in NetworkTopologyStrategy being set by default.
+def test_create_and_drop_keyspace_with_default_replication_class(cql, this_dc):
+    ksdef = "WITH REPLICATION = { 'replication_factor' : '1' }"
+    with new_test_keyspace(cql, ksdef) as keyspace:
+        row = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
+        rep = row.replication
+        assert rep["class"] == "org.apache.cassandra.locator.NetworkTopologyStrategy"
+        assert rep[this_dc] == "1"
+
 # Trying to create the same keyspace - even if with identical parameters -
 # should result in an AlreadyExists error.
 def test_create_keyspace_twice(cql, this_dc):
