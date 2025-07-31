@@ -19,7 +19,8 @@ namespace statements {
 /**
  * Class for common statement properties.
  */
-class cf_properties final {
+class cf_properties {
+protected:
     const ::shared_ptr<cf_prop_defs> _properties = ::make_shared<cf_prop_defs>();
     bool _use_compact_storage = false;
     std::vector<std::pair<::shared_ptr<column_identifier>, bool>> _defined_ordering; // Insertion ordering is important
