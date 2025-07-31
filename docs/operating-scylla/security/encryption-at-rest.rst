@@ -840,12 +840,12 @@ Set the Azure Host
 If you are using Azure Key Vault to encrypt tables or system information, you
 need to add the Azure information to the ``scylla.yaml`` configuration file.
 
-What You'll Need
-================
+**Before you Begin**
 
 Before configuring Azure Key Vault integration, ensure you have:
 
-* A Vault key.
+* A key vault and a key in your Azure account. Follow the procedure in
+  :ref:`Create Encryption Keys <ear-create-encryption-key>` to create them.
 
 * An Azure identity to authenticate ScyllaDB against the Vault key. Choose one of:
 
@@ -853,28 +853,27 @@ Before configuring Azure Key Vault integration, ensure you have:
   * **Service Principal** - Requires providing a tenant ID, client ID, and a secret or certificate.
 
 * Sufficient permissions to perform the ``wrapkey`` and ``unwrapkey`` operations
-  on the key. If you are using RBAC, you can assign the "Key Vault Crypto User"
-  role to your identity.
+  on the key. For example, if your key vault uses RBAC, you can assign the
+  built-in "Key Vault Crypto User" role to your identity.
 
 .. note::
    ScyllaDB can also authenticate indirectly through a preconfigured Azure CLI,
    but this is offered only for testing purposes.
 
-Procedure
-=========
+**Procedure**
 
-#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add a new host
-   in the Azure host(s) section:
+#. Edit the ``scylla.yaml`` file located in ``/etc/scylla/`` to add the
+   following in the Azure host(s) section:
 
    .. code-block:: yaml
 
       azure_hosts:
         <name>:
             azure_tenant_id: <tenant ID> (optional)
-            azure_client_id: <ID of your service principal> (optional)
+            azure_client_id: <ID of the service principal> (optional)
             azure_client_secret: <secret of the service principal> (optional)
             azure_client_certificate_path: <path to PEM-encoded certificate and private key of the service principal> (optional)
-            master_key: <vaultname>/<keyname> - named Vault key for encrypting data keys (optional)
+            master_key: <vaultname>/<keyname> - named Vault key for encrypting data keys (required)
             truststore: <PEM file with CA certificates for TLS> (optional)
             priority_string: <TLS priority string> (optional)
             key_cache_expiry: <key cache expiry period> (optional)
@@ -888,7 +887,7 @@ Procedure
    * ``azure_client_id`` - The client ID of your service principal. Required only for authentication with a service principal.
    * ``azure_client_secret`` - The secret of your service principal. Required only for authentication with a service principal.
    * ``azure_client_certificate_path`` - The path to the PEM-encoded certificate and private key file of your service principal. Can be used instead of a secret.
-   * ``master_key`` - The <vaultname>/<keyname> of your key. This parameter can be omitted if you specify it through the :ref:`encryption options <ear-create-table-master-key-override>` of the table schema.
+   * ``master_key`` - The <vaultname>/<keyname> of your key. This parameter is required.
    * ``truststore`` - Path to a PEM file with CA certificates to validate the server's TLS certificate.
    * ``priority_string`` - The TLS priority string for TLS handshakes.
    * ``key_cache_expiry`` - Key cache expiry period, after which keys will be re-requested from Azure Key Vault. Default is 600s.
@@ -898,7 +897,7 @@ Procedure
 
    .. tabs::
 
-      .. group-tab:: Managed Identity (Recommended for Production)
+      .. group-tab:: Managed Identity (recommended)
 
          .. code-block:: yaml
 
@@ -917,10 +916,6 @@ Procedure
                   azure_client_secret: mysecret
                   master_key: mykeyvault/mykey
 
-         .. note::
-            Alternatively, ScyllaDB can obtain these credentials from the following environment variables:
-            ``AZURE_TENANT_ID``, ``AZURE_CLIENT_ID``, and ``AZURE_CLIENT_SECRET``.
-
       .. group-tab:: Service Principal with Certificate
 
          .. code-block:: yaml
@@ -932,9 +927,26 @@ Procedure
                   azure_client_certificate_path: /path/to/certificate.pem
                   master_key: mykeyvault/mykey
 
-         .. note::
-            Alternatively, ScyllaDB can obtain these credentials from the following environment variables:
-            ``AZURE_TENANT_ID``, ``AZURE_CLIENT_ID``, and ``AZURE_CLIENT_CERTIFICATE_PATH``.
+   .. note::
+
+      **Azure Credential Resolution**
+
+      If no credentials are provided in the configuration file, ScyllaDB will
+      attempt to automatically resolve credentials in the following order:
+
+      1. **Environment Variables**: Checks the ``AZURE_TENANT_ID``,
+         ``AZURE_CLIENT_ID``, ``AZURE_CLIENT_SECRET``, and
+         ``AZURE_CLIENT_CERTIFICATE_PATH`` environment variables. If set,
+         ScyllaDB uses these credentials directly. If both ``AZURE_CLIENT_SECRET``
+         and ``AZURE_CLIENT_CERTIFICATE_PATH`` are set, the secret takes
+         precedence.
+
+      2. **Azure CLI**: If the Azure CLI is installed and configured, ScyllaDB
+         will be using it to generate access tokens.
+
+      3. **Azure Instance Metadata Service (IMDS)**: If running on an Azure VM
+         with an assigned managed identity, ScyllaDB will be querying the IMDS
+         for access tokens.
 
 #. Save the file.
 #. Drain the node with :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>`
