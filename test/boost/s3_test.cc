@@ -845,7 +845,7 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.session_token.contains("STS_SESSIONTOKEN"), true);
     seastar::sleep(1050ms).get();
     auto creds1 = provider_chain.get_aws_credentials().get();
-    BOOST_REQUIRE(creds1.expires_at - creds.expires_at == 0s);
+    BOOST_REQUIRE(creds1.expires_at - creds.expires_at >= 1s);
 
     provider_chain = {};
     provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
@@ -856,7 +856,7 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
     BOOST_REQUIRE_EQUAL(creds.session_token.contains("INSTANCE_FROFILE_SESSIONTOKEN"), true);
     seastar::sleep(1050ms).get();
     creds1 = provider_chain.get_aws_credentials().get();
-    BOOST_REQUIRE(creds1.expires_at - creds.expires_at == 0s);
+    BOOST_REQUIRE(creds1.expires_at - creds.expires_at >= 1s);
 
     provider_chain = {};
     provider_chain.add_credentials_provider(std::make_unique<aws::sts_assume_role_credentials_provider>("0.0.0.0", 0, false))
