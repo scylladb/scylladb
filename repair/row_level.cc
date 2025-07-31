@@ -193,6 +193,8 @@ struct row_level_repair_metrics {
     uint64_t row_from_disk_bytes{0};
     uint64_t tx_hashes_nr{0};
     uint64_t rx_hashes_nr{0};
+    uint64_t inc_sst_skipped_bytes{0};
+    uint64_t inc_sst_read_bytes{0};
     row_level_repair_metrics() {
         namespace sm = seastar::metrics;
         _metrics.add_group("repair", {
@@ -212,6 +214,10 @@ struct row_level_repair_metrics {
                             sm::description("Total number of rows read from disk on this shard.")),
             sm::make_counter("row_from_disk_bytes", row_from_disk_bytes,
                             sm::description("Total bytes of rows read from disk on this shard.")),
+            sm::make_counter("inc_sst_skipped_bytes", inc_sst_skipped_bytes,
+                            sm::description("Total number of bytes skipped from sstables for incremental repair on this shard.")),
+            sm::make_counter("inc_sst_read_bytes", inc_sst_read_bytes,
+                            sm::description("Total number of bytes read from sstables for incremental repair on this shard.")),
         });
     }
 };
@@ -1177,14 +1183,17 @@ private:
         for (auto& snap : sstables) {
             co_await coroutine::maybe_yield();
             auto& sst = snap.sst;
+            auto bytes_on_disk = sst->bytes_on_disk();
             if (repair::is_repaired(sstables_repaired_at, sst)) {
                 rlogger.info("Skipped adding sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for incremental repair",
                     sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard);
+                _metrics.inc_sst_skipped_bytes += bytes_on_disk;
             } else {
                 sst->mark_as_being_repaired(_frozen_topology_guard);
                 rlogger.info("Added sst={} repaired_at={} sstables_repaired_at={} being_repaired={} session_id={} for incremental repair",
                     sst->toc_filename(), sst->get_stats_metadata().repaired_at, sstables_repaired_at, sst->being_repaired, _frozen_topology_guard);
                 _incremental_repair_meta.sst_set->insert(sst);
+                _metrics.inc_sst_read_bytes += bytes_on_disk;
             }
         }
         // Note: It is safe to re-enable compaction again because all
