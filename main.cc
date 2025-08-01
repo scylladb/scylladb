@@ -1907,6 +1907,10 @@ sharded<locator::shared_token_metadata> token_metadata;
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
+            // Depends on all keyspaces being initialized because after this call
+            // we can be reloading schema.
+            mm.local().register_feature_listeners();
+
             checkpoint(stop_signal, "starting commit log");
             auto cl = db.local().commitlog();
 

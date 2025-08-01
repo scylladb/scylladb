@@ -187,6 +187,8 @@ private:
     future<> announce_without_raft(utils::chunked_vector<mutation> schema, group0_guard);
 
 public:
+    void register_feature_listeners();
+
     future<> maybe_sync(const schema_ptr& s, locator::host_id endpoint);
 
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
