@@ -9,12 +9,26 @@
 #pragma once
 
 #include "utils/assert.hh"
+#include "utils/exception_container.hh"
 #include "utils/fragmented_temporary_buffer.hh"
+#include "utils/result.hh"
 #include <seastar/core/timer.hh>
 #include <seastar/core/memory.hh>
 #include <bit>
+#include <concepts>
 
 namespace utils {
+
+template<typename Fn, typename Ret>
+concept buffer_writer_for = std::invocable<Fn, bytes_mutable_view>
+    && ExceptionContainerResult<std::invoke_result_t<Fn, bytes_mutable_view>>
+    && std::same_as<typename std::invoke_result_t<Fn, bytes_mutable_view>::value_type, size_t>;
+
+template<typename Fn>
+concept bytes_ostream_writer = buffer_writer_for<Fn, bytes_ostream>;
+
+template<typename Fn>
+concept fragmented_buffer_writer = buffer_writer_for<Fn, fragmented_temporary_buffer>;
 
 // Users of reusable_buffer don't need the templated parts,
 // so the non-templated implementation parts are extracted
@@ -120,20 +134,30 @@ protected:
     // buffer, and its contents are copied to a new fragmented buffer after `fn`
     // returns.
     // This way a copy is avoided in the small case.
-    template<typename Function>
-    requires std::is_invocable_r_v<size_t, Function, bytes_mutable_view>
-    bytes_ostream make_bytes_ostream(size_t maximum_length, Function&& fn) & {
+    template<bytes_ostream_writer Function>
+    utils::rebind_result<bytes_ostream, std::invoke_result_t<Function, bytes_mutable_view>>
+    make_bytes_ostream(size_t maximum_length, Function&& fn) & {
+        using fn_result_type = std::invoke_result_t<Function, bytes_mutable_view>;
+
         bytes_ostream output;
         if (maximum_length && maximum_length <= bytes_ostream::max_chunk_size()) {
             auto ptr = output.write_place_holder(maximum_length);
-            size_t actual_length = fn(bytes_mutable_view(ptr, maximum_length));
+            fn_result_type fn_result = fn(bytes_mutable_view(ptr, maximum_length));
+            if (!fn_result) {
+                return std::move(fn_result).assume_error();
+            }
+            size_t actual_length = std::move(fn_result).value();
             output.remove_suffix(output.size() - actual_length);
         } else {
             auto view = get_temporary_buffer(maximum_length);
-            size_t actual_length = fn(view);
+            fn_result_type fn_result = fn(view);
+            if (!fn_result) {
+                return std::move(fn_result).assume_error();
+            }
+            size_t actual_length = std::move(fn_result).value();
             output.write(bytes_view(view.data(), actual_length));
         }
-        return output;
+        return std::move(output);
     }
 
     // Provides a contiguous buffer of size `maximum_length` to `fn`.
@@ -146,20 +170,30 @@ protected:
     // buffer, and its contents are copied to a new fragmented buffer after `fn`
     // returns.
     // This way a copy is avoided in the small case.
-    template<typename Function>
-    requires std::is_invocable_r_v<size_t, Function, bytes_mutable_view>
-    fragmented_temporary_buffer make_fragmented_temporary_buffer(size_t maximum_length, Function&& fn) & {
+    template<fragmented_buffer_writer Function>
+    utils::rebind_result<fragmented_temporary_buffer, std::invoke_result_t<Function, bytes_mutable_view>>
+    make_fragmented_temporary_buffer(size_t maximum_length, Function&& fn) & {
+        using fn_result_type = std::invoke_result_t<Function, bytes_mutable_view>;
+
         if (maximum_length <= fragmented_temporary_buffer::default_fragment_size) {
             seastar::temporary_buffer<char> buf(maximum_length);
             auto view = bytes_mutable_view(reinterpret_cast<bytes::value_type*>(buf.get_write()), buf.size());
-            size_t actual_length = fn(view);
+            fn_result_type fn_result = fn(view);
+            if (!fn_result) {
+                return std::move(fn_result).assume_error();
+            }
+            size_t actual_length = std::move(fn_result).value();
             buf.trim(actual_length);
             std::vector<seastar::temporary_buffer<char>> chunks;
             chunks.push_back(std::move(buf));
             return fragmented_temporary_buffer(std::move(chunks), actual_length);
         } else {
             auto view = get_temporary_buffer(maximum_length);
-            size_t actual_length = fn(view);
+            fn_result_type fn_result = fn(view);
+            if (!fn_result) {
+                return std::move(fn_result).assume_error();
+            }
+            size_t actual_length = std::move(fn_result).value();
             return fragmented_temporary_buffer(reinterpret_cast<const char*>(view.data()), actual_length);
         }
     }
@@ -300,18 +334,18 @@ public:
 
     // The result mustn't outlive `this`.
     // No method of `this` may be called again.
-    template<typename Function>
-    requires std::is_invocable_r_v<size_t, Function, bytes_mutable_view>
-    bytes_ostream make_bytes_ostream(size_t maximum_length, Function&& fn) & {
+    template<bytes_ostream_writer Function>
+    utils::rebind_result<bytes_ostream, std::invoke_result_t<Function, bytes_mutable_view>>
+    make_bytes_ostream(size_t maximum_length, Function&& fn) & {
         mark_used();
         return _buf.make_bytes_ostream(maximum_length, std::forward<Function>(fn));
     }
 
     // The result mustn't outlive `this`.
     // No method of `this` may be called again.
-    template<typename Function>
-    requires std::is_invocable_r_v<size_t, Function, bytes_mutable_view>
-    fragmented_temporary_buffer make_fragmented_temporary_buffer(size_t maximum_length, Function&& fn) & {
+    template<fragmented_buffer_writer Function>
+    utils::rebind_result<fragmented_temporary_buffer, std::invoke_result_t<Function, bytes_mutable_view>>
+    make_fragmented_temporary_buffer(size_t maximum_length, Function&& fn) & {
         mark_used();
         return _buf.make_fragmented_temporary_buffer(maximum_length, std::forward<Function>(fn));
     }
