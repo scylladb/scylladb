@@ -536,6 +536,7 @@ CREATE TABLE system.clients (
     ssl_enabled boolean,
     ssl_protocol text,
     username text,
+    scheduling_group text,
     PRIMARY KEY (address, port, client_type)
 ) WITH CLUSTERING ORDER BY (port ASC, client_type ASC)
 ~~~
