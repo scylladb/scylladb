@@ -134,7 +134,7 @@ void cache_hitrate_calculator::run_on(size_t master, lowres_clock::duration d) {
 
 future<lowres_clock::duration> cache_hitrate_calculator::recalculate_hitrates() {
     auto non_system_filter = [&] (const std::pair<table_id, lw_shared_ptr<replica::column_family>>& cf) {
-        return _db.local().find_keyspace(cf.second->schema()->ks_name()).get_replication_strategy().get_type() != locator::replication_strategy_type::local;
+        return !_db.local().find_keyspace(cf.second->schema()->ks_name()).get_replication_strategy().is_local();
     };
 
     auto cf_to_cache_hit_stats = [non_system_filter] (replica::database& db) {

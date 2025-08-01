@@ -2938,7 +2938,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         muts.reserve(topo.normal_nodes.size());
         std::unordered_set<locator::host_id> dirty_nodes;
 
-        for (auto& [_, erm] : _db.get_non_local_strategy_keyspaces_erms()) {
+        for (auto& [_, ermp] : _db.get_non_local_strategy_keyspaces_erms()) {
+            auto* erm = ermp->maybe_as_vnode_effective_replication_map();
             const std::unordered_set<locator::host_id>& nodes = rollback ? erm->get_all_pending_nodes() : erm->get_dirty_endpoints();
             dirty_nodes.insert(nodes.begin(), nodes.end());
         }

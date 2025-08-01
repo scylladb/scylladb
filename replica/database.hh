@@ -1340,7 +1340,7 @@ using keyspace_metadata = data_dictionary::keyspace_metadata;
 struct keyspace_change {
     lw_shared_ptr<keyspace_metadata> metadata;
     locator::replication_strategy_ptr strategy;
-    locator::vnode_effective_replication_map_ptr erm;
+    locator::keyspace_effective_replication_map_ptr erm;
 
     const sstring& keyspace_name() const {
         return metadata->name();
@@ -1372,7 +1372,7 @@ public:
     };
 private:
     locator::replication_strategy_ptr _replication_strategy;
-    locator::vnode_effective_replication_map_ptr _effective_replication_map;
+    locator::keyspace_effective_replication_map_ptr _effective_replication_map;
     lw_shared_ptr<keyspace_metadata> _metadata;
     config _config;
     locator::effective_replication_map_factory& _erm_factory;
@@ -1395,10 +1395,10 @@ public:
 
     static locator::replication_strategy_ptr create_replication_strategy(
             lw_shared_ptr<keyspace_metadata> metadata);
-    future<locator::vnode_effective_replication_map_ptr> create_effective_replication_map(
+    future<locator::keyspace_effective_replication_map_ptr> create_keyspace_effective_replication_map(
             locator::replication_strategy_ptr strategy,
             const locator::shared_token_metadata& stm) const;
-    void update_effective_replication_map(locator::vnode_effective_replication_map_ptr erm);
+    void update_effective_replication_map(locator::keyspace_effective_replication_map_ptr erm);
 
     /**
      * This should not really be return by reference, since replication
@@ -1412,7 +1412,7 @@ public:
         return _replication_strategy;
     }
 
-    locator::vnode_effective_replication_map_ptr get_vnode_effective_replication_map() const;
+    locator::keyspace_effective_replication_map_ptr get_keyspace_effective_replication_map() const;
 
     bool uses_tablets() const {
         return _replication_strategy->uses_tablets();
@@ -1797,7 +1797,8 @@ public:
     std::vector<sstring> get_all_keyspaces() const;
     std::vector<sstring> get_non_local_strategy_keyspaces() const;
     std::vector<sstring> get_non_local_vnode_based_strategy_keyspaces() const;
-    std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
+    // All keyspace_effective_replication_map_ptr must hold a vnode_effective_replication_map
+    std::unordered_map<sstring, locator::keyspace_effective_replication_map_ptr> get_non_local_strategy_keyspaces_erms() const;
     std::vector<sstring> get_tablets_keyspaces() const;
     column_family& find_column_family(std::string_view ks, std::string_view name);
     const column_family& find_column_family(std::string_view ks, std::string_view name) const;
@@ -1915,7 +1916,7 @@ public:
 
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
-    future<dht::token_range_vector> get_keyspace_local_ranges(locator::vnode_effective_replication_map_ptr erm);
+    future<dht::token_range_vector> get_keyspace_local_ranges(locator::keyspace_effective_replication_map_ptr erm);
 
     void set_format(sstables::sstable_version_types format) noexcept;
     void set_format_by_config();

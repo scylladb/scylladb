@@ -948,6 +948,23 @@ std::unique_ptr<locator::token_range_splitter> make_splitter(token_metadata_ptr 
     return std::make_unique<token_metadata_ring_splitter>(std::move(tmptr));
 }
 
+class local_splitter : public locator::token_range_splitter {
+    std::optional<dht::token> _next_token;
+public:
+    local_splitter() : _next_token(dht::minimum_token()) {}
+
+    void reset(dht::ring_position_view pos) override {
+        _next_token = pos.token();
+    }
+
+    std::optional<dht::token> next_token() override {
+        if (auto ret = std::exchange(_next_token, std::nullopt)) {
+            return ret;
+        }
+        return std::nullopt;
+    }
+};
+
 topology&
 token_metadata::get_topology() {
     return _impl->get_topology();
