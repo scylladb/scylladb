@@ -963,6 +963,38 @@ static void decode_set_or_list_type(const listlike_collection_type_impl& type, m
     write_be(collection_size_ptr, collection_size);
 }
 
+// Encode a map type into byte comparable format.
+// The map is encoded as a sequence of key-value pairs, each preceded by a component header similar to sets and lists.
+static void encode_map(const map_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    const auto& key_type = *type.get_keys_type();
+    const auto& value_type = *type.get_values_type();
+    auto map_size = read_collection_size(serialized_bytes_view);
+    while (map_size--) {
+        encode_component(key_type, read_collection_key(serialized_bytes_view), out);
+        encode_component(value_type, read_collection_value_nonnull(serialized_bytes_view), out);
+    }
+    write_native_int(out, TERMINATOR);
+}
+
+// Decode a map type from byte comparable format.
+static void decode_map(const map_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    const auto& key_type = *type.get_keys_type();
+    const auto& value_type = *type.get_values_type();
+    // Create a place holder for the size of the map.
+    // The size will be written later after decoding all the elements.
+    auto map_size_ptr = reinterpret_cast<char*>(out.write_place_holder(sizeof(int32_t)));
+    int32_t map_size = 0;
+    while (decode_marker_and_component<false>(key_type, comparable_bytes_view, out) == stop_iteration::no) {
+        // Decode value
+        if (read_simple_native<uint8_t>(comparable_bytes_view) != NEXT_COMPONENT) {
+            throw_with_backtrace<marshal_exception>("decode_map - unexpected component marker in map");
+        }
+        decode_component(value_type, comparable_bytes_view, out);
+        map_size++;
+    }
+    write_be(map_size_ptr, static_cast<int32_t>(map_size));
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -1042,6 +1074,10 @@ struct to_comparable_bytes_visitor {
     // encode sets and lists
     void operator()(const listlike_collection_type_impl& type) {
         encode_set_or_list_type(type, serialized_bytes_view, out);
+    }
+
+    void operator()(const map_type_impl& type) {
+        encode_map(type, serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -1147,6 +1183,10 @@ struct from_comparable_bytes_visitor {
     // decode sets and lists
     void operator()(const listlike_collection_type_impl& type) {
         decode_set_or_list_type(type, comparable_bytes_view, out);
+    }
+
+    void operator()(const map_type_impl& type) {
+        decode_map(type, comparable_bytes_view, out);
     }
 
     // TODO: Handle other types

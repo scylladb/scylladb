@@ -17,6 +17,7 @@
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "types/list.hh"
+#include "types/map.hh"
 #include "types/set.hh"
 #include "types/types.hh"
 #include "types/comparable_bytes.hh"
@@ -616,6 +617,49 @@ BOOST_AUTO_TEST_CASE(test_set) {
 
 BOOST_AUTO_TEST_CASE(test_list) {
     test_set_or_list(list_type_impl::get_instance, make_list_value);
+}
+
+BOOST_AUTO_TEST_CASE(test_map) {
+    // Generate the test data for a map with UUID keys and bytes values.
+    constexpr size_t test_data_size = 500, max_entries_per_map = 25;
+    std::vector<map_type_impl::native_type> map_test_data;
+    map_test_data.reserve(test_data_size + 21);
+    for (size_t i = 0; i < test_data_size; i++) {
+        map_type_impl::native_type test_item;
+        size_t num_entries = tests::random::get_int<size_t>(1, max_entries_per_map);
+        for (size_t j = 0; j < num_entries; j++) {
+            // Generate a random UUID and a random bytes value
+            test_item.emplace_back(make_random_data_value_uuid(), make_random_data_value_bytes());
+        }
+
+        // Add the map to the test data
+        map_test_data.emplace_back(test_item.begin(), test_item.end());
+    }
+
+    // Include duplicates with some variants
+    for (int i = 0; i < 10; i++) {
+        auto test_item = map_test_data.at(tests::random::get_int<size_t>(test_data_size - 1));
+        map_test_data.emplace_back(test_item);
+        map_type_impl::native_type duplicate_with_different_values;
+        for (const auto& [key, value] : test_item) {
+            duplicate_with_different_values.emplace_back(key, make_random_data_value_bytes());
+        }
+        map_test_data.emplace_back(std::move(duplicate_with_different_values));
+    }
+
+    // Add an empty entry to the map
+    map_test_data.emplace_back();
+
+    for (bool is_multi_cell : {false, true}) {
+        const auto map_type = map_type_impl::get_instance(uuid_type, bytes_type, is_multi_cell);
+        std::vector<data_value> collection_test_data;
+        collection_test_data.reserve(map_test_data.size());
+        for (const auto& data : map_test_data) {
+            collection_test_data.emplace_back(make_map_value(map_type, data));
+        }
+
+        byte_comparable_test(std::move(collection_test_data));
+    }
 }
 
 // Test Scylla's byte-comparable encoding compatibility with Cassandra's implementation by
