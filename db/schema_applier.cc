@@ -852,7 +852,7 @@ future<> schema_applier::load_mutable_token_metadata() {
     locator::mutable_token_metadata_ptr current_token_metadata = co_await _ss.local().get_mutable_token_metadata_ptr();
     if (_tablet_hint) {
         slogger.info("Tablet metadata changed");
-        new_token_metadata = co_await _ss.local().prepare_tablet_metadata(
+        new_token_metadata = co_await _ss.local().prepare_token_metadata_with_tablets_change(
                 _tablet_hint, current_token_metadata);
         co_return co_await _pending_token_metadata.assign(new_token_metadata);
     }

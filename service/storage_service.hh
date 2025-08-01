@@ -258,7 +258,7 @@ public:
     future<> uninit_messaging_service();
 
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
-    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata = nullptr);
+    future<locator::mutable_token_metadata_ptr> prepare_token_metadata_with_tablets_change(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata = nullptr);
     future<> commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr);
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
 
