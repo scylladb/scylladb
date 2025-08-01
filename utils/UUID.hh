@@ -68,6 +68,8 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const UUID& uuid);
 
+    friend std::istream& operator>>(std::istream& in, UUID& uuid);
+
     bool operator==(const UUID& v) const noexcept = default;
 
     // Please note that this comparator does not preserve timeuuid

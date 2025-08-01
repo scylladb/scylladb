@@ -28,15 +28,19 @@ private:
     sstring _partioner;
     utils::chunked_vector<gossip_digest> _digests;
     utils::UUID _group0_id;
+    utils::UUID _recovery_leader;
 public:
     gossip_digest_syn() {
     }
 
-    gossip_digest_syn(sstring id, sstring p, utils::chunked_vector<gossip_digest> digests, utils::UUID group0_id)
+    gossip_digest_syn(
+            sstring id, sstring p, utils::chunked_vector<gossip_digest> digests,
+            utils::UUID group0_id, utils::UUID recovery_leader)
         : _cluster_id(std::move(id))
         , _partioner(std::move(p))
         , _digests(std::move(digests))
-        , _group0_id(std::move(group0_id)) {
+        , _group0_id(std::move(group0_id))
+        , _recovery_leader(std::move(recovery_leader)) {
     }
 
     sstring cluster_id() const {
@@ -45,6 +49,10 @@ public:
 
     utils::UUID group0_id() const {
         return _group0_id;
+    }
+
+    utils::UUID recovery_leader() const {
+        return _recovery_leader;
     }
 
     sstring partioner() const {
@@ -57,6 +65,10 @@ public:
 
     utils::UUID get_group0_id() const {
         return group0_id();
+    }
+
+    utils::UUID get_recovery_leader() const {
+        return _recovery_leader;
     }
 
     sstring get_partioner() const {

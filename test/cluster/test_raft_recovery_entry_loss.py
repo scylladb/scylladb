@@ -8,6 +8,7 @@ import logging
 import time
 import pytest
 
+from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts
@@ -106,15 +107,17 @@ async def test_raft_recovery_entry_lose(manager: ManagerClient):
     # FIXME: check that the way to identify the leader works when it's implemented (whatever it will be).
 
     recovery_leader_id = await manager.get_host_id(live_servers[1].server_id)
-    logging.info(f'Setting recovery leader to {live_servers[1].server_id} on {live_servers}')
-    for srv in live_servers:
+
+    async def set_recovery_leader(srv: ServerInfo):
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
-    # Restart twice to check that noninitial restarts with recovery_leader work. Noninitial restarts should not break
+    logging.info(f'Restarting {live_servers[::-1]} with recovery leader {live_servers[1].server_id}')
+    await manager.rolling_restart(live_servers[::-1], with_down=set_recovery_leader)
+
+    # Restart again to check that noninitial restarts with recovery_leader work. Noninitial restarts should not break
     # the recovery procedure. Note that nodes join the new group 0 only during the first restart with
     # recovery_leader, so the following restarts have a different execution path.
-    logging.info(f'Restarting {live_servers[::-1]} twice')
-    await manager.rolling_restart(live_servers[::-1])
+    logging.info(f'Restarting {live_servers[::-1]} again')
     await manager.rolling_restart(live_servers[::-1])
 
     cql = await reconnect_driver(manager)

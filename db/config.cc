@@ -86,6 +86,12 @@ object_storage_endpoints_to_json(const std::vector<db::object_storage_endpoint_p
     return value_to_json(m);
 }
 
+static
+json::json_return_type
+uuid_to_json(const db::config::UUID& uuid) {
+    return value_to_json(format("{}", uuid));
+}
+
 // Convert a value that can be printed with fmt::format, or a vector of
 // such values, to JSON. An example is enum_option<T>, because enum_option<T>
 // has a specialization for fmt::formatter.
@@ -294,6 +300,12 @@ const config_type& config_type_for<std::vector<db::object_storage_endpoint_param
     return ct;
 }
 
+template <>
+const config_type& config_type_for<db::config::UUID>() {
+    static config_type ct("UUID", uuid_to_json);
+    return ct;
+}
+
 }
 
 namespace YAML {
@@ -487,6 +499,22 @@ struct convert<db::object_storage_endpoint_param> {
         ep.config.use_https = node["https"].as<bool>(false);
         ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
         ep.config.role_arn = node["iam_role_arn"] ? node["iam_role_arn"].as<std::string>() : "";
+        return true;
+    }
+};
+
+template<>
+struct convert<utils::UUID> {
+    static bool decode(const Node& node, utils::UUID& uuid) {
+        std::string uuid_string;
+        if (!convert<std::string>::decode(node, uuid_string)) {
+            return false;
+        }
+        try {
+            std::istringstream(uuid_string) >> uuid;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
         return true;
     }
 };
@@ -1402,7 +1430,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "The maximum fraction of cache memory permitted for use by index cache. Clamped to the [0.0; 1.0] range. Must be small enough to not deprive the row cache of memory, but should be big enough to fit a large fraction of the index. The default value 0.2 means that at least 80\% of cache memory is reserved for the row cache, while at most 20\% is usable by the index cache.")
     , consistent_cluster_management(this, "consistent_cluster_management", value_status::Deprecated, true, "Use RAFT for cluster management and DDL.")
     , force_gossip_topology_changes(this, "force_gossip_topology_changes", value_status::Used, false, "Force gossip-based topology operations in a fresh cluster. Only the first node in the cluster must use it. The rest will fall back to gossip-based operations anyway. This option should be used only for testing.  Note: gossip topology changes are incompatible with tablets.")
-    , recovery_leader(this, "recovery_leader", liveness::LiveUpdate, value_status::Used, "", "Host ID of the node restarted first while performing the Manual Raft-based Recovery Procedure. Warning: this option disables some guardrails for the needs of the Manual Raft-based Recovery Procedure. Make sure you unset it at the end of the procedure.")
+    , recovery_leader(this, "recovery_leader", liveness::LiveUpdate, value_status::Used, utils::null_uuid(), "Host ID of the node restarted first while performing the Manual Raft-based Recovery Procedure. Warning: this option disables some guardrails for the needs of the Manual Raft-based Recovery Procedure. Make sure you unset it at the end of the procedure.")
     , wasm_cache_memory_fraction(this, "wasm_cache_memory_fraction", value_status::Used, 0.01, "Maximum total size of all WASM instances stored in the cache as fraction of total shard memory.")
     , wasm_cache_timeout_in_ms(this, "wasm_cache_timeout_in_ms", value_status::Used, 5000, "Time after which an instance is evicted from the cache.")
     , wasm_cache_instance_size_limit(this, "wasm_cache_instance_size_limit", value_status::Used, 1024*1024, "Instances with size above this limit will not be stored in the cache.")
