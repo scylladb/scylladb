@@ -318,7 +318,7 @@ class TestCQLAudit(AuditTester):
 
     def get_audit_entries_count(self, session):
         res_list = self.get_audit_log_list(session)
-        res_list = self.filter_out_noise(res_list, filter_out_auth=True, filter_out_use=True)
+        res_list = self.filter_out_noise(res_list, filter_out_all_auth=True, filter_out_use=True)
         logger.debug("Printing audit table content:")
         for row in res_list:
             logger.debug("  %s", row)
@@ -431,15 +431,17 @@ class TestCQLAudit(AuditTester):
 
     # Filter out queries that can appear in random moments of the tests,
     # such as LOGINs and USE statements.
-    def filter_out_noise(self, rows, filter_out_auth, filter_out_use):
-        if filter_out_auth:
+    def filter_out_noise(self, rows, filter_out_all_auth=False, filter_out_cassandra_auth=False, filter_out_use=False):
+        if filter_out_all_auth:
             rows = [row for row in rows if row.category != "AUTH"]
+        if filter_out_cassandra_auth:
+            rows = [row for row in rows if not (row.category == "AUTH" and row.username == "cassandra")]
         if filter_out_use:
             rows = [row for row in rows if "USE " not in row.operation]
         return rows
 
     @contextmanager
-    def assert_entries_were_added(self, session: Session, expected_entries: list[AuditEntry], merge_duplicate_rows: bool = True):
+    def assert_entries_were_added(self, session: Session, expected_entries: list[AuditEntry], merge_duplicate_rows: bool = True, filter_out_cassandra_auth: bool = False):
         # Get audit entries before executing the query, to later compare with
         # audit entries after executing the query.
         rows_before = self.get_audit_log_list(session)
@@ -459,10 +461,14 @@ class TestCQLAudit(AuditTester):
         if merge_duplicate_rows:
             new_rows = self.deduplicate_audit_entries(new_rows)
 
+        auth_not_expected = (len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0)
+        use_not_expected = (len([entry for entry in expected_entries if "USE " in entry.statement]) == 0)
+
         new_rows = self.filter_out_noise(
             new_rows,
-            filter_out_auth=len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0,
-            filter_out_use=len([entry for entry in expected_entries if "USE " in entry.statement]) == 0
+            filter_out_all_auth=auth_not_expected,
+            filter_out_cassandra_auth=filter_out_cassandra_auth,
+            filter_out_use=use_not_expected
         )
 
         assert len(new_rows) == len(expected_entries), f"Expected {len(expected_entries)} new audit entries, but got {len(new_rows)} new entries: {new_rows}"
@@ -803,7 +809,7 @@ class TestCQLAudit(AuditTester):
         session = self.prepare(user="cassandra", password="cassandra")
 
         expected_entry = AuditEntry(category="AUTH", statement="LOGIN", table="", ks="", user="wrong_user", cl="", error=True)
-        with self.assert_entries_were_added(session, [expected_entry]):
+        with self.assert_entries_were_added(session, [expected_entry], filter_out_cassandra_auth=True):
             try:
                 bad_session = self.exclusive_cql_connection(self.cluster.nodelist()[0], user="wrong_user", password="wrong_password")
                 pytest.fail()
@@ -923,8 +929,18 @@ class TestCQLAudit(AuditTester):
 
         expected_audit_entries = [AuditEntry(category="AUTH", statement="LOGIN", user="test", table="", ks="", cl="", error=False)]
 
-        with self.assert_entries_were_added(session, expected_audit_entries):
+        with self.assert_entries_were_added(session, expected_audit_entries, filter_out_cassandra_auth=True):
             self.prepare(user="test", password="test", create_keyspace=False)
+
+    def test_cassandra_login(self):
+        """
+        Test user login to default (cassandra) user
+        """
+        session = self.prepare(user="cassandra", password="cassandra", create_keyspace=False)
+        expected_audit_entries = [AuditEntry(category="AUTH", statement="LOGIN", user="cassandra", table="", ks="", cl="", error=False)]
+
+        with self.assert_entries_were_added(session, expected_audit_entries, filter_out_cassandra_auth=False):
+            self.prepare(user="cassandra", password="cassandra", create_keyspace=False)
 
     def test_categories(self):
         """
