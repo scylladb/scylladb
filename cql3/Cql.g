@@ -413,6 +413,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
         bool bypass_cache = false;
         auto attrs = std::make_unique<cql3::attributes::raw>();
         expression wclause = conjunction{};
+        bool is_ann_ordering = false;
     }
     : K_SELECT (
                 ( K_JSON { statement_subtype = raw::select_statement::parameters::statement_subtype::JSON; } )?
@@ -425,7 +426,7 @@ selectStatement returns [std::unique_ptr<raw::select_statement> expr]
              )
       ( K_WHERE w=whereClause { wclause = std::move(w); } )?
       ( K_GROUP K_BY gbcolumns=listOfIdentifiers)?
-      ( K_ORDER K_BY orderByClause[orderings] ( ',' orderByClause[orderings] )* )?
+      ( K_ORDER K_BY orderByClause[orderings, is_ann_ordering] ( ',' orderByClause[orderings, is_ann_ordering] )* )?
       ( K_PER K_PARTITION K_LIMIT rows=intValue { per_partition_limit = std::move(rows); } )?
       ( K_LIMIT rows=intValue { limit = std::move(rows); } )?
       ( K_ALLOW K_FILTERING  { allow_filtering = true; } )?
@@ -484,11 +485,37 @@ whereClause returns [uexpression clause]
         { clause = conjunction{std::move(terms)}; }
     ;
 
-orderByClause[raw::select_statement::parameters::orderings_type& orderings]
+orderByClause[raw::select_statement::parameters::orderings_type& orderings, bool& is_ann_ordering]
     @init{
         raw::select_statement::ordering ordering = raw::select_statement::ordering::ascending;
+        std::optional<expression> ann_ordering;
     }
-    : c=cident (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })? { orderings.emplace_back(c, ordering); }
+    : c=cident (K_ANN K_OF t=term {ann_ordering=std::move(t);})? (K_ASC | K_DESC { ordering = raw::select_statement::ordering::descending; })?
+    {
+        if (!ann_ordering) {
+            if (is_ann_ordering) {
+                throw exceptions::invalid_request_exception(
+                    "ANN ordering does not support any other ordering");
+            }
+            orderings.emplace_back(c, ordering);
+        } else {
+            if (ordering != raw::select_statement::ordering::ascending) {
+                throw exceptions::invalid_request_exception(
+                    "Descending ANN ordering is not supported");
+            }
+            if (!orderings.empty()) {
+                if (is_ann_ordering) {
+                    throw exceptions::invalid_request_exception(
+                        "Cannot specify more than one ANN ordering");
+                } else {
+                    throw exceptions::invalid_request_exception(
+                        "ANN ordering does not support any other ordering");
+                }
+            }
+            is_ann_ordering = true;
+            orderings.emplace_back(c, ann_ordering.value());
+        }
+    }
     ;
 
 jsonValue returns [uexpression value]
@@ -2243,6 +2270,7 @@ K_ORDER:       O R D E R;
 K_BY:          B Y;
 K_ASC:         A S C;
 K_DESC:        D E S C;
+K_ANN:         A N N;
 K_ALLOW:       A L L O W;
 K_FILTERING:   F I L T E R I N G;
 K_IF:          I F;

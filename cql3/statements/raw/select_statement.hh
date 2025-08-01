@@ -43,9 +43,13 @@ public:
         ascending,
         descending
     };
+    // Vector of floats with dimension the same as the vector indexed column.
+    // This vector is the target for the nearest neighbors in ANN queries.
+    using ann_vector = expr::expression;
+    using ordering_type = std::variant<ordering, ann_vector>;
     class parameters final {
     public:
-        using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering>>;
+        using orderings_type = std::vector<std::pair<shared_ptr<column_identifier::raw>, ordering_type>>;
         enum class statement_subtype { REGULAR, JSON, PRUNE_MATERIALIZED_VIEW, MUTATION_FRAGMENTS };
     private:
         const orderings_type _orderings;
@@ -75,11 +79,12 @@ public:
     using compare_fn = std::function<bool(const T&, const T&)>;
 
     using result_row_type = std::vector<managed_bytes_opt>;
+    using prepared_ann_ordering_type = std::pair<const column_definition*, expr::expression>;
     using ordering_comparator_type = compare_fn<result_row_type>;
 protected:
     virtual audit::statement_category category() const override;
 private:
-    using prepared_orderings_type = std::vector<std::pair<const column_definition*, ordering>>;
+    using prepared_orderings_type = std::vector<std::pair<const column_definition*, ordering_type>>;
 private:
     lw_shared_ptr<const parameters> _parameters;
     std::vector<::shared_ptr<selection::raw_selector>> _select_clause;
@@ -125,6 +130,10 @@ private:
     prepared_orderings_type prepare_orderings(const schema& schema) const;
 
     void verify_ordering_is_valid(const prepared_orderings_type&, const schema&, const restrictions::statement_restrictions& restrictions) const;
+
+    void verify_ann_ordering_is_valid(const std::optional<expr::expression>& limit, const std::optional<expr::expression>& per_partition_limit, const selection::selection& selection) const;
+
+    prepared_ann_ordering_type prepare_ann_ordering(const schema& schema, prepare_context& ctx, data_dictionary::database db) const;
 
     // Checks whether this ordering reverses all results.
     // We only allow leaving select results unchanged or reversing them.

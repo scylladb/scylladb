@@ -70,6 +70,27 @@ public:
 
     using ann_error = std::variant<disabled, aborted, addr_unavailable, service_unavailable, service_error, service_reply_format_error>;
 
+    struct ann_error_visitor {
+        sstring operator()(service::vector_store_client::service_error e) const {
+            return fmt::format("Vector Store error: HTTP status {}", e.status);
+        }
+        sstring operator()(service::vector_store_client::disabled) const {
+            return fmt::format("Vector Store is disabled");
+        }
+        sstring operator()(service::vector_store_client::aborted) const {
+            return fmt::format("Vector Store request was aborted");
+        }
+        sstring operator()(service::vector_store_client::addr_unavailable) const {
+            return fmt::format("Vector Store service address could not be fetched from DNS");
+        }
+        sstring operator()(service::vector_store_client::service_unavailable) const {
+            return fmt::format("Vector Store service is unavailable");
+        }
+        sstring operator()(service::vector_store_client::service_reply_format_error) const {
+            return fmt::format("Vector Store returned an invalid JSON");
+        }
+    };
+
     explicit vector_store_client(config const& cfg);
     ~vector_store_client();
 

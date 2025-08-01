@@ -26,6 +26,7 @@
 #include "cql3/statements/request_validations.hh"
 #include "cql3/functions/token_fct.hh"
 #include "dht/i_partitioner.hh"
+#include "db/schema_tables.hh"
 #include "types/tuple.hh"
 
 namespace {
@@ -1274,14 +1275,16 @@ statement_restrictions::statement_restrictions(data_dictionary::database db,
         }
 
         const auto& im = index_opt->metadata();
-        sstring index_table_name = im.name() + "_index";
-        schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
-        _view_schema = view_schema;
+        if (db::schema_tables::view_should_exist(im)) {
+            sstring index_table_name = im.name() + "_index";
+            schema_ptr view_schema = db.find_schema(schema->ks_name(), index_table_name);
+            _view_schema = view_schema;
 
-        if (im.local()) {
-            prepare_indexed_local(*view_schema);
-        } else {
-            prepare_indexed_global(*view_schema);
+            if (im.local()) {
+                prepare_indexed_local(*view_schema);
+            } else {
+                prepare_indexed_global(*view_schema);
+            }
         }
     }
 }
