@@ -187,6 +187,7 @@ class schema_applier {
     functions_change_batch_all_shards _functions_batch; // includes aggregates
 
     future<schema_persisted_state> get_schema_persisted_state();
+    future<> load_mutable_token_metadata();
 public:
     schema_applier(
             sharded<service::storage_proxy>& proxy,
