@@ -26,6 +26,9 @@ set_property(
       $<$<CONFIG:${sanitized_modes}>:-fsanitize-address-use-after-scope>)
 
 add_library(cql3 STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(cql3 REUSE_FROM scylla-main)
+endif()
 target_sources(cql3
   PRIVATE
     type_json.cc

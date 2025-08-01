@@ -1,4 +1,7 @@
 add_library(tools STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(tools REUSE_FROM scylla-main)
+endif()
 target_sources(tools
   PRIVATE
     scylla-local-file-key-generator.cc

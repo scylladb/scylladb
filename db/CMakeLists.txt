@@ -1,4 +1,7 @@
 add_library(db STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(db REUSE_FROM scylla-main)
+endif()
 target_sources(db
   PRIVATE
     consistency_level.cc

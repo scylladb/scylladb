@@ -1,4 +1,7 @@
 add_library(cdc STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(cdc REUSE_FROM scylla-main)
+endif()
 target_sources(cdc
   PRIVATE
     cdc_partitioner.cc

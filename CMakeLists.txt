@@ -163,7 +163,13 @@ file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 include(add_version_library)
 generate_scylla_version()
 
+option(Scylla_USE_PRECOMPILED_HEADER "Use precompiled header for Scylla" ON)
+
 add_library(scylla-main STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(scylla-main PRIVATE "stdafx.hh")
+endif()
+
 target_sources(scylla-main
   PRIVATE
     absl-flat_hash_map.cc

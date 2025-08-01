@@ -1,4 +1,7 @@
 add_library(replica STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(replica REUSE_FROM scylla-main)
+endif()
 target_sources(replica
   PRIVATE
     distributed_loader.cc

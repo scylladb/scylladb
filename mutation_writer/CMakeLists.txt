@@ -1,4 +1,7 @@
 add_library(mutation_writer STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(mutation_writer REUSE_FROM scylla-main)
+endif()
 target_sources(mutation_writer
   PRIVATE
     feed_writers.cc

@@ -4,6 +4,9 @@ find_package(cpp-jwt REQUIRED)
 find_package(kmip)
 
 add_library(scylla_encryption STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(scylla_encryption REUSE_FROM scylla-main)
+endif()
 target_sources(scylla_encryption
   PRIVATE
     encrypted_file_impl.cc

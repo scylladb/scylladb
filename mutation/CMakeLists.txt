@@ -1,4 +1,7 @@
 add_library(mutation STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(mutation REUSE_FROM scylla-main)
+endif()
 target_sources(mutation
   PRIVATE
     async_utils.cc

@@ -4,6 +4,9 @@ generate_cql_grammar(
   SOURCES cql_grammar_srcs)
 
 add_library(alternator STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(alternator REUSE_FROM scylla-main)
+endif()
 target_sources(alternator
   PRIVATE
     controller.cc

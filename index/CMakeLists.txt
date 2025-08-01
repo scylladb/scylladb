@@ -1,6 +1,9 @@
 find_package(cryptopp REQUIRED)
 
 add_library(index STATIC)
+if (Scylla_USE_PRECOMPILED_HEADER)
+  target_precompile_headers(index REUSE_FROM scylla-main)
+endif()
 target_sources(index
   PRIVATE
     secondary_index.cc
