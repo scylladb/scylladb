@@ -995,6 +995,43 @@ static void decode_map(const map_type_impl& type, managed_bytes_view& comparable
     write_be(map_size_ptr, static_cast<int32_t>(map_size));
 }
 
+// Encode a tuple type into byte comparable format.
+// The tuple is encoded as a sequence of components, each preceded by a component header similar to sets and lists.
+// If an element is null, it is encoded with a NEXT_COMPONENT_NULL marker and any trailing nulls are skipped.
+// The tuple is terminated with a TERMINATOR byte.
+static void encode_tuple(const tuple_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    int pending_null_writes = 0;
+    for (const auto& element_type : type.all_types()) {
+        if (serialized_bytes_view.empty()) {
+            // End of tuple values: all remaining elements are null and can be omitted from encoding.
+            break;
+        }
+        auto element = read_tuple_element(serialized_bytes_view);
+        if (element) {
+            // Write any pending null components before writing the current element.
+            while (pending_null_writes > 0) {
+                encode_null_component(out);
+                pending_null_writes--;
+            }
+            encode_component(*element_type.get(), element.value(), out);
+        } else {
+            // Null tuple element. Track it but do not write it yet as it maybe a trailing null.
+            pending_null_writes++;
+        }
+    }
+
+    write_native_int(out, TERMINATOR);
+}
+
+// Decodes a tuple type from byte comparable format into its serialized representation.
+static void decode_tuple(const tuple_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    for (const auto& element_type : type.all_types()) {
+        if (decode_marker_and_component<true>(*element_type.get(), comparable_bytes_view, out) == stop_iteration::yes) {
+            break;
+        }
+    }
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -1078,6 +1115,11 @@ struct to_comparable_bytes_visitor {
 
     void operator()(const map_type_impl& type) {
         encode_map(type, serialized_bytes_view, out);
+    }
+
+    // encode tuples and UDTs
+    void operator()(const tuple_type_impl& type) {
+        encode_tuple(type, serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -1187,6 +1229,11 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const map_type_impl& type) {
         decode_map(type, comparable_bytes_view, out);
+    }
+
+    // decode tuples and UDTs
+    void operator()(const tuple_type_impl& type) {
+        decode_tuple(type, comparable_bytes_view, out);
     }
 
     // TODO: Handle other types

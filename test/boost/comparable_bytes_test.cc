@@ -65,8 +65,8 @@ void byte_comparable_test(std::vector<data_value>&& test_data) {
         auto original_serialized_bytes = managed_bytes(value.serialize_nonnull());
         comparable_bytes comparable_bytes(*test_data_type, original_serialized_bytes);
         auto decoded_serialized_bytes = comparable_bytes.to_serialized_bytes(*test_data_type).value();
-        if (test_data_type == decimal_type) {
-            // The `decimal_type` requires special handling because its comparable byte representation
+        if (test_data_type == decimal_type || test_data_type->is_tuple()) {
+            // 1. The `decimal_type` requires special handling because its comparable byte representation
             // normalizes the scale and unscaled value. This means the serialized bytes after
             // decoding from comparable bytes might not be identical to the original serialized bytes,
             // despite them representing the same decimal value.
@@ -74,7 +74,9 @@ void byte_comparable_test(std::vector<data_value>&& test_data) {
             // are equivalent decimals but have different serialized forms. Comparable byte encoding
             // will normalize them. So, instead of directly comparing serialized bytes, compare the
             // deserialized decoded value against the original decimal value.
-            auto decoded_value = decimal_type->deserialize_value(managed_bytes_view(decoded_serialized_bytes));
+            // 2. When encoding `tuple_type`, any trailing nulls are trimmed, so the serialized bytes
+            // cannot be compared directly.
+            auto decoded_value = test_data_type->deserialize_value(managed_bytes_view(decoded_serialized_bytes));
             BOOST_REQUIRE_MESSAGE(value == decoded_value, seastar::value_of([&] () {
                 return fmt::format("comparable bytes encode/decode failed for value : {}", value);
             }));
@@ -656,6 +658,83 @@ BOOST_AUTO_TEST_CASE(test_map) {
         collection_test_data.reserve(map_test_data.size());
         for (const auto& data : map_test_data) {
             collection_test_data.emplace_back(make_map_value(map_type, data));
+        }
+
+        byte_comparable_test(std::move(collection_test_data));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_tuple) {
+    // Generate the test data for tuple with UUID and bytes types
+    constexpr int test_data_size = 1000;
+    std::vector<data_value> tuple_test_data;
+    tuple_test_data.reserve(test_data_size + 30 + 3);
+    const auto test_tuple_type = tuple_type_impl::get_instance({uuid_type, bytes_type});
+    for (int i = 0; i < test_data_size; i++) {
+        tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {make_random_data_value_uuid(), make_random_data_value_bytes()}));
+    }
+
+    // Include few duplicates in the test data with variations
+    for (int i = 0; i < 10; i++) {
+        auto test_item = value_cast<tuple_type_impl::native_type>(
+            tuple_test_data.at(tests::random::get_int<size_t>(test_data_size - 1)));
+        tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {test_item.at(0), make_random_data_value_bytes()}));
+        tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {make_random_data_value_uuid(), test_item.at(1)}));
+        tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {test_item.at(0), test_item.at(1)}));
+    }
+
+    // Include tuples with nulls in the testdata
+    tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {make_random_data_value_uuid(), data_value::make_null(bytes_type)}));
+    tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {data_value::make_null(uuid_type), make_random_data_value_bytes()}));
+    tuple_test_data.emplace_back(make_tuple_value(test_tuple_type, {data_value::make_null(uuid_type), data_value::make_null(bytes_type)}));
+
+    byte_comparable_test(std::move(tuple_test_data));
+}
+
+BOOST_AUTO_TEST_CASE(test_udt) {
+    // Generate data for UDT with following types : uuid, bytes, int64_t
+    constexpr int test_data_size = 1000;
+    std::vector<user_type_impl::native_type> udt_test_data;
+    udt_test_data.reserve(test_data_size + 100);
+    auto make_random_data_value_int64 = [] () {
+        return data_value(tests::random::get_int<int64_t>(std::numeric_limits<int64_t>::min(), std::numeric_limits<int64_t>::max()));
+    };
+    for (int i = 0; i < test_data_size; i++) {
+        udt_test_data.emplace_back(user_type_impl::native_type{
+            make_random_data_value_uuid(), make_random_data_value_bytes(), make_random_data_value_int64()});
+    }
+
+    // Include few duplicates in the test data with variations
+    for (int i = 0; i < 10; i ++) {
+        auto test_item = udt_test_data.at(tests::random::get_int<size_t>(test_data_size - 1));
+        udt_test_data.emplace_back(user_type_impl::native_type{test_item.at(0), test_item.at(1), make_random_data_value_int64()});
+        udt_test_data.emplace_back(user_type_impl::native_type{test_item.at(0), make_random_data_value_bytes(), test_item.at(2)});
+        udt_test_data.emplace_back(user_type_impl::native_type{make_random_data_value_uuid(), test_item.at(1), test_item.at(2)});
+        udt_test_data.emplace_back(user_type_impl::native_type{test_item.at(0), make_random_data_value_bytes(), make_random_data_value_int64()});
+        udt_test_data.emplace_back(user_type_impl::native_type{make_random_data_value_uuid(), test_item.at(1), make_random_data_value_int64()});
+        udt_test_data.emplace_back(user_type_impl::native_type{make_random_data_value_uuid(), make_random_data_value_bytes(), test_item.at(2)});
+        udt_test_data.emplace_back(test_item);
+    }
+
+    // Include tuples with nulls in the testdata
+    udt_test_data.emplace_back(user_type_impl::native_type{make_random_data_value_uuid(), make_random_data_value_bytes(), data_value::make_null(long_type)});
+    udt_test_data.emplace_back(user_type_impl::native_type{make_random_data_value_uuid(), data_value::make_null(bytes_type), make_random_data_value_int64()});
+    udt_test_data.emplace_back(user_type_impl::native_type{data_value::make_null(uuid_type), make_random_data_value_bytes(), make_random_data_value_int64()});
+    udt_test_data.emplace_back(user_type_impl::native_type{make_random_data_value_uuid(), data_value::make_null(bytes_type), data_value::make_null(long_type)});
+    udt_test_data.emplace_back(user_type_impl::native_type{data_value::make_null(uuid_type), make_random_data_value_bytes(), data_value::make_null(long_type)});
+    udt_test_data.emplace_back(user_type_impl::native_type{data_value::make_null(uuid_type), data_value::make_null(bytes_type), make_random_data_value_int64()});
+    udt_test_data.emplace_back(user_type_impl::native_type{data_value::make_null(uuid_type), data_value::make_null(bytes_type), data_value::make_null(long_type)});
+
+
+    // Run the test for both frozen and non frozen types
+    for (auto is_multi_cell : {false, true}) {
+        const auto test_udt_type = user_type_impl::get_instance("ks_test", "cb_test_udt",
+        std::vector<bytes>{"field1", "field2", "field3"},
+        std::vector<data_type>{uuid_type, bytes_type, long_type}, is_multi_cell);
+        std::vector<data_value> collection_test_data;
+        collection_test_data.reserve(udt_test_data.size());
+        for (const auto& data : udt_test_data) {
+            collection_test_data.emplace_back(make_user_value(test_udt_type, data));
         }
 
         byte_comparable_test(std::move(collection_test_data));
