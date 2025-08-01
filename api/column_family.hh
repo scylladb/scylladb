@@ -28,10 +28,14 @@ template<class Mapper, class I, class Reducer>
 future<I> map_reduce_cf_raw(http_context& ctx, const sstring& name, I init,
         Mapper mapper, Reducer reducer) {
     auto uuid = parse_table_info(name, ctx.db.local()).id;
-    using mapper_type = std::function<std::unique_ptr<std::any>(replica::database&)>;
+    using mapper_type = std::function<future<std::unique_ptr<std::any>>(replica::database&)>;
     using reducer_type = std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)>;
     return ctx.db.map_reduce0(mapper_type([mapper, uuid](replica::database& db) {
-        return std::make_unique<std::any>(I(mapper(db.find_column_family(uuid))));
+        return futurize_invoke([mapper, &db, uuid] {
+            return mapper(db.find_column_family(uuid));
+        }).then([] (auto result) {
+            return std::make_unique<std::any>(I(std::move(result)));
+        });
     }), std::make_unique<std::any>(std::move(init)), reducer_type([reducer = std::move(reducer)] (std::unique_ptr<std::any> a, std::unique_ptr<std::any> b) mutable {
         return std::make_unique<std::any>(I(reducer(std::any_cast<I>(std::move(*a)), std::any_cast<I>(std::move(*b)))));
     })).then([] (std::unique_ptr<std::any> r) {
@@ -61,13 +65,12 @@ future<json::json_return_type> map_reduce_cf_time_histogram(http_context& ctx, c
 
 struct map_reduce_column_families_locally {
     std::any init;
-    std::function<std::unique_ptr<std::any>(replica::column_family&)> mapper;
+    std::function<future<std::unique_ptr<std::any>>(replica::column_family&)> mapper;
     std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)> reducer;
     future<std::unique_ptr<std::any>> operator()(replica::database& db) const {
         auto res = seastar::make_lw_shared<std::unique_ptr<std::any>>(std::make_unique<std::any>(init));
-        return db.get_tables_metadata().for_each_table_gently([res, this] (table_id, seastar::lw_shared_ptr<replica::table> table) {
-            *res = reducer(std::move(*res), mapper(*table.get()));
-            return make_ready_future();
+        return db.get_tables_metadata().for_each_table_gently([res, this] (table_id, seastar::lw_shared_ptr<replica::table> table) -> future<> {
+            *res = reducer(std::move(*res), co_await mapper(*table.get()));
         }).then([res] () {
             return std::move(*res);
         });
@@ -77,10 +80,14 @@ struct map_reduce_column_families_locally {
 template<class Mapper, class I, class Reducer>
 future<I> map_reduce_cf_raw(http_context& ctx, I init,
         Mapper mapper, Reducer reducer) {
-    using mapper_type = std::function<std::unique_ptr<std::any>(replica::column_family&)>;
+    using mapper_type = std::function<future<std::unique_ptr<std::any>>(replica::column_family&)>;
     using reducer_type = std::function<std::unique_ptr<std::any>(std::unique_ptr<std::any>, std::unique_ptr<std::any>)>;
     auto wrapped_mapper = mapper_type([mapper = std::move(mapper)] (replica::column_family& cf) mutable {
-        return std::make_unique<std::any>(I(mapper(cf)));
+        return futurize_invoke([&cf, mapper] {
+            return mapper(cf);
+        }).then([] (auto result) {
+            return std::make_unique<std::any>(I(std::move(result)));
+        });
     });
     auto wrapped_reducer = reducer_type([reducer = std::move(reducer)] (std::unique_ptr<std::any> a, std::unique_ptr<std::any> b) mutable {
         return std::make_unique<std::any>(I(reducer(std::any_cast<I>(std::move(*a)), std::any_cast<I>(std::move(*b)))));

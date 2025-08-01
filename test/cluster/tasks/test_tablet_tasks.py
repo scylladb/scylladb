@@ -525,7 +525,8 @@ async def test_tablet_resize_revoked(manager: ManagerClient):
 
         async def wait_for_task(task_id):
             status = await tm.wait_for_task(servers[0].ip_addr, task_id)
-            check_task_status(status, ["suspended"], "split", "table", False, keyspace, table1, [0, 1, 2])
+            # With incremental repair, we have doubled the tasks for repaired and unrepaired set
+            check_task_status(status, ["suspended"], "split", "table", False, keyspace, table1, [0, 1, 2, 3, 4, 5])
 
         await asyncio.gather(revoke_resize(log, mark), wait_for_task(task0.task_id))
 
