@@ -14,7 +14,7 @@ import urllib3
 from botocore.exceptions import BotoCoreError, ClientError
 from packaging.version import Version
 
-from test.alternator.util import random_bytes
+from test.alternator.util import random_bytes, random_string
 
 
 def gen_json(n):
@@ -402,3 +402,57 @@ def test_request_payload_must_be_object(dynamodb):
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     r = json.loads(response.text)
     assert "__type" not in r and "TableNames" in r
+
+# Verify that HTTP keep-alive, i.e., connection reuse, works correctly.
+# We send two requests, and check that if keep-alive is requested both
+# requests were sent over the same connection, but if keep-alive is disabled
+# the two requests are sent over different connections.
+# Checking both cases - with and without keep-alive - is important also for
+# verifying the validity of the test. It confirms that the test's code that
+# tries to detect when a connection is wrongly not reused, does succeed to
+# detect non-reuse of the connection.
+# This test was requested in #23067
+@pytest.mark.parametrize("use_keep_alive", [True, False])
+def test_keep_alive(dynamodb, test_table, use_keep_alive):
+    p = random_string()
+    req = get_signed_request(dynamodb, 'PutItem', '{"TableName": "' + test_table.name + '", "Item": {"p": {"S": "' + p + '"}, "c": {"S": "x"}}}')
+
+    # Adding a "Connection: close" header in the !use_keep_alive case tells
+    # the server to close the connection after the first request, forcing
+    # the test to use a different connection for the second request.
+    if not use_keep_alive:
+        req.headers['Connection'] = 'close'
+
+    # Use a requests library's "Session" to allow the library to reuse the
+    # same connection if the server keeps the connection alive.
+    session = requests.Session()
+
+    # Monkey-patch urllib's connect() functions for both HTTP and HTTPS,
+    # which the requests library uses, to tell us how many new connections
+    # were created. If a connection is reused, one fewer connection is created.
+    connect_count = 0
+    original_http_connect = urllib3.connection.HTTPConnection.connect
+    original_https_connect = urllib3.connection.HTTPSConnection.connect
+    def patched_http_connect(self):
+        nonlocal connect_count
+        connect_count += 1
+        return original_http_connect(self)
+    def patched_https_connect(self):
+        nonlocal connect_count
+        connect_count += 1
+        return original_https_connect(self)
+    urllib3.connection.HTTPConnection.connect = patched_http_connect
+    urllib3.connection.HTTPSConnection.connect = patched_https_connect
+    try:
+        # Note that by default (stream=False), post() reads the entire
+        # response body before returning. So the connection should be
+        # immediately reusable if the server kept it alive.
+        session.post(req.url, headers=req.headers, data=req.body, verify=False)
+        session.post(req.url, headers=req.headers, data=req.body, verify=False)
+        if use_keep_alive:
+            assert connect_count == 1 # one connection reused.
+        else:
+            assert connect_count == 2 # connection not reused, so two opened.
+    finally:
+        urllib3.connection.HTTPConnection.connect = original_http_connect
+        urllib3.connection.HTTPSConnection.connect = original_https_connect
