@@ -9,6 +9,7 @@
  */
 
 #include <algorithm>
+#include <exception>
 #include <ranges>
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
@@ -114,14 +115,7 @@ future<> migration_manager::drain()
 void migration_manager::init_messaging_service()
 {
     auto reload_schema_in_bg = [this] {
-        (void) with_gate(_background_tasks, [this] {
-            return reload_schema().handle_exception([] (std::exception_ptr ep) {
-                // Due to features being unordered, reload might fail because
-                // some tables still have the wrong version and looking up e.g.
-                // the base-table of a view will fail.
-                mlogger.debug("Failed to reload schema: {}", ep);
-            });
-        });
+        _needs_reload_schema = true;
     };
 
     if (this_shard_id() == 0) {
@@ -1178,6 +1172,25 @@ future<> migration_manager::maybe_sync(const schema_ptr& s, locator::host_id end
                 mlogger.debug("Syncing schema of {}.{} (v={}) with {}", ks_name, cf_name, version, endpoint);
                 return local_mm.merge_schema_from(endpoint);
             });
+        }
+    });
+}
+
+future<> migration_manager::maybe_reload_schema() {
+    if (!_needs_reload_schema) {
+        co_return;
+    }
+    _needs_reload_schema = false;
+    co_await with_gate(_background_tasks, [this] -> future<> {
+        // Reloading schema triggers schema merge which depends on storage service.
+        assert(_ss.local_is_initialized());
+        try {
+            co_await reload_schema();
+        } catch (...) {
+            // Due to features being unordered, reload might fail because
+            // some tables still have the wrong version and looking up e.g.
+            // the base-table of a view will fail.
+            mlogger.debug("Failed to reload schema: {}", std::current_exception());
         }
     });
 }
