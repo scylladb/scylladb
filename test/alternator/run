@@ -69,6 +69,7 @@ def run_alternator_cmd(pid, dir):
         '--alternator-streams-time-window-s', '0',
         '--alternator-timeout-in-ms', '30000',
         '--alternator-ttl-period-in-seconds', '0.5',
+        '--alternator-allow-system-table-write=1',
         # Allow testing experimental features. Following issue #9467, we need
         # to add here specific experimental features as they are introduced.
         # We only list here Alternator-specific experimental features - CQL
@@ -87,6 +88,19 @@ def run_alternator_cmd(pid, dir):
 
     for i in remove_scylla_options:
         cmd.remove(i)
+
+    # Unfortunately, earlier Scylla versions required different command line
+    # options to run, so for some old versions we need to drop some of the
+    # command line options added above, or add more options. In cqlpy/run.py's
+    # run_precompiled_scylla_cmd we already do this for most Scylla options,
+    # but here we just need to take care of the Alternator-specific options
+    # that we added here and were different in older versions.
+    if 'release' in globals():
+        version = release.split('~')[0].split('.')
+        major = [int(version[0]), int(version[1])]
+        print(major)
+        if major < [2025,4]:
+            cmd.remove('--alternator-allow-system-table-write=1')
 
     return (cmd, env)
 
