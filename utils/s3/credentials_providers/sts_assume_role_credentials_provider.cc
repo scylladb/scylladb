@@ -28,14 +28,8 @@ sts_assume_role_credentials_provider::sts_assume_role_credentials_provider(const
     : sts_host(seastar::format("sts.{}.amazonaws.com", _region)), role_arn(_role_arn) {
 }
 
-bool sts_assume_role_credentials_provider::is_time_to_refresh() const {
-    return seastar::lowres_clock::now() >= creds.expires_at;
-}
-
 future<> sts_assume_role_credentials_provider::reload() {
-    if (is_time_to_refresh() || !creds) {
-        co_await update_credentials();
-    }
+    co_await update_credentials();
 }
 
 future<> sts_assume_role_credentials_provider::update_credentials() {

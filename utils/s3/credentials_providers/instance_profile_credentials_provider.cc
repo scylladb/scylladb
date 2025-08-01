@@ -22,14 +22,8 @@ static logging::logger ec2_md_logger("ec2_metadata");
 instance_profile_credentials_provider::instance_profile_credentials_provider(const std::string& _host, unsigned _port) : ec2_metadata_ip(_host), port(_port) {
 }
 
-bool instance_profile_credentials_provider::is_time_to_refresh() const {
-    return seastar::lowres_clock::now() >= creds.expires_at;
-}
-
 future<> instance_profile_credentials_provider::reload() {
-    if (is_time_to_refresh() || !creds) {
-        co_await update_credentials();
-    }
+    co_await update_credentials();
 }
 
 static constexpr auto EC2_SECURITY_CREDENTIALS_RESOURCE = "/latest/meta-data/iam/security-credentials";
