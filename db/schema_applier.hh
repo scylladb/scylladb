@@ -130,9 +130,10 @@ struct schema_diff_per_shard {
 };
 
 
-class new_token_metadata {
+class pending_token_metadata {
     std::vector<locator::mutable_token_metadata_ptr> shards{smp::count};
 public:
+    future<> assign(locator::mutable_token_metadata_ptr new_token_metadata);
     locator::mutable_token_metadata_ptr& local();
     future<> destroy();
 };
@@ -148,8 +149,6 @@ struct affected_tables_and_views {
 
     std::unique_ptr<replica::tables_metadata_lock_on_all_shards> locks;
     std::unordered_map<table_id, replica::global_table_ptr> table_shards;
-
-    new_token_metadata new_token_metadata; // represents token metadata after updating tablets metadata, nullptr if there was no change
 };
 
 // We wrap it with pointer because change_batch needs to be constructed and destructed
@@ -169,6 +168,11 @@ class schema_applier {
 
     std::set<sstring> _keyspaces;
     std::unordered_map<keyspace_name, table_selector> _affected_tables;
+
+    // Copy of token metadata used for schema change, it has two purposes:
+    // - makes sure all updated schema entities use the same metadata
+    // - allows to change tablets metadata without immediately committing it.
+    locator::pending_token_metadata _pending_token_metadata;
     locator::tablet_metadata_change_hint _tablet_hint;
 
     schema_persisted_state _before;
@@ -183,6 +187,7 @@ class schema_applier {
     functions_change_batch_all_shards _functions_batch; // includes aggregates
 
     future<schema_persisted_state> get_schema_persisted_state();
+    future<> load_mutable_token_metadata();
 public:
     schema_applier(
             sharded<service::storage_proxy>& proxy,
@@ -211,6 +216,12 @@ public:
     future<> destroy();
 
 private:
+    future<> merge_keyspaces();
+    future<> merge_types();
+    future<> merge_tables_and_views();
+    future<> merge_functions();
+    future<> merge_aggregates();
+
     void commit_tables_and_views();
     future<> finalize_tables_and_views();
     void commit_on_shard(replica::database& db);

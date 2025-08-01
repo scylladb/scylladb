@@ -112,8 +112,15 @@ future<> migration_manager::drain()
 void migration_manager::init_messaging_service()
 {
     auto reload_schema_in_bg = [this] {
-        (void) with_gate(_background_tasks, [this] {
-            return reload_schema().handle_exception([] (std::exception_ptr ep) {
+        (void) with_gate(_background_tasks, [this] -> future<> {
+            // Reloading schema triggers schema merge which depends on storage service.
+            while (!_ss.local_is_initialized()) {
+                if (_as.abort_requested()) {
+                    co_return;
+                }
+                co_await seastar::sleep_abortable(10ms, _as);
+            }
+            co_await reload_schema().handle_exception([] (std::exception_ptr ep) {
                 // Due to features being unordered, reload might fail because
                 // some tables still have the wrong version and looking up e.g.
                 // the base-table of a view will fail.
