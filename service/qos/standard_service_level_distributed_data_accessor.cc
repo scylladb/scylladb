@@ -37,6 +37,10 @@ bool standard_service_level_distributed_data_accessor::is_v2() const {
     return false;
 }
 
+bool standard_service_level_distributed_data_accessor::can_use_effective_service_level_cache() const {
+    return false;
+}
+
 ::shared_ptr<service_level_controller::service_level_distributed_data_accessor> standard_service_level_distributed_data_accessor::upgrade_to_v2(cql3::query_processor& qp, service::raft_group0_client& group0_client) const {
     return ::static_pointer_cast<service_level_controller::service_level_distributed_data_accessor>(
                 ::make_shared<raft_service_level_distributed_data_accessor>(qp, group0_client));
