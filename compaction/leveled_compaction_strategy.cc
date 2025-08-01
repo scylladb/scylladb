@@ -55,8 +55,8 @@ compaction_descriptor leveled_compaction_strategy::get_sstables_for_compaction(t
             continue;
         }
         auto& sst = *std::max_element(sstables.begin(), sstables.end(), [&] (auto& i, auto& j) {
-            auto ratio_i = i->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
-            auto ratio_j = j->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_state(), table_s.schema());
+            auto ratio_i = i->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_before_getter(), table_s.schema());
+            auto ratio_j = j->estimate_droppable_tombstone_ratio(compaction_time, table_s.get_tombstone_gc_before_getter(), table_s.schema());
             return ratio_i < ratio_j;
         });
         return sstables::compaction_descriptor({ sst }, sst->get_sstable_level());

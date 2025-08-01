@@ -198,13 +198,13 @@ class cache_mutation_reader final : public mutation_reader::impl {
     }
 
     gc_clock::time_point get_read_time() {
-        return _read_context.tombstone_gc_state() ? gc_clock::now() : gc_clock::time_point::min();
+        return _read_context.gc_before_getter() ? gc_clock::now() : gc_clock::time_point::min();
     }
 
     gc_clock::time_point get_gc_before(const schema& schema, dht::decorated_key dk, const gc_clock::time_point query_time) {
-        auto gc_state = _read_context.tombstone_gc_state();
-        if (gc_state) {
-            return gc_state->with_commitlog_check_disabled().get_gc_before_for_key(schema.shared_from_this(), dk, query_time);
+        auto gc_before_getter = _read_context.gc_before_getter();
+        if (gc_before_getter) {
+            return gc_before_getter->with_commitlog_check_disabled().get_gc_before_for_key(schema.shared_from_this(), dk, query_time);
         }
 
         return gc_clock::time_point::min();
@@ -796,7 +796,7 @@ void cache_mutation_reader::copy_from_cache_to_buffer() {
     if (_next_row_in_range) {
         bool remove_row = false;
 
-        if (_read_context.tombstone_gc_state() // do not compact rows when tombstone_gc_state is not set (used in some unit tests)
+        if (_read_context.gc_before_getter() // do not compact rows when gc_before_getter is not set (used in some unit tests)
             && !_next_row.dummy()
             && _snp->at_latest_version()
             && _snp->at_oldest_version()) {

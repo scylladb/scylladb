@@ -157,7 +157,7 @@ class compact_mutation_state {
     uint64_t _row_limit{};
     uint32_t _partition_limit{};
     uint64_t _partition_row_limit{};
-    tombstone_gc_state _tombstone_gc_state;
+    tombstone_gc_before_getter _gc_before_getter;
 
     tombstone _partition_tombstone;
 
@@ -255,7 +255,7 @@ private:
         bool purgeable = false;
         auto timestamp_source = max_purgeable::timestamp_source::none;
 
-        if (_tombstone_gc_state.cheap_to_get_gc_before(_schema)) {
+        if (_gc_before_getter.cheap_to_get_gc_before(_schema)) {
             // if retrieval of grace period is cheap, can_gc() will only be
             // called for tombstones that are older than grace period, in
             // order to avoid unnecessary bloom filter checks when calculating
@@ -304,7 +304,7 @@ private:
             return _gc_before.value();
         } else {
             if (_dk) {
-                _gc_before = _tombstone_gc_state.get_gc_before_for_key(_schema.shared_from_this(), *_dk, _query_time);
+                _gc_before = _gc_before_getter.get_gc_before_for_key(_schema.shared_from_this(), *_dk, _query_time);
                 return _gc_before.value();
             } else {
                 return gc_clock::time_point::min();
@@ -331,8 +331,14 @@ private:
 public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
-    compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
-              uint32_t partition_limit, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
+    compact_mutation_state(
+            const schema& s,
+            gc_clock::time_point query_time,
+            const query::partition_slice& slice,
+            uint64_t limit,
+            uint32_t partition_limit,
+            tombstone_gc_before_getter gc_before_getter,
+            mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
         : _schema(s)
         , _query_time(query_time)
         , _can_gc(always_gc)
@@ -340,7 +346,7 @@ public:
         , _row_limit(limit)
         , _partition_limit(partition_limit)
         , _partition_row_limit(_slice.options.contains(query::partition_slice::option::distinct) ? 1 : slice.partition_row_limit())
-        , _tombstone_gc_state(nullptr)
+        , _gc_before_getter(std::move(gc_before_getter))
         , _last_pos(position_in_partition::for_partition_end())
         , _validator("mutation_compactor for read", _schema, validation_level)
     {
@@ -349,14 +355,14 @@ public:
 
     compact_mutation_state(const schema& s, gc_clock::time_point compaction_time,
             max_purgeable_fn get_max_purgeable,
-            const tombstone_gc_state& gc_state,
+            tombstone_gc_before_getter gc_before_getter,
             tombstone_purge_stats* tombstone_stats = nullptr)
         : _schema(s)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable).first; })
         , _slice(s.full_slice())
-        , _tombstone_gc_state(gc_state)
+        , _gc_before_getter(std::move(gc_before_getter))
         , _last_pos(position_in_partition::for_partition_end())
         , _collector(std::make_unique<mutation_compactor_garbage_collector>(_schema))
         , _tombstone_stats(tombstone_stats)
@@ -680,9 +686,9 @@ class compact_mutation {
 public:
     // Can only be used for compact_for_sstables::no
     compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
-              uint32_t partition_limit,
+              uint32_t partition_limit, tombstone_gc_before_getter gc_before_getter,
               Consumer consumer, GCConsumer gc_consumer = GCConsumer())
-        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, query_time, slice, limit, partition_limit, std::move(gc_before_getter)))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
@@ -690,10 +696,9 @@ public:
     // Can only be used for compact_for_sstables::yes
     compact_mutation(const schema& s, gc_clock::time_point compaction_time,
             max_purgeable_fn get_max_purgeable,
-
-            const tombstone_gc_state& gc_state,
+            tombstone_gc_before_getter gc_before_getter,
             Consumer consumer, GCConsumer gc_consumer = GCConsumer(), tombstone_purge_stats* tombstone_stats = nullptr)
-        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable, gc_state, tombstone_stats))
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable, std::move(gc_before_getter), tombstone_stats))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
