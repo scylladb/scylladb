@@ -21,6 +21,7 @@
 #include "cdc/metadata.hh"
 #include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
+#include "index/vector_index.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
@@ -57,7 +58,7 @@ using namespace std::chrono_literals;
 logging::logger cdc_log("cdc");
 
 namespace cdc {
-static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
+static schema_ptr create_log_schema(const schema&, std::optional<table_id>, schema_ptr, int ttl_seconds);
 }
 
 static constexpr auto cdc_group_name = "cdc";
@@ -167,7 +168,7 @@ public:
             ensure_that_table_uses_vnodes(ksm, schema);
 
             // in seastar thread
-            auto log_schema = create_log_schema(schema);
+            auto log_schema = create_log_schema(schema, {}, nullptr, schema.cdc_options().ttl());
 
             auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
 
@@ -176,8 +177,29 @@ public:
     }
 
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
-        bool is_cdc = new_schema.cdc_options().enabled();
-        bool was_cdc = old_schema.cdc_options().enabled();
+        bool has_vector_index = secondary_index::has_vector_index(new_schema);
+        auto cdc_options = new_schema.cdc_options();
+
+        if (has_vector_index) {
+            // If we have a vector index, we need to ensure that the CDC log is created
+            // satisfying the minimal requirements of Vector Search.
+            if (cdc_options.enabled()) {
+                auto ttl = cdc_options.ttl();
+                if (ttl && ttl < VS_TTL_SECONDS) {
+                    throw exceptions::invalid_request_exception(format("Vector Search is enabled on this table.\n"
+                                                                "The CDC log must meet the minimal requirements of Vector Search.\n"
+                                                                "This means that the CDC's TTL must be at least {} seconds (24 hours).", VS_TTL_SECONDS));
+                }
+                if (cdc_options.get_delta_mode() != cdc::delta_mode::full) {
+                    throw exceptions::invalid_request_exception("Vector Search is enabled on this table.\n"
+                                                                "The CDC log must meet the minimal requirements of Vector Search.\n"
+                                                                "This means that the CDC's delta mode must be set to 'full'.\n");
+                }
+            }
+        }
+
+        bool is_cdc = cdc_options.enabled() || has_vector_index;
+        bool was_cdc = old_schema.cdc_options().enabled() || secondary_index::has_vector_index(old_schema);
 
         // if we are turning off cdc we can skip this, since even if columns change etc,
         // any writer should see cdc -> off together with any actual schema changes to
@@ -205,9 +227,11 @@ public:
             ensure_that_table_has_no_counter_columns(new_schema);
             ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
 
-            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
+            int ttl_seconds = std::max(new_schema.cdc_options().ttl(), has_vector_index ? VS_TTL_SECONDS : 0);
 
-            auto log_mut = log_schema 
+            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema, ttl_seconds);
+
+            auto log_mut = log_schema
                 ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
                 : db::schema_tables::make_create_table_mutations(new_log_schema, timestamp)
                 ;
@@ -432,7 +456,7 @@ bool is_log_for_some_table(const replica::database& db, const sstring& ks_name, 
     if (!base_schema) {
         return false;
     }
-    return base_schema->cdc_options().enabled();
+    return base_schema->cdc_options().enabled() || secondary_index::has_vector_index(*base_schema);
 }
 
 schema_ptr get_base_table(const replica::database& db, const schema& s) {
@@ -496,12 +520,11 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
     return to_bytes(cdc_deleted_elements_column_prefix) + column_name;
 }
 
-static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uuid, schema_ptr old) {
+static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uuid, schema_ptr old, int ttl_seconds) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
-    auto ttl_seconds = s.cdc_options().ttl();
     if (ttl_seconds > 0) {
         b.set_gc_grace_seconds(0);
         auto ceil = [] (int dividend, int divisor) {
@@ -890,15 +913,17 @@ class log_mutation_builder {
 
 public:
     log_mutation_builder(mutation& log_mut, api::timestamp_type ts,
-                         const partition_key& base_pk, const schema& base_schema)
+                         const partition_key& base_pk, const schema& base_schema, bool vs_enabled)
         : _base_schema(base_schema), _log_schema(*log_mut.schema()),
           _op_col(*_log_schema.get_column_definition(log_meta_column_name_bytes("operation"))),
           _ttl_col(*_log_schema.get_column_definition(log_meta_column_name_bytes("ttl"))),
           _base_pk(base_pk.explode_fragmented()),
           _tuuid(timeuuid_type->decompose(generate_timeuuid(ts))),
           _ts(ts),
-          _ttl(_base_schema.cdc_options().ttl()
-                  ? std::optional{std::chrono::seconds(_base_schema.cdc_options().ttl())} : std::nullopt),
+          _ttl(
+            base_schema.cdc_options().ttl() ? std::optional{std::chrono::seconds{std::max(base_schema.cdc_options().ttl(), vs_enabled ? VS_TTL_SECONDS : 0)}}
+            : (vs_enabled ? std::optional{std::chrono::seconds{VS_TTL_SECONDS}} : std::nullopt)
+          ),
           _log_mut(log_mut)
     {}
 
@@ -1484,13 +1509,16 @@ private:
 
     stats::part_type_set _touched_parts;
 
+    bool _vs_enabled = false;
+
 public:
-    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk)
+    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk, bool vs_enabled)
         : _ctx(ctx)
         , _schema(std::move(s))
         , _dk(std::move(dk))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
+        , _vs_enabled(vs_enabled)
     {
     }
 
@@ -1498,7 +1526,7 @@ public:
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
         const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
-        _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
+        _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema, _vs_enabled);
         _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());
     }
 
@@ -1594,7 +1622,7 @@ public:
             ._enable_updating_state = _enable_updating_state,
             ._clustering_row_states = _clustering_row_states,
             ._static_row_state = _static_row_state,
-            ._generate_delta_values = generate_delta_values(_builder->base_schema())
+            ._generate_delta_values = generate_delta_values(_builder->base_schema()) || _vs_enabled
         };
         cdc::inspect_mutation(m, v);
     }
@@ -1793,7 +1821,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        auto s = m.schema();
+        return s->cdc_options().enabled() || secondary_index::has_vector_index(*s);
     });
 
     if (i == e) {
@@ -1809,11 +1838,11 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             auto& m = mutations[idx];
             auto s = m.schema();
 
-            if (!s->cdc_options().enabled()) {
+            if (!s->cdc_options().enabled() && !secondary_index::has_vector_index(*s)) {
                 return make_ready_future<>();
             }
 
-            transformer trans(_ctxt, s, m.decorated_key());
+            transformer trans(_ctxt, s, m.decorated_key(), secondary_index::has_vector_index(*s));
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
             if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
@@ -1874,7 +1903,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
 bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations) const {
     return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        auto s = m.schema();
+        return s->cdc_options().enabled() || secondary_index::has_vector_index(*s);
     });
 }
 

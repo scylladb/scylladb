@@ -7,11 +7,16 @@
  */
 
 
+#include "cdc/cdc_options.hh"
+#include "cdc/log.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/util.hh"
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
 #include "index/vector_index.hh"
+#include "index/secondary_index.hh"
+#include "index/secondary_index_manager.hh"
+#include "index/target_parser.hh"
 #include "concrete_types.hh"
 #include "utils/managed_string.hh"
 #include <seastar/core/sstring.hh>
@@ -84,6 +89,19 @@ void vector_index::validate(const schema &schema, cql3::statements::index_prop_d
         throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
     }
 
+    auto cdc_options = schema.cdc_options();
+    if (cdc_options.enabled()) {
+        auto ttl = cdc_options.ttl();
+        if (ttl && ttl < cdc::VS_TTL_SECONDS) {
+            throw exceptions::invalid_request_exception(format("CDC's TTL must be at least {} seconds (24 hours) to enable Vector Search.\n"
+                                                               "Check documentation on how to setup TTL - https://docs.scylladb.com/manual/branch-2025.2/features/cdc/cdc-intro.html#cdc-parameters", cdc::VS_TTL_SECONDS));
+        }
+        if (cdc_options.get_delta_mode() != cdc::delta_mode::full) {
+            throw exceptions::invalid_request_exception("CDC's delta mode must be set to 'full' to enable Vector Search.\n"
+                                                               "Check documentation on how to setup delta mode - https://docs.scylladb.com/manual/branch-2025.2/features/cdc/cdc-intro.html#cdc-parameters");
+        }
+    }
+
     for (auto option: properties.get_raw_options()) {
         auto it = supported_options.find(option.first);
         if (it == supported_options.end()) {
@@ -93,8 +111,24 @@ void vector_index::validate(const schema &schema, cql3::statements::index_prop_d
     }
 }
 
+bool vector_index::is_vector_index() const {
+    return true;
+}
+
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {
     return std::make_unique<vector_index>();
+}
+
+bool has_vector_index(const schema& s) {
+    auto i = s.indices();
+    return std::any_of(i.begin(), i.end(), [](const auto& index) {
+        auto it = index.options().find(db::index::secondary_index::custom_index_option_name);
+        if (it != index.options().end()) {
+            auto custom_class = secondary_index_manager::get_custom_class_factory(it->second);
+            return (custom_class && (*custom_class)()->is_vector_index());
+        }
+        return false;
+    });
 }
 
 }

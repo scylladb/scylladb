@@ -239,3 +239,53 @@ def test_rename_column_of_fake_cdc_log_table(cql, test_keyspace, scylla_only):
         cql.execute(f"ALTER TABLE {test_keyspace}.{fake_cdc_log_table_name} RENAME p TO q")
     finally:
         cql.execute(f"DROP TABLE IF EXISTS {test_keyspace}.{fake_cdc_log_table_name}")
+
+
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_vs_cdc_options_ensured(scylla_only, cql, test_keyspace):
+    schema = "pk int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Enable CDC by creating an index with Vector Search minimal options
+        # TTL = 24h
+        VS_TTL_SECONDS = 86400
+        # delta = full
+        cql.execute(f"CREATE INDEX v_idx ON {table} (v) USING 'vector_index'")
+
+        # Allow creating CDC log table with default options
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true}}")
+
+        # Disallow changing CDC's TTL to less than 24 hours
+        with pytest.raises(InvalidRequest, match=f"CDC's TTL must be at least {VS_TTL_SECONDS} seconds"):
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'ttl' : 1}}")
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'ttl' : 86400}}")
+
+        # Allow changing CDC's TTL to 0 (infinite)
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'ttl' : 0}}")
+
+        # Disallow changing CDC's delta to 'keys'
+        with pytest.raises(InvalidRequest, match="CDC's delta mode must be set to 'full'"):
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'delta' : 'keys'}}")
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'delta' : 'full'}}")
+
+        # Allow changing CDC's preimage and postimage
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'preimage' : true}}")
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'postimage' : true}}")
+
+        # Drop index and try to recreate with various CDC options
+        cql.execute(f"DROP INDEX {test_keyspace}.v_idx")
+
+        # Disallow creating the vector index when CDC's TTL is less than 24h
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'ttl' : 1}}")
+        with pytest.raises(InvalidRequest, match=f"CDC's TTL must be at least {VS_TTL_SECONDS} seconds"):
+            cql.execute(f"CREATE INDEX v_idx ON {table} (v) USING 'vector_index'")
+
+        # Disallow creating the vector index when CDC's delta is set to 'keys'
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'delta' : 'keys'}}")
+        with pytest.raises(InvalidRequest, match="CDC's delta mode must be set to 'full'"):
+            cql.execute(f"CREATE INDEX v_idx ON {table} (v) USING 'vector_index'")
+
+        # Allow creating the vector index when CDC's options fulfill the minimal requirements of Vector Search
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled' : true, 'ttl' : 172800, 'delta' : 'full', 'preimage' : true, 'postimage' : true}}")
+        cql.execute(f"CREATE INDEX v_idx ON {table} (v) USING 'vector_index'")
