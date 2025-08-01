@@ -64,7 +64,9 @@ auto generate_unavailable_localhost_port() -> port_number {
 auto listen_on_ephemeral_port(std::unique_ptr<http_server> server) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
     auto inaddr = net::inet_address(LOCALHOST);
     auto const addr = socket_address(inaddr, 0);
-    co_await server->listen(addr);
+    ::listen_options opts;
+    opts.set_fixed_cpu(this_shard_id());
+    co_await server->listen(addr, opts);
     auto const& listeners = http_server_tester::listeners(*server);
     BOOST_CHECK_EQUAL(listeners.size(), 1);
     co_return std::make_tuple(std::move(server), listeners[0].local_address().port());
