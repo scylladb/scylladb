@@ -1787,6 +1787,36 @@ rest_get_schema_versions(sharded<service::storage_service>& ss, std::unique_ptr<
         });
 }
 
+static
+future<json::json_return_type>
+rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+    auto keyspace = req->get_query_param("keyspace");
+    try {
+        if (!keyspace.empty()) {
+            keyspace = validate_keyspace(ctx, keyspace);
+            auto it = req->query_parameters.find("tables");
+            auto table_infos = parse_table_infos(keyspace, ctx, it != req->query_parameters.end() ? it->second : "");
+
+            co_await ctx.db.invoke_on_all([&table_infos](replica::database& db) -> future<> {
+                return parallel_for_each(table_infos, [&db](const auto& table) -> future<> {
+                    const auto& [table_name, table_id] = table;
+                    return db.find_column_family(table_id).drop_quarantined_sstables();
+                });
+            });
+        } else {
+            co_await ctx.db.invoke_on_all([](replica::database& db) -> future<> {
+                return db.get_tables_metadata().parallel_for_each_table([](table_id, lw_shared_ptr<replica::table> t) -> future<> {
+                    return t->drop_quarantined_sstables();
+                });
+            });
+        }
+    } catch (...) {
+        apilog.error("drop_quarantined_sstables: failed with exception: {}", std::current_exception());
+        throw;
+    }
+
+    co_return json_void();
+}
 
 // Disambiguate between a function that returns a future and a function that returns a plain value, also
 // add std::ref() as a courtesy. Also handles ks_cf_func signatures.
@@ -1890,6 +1920,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::tablet_balancing_enable.set(r, rest_bind(rest_tablet_balancing_enable, ss));
     ss::quiesce_topology.set(r, rest_bind(rest_quiesce_topology, ss));
     sp::get_schema_versions.set(r, rest_bind(rest_get_schema_versions, ss));
+    ss::drop_quarantined_sstables.set(r, rest_bind(rest_drop_quarantined_sstables, ctx, ss));
 }
 
 void unset_storage_service(http_context& ctx, routes& r) {
@@ -1972,6 +2003,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::tablet_balancing_enable.unset(r);
     ss::quiesce_topology.unset(r);
     sp::get_schema_versions.unset(r);
+    ss::drop_quarantined_sstables.unset(r);
 }
 
 void set_load_meter(http_context& ctx, routes& r, service::load_meter& lm) {
