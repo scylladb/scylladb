@@ -663,13 +663,6 @@ future<> schema_applier::merge_tables_and_views()
         _affected_tables_and_views.table_shards.insert({uuid,
                 co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
     });
-
-    if (_tablet_hint) {
-        slogger.info("Tablet metadata changed");
-        auto new_token_metadata = co_await _ss.local().prepare_tablet_metadata(
-                _tablet_hint, _pending_token_metadata.local());
-        co_await _pending_token_metadata.assign(new_token_metadata);
-    }
 }
 
 future<frozen_schema_diff> schema_diff_per_shard::freeze() const {
@@ -852,12 +845,22 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
     }
 }
 
+// Loads metadata into a single source of truth to ensure consistency.
+// It will be committed later if required by the current schema change.
+future<> schema_applier::load_mutable_token_metadata() {
+    locator::mutable_token_metadata_ptr current_token_metadata = co_await _ss.local().get_mutable_token_metadata_ptr();
+    if (_tablet_hint) {
+        slogger.info("Tablet metadata changed");
+        auto new_token_metadata = co_await _ss.local().prepare_tablet_metadata(
+                _tablet_hint, current_token_metadata);
+        co_return co_await _pending_token_metadata.assign(new_token_metadata);
+    }
+    co_await _pending_token_metadata.assign(current_token_metadata);
+}
+
 future<> schema_applier::update() {
     _after = co_await get_schema_persisted_state();
-
-    co_await _pending_token_metadata.assign(
-            co_await _ss.local().get_mutable_token_metadata_ptr());
-
+    co_await load_mutable_token_metadata();
     co_await merge_keyspaces();
     co_await merge_types();
     co_await merge_tables_and_views();
