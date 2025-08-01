@@ -43,8 +43,8 @@ static_sharder::shard_of(const token& t) const {
     return dht::shard_of(_shard_count, _sharding_ignore_msb_bits, t);
 }
 
-unsigned
-static_sharder::shard_for_reads(const token& t) const {
+std::optional<unsigned>
+static_sharder::try_get_shard_for_reads(const token& t) const {
     return shard_of(t);
 }
 
@@ -513,8 +513,8 @@ auto_refreshing_sharder::refresh() {
     });
 }
 
-unsigned auto_refreshing_sharder::shard_for_reads(const token& t) const {
-    return _sharder->shard_for_reads(t);
+std::optional<unsigned> auto_refreshing_sharder::try_get_shard_for_reads(const token& t) const {
+    return _sharder->try_get_shard_for_reads(t);
 }
 
 dht::shard_replica_set
