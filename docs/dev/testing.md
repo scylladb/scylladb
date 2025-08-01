@@ -10,7 +10,7 @@ This is a manual for `test.py`.
 
 ## Installation
 
-To run `test.py`, Python 3.7 or higher is required.
+To run `test.py`, Python 3.11 or higher is required.
 `./install-dependencies.sh` should install all the required Python
 modules. If `install-dependencies.sh` does not support your distribution,
 please manually install all Python modules it lists with `pip`.
@@ -106,6 +106,19 @@ shed more light on this.
 Build artefacts, such as test output and harness output is stored
 in `./testlog`. Scylla data files are stored in `/tmp`.
 
+There are several test directories that are excluded from orchestration by `test.py`:
+
+- test/boost
+- test/raft
+- test/ldap
+- test/unit
+
+This means that `test.py` will not run tests directly, but will delegate all work to `pytest`.
+That's why all these directories do not have `suite.yaml` files.
+Additionally, these directories do not follow abstract naming suite/testname
+convention, and instead use the `pytest` naming convention, i.e. to run a test you need to provide the path to the file
+and optionally the test name, e.g. `test/boost/aggregate_fcts_test.cc::test_aggregate_avg`.
+
 ## How it works
 
 On start, `test.py` invokes `ninja` to find out configured build modes. Then
@@ -176,11 +189,11 @@ Scylla (possibly started in debugger) using `cqlsh`.
 
 The same unit test can be run in different seastar configurations, i.e. with
 different command line arguments. The custom arguments can be set in
-`custom_args` key of the `suite.yaml` file.
+`custom_args` key of the `test_config.yaml` file.
 
 Tests from boost suite are divided into test-cases. These are top-level
 functions wrapped by `BOOST_AUTO_TEST_CASE`, `SEASTAR_TEST_CASE` or alike.
-Boost tests support `suitename/testname::casename` selection described above.
+Boost tests support `path/to/file_name.cc::casename` selection described above.
 
 ### Debugging unit tests
 
@@ -327,6 +340,19 @@ started or stopped, even if it ended up in the same state
 as it was at the beginning of the test, is considered "dirty".
 Such clusters are not returned to the pool, but destroyed, and
 the pool is replenished with a new cluster instead.
+
+## Test metrics
+
+The parameter `--gather-metrics` is used to gather CPU/RAM usage during tests from the cgroup and system overall CPU/RAM
+usage.
+For that, SQLite database is used to store the metrics in `testlog/sqlite.db`.
+The database is created in the `testlog` directory and contains the following tables:
+
+- `tests` - contains the list of tests that were executed with information about the test name, directory, architecture,
+  and mode
+- `test_metrics` - contains the metrics for each test, such as memory peak usage, CPU usage, and duration
+- `system_resource_metrics` - contains system CPU and memory utilization in percents during the whole run
+- `cgroup_memory_metrics` - contains cgroup memory usage during the test run
 
 ## Automation, CI, and Jenkins
 
