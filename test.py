@@ -151,6 +151,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="number of times to repeat test execution")
     parser.add_argument('--timeout', action="store", default="24000", type=int,
                         help="timeout value for test execution")
+    parser.add_argument('--session-timeout', action="store", default="24000", type=int,
+                        help="timeout value for test session execution")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
     parser.add_argument('--jobs', '-j', action="store", type=int,
@@ -333,6 +335,10 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
         args.append(f'--x-log2-compaction-groups={options.x_log2_compaction_groups}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.timeout:
+        args.append(f'--timeout={options.timeout}')
+    if options.session_timeout:
+        args.append(f'--session-timeout={options.session_timeout}')
     if len(expression) > 1:
         args.extend(['-k', expression])
     if not options.save_log_on_success:
@@ -431,6 +437,7 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     total_tests = 0
     max_failures = options.max_failures
     failed = 0
+    time_started = time.perf_counter()
     try:
         await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
         for i in range(1, options.repeat + 1):
@@ -458,6 +465,8 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
         # Wait & reap ALL tasks but signaled_task
         # Do not use asyncio.ALL_COMPLETED to print a nice progress report
         while len(pending) > 1:
+            if time.perf_counter() - time_started > options.session_timeout:
+                await cancel(pending, "Timeout reached")
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
             failed += await reap(done, pending, signaled)
             if max_failures != 0 and max_failures <= failed:
