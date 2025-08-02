@@ -32,6 +32,7 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
@@ -178,7 +179,9 @@ service::service(
             , _permissions_cache_max_entries_observer(_qp.db().get_config().permissions_cache_max_entries.observe(_permissions_cache_cfg_cb))
             , _permissions_cache_update_interval_in_ms_observer(_qp.db().get_config().permissions_update_interval_in_ms.observe(_permissions_cache_cfg_cb))
             , _permissions_cache_validity_in_ms_observer(_qp.db().get_config().permissions_validity_in_ms.observe(_permissions_cache_cfg_cb))
-            , _used_by_maintenance_socket(used_by_maintenance_socket) {}
+            , _used_by_maintenance_socket(used_by_maintenance_socket)
+            , _access_gate("auth_service_access_gate")
+            , _status(status::inactive) {}
 
 service::service(
         utils::loading_cache_config c,
@@ -254,20 +257,35 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
         _mnotifier.register_listener(_migration_listener.get());
         return make_ready_future<>();
     });
+
+    _status = status::working;
 }
 
 future<> service::stop() {
+    // Part of a reproducer of scylladb/scylladb#24792.
+    // Step 2. of the plan described in the issue and in `main.cc`.
+    // https://github.com/scylladb/scylladb/issues/24792#issuecomment-3146021819
+    co_await utils::get_local_injector().inject("suspend_auth_service_stop", utils::wait_for_message(5min));
+
+    co_await _access_gate.close();
+    _status = status::stopping;
+
     _as.request_abort();
+
     // Only one of the shards has the listener registered, but let's try to
     // unregister on each one just to make sure.
-    return _mnotifier.unregister_listener(_migration_listener.get()).then([this] {
-        if (_permissions_cache) {
-            return _permissions_cache->stop();
-        }
-        return make_ready_future<>();
-    }).then([this] {
-        return when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
-    });
+    co_await _mnotifier.unregister_listener(_migration_listener.get());
+
+    if (_permissions_cache) {
+        co_await _permissions_cache->stop();
+    }
+
+    co_await when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
+
+    // Part of a reproducer of scylladb/scylladb#24792.
+    // Step 5. of the plan described in the issue and in `main.cc`.
+    // https://github.com/scylladb/scylladb/issues/24792#issuecomment-3146021819
+    utils::get_local_injector().receive_message("suspend_update_effective_service_levels_cache_accessing_auth_service");
 }
 
 future<> service::ensure_superuser_is_created() {
