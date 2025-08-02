@@ -482,3 +482,20 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
     # Check if group0 is healthy
     s2 = await manager.server_add(config=auth_config, property_file={"dc": "dc1", "rack": "rack3"})
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+# Reproducer of scylladb/scylladb#24792.
+@pytest.mark.asyncio
+@skip_mode("release", "error injection is disabled in release mode")
+async def test_try_to_access_stopped_auth_service_when_reloading_effective_sl_cache(manager: ManagerClient):
+    # These two services are relevant for this test, so let's
+    # increase the log level to make potential debugging easier.
+    cmdline = ["--logger-log-level", "service_level_controller=debug",
+               "--logger-log-level", "auth_service=debug"]
+    # This might make things simpler if we end up having to debug the test.
+    cmdline.append("--smp=1")
+    # Let's use the right authenticator and authorizer to make the test closer to reality.
+    config = {**auth_config}
+
+    srv = await manager.server_add(cmdline=cmdline, config=config)
+    await manager.api.enable_injection(srv.ip_addr, "reload_sl_cache_after_stopping_auth_service", one_shot=True)
+    await manager.server_stop_gracefully(srv.server_id)

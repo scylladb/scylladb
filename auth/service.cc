@@ -32,6 +32,7 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
@@ -261,6 +262,11 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
 }
 
 future<> service::stop() {
+    // Part of a reproducer of scylladb/scylladb#24792.
+    // Step 2. of the plan described in the issue and in `main.cc`.
+    // https://github.com/scylladb/scylladb/issues/24792#issuecomment-3146021819
+    co_await utils::get_local_injector().inject("suspend_auth_service_stop", utils::wait_for_message(5min));
+
     co_await _access_gate.close();
     _status = status::stopping;
 
@@ -275,6 +281,11 @@ future<> service::stop() {
     }
 
     co_await when_all_succeed(_role_manager->stop(), _authorizer->stop(), _authenticator->stop()).discard_result();
+
+    // Part of a reproducer of scylladb/scylladb#24792.
+    // Step 5. of the plan described in the issue and in `main.cc`.
+    // https://github.com/scylladb/scylladb/issues/24792#issuecomment-3146021819
+    utils::get_local_injector().receive_message("suspend_update_effective_service_levels_cache_accessing_auth_service");
 }
 
 future<> service::ensure_superuser_is_created() {

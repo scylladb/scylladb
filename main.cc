@@ -2272,7 +2272,72 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
 
+            // This is part of a reproducer of issue scylladb/scylladb#24792.
+            // It's quite complex and requires a chain of error injections to simulate
+            // a specific order of steps performed by the code. Note that the reproducer TEST
+            // only triggers the injection `reload_sl_cache_after_stopping_auth_service`;
+            // the other ones:
+            //
+            // * `suspend_update_effective_service_levels_cache_accessing_auth_service`,
+            // * `suspend_auth_service_stop`,
+            //
+            // are called by the code.
+            //
+            // I was trying to implement it more cleanly, but it was very hard: Scylla is
+            // already stopping and trying to trigger and coordinate
+            // `service_level_controller::update_effective_service_levels_cache` is very
+            // difficult at that stage.
+            //
+            // -------------------------------------
+            // Ideal plan (this is NOT implemented):
+            // -------------------------------------
+            // Step 1. Trigger `auth::service::stop`. Get stuck at the very beginning of it.
+            // Step 2. Trigger effective service levels cache update. Get stuck right after
+            //         passing through a check that validates that `auth::service` is running.
+            // Step 3. Resume the pending `auth::service::stop`. Wait for it to finish.
+            // Step 4. Resume the pending effective service levels cache update. Wait for it
+            //         to finish.
+            //
+            // ----------------------------------
+            // Actual plan (what IS implemented):
+            // ----------------------------------
+            // Step 1. Trigger effective service levels cache update.
+            // Step 2. Trigger `auth::service::stop`. Get stuck at the very beginning of it.
+            // Step 3. Resume the pending effective service levels cache update. Get stuck again,
+            //         but this time right after passing through a check that validates that
+            //         `auth::service` is running.
+            // Step 4. Resume the pending `auth::service::stop`. Wait for it to finish.
+            // Step 5. Resume the pending effective service levels cache update. Wait for it
+            //         to finish.
+            //
+            // The ONLY reason why we added step 1 in the actual plan is that it's more convenient.
+            // https://github.com/scylladb/scylladb/issues/24792#issuecomment-3146021819
+            std::any maybe_update_effective_service_levels_cache;
+
             std::any stop_auth_service;
+
+            // Look at the description of `maybe_update_effective_service_levels_cache` above.
+            // For more details, see issue: scylladb/scylladb#24792.
+            auto trigger_additional_effective_service_levels_cache_update = defer([&maybe_update_effective_service_levels_cache] {
+                if (utils::get_local_injector().enter("reload_sl_cache_after_stopping_auth_service")) {
+                    // Prevent `service_level_controller::update_effective_service_levels_cache` from any progress.
+                    utils::get_local_injector().enable("suspend_update_effective_service_levels_cache_accessing_auth_service");
+                    // Prevent `auth::service::stop` from progressing.
+                    utils::get_local_injector().enable("suspend_auth_service_stop");
+
+                    // Step 1. Trigger cache reload.
+                    future<> tmp = sl_controller.local().update_effective_service_levels_cache();
+
+                    // Step 2. performed by `stop_auth_service` above.
+
+                    // Leave it aside until we're done stopping `auth::service`.
+                    // The destructor of `maybe_update_effective_service_levels_cache` will perform Step 5.
+                    maybe_update_effective_service_levels_cache = seastar::make_shared(defer([tmp = std::move(tmp)] mutable {
+                        tmp.get();
+                    }));
+                };
+            });
+
             // Has to be called after node joined the cluster (join_cluster())
             // with raft leader elected as only then auth version mutation is put
             // in scylla_local table. This allows to know the version at auth service
