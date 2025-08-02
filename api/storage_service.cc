@@ -745,13 +745,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             fmopt = flush_mode::skip;
         }
         auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt, consider_only_existing_data);
-        try {
-            co_await task->done();
-        } catch (...) {
-            apilog.error("force_compaction failed: {}", std::current_exception());
-            throw;
-        }
-
+        co_await task->done();
         co_return json_void();
     });
 
@@ -776,13 +770,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
             fmopt = flush_mode::skip;
         }
         auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
-        try {
-            co_await task->done();
-        } catch (...) {
-            apilog.error("force_keyspace_compaction: keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
-            throw;
-        }
-
+        co_await task->done();
         co_return json_void();
     });
 
@@ -806,13 +794,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
             {}, std::move(keyspace), db, table_infos, flush_mode::all_tables, tasks::is_user_task::yes);
-        try {
-            co_await task->done();
-        } catch (...) {
-            apilog.error("force_keyspace_cleanup: keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
-            throw;
-        }
-
+        co_await task->done();
         co_return json::json_return_type(0);
     });
 
@@ -832,12 +814,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<global_cleanup_compaction_task_impl>({}, db);
-        try {
-            co_await task->done();
-        } catch (...) {
-            apilog.error("cleanup_all failed: {}", std::current_exception());
-            throw;
-        }
+        co_await task->done();
         co_return json::json_return_type(0);
     });
 
@@ -846,13 +823,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         bool res = false;
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, table_infos, &res);
-        try {
-            co_await task->done();
-        } catch (...) {
-            apilog.error("perform_keyspace_offstrategy_compaction: keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
-            throw;
-        }
-
+        co_await task->done();
         co_return json::json_return_type(res);
     }));
 
@@ -864,13 +835,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
-        try {
-            co_await task->done();
-        } catch (...) {
-            apilog.error("upgrade_sstables: keyspace={} tables={} failed: {}", keyspace, table_infos, std::current_exception());
-            throw;
-        }
-
+        co_await task->done();
         co_return json::json_return_type(0);
     }));
 
