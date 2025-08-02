@@ -161,7 +161,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h2, 3},
                         tablet_replica {h3, 1},
                     },
-                    db_clock::now(),
+                    locator::repair_time_map{{table1, db_clock::now()}},
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
                     locator::tablet_task_info::make_intranode_migration_request()
                 });
@@ -345,7 +345,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
                         tablet_replica {h2, 3},
                         tablet_replica {h3, 1},
                     },
-                    db_clock::now(),
+                    locator::repair_time_map{{table1, db_clock::now()}},
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
                     locator::tablet_task_info::make_intranode_migration_request()
                 });
