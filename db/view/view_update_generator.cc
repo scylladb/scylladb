@@ -138,48 +138,11 @@ future<> view_update_generator::start() {
                 uint64_t input_size = 0;
 
                 try {
-                    // Exploit the fact that sstables in the staging directory
-                    // are usually non-overlapping and use a partitioned set for
-                    // the read.
-                    // With tablets, it doesn't matter full range is fed into partitioned set since
-                    // there will be usually one sstable to be processed per tablet, and sstables of
-                    // different tablets are disjoint.
-                    auto token_range = dht::token_range::make(dht::first_token(), dht::last_token());
-                    auto ssts = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, std::move(token_range)));
-                    for (auto& sst : sstables) {
-                        ssts->insert(sst);
-                        input_size += sst->data_size();
-                    }
-
-                    vug_logger.info("Processing {}.{}: {} in {} sstables",
-                                    s->ks_name(), s->cf_name(), utils::pretty_printed_data_size(input_size), sstables.size());
-
-                    auto permit = _db.obtain_reader_permit(*t, "view_update_generator", db::no_timeout, {}).get();
-                    auto ms = mutation_source([this, ssts] (
-                                schema_ptr s,
-                                reader_permit permit,
-                                const dht::partition_range& pr,
-                                const query::partition_slice& ps,
-                                tracing::trace_state_ptr ts,
-                                streamed_mutation::forwarding fwd_ms,
-                                mutation_reader::forwarding fwd_mr) {
-                        return ssts->make_range_sstable_reader(s, std::move(permit), pr, ps, std::move(ts), fwd_ms, fwd_mr, *_progress_tracker);
-                    });
-                    auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader(
-                            std::move(ms),
-                            s,
-                            permit,
-                            query::full_partition_range,
-                            s->full_slice(),
-                            nullptr,
-                            ::mutation_reader::forwarding::no);
-                    auto close_sr = deferred_close(staging_sstable_reader);
-
-                    inject_failure("view_update_generator_consume_staging_sstable");
-                    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(*this, s, std::move(permit), *t, sstables, _as, staging_sstable_reader_handle));
-                    if (result == stop_iteration::yes) {
+                    auto result = generate_updates_from_staging_sstables(t, sstables);
+                    if (result.first == stop_iteration::yes) {
                         break;
                     }
+                    input_size = result.second;
                 } catch (...) {
                     vug_logger.warn("Processing {} failed for table {}:{}. Will retry...", s->ks_name(), s->cf_name(), std::current_exception());
                     // Need to add sstables back to the set so we can retry later. By now it may
@@ -189,6 +152,7 @@ future<> view_update_generator::start() {
                     seastar::sleep(std::chrono::seconds(1)).get();
                     break;
                 }
+
                 try {
                     inject_failure("view_update_generator_collect_consumed_sstables");
                     _progress_tracker->on_sstables_deregistration(sstables);
@@ -221,6 +185,80 @@ future<> view_update_generator::start() {
         }
     });
     return make_ready_future<>();
+}
+
+// Must be called in a seastar thread.
+std::pair<stop_iteration, uint64_t> view_update_generator::generate_updates_from_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable>& sstables) {
+    schema_ptr s = table->schema();
+    uint64_t input_size = 0;
+
+    // Exploit the fact that sstables in the staging directory
+    // are usually non-overlapping and use a partitioned set for
+    // the read.
+    // With tablets, it doesn't matter full range is fed into partitioned set since
+    // there will be usually one sstable to be processed per tablet, and sstables of
+    // different tablets are disjoint.
+    auto token_range = dht::token_range::make(dht::first_token(), dht::last_token());
+    auto ssts = make_lw_shared<sstables::sstable_set>(sstables::make_partitioned_sstable_set(s, std::move(token_range)));
+    for (auto& sst : sstables) {
+        ssts->insert(sst);
+        input_size += sst->data_size();
+    }
+
+    vug_logger.info("Processing {}.{}: {} in {} sstables",
+                    s->ks_name(), s->cf_name(), utils::pretty_printed_data_size(input_size), sstables.size());
+
+    auto permit = _db.obtain_reader_permit(*table, "view_update_generator", db::no_timeout, {}).get();
+    auto ms = mutation_source([this, ssts] (
+                schema_ptr s,
+                reader_permit permit,
+                const dht::partition_range& pr,
+                const query::partition_slice& ps,
+                tracing::trace_state_ptr ts,
+                streamed_mutation::forwarding fwd_ms,
+                mutation_reader::forwarding fwd_mr) {
+        return ssts->make_range_sstable_reader(s, std::move(permit), pr, ps, std::move(ts), fwd_ms, fwd_mr, *_progress_tracker);
+    });
+    auto [staging_sstable_reader, staging_sstable_reader_handle] = make_manually_paused_evictable_reader(
+            std::move(ms),
+            s,
+            permit,
+            query::full_partition_range,
+            s->full_slice(),
+            nullptr,
+            ::mutation_reader::forwarding::no);
+    auto close_sr = deferred_close(staging_sstable_reader);
+
+    inject_failure("view_update_generator_consume_staging_sstable");
+    auto result = staging_sstable_reader.consume_in_thread(view_updating_consumer(*this, s, std::move(permit), *table, sstables, _as, staging_sstable_reader_handle));
+    return std::make_pair(result, input_size);
+}
+
+future<> view_update_generator::process_staging_sstables(lw_shared_ptr<replica::table> table, std::vector<sstables::shared_sstable> sstables) {
+    return seastar::async([this, table = std::move(table), &sstables] {
+        for(auto& sst: sstables) {
+            _progress_tracker->on_sstable_registration(sst);
+        }
+
+        // Generate view updates from staging sstables
+        auto start_time = db_clock::now();
+        auto [result, input_size] = generate_updates_from_staging_sstables(table, sstables);
+        if (result == stop_iteration::yes) {
+            throw abort_requested_exception{};
+        }
+
+        _progress_tracker->on_sstables_deregistration(sstables);
+
+        auto end_time = db_clock::now();
+        auto duration = std::chrono::duration<float>(end_time - start_time);
+        schema_ptr s = table->schema();
+        vug_logger.info("Processed {}.{}: {} sstables in {}ms = {}", s->ks_name(), s->cf_name(), sstables.size(),
+                        std::chrono::duration_cast<std::chrono::milliseconds>(duration).count(),
+                        utils::pretty_printed_throughput(input_size, duration));
+        
+        // Move staging sstables to table's base directory
+        table->move_sstables_from_staging(sstables).get();
+    });
 }
 
 // The .do_abort() just kicks the v.u.g. background fiber to wrap up and it
@@ -302,6 +340,9 @@ void view_update_generator::setup_metrics() {
 
 void view_update_generator::discover_staging_sstables() {
     _db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
+        if (table->uses_tablets()) {
+            return;
+        }
         auto t = table->shared_from_this();
         for (auto sstables = t->get_sstables(); sstables::shared_sstable sst : *sstables) {
             if (sst->requires_view_building()) {
