@@ -9,6 +9,7 @@
 #include "auth/standard_role_manager.hh"
 
 #include <optional>
+#include <stdexcept>
 #include <unordered_set>
 #include <vector>
 
@@ -28,6 +29,7 @@
 #include "cql3/util.hh"
 #include "db/consistency_level_type.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/error_injection.hh"
 #include "utils/log.hh"
 #include <seastar/core/loop.hh>
 #include <seastar/coroutine/maybe_yield.hh>
@@ -672,6 +674,12 @@ future<role_set> standard_role_manager::query_all() {
 
     // To avoid many copies of a view.
     static const auto role_col_name_string = sstring(meta::roles_table::role_col_name);
+
+    if (utils::get_local_injector().enter("standard_role_manager_fail_legacy_query")) {
+        if (legacy_mode(_qp)) {
+            throw std::runtime_error("standard_role_manager::query_all: failed due to error injection");
+        }
+    }
 
     const auto results = co_await _qp.execute_internal(
             query,

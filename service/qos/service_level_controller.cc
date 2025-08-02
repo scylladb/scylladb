@@ -308,6 +308,17 @@ future<> service_level_controller::update_effective_service_levels_cache() {
         // might be not initialized yet.
         co_return;
     }
+    if (!_sl_data_accessor || !_sl_data_accessor->can_use_effective_service_level_cache()) {
+        // Don't populate the effective service level cache until auth is migrated to raft.
+        // Otherwise, executing the code that follows would read roles data
+        // from system_auth tables; that would be bad because reading from
+        // those tables is prone to timeouts, and `update_effective_service_levels_cache`
+        // is called from the group0 context - a timeout like that would render
+        // group0 non-functional on the node until restart.
+        //
+        // See scylladb/scylladb#24963 for more details.
+        co_return;
+    }
     auto units = co_await get_units(_global_controller_db->notifications_serializer, 1);
 
     auto& role_manager = _auth_service.local().underlying_role_manager();
@@ -384,7 +395,7 @@ void service_level_controller::stop_legacy_update_from_distributed_data() {
 }
 
 future<std::optional<service_level_options>> service_level_controller::find_effective_service_level(const sstring& role_name) {
-    if (_sl_data_accessor->is_v2()) {
+    if (_sl_data_accessor->can_use_effective_service_level_cache()) {
         auto effective_sl_it = _effective_service_levels_db.find(role_name);
         co_return effective_sl_it != _effective_service_levels_db.end() 
             ? std::optional<service_level_options>(effective_sl_it->second)
