@@ -59,7 +59,7 @@ async def test_service_levels_snapshot(manager: ManagerClient):
     assert set([sl.service_level for sl in result]) == set([sl.service_level for sl in new_result])
 
 @pytest.mark.asyncio
-async def test_service_levels_upgrade(request, manager: ManagerClient):
+async def test_service_levels_upgrade(request, manager: ManagerClient, build_mode: str):
     # First, force the first node to start in legacy mode
     cfg = {'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
 
@@ -86,6 +86,11 @@ async def test_service_levels_upgrade(request, manager: ManagerClient):
 
     result = await cql.run_async("SELECT service_level FROM system_distributed.service_levels")
     assert set([sl.service_level for sl in result]) == set(sls)
+
+    if build_mode in ("debug", "dev"):
+        # See scylladb/scylladb/#24963 for more details
+        logging.info("Enabling an error injection in legacy role manager, to check that we don't query auth in system_auth")
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "standard_role_manager_fail_legacy_query", one_shot=False) for s in servers))
 
     logging.info("Triggering upgrade to raft topology")
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
