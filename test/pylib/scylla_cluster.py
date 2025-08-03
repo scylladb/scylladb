@@ -6,7 +6,7 @@
 """Scylla clusters for testing.
    Provides helpers to setup and manage clusters of Scylla servers for testing.
 """
-from functools import wraps
+from functools import wraps, reduce
 import asyncio
 import concurrent.futures
 from asyncio.subprocess import Process
@@ -20,13 +20,12 @@ import shutil
 import tempfile
 import time
 import traceback
-from typing import Any, Optional, Dict, List, Set, Tuple, Callable, AsyncIterator, NamedTuple, Union, NoReturn, \
-    Awaitable
+from typing import Any, Optional, Dict, List, Set, Callable, AsyncIterator, NamedTuple, Union, NoReturn
 import uuid
 from io import BufferedWriter
 import importlib
 
-from test import TOP_SRC_DIR, TEST_DIR
+from test import TOP_SRC_DIR, TEST_DIR, path_to
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
@@ -41,7 +40,6 @@ import glob
 import errno
 import re
 import platform
-import contextlib
 import fcntl
 import urllib
 
@@ -73,8 +71,11 @@ class ReplaceConfig(NamedTuple):
     wait_replaced_dead: bool = True
 
 
-def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addrs: List[str], cluster_name: str,
-                     socket_path: str, server_encryption: str) -> dict[str, object]:
+def make_scylla_conf(mode: str,
+                     host_addr: str,
+                     seed_addrs: list[str],
+                     cluster_name: str,
+                     server_encryption: str) -> dict[str, Any]:
     # We significantly increase default timeouts to allow running tests on a very slow
     # setup (but without network losses). These timeouts can impact the running time of
     # topology tests. For example, the barrier_and_drain topology command waits until
@@ -86,7 +87,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
 
     return {
         'cluster_name': cluster_name,
-        'workdir': str(workdir.resolve()),
         'listen_address': host_addr,
         'rpc_address': host_addr,
         'api_address': host_addr,
@@ -138,8 +138,6 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'view_update_reader_concurrency_semaphore_serialize_limit_multiplier': 0,
         'view_update_reader_concurrency_semaphore_kill_limit_multiplier': 0,
 
-        'maintenance_socket': socket_path,
-
         'service_levels_interval_ms': 500,
 
         'server_encryption_options': {
@@ -152,6 +150,10 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'rf_rack_valid_keyspaces': True,
 
         'alternator_allow_system_table_write': True,
+
+        "authenticator": "PasswordAuthenticator",
+        "authorizer": "CassandraAuthorizer",
+        "tablets_initial_scale_factor": 4 if mode == "release" else 2,
     }
 
 # Seastar options can not be passed through scylla.yaml, use command line
@@ -369,31 +371,17 @@ class ScyllaServer:
     _host_id: HostID                             # Host id (UUID)
     newid = itertools.count(start=1).__next__   # Sequential unique id
 
-    def __init__(self, mode: str, version: ScyllaVersionDescription, vardir: str | pathlib.Path,
+    def __init__(self,
                  logger: Union[logging.Logger, logging.LoggerAdapter],
-                 cluster_name: str, ip_addr: str, seeds: List[str],
+                 vardir: pathlib.Path,
+                 version: ScyllaVersionDescription,
                  cmdline_options: List[str],
                  config_options: Dict[str, Any],
                  property_file: Dict[str, Any],
-                 append_env: Dict[str,Any],
-                 server_encryption: str) -> None:
-        # pylint: disable=too-many-arguments
+                 append_env: Dict[str, str]):
         self.server_id = ServerNum(ScyllaServer.newid())
-        xdist_worker_id = get_xdist_worker_id()
-        # this variable needed to make a cleanup after server is not needed anymore
-        self.maintenance_socket_dir = tempfile.TemporaryDirectory(
-            prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-"
-        )
-        self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
-        self.exe = pathlib.Path(version.path).resolve()
-        self.vardir = pathlib.Path(vardir)
         self.logger = logger
         self.log_file = None
-        self.cmdline_options = merge_cmdline_options(SCYLLA_CMDLINE_OPTIONS, version.argv)
-        self.cmdline_options = merge_cmdline_options(self.cmdline_options, cmdline_options)
-        self.cluster_name = cluster_name
-        self.ip_addr = IPAddress(ip_addr)
-        self.seeds = seeds
         self.auth_provider: Optional[AuthProvider] = None
         self.cmd: Optional[Process] = None
         self.start_stop_lock = asyncio.Lock()
@@ -401,8 +389,11 @@ class ScyllaServer:
         self.log_savepoint = 0
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
+
+        xdist_worker_id = get_xdist_worker_id()
         shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
-        self.workdir = self.vardir / shortname
+
+        self.workdir = vardir / shortname
         self.log_filename = self.workdir.with_suffix(".log")
         self.config_filename = self.workdir / "conf/scylla.yaml"
         self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
@@ -413,28 +404,29 @@ class ScyllaServer:
         self.resources_certificate_file = self.resourcesdir / "scylla.crt"
         self.resources_keyfile_file = self.resourcesdir / "scylla.key"
 
-        if property_file and "endpoint_snitch" not in config_options:
-            config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
+        self.maintenance_socket_dir = tempfile.TemporaryDirectory(
+            prefix=f"scylladb-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}-test.py-"
+        )
+        self.maintenance_socket_path = f"{self.maintenance_socket_dir.name}/cql.m"
 
-        # Sum of basic server configuration and the user-provided config options.
-        self.config = make_scylla_conf(
-                mode = mode,
-                workdir = self.workdir,
-                host_addr = self.ip_addr,
-                seed_addrs = self.seeds,
-                cluster_name = self.cluster_name,
-                server_encryption = server_encryption,
-                socket_path=self.maintenance_socket_path) \
-            | version.config | config_options
+        self.exe = pathlib.Path(version.path).resolve()
+        self.cmdline_options = cmdline_options
+        self.config = {
+            'workdir': str(self.workdir.resolve()),
+            'maintenance_socket': self.maintenance_socket_path,
+        } | config_options
         self.property_file = property_file
         self.append_env = append_env
+
+    @property
+    def ip_addr(self) -> IPAddress:
+        return IPAddress(self.config["listen_address"])
 
     def change_ip(self, ip_addr: IPAddress) -> None:
         """Change IP address of the current server. Pre: the server is
         stopped"""
         if self.is_running:
             raise RuntimeError(f"Can't change IP of a running server {self.ip_addr}.")
-        self.ip_addr = ip_addr
         self.config["listen_address"] = ip_addr
         self.config["rpc_address"] = ip_addr
         self.config["api_address"] = ip_addr
@@ -442,11 +434,14 @@ class ScyllaServer:
         self.config["alternator_address"] = ip_addr
         self._write_config_file()
 
+    @property
+    def seeds(self) -> list[str]:
+        return [s.strip() for s in self.config["seed_provider"][0]["parameters"][0]["seeds"].split(",")]
+
     def change_seeds(self, seeds: List[str]):
         """Change seeds of the current server. Pre: the server is stopped"""
         if self.is_running:
             raise RuntimeError(f"Can't change seeds of a running server {self.ip_addr}.")
-        self.seeds = seeds
         self.config['seed_provider'][0]['parameters'][0]['seeds'] = ','.join(seeds)
         self._write_config_file()
 
@@ -955,26 +950,29 @@ class ScyllaCluster:
     """A cluster of Scylla servers providing an API for changes"""
     # pylint: disable=too-many-instance-attributes
 
-    class CreateServerParams(NamedTuple):
-        logger: Union[logging.Logger, logging.LoggerAdapter]
-        cluster_name: str
-        ip_addr: IPAddress
-        seeds: List[str]
-        property_file: dict[str, Any] | None
-        config_from_test: dict[str, Any]
-        cmdline_from_test: List[str]
-        version: Optional[ScyllaVersionDescription]
-        server_encryption: str
-
-    def __init__(self, logger: Union[logging.Logger, logging.LoggerAdapter],
-                 host_registry: HostRegistry, replicas: int,
-                 create_server: Callable[[CreateServerParams], ScyllaServer]) -> None:
+    def __init__(self,
+                 logger: Union[logging.Logger, logging.LoggerAdapter],
+                 vardir: pathlib.Path,
+                 host_registry: HostRegistry,
+                 replicas: int,
+                 mode: str,
+                 cmdline_options: str | list[str],
+                 cmdline_options_override: list[str],
+                 config_options: dict[str, Any],
+                 append_env: dict[str, str]):
         self.logger = logger
+        self.vardir = vardir
         self.host_registry = host_registry
+        self.replicas = replicas
+        self.mode = mode
+        self.cmdline_options = [cmdline_options] if isinstance(cmdline_options, str) else cmdline_options
+        self.cmdline_options_override = cmdline_options_override
+        self.config_options = config_options
+        self.append_env = append_env
+
         self.leased_ips = set[IPAddress]()
         self.name = str(uuid.uuid1())
-        self.replicas = replicas
-        self.create_server = create_server
+
         # Every ScyllaServer is in one of self.running, self.stopped.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
@@ -1053,6 +1051,19 @@ class ScyllaCluster:
             self.stopped.update(self.running)
             self.running.clear()
 
+    async def recycle(self) -> None:
+        """When a dirty cluster is returned to the cluster pool,
+           stop it and release the used IPs. We don't necessarily uninstall() it yet,
+           which would delete the log file and directory - we might want to preserve
+           these if it came from a failed test.
+        """
+        for srv in self.servers.values():
+            if srv.log_file is not None:
+                srv.log_file.close()
+            srv.maintenance_socket_dir.cleanup()
+        await self.stop()
+        await self.release_ips()
+
     def _seeds(self) -> List[IPAddress]:
         # If the cluster is empty, all servers must use self.initial_seed to not start separate clusters.
         if not self.running:
@@ -1111,18 +1122,6 @@ class ScyllaCluster:
             if not seeds:
                 seeds = [ip_addr]
 
-        params = ScyllaCluster.CreateServerParams(
-            logger = self.logger,
-            cluster_name = self.name,
-            ip_addr = ip_addr,
-            seeds = seeds,
-            property_file = property_file,
-            config_from_test = extra_config,
-            server_encryption = server_encryption,
-            cmdline_from_test = cmdline or [],
-            version = version,
-        )
-
         server = None
 
         async def handle_join_failure():
@@ -1132,7 +1131,43 @@ class ScyllaCluster:
             self.stopped[server.server_id] = server
 
         try:
-            server = self.create_server(params)
+            if version is None:
+                version = get_current_version_description(path=path_to(self.mode, "scylla"))
+            if not os.access(version.path, os.F_OK):
+                raise FileNotFoundError(f"{version.path} does not exist.")
+            if not os.access(version.path, os.X_OK):
+                raise PermissionError(f"{version.path} is not executable.")
+
+            cmdline = reduce(merge_cmdline_options, [
+                SCYLLA_CMDLINE_OPTIONS,
+                version.argv,
+                self.cmdline_options,
+                cmdline or [],
+                self.cmdline_options_override,
+            ])
+
+            # Sum of basic server configuration and the user-provided config options.
+            config_options = make_scylla_conf(
+                mode=self.mode,
+                host_addr=ip_addr,
+                seed_addrs=seeds,
+                cluster_name=self.name,
+                server_encryption=server_encryption,
+            ) | version.config | self.config_options | extra_config
+
+            if property_file and "endpoint_snitch" not in config_options:
+                config_options["endpoint_snitch"] = "GossipingPropertyFileSnitch"
+
+            server = ScyllaServer(
+                logger=self.logger,
+                vardir=self.vardir,
+                version=version,
+                cmdline_options=cmdline,
+                config_options=config_options,
+                property_file=property_file,
+                append_env=self.append_env,
+            )
+
             self.logger.info("Cluster %s adding server...", self)
             if start:
                 await server.install_and_start(self.api, expected_error, expected_server_up_state)
