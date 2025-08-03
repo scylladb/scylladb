@@ -665,16 +665,15 @@ private:
         // Ignoring the result of make_request() because we don't want to block and it is safe since we have a gate we are going to wait on and all argument are
         // captured by value or moved into the fiber
         std::ignore = _client->make_request(std::move(req),[this, part_number, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
-            return util::read_entire_stream_contiguous(in).then([this, part_number](auto body) mutable {
-                auto etag = parse_multipart_copy_upload_etag(body);
-                if (etag.empty()) {
-                    return make_exception_future<>(std::runtime_error("Cannot parse ETag"));
-                }
-                s3l.trace("Part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
-                _part_etags[part_number] = std::move(etag);
-                return make_ready_future<>();
-            });
-        },http::reply::status_type::ok,_as)
+            auto _in = std::move(in);
+            auto body = co_await util::read_entire_stream_contiguous(_in);
+            auto etag = parse_multipart_copy_upload_etag(body);
+            if (etag.empty()) {
+                throw std::runtime_error("Cannot parse ETag");
+            }
+            s3l.trace("Part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
+            _part_etags[part_number] = std::move(etag);
+        },http::reply::status_type::ok, _as)
         .handle_exception([this, part_number](auto ex) {
             s3l.warn("Failed to upload part {}, upload id {}. Reason: {}", part_number, _upload_id, ex);
         })
