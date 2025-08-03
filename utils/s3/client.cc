@@ -699,7 +699,8 @@ private:
         // Ignoring the result of make_request() because we don't want to block and it is safe since we have a gate we are going to wait on and all argument are
         // captured by value or moved into the fiber
         std::ignore = _client->make_request(std::move(req),[this, part_number, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
-            auto body = co_await util::read_entire_stream_contiguous(in);
+            auto _in = std::move(in);
+            auto body = co_await util::read_entire_stream_contiguous(_in);
             auto etag = parse_multipart_copy_upload_etag(body);
             if (etag.empty()) {
                 throw std::runtime_error("Cannot parse ETag");
