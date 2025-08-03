@@ -219,6 +219,20 @@ class ManagerClient:
         return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]), info[3], info[4])
                 for info in server_info_list]
 
+    async def starting_servers(self) -> list[ServerInfo]:
+        """Get List of server info (id and IP address) of servers currently
+           starting. Can be useful for killing (with server_stop()) a server
+           which a test started in the background but now doesn't expect to
+           ever finish booting successfully.
+        """
+        try:
+            server_info_list = await self.client.get_json("/cluster/starting-servers")
+        except RuntimeError as exc:
+            raise Exception("Failed to get list of starting servers") from exc
+        assert isinstance(server_info_list, list), "starting_servers got unknown data type"
+        return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]), info[3], info[4])
+                for info in server_info_list]
+
     async def mark_dirty(self) -> None:
         """Manually mark current cluster dirty.
            To be used when a server was modified outside of this API."""
