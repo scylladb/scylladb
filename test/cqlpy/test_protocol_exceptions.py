@@ -94,10 +94,29 @@ def test_protocol_version_mismatch(scylla_only, request, host):
 # To avoid code duplication of this low-level code, we use a common
 # implementation function with parameters. To trigger a specific
 # protocol error, the appropriate trigger should be set to True.
-def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_auth=False):
+def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_auth=False, trigger_unknown_compression=False):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((host, 9042))
     try:
+        if trigger_unknown_compression:
+            # send STARTUP with an unknown COMPRESSION option
+            bad_startup = bytearray()
+            bad_startup += struct.pack("!B", 0x04)  # version 4
+            bad_startup += struct.pack("!B", 0x00)  # flags
+            bad_startup += struct.pack("!H", 0x01)  # stream = 1
+            bad_startup += struct.pack("!B", 0x01)  # opcode = STARTUP
+            # two entries in the string map: CQL_VERSION and COMPRESSION
+            body = (
+                b'\x00\x02'
+                b'\x00\x0bCQL_VERSION\x00\x053.0.0'
+                b'\x00\x0bCOMPRESSION\x00\x07invalid_compression_algorithm'
+            )
+            bad_startup += struct.pack("!I", len(body))
+            bad_startup += body
+            s.send(bad_startup)
+            s.recv(4096)
+            return
+
         # STARTUP
         startup = bytearray()
         startup += struct.pack("!B", 0x04)         # version 4
@@ -199,6 +218,23 @@ def test_unexpected_message_during_auth(scylla_only, no_ssl, host):
 
     for _ in range(run_count):
         _protocol_error_impl(host, trigger_unexpected_auth=True)
+
+    protocol_exception_metrics_after = get_protocol_error_metrics(host)
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
+
+# Test if the error is raised when sending an unknown compression algorithm.
+def test_unknown_compression_algorithm(scylla_only, no_ssl, host):
+    run_count = 100
+    cpp_exception_threshold = 10
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
+    protocol_exception_metrics_before = get_protocol_error_metrics(host)
+
+    for _ in range(run_count):
+        _protocol_error_impl(host, trigger_unknown_compression=True)
 
     protocol_exception_metrics_after = get_protocol_error_metrics(host)
     assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
