@@ -69,7 +69,7 @@ struct gossip_config {
     uint32_t skip_wait_for_gossip_to_settle = -1;
     utils::updateable_value<uint32_t> failure_detector_timeout_ms;
     utils::updateable_value<int32_t> force_gossip_generation;
-    utils::updateable_value<sstring> recovery_leader;
+    utils::updateable_value<utils::UUID> recovery_leader;
 };
 
 struct loaded_endpoint_state {
@@ -135,6 +135,8 @@ public:
     const sstring& get_cluster_name() const noexcept;
     void set_group0_id(utils::UUID group0_id);
     const utils::UUID& get_group0_id() const noexcept;
+
+    const utils::UUID& get_recovery_leader() const noexcept;
 
     const sstring& get_partitioner_name() const noexcept {
         return _gcfg.partitioner;

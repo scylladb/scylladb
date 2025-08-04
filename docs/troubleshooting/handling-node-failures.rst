@@ -148,12 +148,13 @@ will leave the recovery mode and remove the obsolete internal Raft data.
         cqlsh> TRUNCATE TABLE system.discovery;
         cqlsh> DELETE value FROM system.scylla_local WHERE key = 'raft_group0_id';
 
-#. Add the ``recovery_leader`` property to the ``scylla.yaml`` file and set it to the host ID of the recovery leader on
-   **every live node**. Make sure the change is applied on all nodes by sending the ``SIGHUP`` signal to all ScyllaDB
-   processes.
-
 #. Perform a :doc:`rolling restart </operating-scylla/procedures/config-change/rolling-restart/>` of all live nodes,
-   however, this time **the recovery leader must be restarted first**.
+   but:
+
+   * **restart the recovery leader first**,
+
+   * before restarting each node, add the ``recovery_leader`` property to its ``scylla.yaml`` file and set it to the
+     host ID of the recovery leader.
 
    After completing this step, Raft should be fully functional.
 
