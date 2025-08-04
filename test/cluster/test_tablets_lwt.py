@@ -375,8 +375,8 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClie
         ]
     }
 
-    logger.info("Bootstrap a cluster with two nodes")
-    servers = await manager.servers_add(2, config=config)
+    logger.info("Bootstrap a cluster with three nodes")
+    servers = await manager.servers_add(3, config=config)
     cql = manager.get_cql()
 
     logger.info("Create a keyspace")
@@ -384,15 +384,17 @@ async def test_lwt_timeout_while_creating_paxos_state_table(manager: ManagerClie
         logger.info(f"Create table {ks}.test")
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
 
-        logger.info("Stop the second node")
-        await manager.server_stop_gracefully(servers[1].server_id)
+        logger.info("Stop the second and third nodes")
+        await asyncio.gather(manager.server_stop_gracefully(servers[1].server_id),
+                             manager.server_stop_gracefully(servers[2].server_id))
 
         logger.info(f"Running an LWT with timeout {timeout}")
         with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, there is no raft quorum"):
             await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
 
-        logger.info("Start the second node")
-        await manager.server_start(servers[1].server_id)
+        logger.info("Start the second and third nodes")
+        await asyncio.gather(manager.server_start(servers[1].server_id),
+                             manager.server_start(servers[2].server_id))
 
 
 @pytest.mark.asyncio
