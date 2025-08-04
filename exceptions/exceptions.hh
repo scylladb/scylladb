@@ -134,6 +134,7 @@ public:
     int32_t block_for;
 
     read_write_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept;
+    read_write_timeout_exception(exception_code code, sstring message, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept;
 };
 
 class read_timeout_exception : public read_write_timeout_exception {
@@ -144,12 +145,21 @@ public:
         : read_write_timeout_exception{exception_code::READ_TIMEOUT, ks, cf, consistency, received, block_for}
         , data_present{data_present}
     { }
+
+    read_timeout_exception(sstring message, db::consistency_level consistency, int32_t received, int32_t block_for, bool data_present) noexcept
+        : read_write_timeout_exception{exception_code::READ_TIMEOUT, std::move(message), consistency, received, block_for}
+        , data_present{data_present}
+    { }
 };
 
 struct mutation_write_timeout_exception : public read_write_timeout_exception {
     db::write_type type;
     mutation_write_timeout_exception(const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for, db::write_type type) noexcept :
         read_write_timeout_exception(exception_code::WRITE_TIMEOUT, ks, cf, consistency, received, block_for)
+        , type{std::move(type)}
+    { }
+    mutation_write_timeout_exception(sstring message, db::consistency_level consistency, int32_t received, int32_t block_for, db::write_type type) noexcept :
+        read_write_timeout_exception(exception_code::WRITE_TIMEOUT, std::move(message), consistency, received, block_for)
         , type{std::move(type)}
     { }
 };

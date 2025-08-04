@@ -6486,20 +6486,20 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
             query::max_result_size(query::result_memory_limiter::unlimited_result_size), query::tombstone_limit::max);
 }
 
-static read_timeout_exception write_timeout_to_read(schema_ptr s, mutation_write_timeout_exception& ex) {
-    return read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false);
+static read_timeout_exception write_timeout_to_read(mutation_write_timeout_exception& ex) {
+    return read_timeout_exception(ex.get_message(), ex.consistency, ex.received, ex.block_for, false);
 }
 
-static read_failure_exception write_failure_to_read(schema_ptr s, mutation_write_failure_exception& ex) {
-    return read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
+static read_failure_exception write_failure_to_read(mutation_write_failure_exception& ex) {
+    return read_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
 }
 
-static mutation_write_timeout_exception read_timeout_to_write(schema_ptr s, read_timeout_exception& ex) {
-    return mutation_write_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, db::write_type::CAS);
+static mutation_write_timeout_exception read_timeout_to_write(read_timeout_exception& ex) {
+    return mutation_write_timeout_exception(ex.get_message(), ex.consistency, ex.received, ex.block_for, db::write_type::CAS);
 }
 
-static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read_failure_exception& ex) {
-    return mutation_write_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
+static mutation_write_failure_exception read_failure_to_write(read_failure_exception& ex) {
+    return mutation_write_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
 }
 
 /**
@@ -6682,24 +6682,24 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
             }
         }
     } catch (read_failure_exception& ex) {
-        write ? throw read_failure_to_write(schema, ex) : throw;
+        write ? throw read_failure_to_write(ex) : throw;
     } catch (read_timeout_exception& ex) {
         if (write) {
             get_stats().cas_write_timeouts.mark();
-            throw read_timeout_to_write(schema, ex);
+            throw read_timeout_to_write(ex);
         } else {
             get_stats().cas_read_timeouts.mark();
             throw;
         }
     } catch (mutation_write_failure_exception& ex) {
-        write ? throw : throw write_failure_to_read(schema, ex);
+        write ? throw : throw write_failure_to_read(ex);
     } catch (mutation_write_timeout_exception& ex) {
         if (write) {
             get_stats().cas_write_timeouts.mark();
             throw;
         } else {
             get_stats().cas_read_timeouts.mark();
-            throw write_timeout_to_read(schema, ex);
+            throw write_timeout_to_read(ex);
         }
     } catch (exceptions::unavailable_exception& ex) {
         write ? get_stats().cas_write_unavailables.mark() :  get_stats().cas_read_unavailables.mark();
