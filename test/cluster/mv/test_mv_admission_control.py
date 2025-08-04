@@ -72,6 +72,8 @@ async def test_mv_retried_writes_reach_all_replicas(manager: ManagerClient) -> N
     servers = await manager.servers_add(node_count - 1, config=cfg, auto_rack_dc="dc1")
     server = await manager.server_add(config=cfg_slow, property_file={"dc": servers[0].datacenter, "rack": servers[0].rack})
 
+    servers_by_id = {(await manager.get_host_id(s.server_id)): s for s in servers}
+
     cql, hosts = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
@@ -90,6 +92,8 @@ async def test_mv_retried_writes_reach_all_replicas(manager: ManagerClient) -> N
         base_tablet_hosts = [str(replica[0]) for replica in base_tablet_replicas]
         slow_host_id = await manager.get_host_id(server.server_id)
         if str(slow_host_id) not in base_tablet_hosts:
+            # sort by rack so that base_tablet_replicas[0] has the same rack as slow_host_id (server)
+            base_tablet_replicas = sorted(base_tablet_replicas, key=lambda r: servers_by_id[r[0]].rack)
             base_tablet_host_id, base_tablet_shard = base_tablet_replicas[0]
             await manager.api.move_tablet(servers[0].ip_addr, ks, "tab", base_tablet_host_id, base_tablet_shard, slow_host_id, 0, 0)
         view_tablet_replicas = await get_tablet_replicas(manager, servers[0], ks, "mv_cf_view", 0)
