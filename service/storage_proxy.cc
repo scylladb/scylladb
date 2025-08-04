@@ -2229,8 +2229,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: fail to send ballot {} to {}: {}", _id,
                                 ballot, peer, ex);
                         if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
-                            auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
-                                        _schema->cf_name(), _cl_for_paxos, summary.committed_ballots_by_replica.size(),
+                            auto e = std::make_exception_ptr(mutation_write_failure_exception(format("{}", ex), _cl_for_paxos, summary.committed_ballots_by_replica.size(),
                                         request_tracker.errors, _required_participants, db::write_type::CAS));
                             request_tracker.set_exception(std::move(e));
                         }
