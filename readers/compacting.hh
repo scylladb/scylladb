@@ -16,7 +16,7 @@ namespace dht {
 class decorated_key;
 }
 
-class tombstone_gc_state;
+class tombstone_gc_before_getter;
 struct tombstone_purge_stats;
 
 /// Creates a compacting reader.
@@ -36,6 +36,6 @@ struct tombstone_purge_stats;
 /// if the source reader supports it
 mutation_reader make_compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
         max_purgeable_fn get_max_purgeable,
-        const tombstone_gc_state& gc_state,
+        tombstone_gc_before_getter gc_before_getter,
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
         tombstone_purge_stats* tombstone_stats = nullptr);

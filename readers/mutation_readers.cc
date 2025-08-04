@@ -1469,12 +1469,12 @@ private:
 public:
     compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
             max_purgeable_fn get_max_purgeable,
-            const tombstone_gc_state& gc_state,
+            tombstone_gc_before_getter gc_before_getter,
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             tombstone_purge_stats* tombstone_stats = nullptr)
         : impl(source.schema(), source.permit())
         , _reader(std::move(source))
-        , _compactor(*_schema, compaction_time, get_max_purgeable, gc_state, tombstone_stats)
+        , _compactor(*_schema, compaction_time, get_max_purgeable, std::move(gc_before_getter), tombstone_stats)
         , _last_uncompacted_partition_start(dht::decorated_key(dht::minimum_token(), partition_key::make_empty()), tombstone{})
         , _fwd(fwd) {
     }
@@ -1557,6 +1557,6 @@ public:
 
 mutation_reader make_compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
         max_purgeable_fn get_max_purgeable,
-        const tombstone_gc_state& gc_state, streamed_mutation::forwarding fwd, tombstone_purge_stats* tombstone_stats) {
-    return make_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, gc_state, fwd, tombstone_stats);
+        tombstone_gc_before_getter gc_before_getter, streamed_mutation::forwarding fwd, tombstone_purge_stats* tombstone_stats) {
+    return make_mutation_reader<compacting_reader>(std::move(source), compaction_time, get_max_purgeable, std::move(gc_before_getter), fwd, tombstone_stats);
 }
