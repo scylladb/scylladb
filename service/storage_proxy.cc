@@ -2397,7 +2397,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
             if (accepted) {
                 tracing::trace(tr_state, "accept_proposal: got \"{}\" from /{}", *accepted ? "accepted" : "rejected", peer);
                 paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got \"{}\" from {}", _id,
-                        accepted ? "accepted" : "rejected", peer);
+                        *accepted ? "accepted" : "rejected", peer);
 
                 *accepted ? request_tracker.accepts++ : request_tracker.rejects++;
             }
