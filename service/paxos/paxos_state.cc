@@ -184,6 +184,7 @@ future<prepare_response> paxos_state::prepare(storage_proxy& sp, paxos_store& pa
 
 future<bool> paxos_state::accept(storage_proxy& sp, paxos_store& paxos_store, tracing::trace_state_ptr tr_state, schema_ptr schema, dht::token token, const proposal& proposal,
         clock_type::time_point timeout) {
+    co_await utils::get_local_injector().inject("paxos_accept_proposal_wait", utils::wait_for_message(std::chrono::minutes(2)));
     co_await utils::get_local_injector().inject("paxos_accept_proposal_timeout", timeout);
     utils::latency_counter lc;
     lc.start();
