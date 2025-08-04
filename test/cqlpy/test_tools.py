@@ -1752,3 +1752,33 @@ def test_scylla_sstable_query_null_data(cql, test_keyspace, scylla_path, scylla_
         assert json.loads(out)
         # Verify that null values were properly queried
         assert ":null" in out.decode('utf-8'), f"Expected null values in the output, but they were not found. out='{out.decode('utf-8')}'"
+
+
+# Use different snapshot tags to stress the sstables::make_entry_descriptor regex pattern matching
+# And try to reproduce https://github.com/scylladb/scylladb/issues/25242 where a snapshot tag
+# that resembles a table-<uuid> directory confused the regular expression when doing greedy matching
+# to think that "snapshots" is the keyspace name and the snapshot tag to be the table name.
+@pytest.mark.parametrize("test_tag", [
+        "sstable-dump-4d1cc6a4-6c13-11f0-a3c9",
+        "test-4d1cc6a46c1311f0a3c9",
+        "dropped-1754462406"
+])
+def test_scylla_sstable_query_data_from_snapshot(cql, test_keyspace, scylla_path, scylla_data_dir, test_tag):
+    """Check that scylla-sstable query works with sstables in a snapshot directory.
+
+    Reproduces https://github.com/scylladb/scylladb/issues/25242
+    """
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        nodetool.take_snapshot(cql, f"{test_keyspace}.{table}", test_tag, False)
+        args = [scylla_path, "sstable", "query", "--output-format", "json", "--scylla-yaml-file", f"{os.path.dirname(scylla_data_dir)}/conf/scylla.yaml", "--logger-log-level", "scylla-sstable=debug"]
+        args.extend([f"{os.path.dirname(sst)}/snapshots/{test_tag}/{os.path.basename(sst)}" for sst in sstables])
+        try:
+            out = subprocess.check_output(args)
+        except subprocess.CalledProcessError as e:
+            pytest.fail(f"Failed to query sstable: {e}\n{e.output.decode('utf-8')}")
+        finally:
+            nodetool.del_snapshot(cql, test_tag)
+
+        assert out
+        print(f"out: {out.decode('utf-8')}")
+        assert json.loads(out)
