@@ -8,7 +8,7 @@ from cassandra import WriteFailure
 from cassandra.auth import PlainTextAuthProvider
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement, ConsistencyLevel
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, ReadTimeout
 from cassandra import Unauthorized
 
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
@@ -578,3 +578,65 @@ async def test_lwt_coordinator_shard(manager: ManagerClient):
         matches = await n2_log.grep("CAS\\[0\\] successful")
         assert len(matches) == 1
         assert "shard 1" in matches[0][0]
+
+
+@pytest.mark.asyncio
+@skip_mode('debug', 'dev is enought: the test checks non-critical functionality')
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_error_message_for_timeout_due_to_uncertainty(manager: ManagerClient):
+    # LWT can sometimes return WriteTimeout when it is uncertain whether the transaction
+    # was applied. In this case, the user should retry the transaction.
+    #
+    # Scenario:
+    # 1. The cluster has three nodes. The first node is configured to throw an error on accept,
+    #    and the second node is configured to wait for an explicit signal from the test.
+    # 2. Run the first LWT on the first node and wait until the coordinator processes the error from it.
+    # 3. Run another LWT, which should invalidate all promises made during the first one.
+    # 4. Signal the second node to proceed with accept; it must return a reject.
+    # 5. At this point, the coordinator is uncertain about the result of the first LWT. Any subsequent LWT
+    #    might either complete its Paxos round (if a quorum of promises observed the accept) or
+    #    overwrite it (if a quorum of promises never observed the accept).
+    #
+    # The test verifies that the WriteTimeout error returned by the system
+    # correctly reflects the cause of the problem.
+
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    servers = await manager.servers_add(3, cmdline=cmdline, auto_rack_dc="mydc")
+    (cql, hosts) = await manager.get_ready_cql(servers)
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
+        logger.info("Create a table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        # accept on the first node returns an error
+        logger.info("Inject paxos_error_before_save_proposal")
+        await inject_error_one_shot_on(manager, "paxos_error_before_save_proposal", [servers[0]])
+
+        # accept on the second node returns reject
+        logger.info("Inject paxos_accept_proposal_wait")
+        await inject_error_one_shot_on(manager, "paxos_accept_proposal_wait", [servers[1]])
+
+        logger.info("Open log")
+        log0 = await manager.server_open_log(servers[0].server_id)
+
+        logger.info(f"Start LWT1 on {hosts[0]}")
+        lwt_task = cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1;",
+                                                 consistency_level=ConsistencyLevel.SERIAL),
+                                 host=hosts[0])
+
+        logger.info(
+            "Wait for the coordinator to process error from the first node")
+        await log0.wait_for('accept_proposal: failure while sending proposal')
+
+        logger.info(f"Run LWT2 on {hosts[1]}")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 2) IF NOT EXISTS", host=hosts[1])
+
+        logger.info("Trigger paxos_accept_proposal_wait")
+        await manager.api.message_injection(servers[1].ip_addr, "paxos_accept_proposal_wait")
+
+        with pytest.raises(ReadTimeout, match="write timeout due to uncertainty(.*)injected_error_before_save_proposal"):
+            await lwt_task
