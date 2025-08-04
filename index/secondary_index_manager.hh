@@ -95,7 +95,7 @@ public:
     /// Returns a custom description of the index, or std::nullopt if the default index description logic should be used instead.
     virtual std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const = 0;
     virtual bool should_create_view() const = 0;
-    virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) = 0;
+    virtual void validate(const schema &schema, const cql3::statements::index_specific_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) const = 0;
 };
 
 class secondary_index_manager {
@@ -105,7 +105,6 @@ class secondary_index_manager {
 public:
     secondary_index_manager(data_dictionary::table cf);
     void reload();
-    view_ptr create_view_for_index(const index_metadata& index) const;
     std::vector<index_metadata> get_dependent_indices(const column_definition& cdef) const;
     std::vector<index> list_indexes() const;
     bool is_index(view_ptr) const;
