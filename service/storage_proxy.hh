@@ -610,7 +610,7 @@ private:
     // fencing_token with the fence_version on the local node/shard and returns an instance of
     // stale_topology_exception if the request coordinator is lagging behind.
     std::optional<replica::stale_topology_exception> check_fence(fencing_token token,
-        locator::host_id caller_address) const noexcept;
+        locator::host_id caller_address) noexcept;
 
     // Checks the fence_token when the future is ready.
     //
@@ -623,14 +623,14 @@ private:
     //     before execution. The "after" check should only run when applying mutations locally;
     //     forwarded mutations perform their own fence_token checks.
     template <typename T>
-    future<T> apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) const;
+    future<T> apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address);
 
     // Checks the fence_token and, if it is stale, returns a failed future containing
     // a stale_topology_exception.
     // The function returns a future (instead of void) for two reasons:
     //   * constructing a failed future is less expensive than throwing an exception
     //   * it maintains consistency with other apply_fence functions
-    future<> apply_fence(std::optional<fencing_token> fence, locator::host_id caller_address) const;
+    future<> apply_fence(std::optional<fencing_token> fence, locator::host_id caller_address);
 
     // Checks the fence_token and, if it is stale, returns a stale_topology_exception
     // wrapped in a replica::exception_variant.
@@ -641,7 +641,7 @@ private:
         std::is_same_v<T, replica::exception_variant> ||
         requires(T t) { std::get<replica::exception_variant>(t); }
     )
-    std::optional<future<T>> apply_fence_result(std::optional<fencing_token> fence, locator::host_id caller_address) const;
+    std::optional<future<T>> apply_fence_result(std::optional<fencing_token> fence, locator::host_id caller_address);
 
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);

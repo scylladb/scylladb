@@ -3066,6 +3066,10 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of operations that crossed a shard boundary"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
+        sm::make_total_operations("fenced_out_requests", replica_fenced_out_requests,
+                       sm::description("number of requests that resulted in a stale_topology_exception"),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
         sm::make_total_operations("cas_dropped_prune", cas_replica_dropped_prune,
                        sm::description("how many times a coordinator did not perform prune after cas"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
@@ -3371,11 +3375,12 @@ storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracin
 }
 
 std::optional<replica::stale_topology_exception>
-storage_proxy::check_fence(fencing_token token, locator::host_id caller_address) const noexcept {
+storage_proxy::check_fence(fencing_token token, locator::host_id caller_address) noexcept {
     const auto fence_version = _shared_token_metadata.get_fence_version();
     if (!token || token.topology_version >= fence_version) {
         return std::nullopt;
     }
+    get_stats().replica_fenced_out_requests++;
     static thread_local logger::rate_limit rate_limit(std::chrono::seconds(1));
     slogger.log(log_level::warn, rate_limit,
         "Stale topology detected, request has been fenced out, "
@@ -3385,7 +3390,7 @@ storage_proxy::check_fence(fencing_token token, locator::host_id caller_address)
 }
 
 template <typename T>
-future<T> storage_proxy::apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) const {
+future<T> storage_proxy::apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) {
     if (!fence) {
         return std::move(future);
     }
@@ -3398,7 +3403,7 @@ future<T> storage_proxy::apply_fence_on_ready(future<T> future, fencing_token fe
     });
 }
 
-future<> storage_proxy::apply_fence(std::optional<fencing_token> fence, locator::host_id caller_address) const {
+future<> storage_proxy::apply_fence(std::optional<fencing_token> fence, locator::host_id caller_address) {
     auto stale = fence ? check_fence(*fence, caller_address) : std::nullopt;
     return stale ? make_exception_future<>(std::move(*stale)) : make_ready_future<>();
 }
@@ -3408,7 +3413,7 @@ requires (
     std::is_same_v<T, replica::exception_variant> ||
     requires(T t) { std::get<replica::exception_variant>(t); }
 )
-std::optional<future<T>> storage_proxy::apply_fence_result(std::optional<fencing_token> fence, locator::host_id caller_address) const {
+std::optional<future<T>> storage_proxy::apply_fence_result(std::optional<fencing_token> fence, locator::host_id caller_address) {
     auto stale = fence ? check_fence(*fence, caller_address) : std::nullopt;
     if (stale) {
         return encode_replica_exception_for_rpc<T>(features(), std::make_exception_ptr(std::move(*stale)));
