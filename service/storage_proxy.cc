@@ -2349,6 +2349,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
         size_t accepts = 0;
         size_t rejects = 0;
         size_t errors = 0;
+        sstring errors_message;
 
         size_t all_replies() const {
             return accepts + rejects + errors;
@@ -2398,6 +2399,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: failure while sending proposal {} to {}: {}", _id,
                                 *proposal, peer, ex);
                         request_tracker.errors++;
+                        append_peer_error(request_tracker.errors_message, peer, ex);
                     }
                 }
             }
@@ -2440,8 +2442,11 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                 // We got one too many errors. The quorum is no longer reachable. We can fail here
                 // timeout_if_partially_accepted or not because failing is always safe - a client cannot
                 // assume that the value was not committed.
-                auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
-                            _schema->cf_name(), _cl_for_paxos, request_tracker.non_error_replies(),
+                auto e = std::make_exception_ptr(mutation_write_failure_exception(
+                            format("Failed to accept {} for {}.{}. Replica errors: {}",
+                                *proposal, _schema->ks_name(), _schema->cf_name(),
+                                request_tracker.errors_message),
+                            _cl_for_paxos, request_tracker.non_error_replies(),
                             request_tracker.errors, _required_participants, db::write_type::CAS));
                 request_tracker.set_exception(std::move(e));
             } else if (_required_participants + request_tracker.non_accept_replies()  > _live_endpoints.size() && !timeout_if_partially_accepted) {
@@ -2467,9 +2472,10 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                     // TODO: we report write timeout exception to be compatible with Cassandra,
                     // which uses write_timeout_exception to signal any "unknown" state.
                     // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
-                    auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(),
-                                _schema->cf_name(), _cl_for_paxos, request_tracker.accepts, _required_participants,
-                                db::write_type::CAS));
+                    auto e = std::make_exception_ptr(mutation_write_timeout_exception(
+                        format("Failed to accept {} for {}.{}: write timeout due to uncertainty. Replica errors: {}",
+                            *proposal, _schema->ks_name(), _schema->cf_name(), request_tracker.errors_message),
+                        _cl_for_paxos, request_tracker.accepts, _required_participants, db::write_type::CAS));
                     request_tracker.set_exception(std::move(e));
                 }
             } // wait for more replies
