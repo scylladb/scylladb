@@ -37,6 +37,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "utils/assert.hh"
 #include "utils/throttle.hh"
+#include "utils/rjson.hh"
 
 #include <fmt/ranges.h>
 #include "readers/from_mutations.hh"
@@ -5267,17 +5268,44 @@ SEASTAR_TEST_CASE(test_cache_cell_tombstone_gc_overlap_checks) {
     });
 }
 
+void check_tombstone_is_gc_candidate(cql_test_env& env, schema_ptr s, const dht::decorated_key& dk, sstring key_value, sstring mutation_source, partition_region region) {
+    std::optional<tombstone> tomb;
+    assert_that(env.execute_cql(format(
+                    "SELECT metadata FROM MUTATION_FRAGMENTS({}.{}) WHERE pk = {} AND mutation_source LIKE '{}' AND partition_region = {} ALLOW FILTERING",
+                    s->ks_name(), s->cf_name(), key_value, mutation_source, int(region))).get())
+        .is_rows()
+        .with_size(1)
+        .with_columns_of_row(0)
+        .with_typed_column<sstring>("metadata", [&] (const sstring& v) {
+            testlog.info("mutation fragments metadata for tombstone gc eligibility check: {}", v);
+            auto metadata = rjson::parse(v);
+            if (!metadata.IsObject() || !metadata.HasMember("tombstone")) {
+                return false;
+            }
+            const api::timestamp_type timestamp(metadata["tombstone"]["timestamp"].GetInt64());
+            const gc_clock::time_point deletion_time(gc_clock::duration(timestamp_from_string(rjson::to_string_view(metadata["tombstone"]["deletion_time"])) / 1000));
+            tomb.emplace(timestamp, deletion_time);
+            return true;
+        });
+
+    BOOST_REQUIRE(tomb.has_value());
+
+    check_tombstone_is_gc_candidate(env, s->id(), dk, *tomb);
+}
+
 SEASTAR_TEST_CASE(test_populating_reader_tombstone_gc_with_data_in_memtable) {
     return do_with_cql_env_thread([] (cql_test_env& env) {
         const auto keyspace_name = get_name();
         const auto table_name = "tbl";
 
+        // Can use tablets and RF=1 after #21623 is fixed.
         env.execute_cql(std::format("CREATE KEYSPACE {}"
-                " WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}",
+                " WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}}"
+                " AND tablets = {{'enabled': 'false'}}",
                 keyspace_name)).get();
         env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY, c int)"
                 " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
-                " AND gc_grace_seconds = 0",
+                " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}",
                 keyspace_name, table_name)).get();
 
         auto& db = env.local_db();
@@ -5285,6 +5313,8 @@ SEASTAR_TEST_CASE(test_populating_reader_tombstone_gc_with_data_in_memtable) {
         const auto schema = tbl.schema();
 
         int32_t key = 7; // Whatever
+        const auto pk = partition_key::from_exploded(*schema, { int32_type->decompose(key) });
+        const auto dk = dht::decorate_key(*schema, pk);
 
         // Simulates scenario where node missed tombstone and has it written to sstable directly
         // after repair, whereas the deleted data remains on memtable due to low write activity.
@@ -5292,11 +5322,14 @@ SEASTAR_TEST_CASE(test_populating_reader_tombstone_gc_with_data_in_memtable) {
         // write a expiring tombstone into a sstable (flushed below)
         env.execute_cql(format("DELETE FROM {}.{} USING timestamp 10 WHERE pk = {}", keyspace_name, table_name, key)).get();
 
-        // waits for tombstone to expire
-        sleep(std::chrono::seconds(1)).get();
-
         // system-wide flush to prevent CL segment from blocking tombstone GC in the read path.
         replica::database::flush_table_on_all_shards(env.db(), schema->id()).get();
+
+        // We add a repair which ... happened in the future. Allows us to avoid sleeps.
+        // After this the dead row becomes eligible for GC.
+        repair_table(env, schema->id(), gc_clock::now() + std::chrono::seconds(10));
+
+        check_tombstone_is_gc_candidate(env, schema, dk, fmt::to_string(key), "sstable:\%", partition_region::partition_start);
 
         // write into memtable data shadowed by the tombstone now living in the sstable
         env.execute_cql(format("INSERT INTO {}.{} (pk, c) VALUES ({}, 0) USING timestamp 9", keyspace_name, table_name, key)).get();
