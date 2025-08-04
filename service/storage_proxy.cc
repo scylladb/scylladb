@@ -1444,6 +1444,8 @@ private:
     // max pruning operations to run in parallel
     static constexpr uint16_t pruning_limit = 1000;
 
+    void append_peer_error(sstring& target, locator::host_id peer, std::exception_ptr error);
+
 public:
     tracing::trace_state_ptr tr_state;
 
@@ -2172,11 +2174,19 @@ paxos_response_handler::begin_and_repair_paxos(client_state& cs, unsigned& conte
 
 template<class T> struct dependent_false : std::false_type {};
 
+void paxos_response_handler::append_peer_error(sstring& target, locator::host_id peer, std::exception_ptr error) {
+    if (!target.ends_with("...")) {
+        auto new_target = format("{}host_id {} -> {};", target, peer, error);
+        target = new_target.size() > 1000 ? target + "..." : std::move(new_target);
+    }
+}
+
 // This function implement prepare stage of Paxos protocol and collects metadata needed to repair
 // previously unfinished round (if there was one).
 future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUID ballot) {
     struct {
         size_t errors = 0;
+        sstring errors_message;
         // Whether the value of the requested key received from participating replicas match.
         bool digests_match = true;
         // Digest corresponding to the value of the requested key received from participating replicas.
@@ -2228,10 +2238,13 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         request_tracker.errors++;
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: fail to send ballot {} to {}: {}", _id,
                                 ballot, peer, ex);
+                        append_peer_error(request_tracker.errors_message, peer, ex);
                         if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
-                            auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
-                                        _schema->cf_name(), _cl_for_paxos, summary.committed_ballots_by_replica.size(),
-                                        request_tracker.errors, _required_participants, db::write_type::CAS));
+                            auto e = std::make_exception_ptr(mutation_write_failure_exception(
+                                format("Failed to prepare ballot {} for {}.{}. Replica errors: {}",
+                                    ballot, _schema->ks_name(), _schema->cf_name(), request_tracker.errors_message),
+                                _cl_for_paxos, summary.committed_ballots_by_replica.size(),
+                                request_tracker.errors, _required_participants, db::write_type::CAS));
                             request_tracker.set_exception(std::move(e));
                         }
                     }
