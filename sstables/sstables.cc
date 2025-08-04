@@ -2376,7 +2376,10 @@ static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(cons
     static boost::regex la_mx("(la|m[cde])-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
-    static boost::regex dir(format(".*/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",
+    // Use non-greedy match so that a snapshot tag that ressembles a name-<uuid> wouldn't match
+    // the keyspace/table-<uuid> part of the regular expression.
+    // See https://github.com/scylladb/scylladb/issues/25242
+    static boost::regex dir(format(".*?/([^/]*)/([^/]+)-[\\da-fA-F]+(?:/({}|{}|{}|{})(?:/[^/]+)?)?/?",
             sstables::staging_dir, sstables::quarantine_dir, sstables::upload_dir, sstables::snapshots_dir).c_str());
 
     boost::smatch match;
