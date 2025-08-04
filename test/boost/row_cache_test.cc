@@ -5267,4 +5267,53 @@ SEASTAR_TEST_CASE(test_cache_cell_tombstone_gc_overlap_checks) {
     });
 }
 
+SEASTAR_TEST_CASE(test_populating_reader_tombstone_gc_with_data_in_memtable) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        const auto table_name = "tbl";
+
+        env.execute_cql(std::format("CREATE KEYSPACE {}"
+                " WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}",
+                keyspace_name)).get();
+        env.execute_cql(std::format("CREATE TABLE {}.{} (pk int PRIMARY KEY, c int)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND gc_grace_seconds = 0",
+                keyspace_name, table_name)).get();
+
+        auto& db = env.local_db();
+        auto& tbl = db.find_column_family(keyspace_name, table_name);
+        const auto schema = tbl.schema();
+
+        int32_t key = 7; // Whatever
+
+        // Simulates scenario where node missed tombstone and has it written to sstable directly
+        // after repair, whereas the deleted data remains on memtable due to low write activity.
+
+        // write a expiring tombstone into a sstable (flushed below)
+        env.execute_cql(format("DELETE FROM {}.{} USING timestamp 10 WHERE pk = {}", keyspace_name, table_name, key)).get();
+
+        // waits for tombstone to expire
+        sleep(std::chrono::seconds(1)).get();
+
+        // system-wide flush to prevent CL segment from blocking tombstone GC in the read path.
+        replica::database::flush_table_on_all_shards(env.db(), schema->id()).get();
+
+        // write into memtable data shadowed by the tombstone now living in the sstable
+        env.execute_cql(format("INSERT INTO {}.{} (pk, c) VALUES ({}, 0) USING timestamp 9", keyspace_name, table_name, key)).get();
+
+        replica::database::drop_cache_for_table_on_all_shards(env.db(), schema->id()).get();
+
+        // Without cache, the compacting reader is bypassed; Verify that the data in memtable is discarded
+        assert_that(env.execute_cql(format("SELECT pk, c FROM {}.{} WHERE pk = {} BYPASS CACHE", keyspace_name, table_name, key)).get())
+            .is_rows()
+            .is_empty();
+
+        // With the cache, the compacting reader is involved;
+        // Verify that the tombstone is not purged, allowing it to shadow the data in memtable
+        assert_that(env.execute_cql(format("SELECT pk, c FROM {}.{} WHERE pk = {}", keyspace_name, table_name, key)).get())
+            .is_rows()
+            .is_empty();
+    });
+}
+
 BOOST_AUTO_TEST_SUITE_END()
