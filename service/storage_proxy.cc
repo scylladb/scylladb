@@ -6489,19 +6489,19 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
 }
 
 static read_timeout_exception write_timeout_to_read(schema_ptr s, mutation_write_timeout_exception& ex) {
-    return read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false);
+    return read_timeout_exception(ex.get_message(), ex.consistency, ex.received, ex.block_for, false);
 }
 
 static read_failure_exception write_failure_to_read(schema_ptr s, mutation_write_failure_exception& ex) {
-    return read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
+    return read_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
 }
 
 static mutation_write_timeout_exception read_timeout_to_write(schema_ptr s, read_timeout_exception& ex) {
-    return mutation_write_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, db::write_type::CAS);
+    return mutation_write_timeout_exception(ex.get_message(), ex.consistency, ex.received, ex.block_for, db::write_type::CAS);
 }
 
 static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read_failure_exception& ex) {
-    return mutation_write_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
+    return mutation_write_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
 }
 
 /**

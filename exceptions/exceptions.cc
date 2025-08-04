@@ -61,7 +61,11 @@ unavailable_exception::unavailable_exception(db::consistency_level cl, int32_t r
     {}
 
 read_write_timeout_exception::read_write_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
-    : request_timeout_exception{code, prepare_message("Operation timed out for {}.{} - received only {} responses from {} CL={}.", ks, cf, received, block_for, consistency)}
+    : read_write_timeout_exception{code, prepare_message("Operation timed out for {}.{} - received only {} responses from {} CL={}.", ks, cf, received, block_for, consistency), consistency, received, block_for}
+    { }
+
+read_write_timeout_exception::read_write_timeout_exception(exception_code code, sstring message, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
+    : request_timeout_exception{code, std::move(message)}
     , consistency{consistency}
     , received{received}
     , block_for{block_for}
