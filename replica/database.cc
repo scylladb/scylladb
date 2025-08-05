@@ -1482,7 +1482,7 @@ keyspace::make_column_family_config(const schema& s, const database& db) const {
     cfg.enable_metrics_reporting = db_config.enable_keyspace_column_family_metrics();
     cfg.enable_node_aggregated_table_metrics = db_config.enable_node_aggregated_table_metrics();
     cfg.tombstone_warn_threshold = db_config.tombstone_warn_threshold();
-    cfg.view_update_concurrency_semaphore_limit = _config.view_update_concurrency_semaphore_limit;
+    cfg.view_update_memory_semaphore_limit = _config.view_update_memory_semaphore_limit;
     cfg.data_listeners = &db.data_listeners();
     cfg.enable_compacting_data_for_streaming_and_repair = db_config.enable_compacting_data_for_streaming_and_repair;
     cfg.enable_tombstone_gc_for_streaming_and_repair = db_config.enable_tombstone_gc_for_streaming_and_repair;
@@ -2362,7 +2362,7 @@ database::make_keyspace_config(const keyspace_metadata& ksm, system_keyspace is_
     cfg.statement_scheduling_group = _dbcfg.statement_scheduling_group;
     cfg.enable_metrics_reporting = _cfg.enable_keyspace_column_family_metrics();
 
-    cfg.view_update_concurrency_semaphore_limit = max_memory_pending_view_updates();
+    cfg.view_update_memory_semaphore_limit = max_memory_pending_view_updates();
     return cfg;
 }
 
@@ -2582,7 +2582,7 @@ future<> database::stop() {
         co_await _schema_commitlog->shutdown();
         dblog.info("Shutting down schema commitlog complete");
     }
-    co_await _view_update_concurrency_sem.wait(max_memory_pending_view_updates());
+    co_await _view_update_memory_sem.wait(max_memory_pending_view_updates());
     if (_commitlog) {
         co_await _commitlog->release();
     }
