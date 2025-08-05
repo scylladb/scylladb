@@ -1731,3 +1731,24 @@ def test_scylla_sstable_query_temp_dir(cql, scylla_path, scylla_data_dir):
         assert res.returncode == 2
         assert res.stdout == ""
         assert res.stderr.endswith(f"error running operation: std::filesystem::__cxx11::filesystem_error (error generic:20, filesystem error: temp_directory_path: Not a directory [{f.name}])\n")
+
+
+def test_scylla_sstable_query_null_data(cql, test_keyspace, scylla_path, scylla_data_dir):
+    """Check that scylla-sstable query works with null cell values.
+
+    Reproduces https://github.com/scylladb/scylladb/issues/25325
+    """
+    # simple_clustering_table sets the static column `s` only for some of the keys
+    # and leaves it unset (null) for others.
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        args = [scylla_path, "sstable", "query", "--output-format", "json", "--scylla-yaml-file", f"{os.path.dirname(scylla_data_dir)}/conf/scylla.yaml", "--logger-log-level", "scylla-sstable=debug"]
+        args.extend(sstables)
+        try:
+            out = subprocess.check_output(args)
+        except subprocess.CalledProcessError as e:
+            pytest.fail(f"Failed to query sstable: {e}\n{e.output.decode('utf-8')}")
+
+        assert out
+        assert json.loads(out)
+        # Verify that null values were properly queried
+        assert ":null" in out.decode('utf-8'), f"Expected null values in the output, but they were not found. out='{out.decode('utf-8')}'"
