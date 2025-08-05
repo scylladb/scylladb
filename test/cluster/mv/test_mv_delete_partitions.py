@@ -63,7 +63,7 @@ async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) 
     node_count = 2
     await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
         await insert_with_concurrency(cql, f"{ks}.tab", 200, 100)
 

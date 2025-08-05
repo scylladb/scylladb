@@ -20,9 +20,9 @@ from cassandra.query import SimpleStatement  # type: ignore
 @skip_mode('release', "error injections aren't enabled in release mode")
 async def test_mv_fail_building(manager: ManagerClient) -> None:
     node_count = 3
-    servers = await manager.servers_add(node_count)
+    servers = await manager.servers_add(node_count, auto_rack_dc="dc")
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
         # Insert initial rows for building an index
         for i in range(10):
