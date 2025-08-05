@@ -5,6 +5,16 @@ run_first:
     - test_scan
     - test_tracing
     - test_ttl
+extra_scylla_cmdline_options:
+  - '--logger-log-level=alternator-auth=trace'
+  - '--logger-log-level=alternator-conditions=trace'
+  - '--logger-log-level=alternator-executor=trace'
+  - '--logger-log-level=alternator-serialization=trace'
+  - '--logger-log-level=alternator-server=trace'
+  - '--logger-log-level=alternator-executor=trace'
+  - '--logger-log-level=alternator_controller=trace'
+  - '--logger-log-level=alternator_ttl=trace'
+  - '--logger-log-level=paxos=trace'
 extra_scylla_config_options:
   {
     experimental_features: [
