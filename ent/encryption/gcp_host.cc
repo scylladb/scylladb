@@ -685,7 +685,7 @@ encryption::gcp_host::impl::get_access_token(const google_credentials& creds, co
                 { "client_id", c.client_id },
                 { "client_secret", c.client_secret },
                 { "refresh_token", c.refresh_token },
-                { "grant_type", "grant_type" },
+                { "grant_type", "refresh_token" },
             }), "", httpd::operation_type::POST);
 
             co_return access_token{ json };
