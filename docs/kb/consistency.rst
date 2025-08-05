@@ -83,7 +83,7 @@ Additional References
 
 * `Jepsen and ScyllaDB: Putting Consistency to the Test blog post <https://www.scylladb.com/2020/12/23/jepsen-and-scylla-putting-consistency-to-the-test/>`_ 
 * `Nauto: Achieving Consistency in an Eventually Consistent Environment blog post <https://www.scylladb.com/2020/02/20/nauto-achieving-consistency-in-an-eventually-consistent-environment/>`_ 
-* `Consistency Levels documentation <https://docs.scylladb.com/stable/cql/consistency.html>`_ 
+* `Consistency Levels documentation <https://docs.scylladb.com/manual/stable/cql/consistency.html>`_ 
 * `High Availability lesson on ScyllaDB University <https://university.scylladb.com/courses/scylla-essentials-overview/lessons/high-availability/>`_ 
 * `Lightweight Transactions lesson on ScyllaDB University <https://university.scylladb.com/courses/data-modeling/lessons/lightweight-transactions/>`_ 
 * `Getting the Most out of Lightweight Transactions in ScyllaDB blog post <https://www.scylladb.com/2020/07/15/getting-the-most-out-of-lightweight-transactions-in-scylla/>`_ 
