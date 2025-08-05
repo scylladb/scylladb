@@ -44,6 +44,7 @@ namespace tests::proc {
             , const std::vector<std::string>& env = {}
             , handler_type stdout_handler = {}
             , handler_type stderr_handler = {}
+            , bool inherit_env = true
         );
 
         static line_handler create_copy_handler(std::ostream&);
