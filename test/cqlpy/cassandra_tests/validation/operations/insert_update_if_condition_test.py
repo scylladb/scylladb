@@ -302,13 +302,13 @@ def testCasAndListIndex(cql, test_keyspace, is_scylla):
 def testDropCreateKeyspaceIfNotExists(cql, test_keyspace):
         keyspace = unique_name()
         # create and confirm
-        execute(cql, test_keyspace, "CREATE KEYSPACE IF NOT EXISTS " + keyspace + " WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} and durable_writes = true ")
+        execute(cql, test_keyspace, "CREATE KEYSPACE IF NOT EXISTS " + keyspace + " WITH replication = { 'class':'NetworkTopologyStrategy', 'replication_factor':1} and durable_writes = true ")
         assertRows(execute(cql, test_keyspace, "select durable_writes from system_schema.keyspaces where keyspace_name = ?",
                            keyspace),
                    row(true))
 
         # unsuccessful create since it's already there, confirm settings don't change
-        execute(cql, test_keyspace, "CREATE KEYSPACE IF NOT EXISTS " + keyspace + " WITH replication = {'class':'SimpleStrategy', 'replication_factor':1} and durable_writes = false ")
+        execute(cql, test_keyspace, "CREATE KEYSPACE IF NOT EXISTS " + keyspace + " WITH replication = {'class':'NetworkTopologyStrategy', 'replication_factor':1} and durable_writes = false ")
 
         assertRows(execute(cql, test_keyspace, "select durable_writes from system_schema.keyspaces where keyspace_name = ?",
                            keyspace),

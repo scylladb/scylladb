@@ -17,6 +17,7 @@ from contextlib import ExitStack
 from .util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, \
     new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user, new_materialized_view, \
     new_secondary_index
+from .conftest import has_tablets
 from .test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra.protocol import InvalidRequest, Unauthorized
 from collections.abc import Iterable
@@ -1628,7 +1629,8 @@ def new_random_keyspace(cql):
     options["replication_factor"] = random.randrange(1, 6)
     options_str = ", ".join([f"'{k}': '{v}'" for (k, v) in options.items()])
     extra = ""
-    if options["class"] == "NetworkTopologyStrategy" and options["replication_factor"] != 1:
+    # Cassandra does not have tablets and thus does not even support tablets syntax.
+    if not has_tablets or options["class"] == "SimpleStrategy" or options["replication_factor"] != 1:
         extra = " and tablets = { 'enabled': false }"
 
     write = random.choice(writes)

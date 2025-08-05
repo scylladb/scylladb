@@ -53,8 +53,8 @@ async def test_pinned_cl_segment_doesnt_resurrect_data(manager: ManagerClient):
     def get_cl_segments():
         return {os.path.basename(s) for s in glob.glob(os.path.join(cl_path, "CommitLog-*"))}
 
-    async with new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks1, \
-               new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks2:
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks1, \
+               new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks2:
         tbl1 = f"{ks1}.tbl1"
         tbl2 = f"{ks2}.tbl2"
         await cql.run_async(f"create table {tbl1} (pk int, ck int, primary key(pk, ck))")

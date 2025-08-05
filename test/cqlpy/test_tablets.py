@@ -57,7 +57,7 @@ def test_alter_cannot_change_vnodes_to_tablets(cql, skip_without_tablets):
 
 # Converting vnodes-based keyspace to tablets-based in not implemented yet
 def test_alter_vnodes_ks_doesnt_enable_tablets(cql, skip_without_tablets):
-    ksdef = "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};"
+    ksdef = "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1} AND tablets = {'enabled': false};"
     with new_test_keyspace(cql, ksdef) as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH replication = {{'class': 'NetworkTopologyStrategy'}};")
 

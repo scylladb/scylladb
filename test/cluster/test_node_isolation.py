@@ -28,7 +28,7 @@ async def test_banned_node_notification(manager: ManagerClient) -> None:
     config = {
         'failure_detector_timeout_in_ms': 2000
     }
-    srvs = await manager.servers_add(3, config=config)
+    srvs = await manager.servers_add(3, config=config, auto_rack_dc="dc")
     cql = manager.get_cql()
 
     # Pause one of the servers so other nodes mark it as dead and we can remove it.

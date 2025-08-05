@@ -128,7 +128,7 @@ async def test_default_compression_on_upgrade(manager: ManagerClient, scylla_202
 
     logger.info("Creating a test keyspace")
     cql = manager.get_cql()
-    await cql.run_async("CREATE KEYSPACE test_ks WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}")
+    await cql.run_async("CREATE KEYSPACE test_ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}")
 
     await create_table_and_check_compression(cql, "test_ks", "table_before_upgrade", "org.apache.cassandra.io.compress.LZ4Compressor", "before upgrade")
 
@@ -252,7 +252,7 @@ async def test_cql_base_tables_respect_compression_config(manager: ManagerClient
     await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
 
     ks = f"cql_aux_test_{int(time.time())}"
-    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
     await cql.run_async(f"CREATE TABLE {ks}.base (pk int PRIMARY KEY, v int)")
 
     try:
@@ -294,7 +294,7 @@ async def test_cql_aux_tables_respect_compression_config(manager: ManagerClient)
     await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
 
     ks = f"cql_aux_test_{int(time.time())}"
-    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'SimpleStrategy', 'replication_factor': 1}}")
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}}")
 
     await cql.run_async(f"CREATE TABLE {ks}.base (pk int PRIMARY KEY, v int) WITH compression = {{ 'sstable_compression': 'DeflateCompressor' }}")
     await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.base WHERE pk IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, pk)")

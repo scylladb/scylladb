@@ -460,7 +460,7 @@ class AuditBackendSyslog(AuditBackend):
         date = datetime.datetime(2000, 1, 1, 0, 0)
 
         node = match.group("node").split(":")[0]
-        statement = match.group("query").replace("\\", "") 
+        statement = match.group("query").replace("\\", "")
         source = match.group("client_ip").split(":")[0]
         event_time = uuid.UUID(int=idx)
         t = self.named_tuple_factory(date, node, event_time, match.group("category"), match.group("cl"), match.group("error") == "true", match.group("keyspace"), statement, source, match.group("table"), match.group("username"))
@@ -829,7 +829,7 @@ class CQLAuditTester(AuditTester):
 
         self.execute_and_validate_new_audit_entry(
             session,
-            "CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true",
+            "CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true",
             category="DDL",
         )
         self.execute_and_validate_new_audit_entry(
@@ -853,7 +853,7 @@ class CQLAuditTester(AuditTester):
         keyspaces = audit_settings["audit_keyspaces"].split(",") if "audit_keyspaces" in audit_settings else []
         assert "ks2" not in keyspaces
         query_sequence = [
-            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true",
+            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true",
             'USE "ks2"',
             "ALTER KEYSPACE ks2 WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : 1 } AND DURABLE_WRITES = false",
             "DROP KEYSPACE ks2",
@@ -968,7 +968,7 @@ class CQLAuditTester(AuditTester):
         keyspaces = audit_settings["audit_keyspaces"].split(",") if "audit_keyspaces" in audit_settings else []
         assert "ks2" not in keyspaces
         query_sequence = [
-            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true",
+            "CREATE KEYSPACE ks2 WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true",
             f"CREATE TABLE ks2.{first_table} (k int PRIMARY KEY, v1 int)",
             f"ALTER TABLE ks2.{first_table} ADD v2 int",
             f"INSERT INTO ks2.{first_table} (k, v1, v2) VALUES (1, 1, 1)",
@@ -1009,7 +1009,7 @@ class CQLAuditTester(AuditTester):
 
         session = await self.prepare(create_keyspace=False, audit_settings=audit_settings)
 
-        session.execute("CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND DURABLE_WRITES = true")
+        session.execute("CREATE KEYSPACE ks WITH replication = { 'class':'SimpleStrategy', 'replication_factor':1} AND tablets = {'enabled': false} AND DURABLE_WRITES = true")
 
         session.execute("USE ks")
 
