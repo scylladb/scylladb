@@ -468,7 +468,7 @@ private:
 
     future<> read_next_page() {
         const dht::partition_range_vector prs{_prs.front()};
-        auto res = co_await query_mutations_on_all_shards(_db, _schema, _cmd, prs, _ts, _timeout);
+        auto res = co_await query_mutations_on_all_shards(_db, _schema, _cmd, prs, _ts, _timeout, false);
         const auto& rr = std::get<0>(res);
         for (const auto& p : rr->partitions()) {
             auto mut = p.mut().unfreeze(_schema);
