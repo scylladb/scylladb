@@ -153,6 +153,8 @@ struct affected_tables_and_views {
 // on the same shard as it's used for.
 using functions_change_batch_all_shards = sharded<cql3::functions::change_batch>;
 
+class pending_schema_getter;
+
 // Schema_applier encapsulates intermediate state needed to construct schema objects from
 // set of rows read from system tables (see struct schema_state). It does atomic (per shard)
 // application of a new schema.
@@ -172,6 +174,7 @@ class schema_applier {
     // - allows to change tablets metadata without immediately committing it.
     locator::pending_token_metadata _pending_token_metadata;
     locator::tablet_metadata_change_hint _tablet_hint;
+    service::token_metadata_change _token_metadata_change;
 
     schema_persisted_state _before;
     schema_persisted_state _after;
@@ -188,6 +191,8 @@ class schema_applier {
 
     future<schema_persisted_state> get_schema_persisted_state();
     future<> load_mutable_token_metadata();
+
+    friend pending_schema_getter;
 public:
     schema_applier(
             sharded<service::storage_proxy>& proxy,
@@ -219,6 +224,7 @@ private:
     future<> merge_keyspaces();
     future<> merge_types();
     future<> merge_tables_and_views();
+    future<> update_tablets();
     future<> merge_functions();
     future<> merge_aggregates();
 
