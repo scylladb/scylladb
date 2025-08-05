@@ -21,6 +21,7 @@ from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
 logger = logging.getLogger(__name__)
+DRIVER_SL_NAME = "driver"
 
 @pytest.mark.asyncio
 async def test_service_levels_snapshot(manager: ManagerClient):
@@ -100,14 +101,14 @@ async def test_service_levels_upgrade(request, manager: ManagerClient, build_mod
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
 
     result_v2 = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_v2]) == set(sls)
+    assert set([sl.service_level for sl in result_v2]) == set(sls + [DRIVER_SL_NAME])
 
     sl_v2 = "sl" + unique_name()
     await cql.run_async(f"CREATE SERVICE LEVEL {sl_v2}")
 
     await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
     result_with_sl_v2 = await cql.run_async(f"SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [sl_v2])
+    assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls+ [DRIVER_SL_NAME] + [sl_v2])
 
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
@@ -130,7 +131,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     logging.info("Validating service levels were created in v2 table")
     result = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
     for sl in result:
-        assert sl.service_level in sls
+        assert sl.service_level in sls + [DRIVER_SL_NAME]
 
     logging.info(f"Restarting hosts {hosts} in recovery mode")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
@@ -143,7 +144,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     logging.info("Checking service levels can be read and v2 table is used")
     recovery_result = await cql.run_async("LIST ALL SERVICE LEVELS")
     assert sl_v1 not in [sl.service_level for sl in recovery_result]
-    assert set([sl.service_level for sl in recovery_result]) == set(sls)
+    assert set([sl.service_level for sl in recovery_result]) == set(sls + [DRIVER_SL_NAME])
 
     logging.info("Checking changes to service levels are forbidden during recovery")
     with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
@@ -176,7 +177,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
 
     sls_list = await cql.run_async("LIST ALL SERVICE LEVELS")
     assert sl_v1 not in [sl.service_level for sl in sls_list]
-    assert set([sl.service_level for sl in sls_list]) == set(sls + [new_sl])
+    assert set([sl.service_level for sl in sls_list]) == set(sls + [new_sl] + [DRIVER_SL_NAME])
 
 def default_timeout(mode):
     if mode == "dev":
@@ -332,7 +333,7 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
     await cql.run_async(f"CREATE SERVICE LEVEL sl1 WITH timeout=500ms AND workload_type='batch'")
 
     sls_list_before = await cql.run_async("LIST ALL SERVICE LEVELS")
-    assert len(sls_list_before) == 1
+    assert len(sls_list_before) == 2
 
     await manager.rolling_restart(servers)
     cql = await reconnect_driver(manager)
@@ -348,7 +349,7 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
     await cql.run_async(f"ALTER SERVICE LEVEL sl1 WITH timeout = 400ms")
 
     result = await cql.run_async("SELECT workload_type FROM system.service_levels_v2")
-    assert len(result) == 1 and result[0].workload_type == 'batch'
+    assert len(result) == 2 and result[0].workload_type == 'batch' and result[1].workload_type == 'batch'
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injection is disabled in release mode')

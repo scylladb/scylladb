@@ -225,9 +225,10 @@ SEASTAR_TEST_CASE(test_alter_with_timeouts) {
 
         auto sl_is_v2 = e.local_client_state().get_service_level_controller().is_v2();
 	    auto msg = cquery_nofail(e, format("SELECT timeout FROM {}", sl_is_v2 ? "system.service_levels_v2" : "system_distributed.service_levels"));
-        assert_that(msg).is_rows().with_rows({{
-            duration_type->from_string("5ms")
-        }});
+        assert_that(msg).is_rows().with_rows({
+            {duration_type->from_string("5ms")},
+            {{}}, // `sl:driver`
+        });
 
         cquery_nofail(e, "ALTER SERVICE LEVEL sl WITH timeout = 35s");
 
@@ -312,9 +313,10 @@ SEASTAR_TEST_CASE(test_alter_with_workload_type) {
 
         auto sl_is_v2 = e.local_client_state().get_service_level_controller().is_v2();
 	    auto msg = cquery_nofail(e, format("SELECT workload_type FROM {}", sl_is_v2 ? "system.service_levels_v2" : "system_distributed.service_levels"));
-        assert_that(msg).is_rows().with_rows({{
-            {}
-        }});
+        assert_that(msg).is_rows().with_rows({
+            {{}},
+            {"batch"}, // `sl:driver`
+        });
 
         e.refresh_client_state().get();
         // Default workload type is `unspecified`
