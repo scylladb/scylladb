@@ -25,6 +25,7 @@
 
 #include <fmt/ranges.h>
 
+#include "absl-flat_hash_map.hh"
 #include "service/storage_service.hh"
 #include "mutation/frozen_mutation.hh"
 #include "schema/schema_fwd.hh"
@@ -33,6 +34,7 @@
 #include "replica/database.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
+#include "compaction/compaction_manager.hh"
 #include "cql3/expr/expression.hh"
 #include "types/types.hh"
 #include "service/migration_manager.hh"
@@ -841,12 +843,84 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
     }
 }
 
+class pending_schema_getter : public service::schema_getter {
+private:
+    schema_applier& _sa;
+    sharded<replica::database>& _db;
+public:
+    pending_schema_getter(schema_applier& sa) :
+            _sa(sa), _db(sa._proxy.local().get_db()) {
+    };
+
+    virtual flat_hash_map<sstring, locator::replication_strategy_ptr> get_keyspaces_replication() const override {
+        flat_hash_map<sstring, locator::replication_strategy_ptr> out;
+        for (auto& [name, ks] : _db.local().get_keyspaces()) {
+            out.emplace(name, ks.get_replication_strategy_ptr());
+        }
+        for (const auto& name : _sa._affected_keyspaces.names.dropped) {
+            out.erase(name);
+        }
+        for (const auto& ks_all_shards : _sa._affected_keyspaces.altered) {
+            auto& kc = *ks_all_shards[this_shard_id()];
+            out.insert_or_assign(kc.metadata->name(), kc.strategy);
+        }
+        for (const auto& ks_all_shards : _sa._affected_keyspaces.created) {
+            auto& ks = *ks_all_shards[this_shard_id()];
+            auto name = ks.metadata()->name();
+            out.insert_or_assign(name, ks.get_replication_strategy_ptr());
+        }
+        return out;
+    };
+
+    virtual future<> for_each_table_schema_gently(std::function<future<>(table_id, schema_ptr)> f) const override {
+        flat_hash_map<table_id, schema_ptr> table_schemas;
+
+        auto ff = [&table_schemas](table_id id, lw_shared_ptr<replica::table> t) -> future<> {
+            table_schemas.insert_or_assign(id, t->schema());
+            co_return;
+        };
+        co_await _db.local().get_tables_metadata().for_each_table_gently(ff);
+
+        auto include_pending_changes = [&table_schemas](schema_diff_per_shard d) -> future<> {
+            for (auto& schema : d.dropped) {
+                co_await maybe_yield();
+                table_schemas.erase(schema->id());
+            }
+            for (auto& change : d.altered) {
+                co_await maybe_yield();
+                table_schemas.insert_or_assign(change.new_schema->id(), change.new_schema);
+            }
+            for (auto& schema : d.created) {
+                co_await maybe_yield();
+                table_schemas.insert_or_assign(schema->id(), schema);
+            }
+        };
+        auto& tables_and_views = _sa._affected_tables_and_views.tables_and_views.local();
+        co_await include_pending_changes(tables_and_views.tables);
+        co_await include_pending_changes(tables_and_views.views);
+
+        for (auto& [id, schema] : table_schemas) {
+            co_await f(id, schema);
+        }
+    };
+};
+
+future<> schema_applier::update_tablets() {
+    // Has to be after tablets and views change is prepared
+    // otherwise this preparation will generate orphaned erms.
+    if (_tablet_hint) {
+        slogger.info("Tablet metadata changed");
+        pending_schema_getter getter{*this};
+        _token_metadata_change = co_await _ss.local().prepare_token_metadata_change(
+                _pending_token_metadata.local(), getter);
+    }
+}
+
 // Loads metadata into a single source of truth to ensure consistency.
 // It will be committed later if required by the current schema change.
 future<> schema_applier::load_mutable_token_metadata() {
     locator::mutable_token_metadata_ptr current_token_metadata = co_await _ss.local().get_mutable_token_metadata_ptr();
     if (_tablet_hint) {
-        slogger.info("Tablet metadata changed");
         auto new_token_metadata = co_await _ss.local().prepare_tablet_metadata(
                 _tablet_hint, current_token_metadata);
         co_return co_await _pending_token_metadata.assign(new_token_metadata);
@@ -860,6 +934,7 @@ future<> schema_applier::update() {
     co_await merge_keyspaces();
     co_await merge_types();
     co_await merge_tables_and_views();
+    co_await update_tablets();
     co_await merge_functions();
     co_await merge_aggregates();
 }
@@ -920,6 +995,10 @@ void schema_applier::commit_on_shard(replica::database& db) {
 
     commit_tables_and_views();
 
+    if (_tablet_hint) {
+        _ss.local().commit_token_metadata_change(_token_metadata_change);
+    }
+
     // commit user functions and aggregates
     _functions_batch.local().commit();
 
@@ -974,11 +1053,11 @@ future<> schema_applier::finalize_tables_and_views() {
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
 
-    // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
-    // and so that compaction groups are not destroyed altogether.
-    // TODO: maybe untangle this dependency
     if (_tablet_hint) {
-        co_await _ss.local().commit_tablet_metadata(_pending_token_metadata.local());
+        auto& db = sharded_db.local();
+        co_await db.get_compaction_manager().get_shared_tombstone_gc_state().
+                flush_pending_repair_time_update(db);
+        _ss.local().wake_up_topology_state_machine();
     }
 
     co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
@@ -1060,6 +1139,7 @@ future<> schema_applier::destroy() {
     co_await _affected_user_types.stop();
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();
+    co_await _token_metadata_change.destroy();
     co_await _functions_batch.stop();
 }
 

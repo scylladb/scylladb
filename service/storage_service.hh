@@ -282,7 +282,7 @@ public:
 
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
     future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);
-    future<> commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr);
+    void wake_up_topology_state_machine() noexcept;
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
 
     void start_tablet_split_monitor();
