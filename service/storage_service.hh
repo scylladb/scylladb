@@ -141,6 +141,16 @@ class node_ops_meta_data;
 using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
 using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
 
+struct token_metadata_change {
+    std::vector<locator::mutable_token_metadata_ptr> pending_token_metadata_ptr{smp::count};
+    std::vector<std::unordered_map<sstring, locator::static_effective_replication_map_ptr>> pending_effective_replication_maps{smp::count};
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms{smp::count};
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms{smp::count};
+    std::unordered_set<session_id> open_sessions;
+
+    future<> destroy();
+};
+
 /**
  * This abstraction contains the token/identifier of this node
  * on the identifier space. This token gets gossiped around.
@@ -288,6 +298,15 @@ private:
     //
     // Note: must be called on shard 0.
     future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
+
+    // Prepares token metadata change without making it visible. Combined with commit function
+    // and appropiate lock it does exactly the same as mutate_token_metadata.
+    // Note: prepare_token_metadata_change must be called on shard 0.
+    future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr);
+
+    // Commits prepared token metadata changes. Must be called under token_metadata_lock
+    // and on all shards.
+    void commit_token_metadata_change(token_metadata_change& change) noexcept;
 
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
