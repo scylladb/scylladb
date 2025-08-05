@@ -2305,16 +2305,6 @@ db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
 
-static future<std::unique_ptr<rjson::value>> get_previous_item(
-        service::storage_proxy& proxy,
-        service::client_state& client_state,
-        schema_ptr schema,
-        const partition_key& pk,
-        const clustering_key& ck,
-        service_permit permit,
-        alternator::stats& global_stats,
-        alternator::stats& per_table_stats);
-
 static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
         schema_ptr schema,
         const clustering_key& ck,
@@ -2463,6 +2453,30 @@ static future<executor::request_return_type> rmw_operation_return(rjson::value&&
 }
 
 static future<std::unique_ptr<rjson::value>> get_previous_item(
+            service::storage_proxy& proxy,
+            service::client_state& client_state,
+            schema_ptr schema,
+            const partition_key& pk,
+            const clustering_key& ck,
+            service_permit permit,
+            db::consistency_level cl,
+            uint64_t& item_length)
+    {
+        auto selection = cql3::selection::selection::wildcard(schema);
+        auto command = previous_item_read_command(proxy, schema, ck, selection);
+        command->allow_limit = db::allow_per_partition_rate_limit::yes;
+        return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
+            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
+        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
+        if (previous_item) {
+            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
+        } else {
+            return make_ready_future<std::unique_ptr<rjson::value>>();
+        }
+    });
+}
+
+static future<std::unique_ptr<rjson::value>> get_previous_item(
         service::storage_proxy& proxy,
         service::client_state& client_state,
         schema_ptr schema,
@@ -2475,19 +2489,21 @@ static future<std::unique_ptr<rjson::value>> get_previous_item(
 {
     global_stats.reads_before_write++;
     per_table_stats.reads_before_write++;
-    auto selection = cql3::selection::selection::wildcard(schema);
-    auto command = previous_item_read_command(proxy, schema, ck, selection);
-    command->allow_limit = db::allow_per_partition_rate_limit::yes;
-    auto cl = db::consistency_level::LOCAL_QUORUM;
-    return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
-        auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
-        if (previous_item) {
-            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
-        } else {
-            return make_ready_future<std::unique_ptr<rjson::value>>();
-        }
-    });
+    return get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_QUORUM, item_length);
+}
+
+static future<uint64_t> get_previous_item_size(
+            service::storage_proxy& proxy,
+            service::client_state& client_state,
+            schema_ptr schema,
+            const partition_key& pk,
+            const clustering_key& ck,
+            service_permit permit) {
+    uint64_t item_length = 0;
+    // The use of get_previous_item here is for DynamoDB calculation compatibility mode,
+    // and the actual value is ignored. For performance reasons, we use CL_LOCAL_ONE.
+    co_await  get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_ONE, item_length);
+    co_return item_length;
 }
 
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
