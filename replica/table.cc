@@ -37,6 +37,7 @@
 #include "memtable-sstable.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
+#include "compaction/sstables_max_purgeable.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
@@ -1714,9 +1715,18 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
           co_await coroutine::return_exception_ptr(std::move(ex));
         });
 
+        tombstone_gc_state gc_state = get_compaction_manager().get_tombstone_gc_state().with_commitlog_check_restricted(old->get_rp_set());
+        auto gc = _schema->memtable_compact_flushed_data()
+                // FIXME(#25428): max_purgeable_fn should use noncopyable_function to avoid jumping through hoops, like below
+                ? tombstone_gc(gc_state, [sst_get_max_purgeable = make_lw_shared<compaction::sstables_max_purgeable>(cg.view_for_unrepaired_data(), std::nullopt)] (const dht::decorated_key& dk, const is_shadowable is_shadowable) {
+                    return (*sst_get_max_purgeable)(dk, is_shadowable);
+                })
+                : tombstone_gc::disabled();
+
         auto f = consumer(old->make_flush_reader(
             old->schema(),
-            compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {})));
+            compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {}),
+            std::move(gc)));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
         // controller. Cache update does not affect the input of the memtable cpu controller, so it can be subject to
@@ -3895,7 +3905,7 @@ write_memtable_to_sstable(mutation_reader reader,
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, tombstone_gc gc) {
     auto cfg = sst->manager().configure_writer("memtable");
     auto monitor = replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional()));
     auto semaphore = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable",
@@ -3904,7 +3914,7 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst) {
 
     try {
         auto permit = semaphore.make_tracking_only_permit(mt.schema(), "mt_to_sst", db::no_timeout, {});
-        auto reader = mt.make_flush_reader(mt.schema(), std::move(permit));
+        auto reader = mt.make_flush_reader(mt.schema(), std::move(permit), std::move(gc));
         co_await write_memtable_to_sstable(std::move(reader), mt, std::move(sst), mt.partition_count(), monitor, cfg);
     } catch (...) {
         ex = std::current_exception();
