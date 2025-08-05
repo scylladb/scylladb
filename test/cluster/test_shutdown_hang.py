@@ -26,15 +26,15 @@ logger = logging.getLogger(__name__)
 async def test_hints_manager_shutdown_hang(manager: ManagerClient) -> None:
     """Reproducer for #8079"""
     s1 = await manager.server_add(config={
-        'error_injections_at_startup': ['decrease_hints_flush_period']
-    })
-    s2 = await manager.server_add()
+        'error_injections_at_startup': ['decrease_hints_flush_period'],
+    }, property_file={"dc": "dc1", "rack": "rack1"})
+    s2 = await manager.server_add(property_file={"dc": "dc1", "rack": "rack2"})
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
     cql = manager.get_cql()
 
     logger.info("Create keyspace and table")
-    async with new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}") as ks:
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f"create table {ks}.t (pk int primary key)")
 
         logger.info(f"Stop {s2}")

@@ -61,9 +61,19 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 @pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) -> None:
     node_count = 2
+<<<<<<< HEAD
     servers = await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update', 'update_backlog_immediately']})
     cql, hosts = await manager.get_ready_cql(servers)
     async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+||||||| parent of d18eb9479f (cql/statement: Create keyspace_metadata with correct initial_tablets count)
+    await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+=======
+    await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+>>>>>>> d18eb9479f (cql/statement: Create keyspace_metadata with correct initial_tablets count)
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, PRIMARY KEY (key, c))")
         await insert_with_concurrency(cql, f"{ks}.tab", 200, 100)
 

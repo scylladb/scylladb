@@ -22,7 +22,7 @@ async def test_cas_semaphore(manager):
 
     host = await wait_for_cql_and_get_hosts(manager.cql, {servers[0]}, time.time() + 60)
 
-    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
+    async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         table = f"{ks}.test"
         await manager.cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
 

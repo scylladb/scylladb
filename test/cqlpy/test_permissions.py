@@ -333,7 +333,7 @@ def test_grant_revoke_udf_permissions(cql):
 # and yet it's not enforced
 def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
     schema = "a int primary key"
-    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 1 }") as keyspace:
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
         with new_test_table(cql, keyspace, schema) as table:
             fun_body_lua = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE lua AS 'return 42;'"
             fun_body_java = "(i int) CALLED ON NULL INPUT RETURNS int LANGUAGE java AS 'return 42;'"
@@ -358,7 +358,7 @@ def test_grant_revoke_alter_udf_permissions(cassandra_bug, cql):
                     check_enforced(cql, username, permission='ALTER', resource=f'all functions in keyspace {keyspace}',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     check_enforced(cql, username, permission='ALTER', resource='all functions',
-                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}")) 
+                            function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
                     check_enforced(cql, username, permission='ALTER', resource=f'FUNCTION {keyspace}.{fun}(int)',
                             function=lambda: user_session.execute(f"CREATE OR REPLACE FUNCTION {keyspace}.{fun} {fun_body}"))
 

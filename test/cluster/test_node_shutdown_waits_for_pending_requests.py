@@ -22,14 +22,14 @@ async def test_node_shutdown_waits_for_pending_requests(manager: ManagerClient) 
     """Reproducer for #16382"""
 
     logger.info('start two nodes')
-    servers = await manager.servers_add(servers_num=2)
+    servers = await manager.servers_add(servers_num=2, auto_rack_dc="dc")
     cql = manager.get_cql()
 
     logger.info(f'wait for host for the node {servers[0]}, servers {servers}')
     h0 = (await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60))[0]
 
     logger.info('create keyspace and table')
-    async with new_test_keyspace(manager, "with replication = {'class': 'SimpleStrategy', 'replication_factor': 2}") as ks:
+    async with new_test_keyspace(manager, "with replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         await cql.run_async(f'create table {ks}.test_table (pk int primary key)')
 
         logger.info('insert test row into the table')
