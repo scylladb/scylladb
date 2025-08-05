@@ -42,7 +42,7 @@ private:
     }
 
     future<> flush_memtable() {
-        co_await _consumer(_memtable->make_flush_reader(_schema, _permit));
+        co_await _consumer(_memtable->make_flush_reader(_schema, _permit, tombstone_gc::disabled()));
         _memtable = make_lw_shared<replica::memtable>(_schema);
     }
 

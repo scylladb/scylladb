@@ -322,7 +322,14 @@ public:
         return make_mutation_reader(s, std::move(permit), range, full_slice);
     }
 
-    mutation_reader make_flush_reader(schema_ptr, reader_permit permit);
+    // If enabled by schema::memtable_compact_flushed_data(), the memtable will
+    // be compacted during flush.
+    //
+    // FIXME
+    // Currently, if tombstone_gc is not engaged, no compaction will happen.
+    // This is a technical limitation, remove once tombstone_gc_state was
+    // refactored to be a value type and not passed around as reference.
+    mutation_reader make_flush_reader(schema_ptr, reader_permit permit, tombstone_gc gc);
 
     mutation_source as_data_source();
 
