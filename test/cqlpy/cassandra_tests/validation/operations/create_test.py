@@ -293,14 +293,14 @@ def testKeyspace(cql):
     n = unique_name()
     assertInvalidThrow(cql, n, SyntaxException, "CREATE KEYSPACE %s testXYZ ")
 
-    execute(cql, n, "CREATE KEYSPACE %s WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+    execute(cql, n, "CREATE KEYSPACE %s WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     execute(cql, n, "DROP KEYSPACE %s")
     # The original Cassandra test checked that a 53-character keyspace name doesn't work
     # but Scylla increased the 48-character limit to 192 characters, so this test was modified
     # to check length of 500, to produce the same outcome on Scylla and Cassandra.
     too_long_keyspace_name = "k" * 500
-    assertInvalid(cql, "", 
-         f"CREATE KEYSPACE {too_long_keyspace_name} WITH replication = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}")
+    assertInvalid(cql, "",
+         f"CREATE KEYSPACE {too_long_keyspace_name} WITH replication = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }}")
 
     # FIXME: Cassandra throws InvalidRequest here, but Scylla uses
     # ConfigurationException. We shouldn't have done that... But I consider
@@ -308,7 +308,7 @@ def testKeyspace(cql):
     # Maybe we should reconsider, and not allow ConfigurationException...
     assertInvalidThrow(cql, "", (InvalidRequest, ConfigurationException), "DROP KEYSPACE non_existing")
 
-    execute(cql, n, "CREATE KEYSPACE %s WITH replication = { 'class' : 'SimpleStrategy', 'replication_factor' : 1 }")
+    execute(cql, n, "CREATE KEYSPACE %s WITH replication = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }")
     # clean-up
     execute(cql, n, "DROP KEYSPACE %s")
 

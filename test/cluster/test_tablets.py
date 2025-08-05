@@ -611,46 +611,58 @@ async def test_explicit_tablet_movement_during_decommission(manager: ManagerClie
 
 
 # This test checks that --enable-tablets option and the TABLETS parameters of the CQL CREATE KEYSPACE
-# statemement are mutually correct from the "the least surprising behavior" concept. See comments inside
-# the test code for more details.
-@pytest.mark.parametrize("with_tablets", [True, False])
+# statement are mutually correct.
+@pytest.mark.parametrize("tablets_mode_for_new_keyspaces", ["enabled", "disabled", "enforced"])
+@pytest.mark.parametrize("cql_tablets_params", ["enabled", "disabled", None])
 @pytest.mark.parametrize("replication_strategy", ["NetworkTopologyStrategy", "SimpleStrategy", "EverywhereStrategy", "LocalStrategy"])
 @pytest.mark.asyncio
-async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, with_tablets, replication_strategy):
-    cfg = {'tablets_mode_for_new_keyspaces': 'enabled' if with_tablets else 'disabled'}
+async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, tablets_mode_for_new_keyspaces, cql_tablets_params, replication_strategy):
+    cfg = {'tablets_mode_for_new_keyspaces': tablets_mode_for_new_keyspaces}
     server = await manager.server_add(config=cfg)
     cql = manager.get_cql()
 
-    # Tablets are only possible when the replication strategy is NetworkTopology
-    tablets_possible = (replication_strategy == 'NetworkTopologyStrategy')
-    tablets_enabled_by_default = tablets_possible and with_tablets
+    """
+    tablets_mode_for_new_keyspaces |       enabled      |      disabled      |      enforced      |
+                                   |--------------------|--------------------|--------------------|
+             AND tablets = {}      | enabled | disabled | enabled | disabled | enabled | disabled |
+                                   |   None  |          |         |   None   |   None  |          |
+    -------------------------------|---------|----------|---------|----------|--------------------|
+         "NetworkTopologyStrategy" |    OK   |    OK    |    OK   |    OK    |    OK   |   Error  |
+         "SimpleStrategy"          |  Error  |    OK    |  Error  |    OK    |  Error  |   Error  |
+         "EverywhereStrategy"      |  Error  |    OK    |  Error  |    OK    |  Error  |   Error  |
+         "LocalStrategy"           |  Error  |    OK    |  Error  |    OK    |  Error  |   Error  |
+    """
+    no_misconfiguration = (
+        (replication_strategy == "NetworkTopologyStrategy" and (tablets_mode_for_new_keyspaces != "enforced" or cql_tablets_params != "disabled"))
+        or (tablets_mode_for_new_keyspaces == "enabled" and cql_tablets_params == "disabled")
+        or (tablets_mode_for_new_keyspaces == "disabled" and cql_tablets_params != "enabled")
+    )
+    expect_tablets = (replication_strategy == "NetworkTopologyStrategy") and (
+        (tablets_mode_for_new_keyspaces == "enforced" and cql_tablets_params != "disabled")
+        or (tablets_mode_for_new_keyspaces == "enabled" and cql_tablets_params != "disabled")
+        or (tablets_mode_for_new_keyspaces == "disabled" and cql_tablets_params == "enabled")
+    )
 
-    # First, check if a kesypace is able to be created with default CQL statement that
-    # doesn't contain tablets parameters. When possible, tablets should be activated
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}}") as ks:
-        res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'").one()
-        if tablets_enabled_by_default:
-            assert res.initial_tablets == 0
-        else:
-            assert res is None
-
-    # Next, check that explicit CQL request for enabling tablets can only be satisfied when
-    # tablets are possible. Tablets must be activated in this case
-    if tablets_possible:
+    if no_misconfiguration:
         expectation = does_not_raise()
     else:
         expectation = pytest.raises(ConfigurationException)
+
     with expectation:
-        ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} AND TABLETS = {{'enabled': true}}")
-        res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'").one()
-        assert res.initial_tablets == 0
+        tablets_opt = ""
+        if cql_tablets_params == "enabled":
+            tablets_opt = f"AND TABLETS = {{'enabled': true }}"
+        if cql_tablets_params == "disabled":
+            tablets_opt = f"AND TABLETS = {{'enabled': false }}"
+
+        ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} {tablets_opt}")
+        res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'")
+        if expect_tablets:
+            assert res.one().initial_tablets == 0
+        else:
+            assert not res
         await cql.run_async(f"drop keyspace {ks}")
 
-    # Finally, check that explicitly disabling tablets in CQL results in vnode-based keyspace
-    # whenever tablets are enabled or not in config
-    async with new_test_keyspace(manager, f"WITH replication = {{'class': '{replication_strategy}', 'replication_factor': 1}} AND TABLETS = {{'enabled': false}}") as ks:
-        res = cql.execute(f"SELECT initial_tablets FROM system_schema.scylla_keyspaces WHERE keyspace_name = '{ks}'").one()
-        assert res is None
 
 @pytest.mark.asyncio
 async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):

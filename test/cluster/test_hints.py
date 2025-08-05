@@ -20,6 +20,7 @@ from test.pylib.tablets import get_tablet_replicas
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import wait_for
 
+from test.cqlpy import nodetool
 from test.cluster.conftest import skip_mode
 from test.cluster.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace
 
@@ -93,11 +94,11 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
     """
     node1 = await manager.server_add(config={
         "error_injections_at_startup": ["decrease_max_size_of_hints_in_progress"]
-    })
-    node2 = await manager.server_add()
+    }, property_file = {"dc":"dc1", "rack":"rack1"})
+    node2 = await manager.server_add(property_file = {"dc":"dc1", "rack":"rack2"})
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
 
@@ -124,10 +125,10 @@ async def test_sync_point(manager: ManagerClient):
     live nodes.
     """
     node_count = 3
-    [node1, node2, node3] = await manager.servers_add(node_count)
+    [node1, node2, node3] = await manager.servers_add(node_count, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
 
@@ -286,12 +287,13 @@ async def test_draining_hints(manager: ManagerClient):
     This test verifies that all hints are drained when a node is being decommissioned.
     """
 
-    s1, s2, _ = await manager.servers_add(3)
+    s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
+
     cql = manager.get_cql()
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
 
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s2.server_id)
@@ -307,6 +309,7 @@ async def test_draining_hints(manager: ManagerClient):
     async def wait():
         assert await_sync_point(s1, sync_point, 60)
 
+    await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s2.rack, s3.rack]}}}")
     async with asyncio.TaskGroup() as tg:
         _ = tg.create_task(manager.decommission_node(s1.server_id, timeout=60))
         _ = tg.create_task(wait())
@@ -318,15 +321,14 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     This test verifies that draining hints is canceled as soon as we issue a shutdown,
     but it's resumed after starting the node again.
     """
+    s1, s2, s3 = await manager.servers_add(3, auto_rack_dc="dc")
 
-    s1, s2, _ = await manager.servers_add(3)
     cql = manager.get_cql()
-
     host_id2 = await manager.get_host_id(s2.server_id)
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
 
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s2.server_id)
@@ -338,6 +340,9 @@ async def test_canceling_hint_draining(manager: ManagerClient):
     sync_point = create_sync_point(s1)
 
     await manager.api.enable_injection(s1.ip_addr, "hinted_handoff_pause_hint_replay", False, {})
+    nodetool.excludenode(cql, host_id2)
+    await cql.run_async(f"ALTER KEYSPACE ks WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', 'dc': {[s1.rack, s3.rack]}}}")
+
     await manager.remove_node(s1.server_id, s2.server_id)
     await manager.server_stop_gracefully(s1.server_id)
 

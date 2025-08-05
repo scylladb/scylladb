@@ -1,6 +1,7 @@
 import pytest
 from contextlib import ExitStack
 from .util import unique_name, config_value_context, new_test_keyspace
+from .conftest import has_tablets
 from cassandra.protocol import ConfigurationException
 
 # Tests for the replication_strategy_{warn,fail}_list guardrail. Because
@@ -32,13 +33,22 @@ def create_ks_and_assert_warnings_and_errors(cql, ks_opts, warnings_count=None, 
             assert not unexpected_warning in "\n".join(response_future.warnings)
 
 
+def get_replication_strategy_ks_opts(strategy: str, replication_option: str, rf: int) -> str:
+    # If tablets syntax is not supported (e.g. in cassandra) we don't add it to the ks options
+    tablets_opt = " AND TABLETS = {'enabled': false}" if has_tablets and strategy != 'NetworkTopologyStrategy' else ""
+    return f" WITH REPLICATION = {{ 'class' : '{strategy}', '{replication_option}' : {rf} }} {tablets_opt}"
+
+
+def get_simple_strategy_ks_opts(rf: int) -> str:
+    return get_replication_strategy_ks_opts('SimpleStrategy', 'replication_factor', rf)
+
+
 def test_given_default_config_when_creating_ks_should_only_produce_warning_for_simple_strategy(cql, this_dc):
-    ks_opts = " WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 3 }"
-    create_ks_and_assert_warnings_and_errors(cql, ks_opts, expected_warning='replication_strategy_warn_list', fails_count=0)
+    create_ks_and_assert_warnings_and_errors(cql, get_simple_strategy_ks_opts(3), expected_warning='replication_strategy_warn_list', fails_count=0)
 
     for key, value in {'NetworkTopologyStrategy': this_dc, 'EverywhereStrategy': 'replication_factor',
                        'LocalStrategy': 'replication_factor'}.items():
-        create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
+        create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts(key, value, 1),
                                                  unexpected_warning='replication_strategy_warn_list', fails_count=0)
 
 
@@ -49,8 +59,8 @@ def test_given_cleared_guardrails_when_creating_ks_should_not_get_warning_nor_er
 
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
-            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
-                                                     unexpected_warning='replication_strategy_warn_list', fails_count=0)
+            create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts(key, value, 1),
+                                                    unexpected_warning='replication_strategy_warn_list', fails_count=0)
 
 
 def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed_strategy_used(cql, this_dc):
@@ -59,7 +69,7 @@ def test_given_non_empty_warn_list_when_creating_ks_should_only_warn_when_listed
                                                                 'SimpleStrategy,LocalStrategy,NetworkTopologyStrategy,EverywhereStrategy'))
         for key, value in {'SimpleStrategy': 'replication_factor', 'NetworkTopologyStrategy': this_dc,
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
-            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
+            create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts(key, value, 1),
                                                      expected_warning='replication_strategy_warn_list', fails_count=0)
 
 
@@ -74,7 +84,7 @@ def test_given_non_empty_warn_and_fail_lists_when_creating_ks_should_fail_query_
                            'EverywhereStrategy': 'replication_factor', 'LocalStrategy': 'replication_factor'}.items():
             # note: even though warn list is not empty, no warnings should be generated, because failures come first -
             #  we don't want to issue a warning and also fail the query at the same time
-            create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : '{key}', '{value}' : 1 }}",
+            create_ks_and_assert_warnings_and_errors(cql, get_replication_strategy_ks_opts(key, value, 1),
                                                      warnings_count=0, fails_count=1)
 
 
@@ -116,35 +126,30 @@ def test_given_rf_and_strategy_guardrails_when_creating_ks_should_print_2_warnin
     with ExitStack() as config_modifications:
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_warn_list', 'SimpleStrategy'))
         config_modifications.enter_context(config_value_context(cql, 'minimum_replication_factor_warn_threshold', '3'))
-        create_ks_and_assert_warnings_and_errors(cql,
-                                                 f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}",
-                                                 warnings_count=2, fails_count=0)
+        create_ks_and_assert_warnings_and_errors(cql, get_simple_strategy_ks_opts(1), warnings_count=2, fails_count=0)
 
 
 def test_given_rf_and_strategy_guardrails_when_violating_fail_rf_limit_and_warn_strategy_limit_should_fail_the_query_without_warning(cql):
     with ExitStack() as config_modifications:
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_warn_list', 'SimpleStrategy'))
         config_modifications.enter_context(config_value_context(cql, 'minimum_replication_factor_fail_threshold', '3'))
-        create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}",
-                                                 warnings_count=0, fails_count=1)
+        create_ks_and_assert_warnings_and_errors(cql, get_simple_strategy_ks_opts(1), warnings_count=0, fails_count=1)
 
 
 def test_given_rf_and_strategy_guardrails_when_violating_fail_strategy_limit_should_fail_the_query(cql):
     with ExitStack() as config_modifications:
         config_modifications.enter_context(config_value_context(cql, 'replication_strategy_fail_list', 'SimpleStrategy'))
         config_modifications.enter_context(config_value_context(cql, 'minimum_replication_factor_fail_threshold', '3'))
-        create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }}",
-                                                 warnings_count=0, fails_count=1)
+        create_ks_and_assert_warnings_and_errors(cql, get_simple_strategy_ks_opts(3), warnings_count=0, fails_count=1)
 
 
 def test_given_restrict_replication_simplestrategy_when_it_is_set_should_emulate_old_behavior(cql):
     with ExitStack() as config_modifications:
         config_modifications.enter_context(config_value_context(cql, 'restrict_replication_simplestrategy', 'true'))
-        create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }}",
-                                                 warnings_count=0, fails_count=1)
+        create_ks_and_assert_warnings_and_errors(cql, get_simple_strategy_ks_opts(3), warnings_count=0, fails_count=1)
         config_modifications.enter_context(config_value_context(cql, 'restrict_replication_simplestrategy', 'warn'))
-        create_ks_and_assert_warnings_and_errors(cql, f" WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 3 }}",
-                                                 warnings_count=1, fails_count=0)
+        create_ks_and_assert_warnings_and_errors(cql, get_simple_strategy_ks_opts(3), warnings_count=1, fails_count=0)
+
 
 def test_config_replication_strategy_warn_list_roundtrips_quotes(cql):
     # Use direct SELECT/UPDATE to avoid trippy config_value_context behavior
