@@ -33,6 +33,7 @@
 #include "replica/database.hh"
 #include "lang/manager.hh"
 #include "db/system_keyspace.hh"
+#include "compaction/compaction_manager.hh"
 #include "cql3/expr/expression.hh"
 #include "types/types.hh"
 #include "service/migration_manager.hh"
@@ -841,6 +842,79 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
     }
 }
 
+class pending_schema_getter : public service::schema_getter {
+private:
+    schema_applier& _sa;
+    distributed<replica::database>& _db;
+
+public:
+    pending_schema_getter(schema_applier& sa) :
+            _sa(sa), _db(sa._proxy.local().get_db()) {
+    };
+
+    virtual replica::column_family* find_column_family(const table_id& uuid) const {
+        auto & tables_and_views = _sa._affected_tables_and_views.tables_and_views.local();
+        for (auto& schema : tables_and_views.tables.dropped) {
+            if (schema->id() == uuid) {
+                return nullptr;
+            }
+        }
+        for (auto& schema : tables_and_views.views.dropped) {
+            if (schema->id() == uuid) {
+                return nullptr;
+            }
+        }
+        auto cf_it = _sa._affected_tables_and_views.table_shards.find(uuid);
+        if (cf_it != _sa._affected_tables_and_views.table_shards.end()) {
+            return &(*cf_it->second);
+        }
+        return &_db.local().find_column_family(uuid);
+    };
+
+    virtual flat_hash_map<sstring, replica::keyspace*> get_keyspaces() const {
+        flat_hash_map<sstring, replica::keyspace*> out;
+        for (auto& [name, ks] : _db.local().get_keyspaces()) {
+            out.emplace(name, &ks);
+        }
+        for (const auto& name : _sa._affected_keyspaces.names.dropped) {
+            out.erase(name);
+        }
+        for (const auto& ks_all_shards : _sa._affected_keyspaces.created) {
+            auto& ks = *ks_all_shards[this_shard_id()];
+            auto name = ks.metadata()->name();
+            out.insert_or_assign(name, &ks);
+        }
+        // Note that this may return stale information for altered keyspaces
+        // but we can't easily return replica::keyspace* in such case because
+        // keyspace_change doesn't reference it (and it can't since it's not updated yet).
+        // So we'd need to build extra indirection to manipulate erms and replication strategies
+        // in such special case. But we simplify here as this stale erm information will be
+        // corrected later by committing keyspace changes (see comment in commit_on_shard()) and
+        // replication strategy can't currently change to per_table after keyspace is created.
+        return out;
+    };
+
+    virtual future<> for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<replica::table>)> f) const {
+        auto ff = [this, &f](table_id id, lw_shared_ptr<replica::table> t) -> future<> {
+            if (find_column_family(id)) {
+                  co_await f(id, t);
+            }
+        };
+        return _db.local().get_tables_metadata().for_each_table_gently(ff);
+    };
+};
+
+future<> schema_applier::update_tablets() {
+    // Has to be after tablets and views change is prepared
+    // otherwise this preparation will generate orphaned erms.
+    if (_tablet_hint) {
+        slogger.info("Tablet metadata changed");
+        pending_schema_getter getter{*this};
+        _token_metadata_change = co_await _ss.local().prepare_token_metadata_change(
+                _pending_token_metadata.local(), getter);
+    }
+}
+
 future<> schema_applier::lock_tables_metadata() {
     // Adding and dropping tables, or changing tablet metadata, uses this
     // locking mechanism to prevent changes to tables_metadata during preemptive
@@ -860,7 +934,6 @@ future<> schema_applier::load_mutable_token_metadata() {
     locator::mutable_token_metadata_ptr new_token_metadata = nullptr;
     locator::mutable_token_metadata_ptr current_token_metadata = co_await _ss.local().get_mutable_token_metadata_ptr();
     if (_tablet_hint) {
-        slogger.info("Tablet metadata changed");
         new_token_metadata = co_await _ss.local().prepare_token_metadata_with_tablets_change(
                 _tablet_hint, current_token_metadata);
         co_return co_await _pending_token_metadata.assign(new_token_metadata);
@@ -874,6 +947,7 @@ future<> schema_applier::update() {
     co_await merge_keyspaces();
     co_await merge_types();
     co_await merge_tables_and_views();
+    co_await update_tablets();
     co_await lock_tables_metadata();
     co_await merge_functions();
     co_await merge_aggregates();
@@ -913,6 +987,15 @@ void schema_applier::commit_tables_and_views() {
 }
 
 void schema_applier::commit_on_shard(replica::database& db) {
+    // commit token_metadata, must be before updating keyspaces as
+    // both may update some metadata (namely erm) but only keyspace operations
+    // include up-to-date information (because they combine keyspace change and
+    // tablet change - via pending_token_metadata).
+    if (_tablet_hint) {
+        pending_schema_getter getter{*this};
+        _ss.local().commit_token_metadata_change(_token_metadata_change, getter);
+    }
+
     // commit keyspace operations
     for (auto& ks_per_shard : _affected_keyspaces.created) {
         auto ks = ks_per_shard[this_shard_id()].release();
@@ -981,11 +1064,11 @@ future<> schema_applier::finalize_tables_and_views() {
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
 
-    // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
-    // and so that compaction groups are not destroyed altogether.
-    // TODO: maybe untangle this dependency
     if (_tablet_hint) {
-        co_await _ss.local().commit_tablet_metadata(_pending_token_metadata.local());
+        auto& db = sharded_db.local();
+        co_await db.get_compaction_manager().get_shared_tombstone_gc_state().
+                flush_pending_repair_time_update(db);
+        _ss.local().wake_up_topology_state_machine();
     }
 
     co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
@@ -1067,6 +1150,7 @@ future<> schema_applier::destroy() {
     co_await _affected_user_types.stop();
     co_await _affected_tables_and_views.tables_and_views.stop();
     co_await _pending_token_metadata.destroy();
+    co_await _token_metadata_change.destroy();
     co_await _functions_batch.stop();
 }
 
