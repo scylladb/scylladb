@@ -264,6 +264,14 @@ auto get_host_port(std::string_view uri) -> std::optional<host_port> {
     return *parsed;
 }
 
+sstring response_content_to_sstring(const std::vector<temporary_buffer<char>>& buffers) {
+    sstring result;
+    for (const auto& buf : buffers) {
+        result.append(buf.get(), buf.size());
+    }
+    return result;
+}
+
 } // namespace
 
 namespace service {
@@ -567,7 +575,8 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
     }
 
     if (resp->status != status_type::ok) {
-        vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, resp->content);
+        vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status,
+                       seastar::value_of([&resp] {return response_content_to_sstring(resp->content);}));
         co_return std::unexpected{service_error{resp->status}};
     }
 
