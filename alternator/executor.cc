@@ -2110,6 +2110,12 @@ public:
     uint64_t length_in_bytes() const noexcept {
         return _length_in_bytes;
     }
+    void set_length_in_bytes(uint64_t length) noexcept {
+        _length_in_bytes = length;
+    }
+    bool is_put_item() noexcept {
+        return _cells.has_value();
+    }
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
