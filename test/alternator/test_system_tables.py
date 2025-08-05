@@ -2,13 +2,16 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 
-# Tests for accessing alternator-only system tables (from Scylla).
+# Tests for accessing Scylla-only system tables. All tests are marked
+# "scylla_only" so are skipped on DynamoDB.
 
 import pytest
 import requests
 
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
+
+from .util import full_scan
 
 internal_prefix = '.scylla.alternator.'
 
@@ -59,3 +62,38 @@ def test_block_creating_tables_with_reserved_prefix(scylla_only, dynamodb):
                     AttributeDefinitions=[{'AttributeName':'p', 'AttributeType': 'S'}]
             )
 
+# Test that the system.clients virtual table is readable, and lists ongoing
+# Alternator requests, and lists the client SDK's User-Agent (usually
+# containing its language, version, and other information) as "driver_name".
+# Since we are making the Scan request with Boto3, we expect to find in
+# the result of the Scan at least one client using Boto3.
+# Reproduces #24993.
+def test_system_clients(scylla_only, dynamodb):
+    clients = dynamodb.Table(internal_prefix + 'system.clients')
+    success = False
+    clients = full_scan(clients)
+    assert len(clients) > 0
+    for client in clients:
+        if 'Boto3' in client['driver_name']:
+            success = True
+            # Verify that some other fields that we expect to appear in
+            # Alternator's system.clients entry do appear. For most of
+            # them we don't know exactly which value we expect to see,
+            # but we know we expect it to appear.
+            assert client['client_type'] == 'alternator'
+            assert 'address' in client
+            assert 'port' in client
+            assert 'shard_id' in client
+            assert 'connection_stage' in client
+            is_ssl = dynamodb.meta.client._endpoint.host.startswith('https')
+            # Alternator converts the boolean in the table scanned through
+            # the Alternator API to a string 'true' or 'false'. This is
+            # probably a bug (because Alternator does have a boolean type
+            # it could use!), but it's not the intention of this test to
+            # check how scanning CQL tables in Alternator works, so let's
+            # just accept both.
+            is_ssl_string = 'true' if is_ssl else 'false'
+            assert client['ssl_enabled'] == is_ssl or client['ssl_enabled'] == is_ssl_string
+            assert 'username' in client
+            assert 'scheduling_group' in client
+    assert success

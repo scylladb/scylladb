@@ -19,4 +19,8 @@ namespace utils {
     seastar::on_internal_error(on_internal_error_logger, reason);
 }
 
+[[noreturn]] void on_fatal_internal_error(std::string_view reason) noexcept {
+    seastar::on_fatal_internal_error(on_internal_error_logger, reason);
+}
+
 }
