@@ -467,7 +467,7 @@ future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet
             // Populate the table with the state from the gossiper here since storage_service::on_change()
             // (which is called each time gossiper state changes) may have skipped it because the tokens
             // for the node were not in the 'normal' state yet
-            auto info = get_peer_info_for_update(id);
+            auto info = get_gossiper_peer_info_for_update(id);
             if (info) {
                 // And then amend with the info from raft
                 info->tokens = rs.ring.value().tokens;
@@ -2526,7 +2526,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} remove_from_peers={} owned_tokens={}", endpoint, is_normal_token_owner, remove_from_peers.contains(endpoint), owned_tokens);
     if (!is_me(endpoint) && !owned_tokens.empty() && !remove_from_peers.count(endpoint)) {
         try {
-            auto info = get_peer_info_for_update(host_id).value();
+            auto info = get_gossiper_peer_info_for_update(host_id).value();
             info.tokens = std::move(owned_tokens);
             co_await _sys_ks.local().update_peer_info(endpoint, host_id, info);
         } catch (...) {
@@ -2674,7 +2674,7 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
     if (node && node->is_member() && (co_await get_ip_from_peers_table(host_id)) == endpoint) {
         if (!is_me(endpoint)) {
             slogger.debug("endpoint={}/{} on_change:     updating system.peers table", endpoint, host_id);
-            if (auto info = get_peer_info_for_update(host_id, states)) {
+            if (auto info = get_gossiper_peer_info_for_update(host_id, states)) {
                 co_await _sys_ks.local().update_peer_info(endpoint, host_id, *info);
             }
         }
@@ -2746,19 +2746,19 @@ future<> storage_service::on_restart(gms::inet_address endpoint, locator::host_i
     return make_ready_future();
 }
 
-std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(locator::host_id endpoint) {
+std::optional<db::system_keyspace::peer_info> storage_service::get_gossiper_peer_info_for_update(locator::host_id endpoint) {
     auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state) {
         return db::system_keyspace::peer_info{};
     }
-    auto info = get_peer_info_for_update(endpoint, ep_state->get_application_state_map());
+    auto info = get_gossiper_peer_info_for_update(endpoint, ep_state->get_application_state_map());
     if (!info && !raft_topology_change_enabled()) {
-        on_internal_error_noexcept(slogger, seastar::format("get_peer_info_for_update({}): application state has no peer info: {}", endpoint, ep_state->get_application_state_map()));
+        on_internal_error_noexcept(slogger, seastar::format("get_gossiper_peer_info_for_update({}): application state has no peer info: {}", endpoint, ep_state->get_application_state_map()));
     }
     return info;
 }
 
-std::optional<db::system_keyspace::peer_info> storage_service::get_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map) {
+std::optional<db::system_keyspace::peer_info> storage_service::get_gossiper_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map) {
     std::optional<db::system_keyspace::peer_info> ret;
 
     auto get_peer_info = [&] () -> db::system_keyspace::peer_info& {
