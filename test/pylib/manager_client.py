@@ -531,6 +531,11 @@ class ManagerClient:
                                    value: Any = None,
                                    *,
                                    config_options: dict[str, Any] | None = None) -> None:
+        """
+        Update the server's configuration file.
+
+        You can update a single option by providing the (key, value) pair, or multiple options using config_options.
+        """
         if key is not None:
             if value is None:
                 raise RuntimeError("`value` is required if `key` is not None")
