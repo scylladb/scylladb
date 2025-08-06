@@ -107,13 +107,30 @@ public:
     virtual table_schema_version index_version(const schema& schema) = 0;
 };
 
+struct vector_stats {
+
+private:
+    seastar::metrics::metric_groups metrics;
+    utils::estimated_histogram ann_limit_histogram{35}; // 35 buckets to cover range to 1000
+    utils::time_estimated_histogram ann_latencies;
+public:
+    vector_stats(const sstring& ks_name, const index_metadata& im);
+    vector_stats(const vector_stats&) = delete;
+    vector_stats& operator=(const vector_stats&) = delete;
+    void add_limit(int limit);
+    void add_latency(std::chrono::steady_clock::duration d);
+};
+
 struct stats {
 
 private:
     seastar::metrics::metric_groups metrics;
     utils::time_estimated_histogram query_latency;
 public:
-    stats(const sstring& ks_name, const sstring& index_name);
+
+    lw_shared_ptr<vector_stats> vector_index_stats;
+
+    stats(const sstring& ks_name, const index_metadata& im);
     stats(const stats&) = delete;
     stats& operator=(const stats&) = delete;
     void add_latency(std::chrono::steady_clock::duration d);

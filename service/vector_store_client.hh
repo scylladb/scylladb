@@ -9,6 +9,7 @@
 #pragma once
 
 #include "seastarx.hh"
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
@@ -33,7 +34,9 @@ namespace service {
 /// A client with the vector-store service.
 class vector_store_client final {
     struct impl;
-    std::unique_ptr<impl> _impl;
+    class metrics;
+    lw_shared_ptr<impl> _impl;
+    std::unique_ptr<metrics> _metrics;
 
 public:
     using config = db::config;
