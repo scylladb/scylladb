@@ -2913,6 +2913,8 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
         start_hint_manager start_hm, gms::generation_type new_generation) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
+    gate::holder holder = _async_gate.hold();
+
     if (_sys_ks.local().was_decommissioned()) {
         auto msg = sstring("This node was decommissioned and will not rejoin the ring unless "
                            "all existing data is removed and the node is bootstrapped again");
@@ -3795,6 +3797,7 @@ future<> storage_service::raft_decommission() {
 future<> storage_service::decommission() {
     return run_with_api_lock(sstring("decommission"), [] (storage_service& ss) {
         return seastar::async([&ss] {
+            gate::holder holder = ss._async_gate.hold();
             ss.check_ability_to_perform_topology_operation("decommission");
             if (ss._operation_mode != mode::NORMAL) {
                 throw std::runtime_error(::format("Node in {} state; wait for status to become normal or restart", ss._operation_mode));
@@ -4395,6 +4398,8 @@ future<node_ops_cmd_response> storage_service::node_ops_cmd_handler(gms::inet_ad
         auto ops_uuid = req.ops_uuid;
         auto topo_guard = null_topology_guard;
         slogger.debug("node_ops_cmd_handler cmd={}, ops_uuid={}", req.cmd, ops_uuid);
+
+        gate::holder holder = _async_gate.hold();
 
         if (req.cmd == node_ops_cmd::query_pending_ops) {
             bool ok = true;
@@ -5106,6 +5111,7 @@ future<> storage_service::raft_check_and_repair_cdc_streams() {
 
 future<> storage_service::rebuild(utils::optional_param source_dc) {
     return run_with_api_lock(sstring("rebuild"), [source_dc] (storage_service& ss) -> future<> {
+        gate::holder holder = ss._async_gate.hold();
         ss.check_ability_to_perform_topology_operation("rebuild");
         if (auto tablets_keyspaces = ss._db.local().get_tablets_keyspaces(); !tablets_keyspaces.empty()) {
             std::ranges::sort(tablets_keyspaces);
@@ -5756,6 +5762,7 @@ future<> storage_service::snitch_reconfigured() {
 future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft::term_t term, uint64_t cmd_index, const raft_topology_cmd& cmd) {
     raft_topology_cmd_result result;
     rtlogger.info("topology cmd rpc {} is called index={}", cmd.cmd, cmd_index);
+    gate::holder holder = _async_gate.hold();
 
     try {
         auto& raft_server = _group0->group0_server();
