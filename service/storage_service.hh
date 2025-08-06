@@ -563,9 +563,9 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
-    std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint);
+    std::optional<db::system_keyspace::peer_info> get_gossiper_peer_info_for_update(locator::host_id endpoint);
     // return an engaged value iff app_state_map has changes to the peer info
-    std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map);
+    std::optional<db::system_keyspace::peer_info> get_gossiper_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map);
 
     std::unordered_set<token> get_tokens_for(locator::host_id endpoint);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);
