@@ -50,7 +50,6 @@
 #include "db/timeout_clock.hh"
 #include "db/consistency_level_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "test/lib/select_statement_utils.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
 #include "utils/result_combinators.hh"
@@ -108,8 +107,6 @@ failed_result_to_result_message(coordinator_result<T>&& r) {
     return ::make_shared<cql_transport::messages::result_message::exception>(std::move(r).assume_error());
 }
 
-static constexpr int DEFAULT_INTERNAL_PAGING_SIZE = select_statement::DEFAULT_COUNT_PAGE_SIZE;
-thread_local int internal_paging_size = DEFAULT_INTERNAL_PAGING_SIZE;
 thread_local const lw_shared_ptr<const select_statement::parameters> select_statement::_default_parameters = make_lw_shared<select_statement::parameters>();
 
 select_statement::parameters::parameters()
@@ -442,7 +439,7 @@ select_statement::do_execute(query_processor& qp,
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = _restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
-        page_size = page_size <= 0 ? internal_paging_size : page_size;
+        page_size = page_size <= 0 ? qp.db().get_config().select_internal_page_size() : page_size;
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
@@ -754,9 +751,9 @@ indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(partition_ranges), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
+            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.db().get_config().select_internal_page_size()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
     }));
 }
 
@@ -834,9 +831,9 @@ indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(primary_keys), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
+            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.db().get_config().select_internal_page_size()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
     }));
 }
 
@@ -900,10 +897,11 @@ indexed_table_select_statement::process_base_query_results(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        lw_shared_ptr<const service::pager::paging_state> paging_state) const
+        lw_shared_ptr<const service::pager::paging_state> paging_state,
+        uint32_t internal_page_size) const
 {
     if (paging_state) {
-        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options);
+        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
     return process_results(std::move(results), std::move(cmd), options, now);
@@ -1119,7 +1117,7 @@ bytes indexed_table_select_statement::compute_idx_token(const partition_key& key
 }
 
 lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const {
+        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
     if (!cdef) {
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
@@ -1166,7 +1164,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     }
 
     auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
-    paging_state_copy->set_remaining(internal_paging_size);
+    paging_state_copy->set_remaining(internal_page_size);
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
     return paging_state_copy;
@@ -1292,11 +1290,12 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
         std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(cql3::query_options(options));
         stop_iteration stop;
         // page size is set to the internal count page size, regardless of the user-provided value
-        internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_paging_size));
+        auto internal_page_size = qp.db().get_config().select_internal_page_size();
+        internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_page_size));
         do {
-            auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
+            auto consume_results = [this, &builder, &options, &internal_options, &state, internal_page_size] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
                 if (paging_state) {
-                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options);
+                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
                 }
                 internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                 if (_restrictions_need_filtering) {
@@ -1901,7 +1900,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     const bool aggregate = _selection->is_aggregate() || has_group_by();
     const bool nonpaged_filtering = _restrictions_need_filtering && page_size <= 0;
     if (aggregate || nonpaged_filtering) {
-        page_size = internal_paging_size;
+        page_size = qp.db().get_config().select_internal_page_size();
     }
 
     auto key_ranges = _restrictions->get_partition_key_ranges(options);
@@ -2740,16 +2739,6 @@ std::vector<size_t> select_statement::prepare_group_by(const schema& schema, sel
     return indices;
 }
 
-}
-
-future<> set_internal_paging_size(int paging_size) {
-    return seastar::smp::invoke_on_all([paging_size] {
-        internal_paging_size = paging_size;
-    });
-}
-
-future<> reset_internal_paging_size() {
-    return set_internal_paging_size(DEFAULT_INTERNAL_PAGING_SIZE);
 }
 
 }

@@ -13,7 +13,6 @@
 #include "test/lib/exception_utils.hh"
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
-#include "test/lib/select_statement_utils.hh"
 #include "transport/messages/result_message.hh"
 #include "service/pager/paging_state.hh"
 #include "types/map.hh"
@@ -22,6 +21,7 @@
 #include "cql3/statements/select_statement.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "db/config.hh"
 
 BOOST_AUTO_TEST_SUITE(secondary_index_test)
 
@@ -1272,14 +1272,18 @@ void test_with_different_page_scenarios(
     validate(current_row);
 }
 
+static cql_test_config test_config_with_small_internal_page_size() {
+    cql_test_config cfg;
+    cfg.db_config->select_internal_page_size.set(page_scenarios_page_size);
+    return cfg;
+}
+
 SEASTAR_TEST_CASE(test_secondary_index_on_ck_first_column_and_aggregation) {
     // Tests aggregation on table with secondary index on first column
     // of clustering key. This is the "partition_slices" case of 
     // indexed_table_select_statement::do_execute.
-
+    auto cfg = test_config_with_small_internal_page_size();
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cql3::statements::set_internal_paging_size_guard g(page_scenarios_page_size);
-
         // Explicitly reproduce the first failing example in issue #7355.
         cquery_nofail(e, "CREATE TABLE t1 (pk1 int, pk2 int, ck int, primary key((pk1, pk2), ck))");
         cquery_nofail(e, "CREATE INDEX ON t1(ck)");
@@ -1346,17 +1350,15 @@ SEASTAR_TEST_CASE(test_secondary_index_on_ck_first_column_and_aggregation) {
             }); 
           });
         });
-    });
+    }, cfg);
 }
 
 SEASTAR_TEST_CASE(test_secondary_index_on_pk_column_and_aggregation) {
     // Tests aggregation on table with secondary index on a column
     // of partition key. This is the "whole_partitions" case of 
     // indexed_table_select_statement::do_execute.
-
+    auto cfg = test_config_with_small_internal_page_size();
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cql3::statements::set_internal_paging_size_guard g(page_scenarios_page_size);
-
         // Explicitly reproduce the second failing example in issue #7355.
         // This a case with a single large partition.
         cquery_nofail(e, "CREATE TABLE t1 (pk1 int, pk2 int, ck int, primary key((pk1, pk2), ck))");
@@ -1406,7 +1408,7 @@ SEASTAR_TEST_CASE(test_secondary_index_on_pk_column_and_aggregation) {
         }, [&](int rows_inserted) {
             assert_select_count_and_select_rows_has_size(e, "FROM t3 WHERE pk2 = 1", rows_inserted);
         });
-    });
+    }, cfg);
 }
 
 SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
@@ -1414,10 +1416,8 @@ SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
     // that is not a part of partition key and clustering key. 
     // This is the non-"whole_partitions" and non-"partition_slices"
     // case of indexed_table_select_statement::do_execute.
-
+    auto cfg = test_config_with_small_internal_page_size();
     return do_with_cql_env_thread([] (cql_test_env& e) {
-        cql3::statements::set_internal_paging_size_guard g(page_scenarios_page_size);
-
         // Test a case when there are a lot of small partitions (more than a page size)
         // and there is a clustering key in base table.
         cquery_nofail(e, "CREATE TABLE t (pk int, ck int, v int, primary key(pk, ck))");
@@ -1473,7 +1473,7 @@ SEASTAR_TEST_CASE(test_secondary_index_on_non_pk_ck_column_and_aggregation) {
             });
           });
         });
-    });
+    }, cfg);
 }
 
 SEASTAR_TEST_CASE(test_computed_columns) {
