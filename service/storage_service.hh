@@ -13,6 +13,7 @@
 
 #include <variant>
 #include <seastar/core/shared_future.hh>
+#include "absl-flat_hash_map.hh"
 #include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
@@ -146,6 +147,15 @@ struct token_metadata_change {
     std::unordered_set<session_id> open_sessions;
 
     future<> destroy();
+};
+
+class schema_getter {
+public:
+    // find_column_family returns nullptr only when table was deleted
+    // during pending schema change.
+    virtual replica::column_family* find_column_family(const table_id& uuid) const = 0;
+    virtual flat_hash_map<sstring, replica::keyspace*> get_keyspaces() const = 0;
+    virtual future<> for_each_table_gently(std::function<future<>(table_id, lw_shared_ptr<replica::table>)> f) const = 0;
 };
 
 /**
@@ -297,11 +307,12 @@ private:
     // Prepares token metadata change without making it visible. Combined with commit function
     // and appropiate lock it does exactly the same as mutate_token_metadata.
     // Note: prepare_token_metadata_change must be called on shard 0.
-    future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr);
+    future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
+            const schema_getter& loader);
 
     // Commits prepared token metadata changes. Must be called under token_metadata_lock
     // and on all shards.
-    void commit_token_metadata_change(token_metadata_change& change) noexcept;
+    void commit_token_metadata_change(token_metadata_change& change, const schema_getter& schema_getter) noexcept;
 
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
