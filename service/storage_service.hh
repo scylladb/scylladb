@@ -13,6 +13,7 @@
 
 #include <variant>
 #include <seastar/core/shared_future.hh>
+#include "absl-flat_hash_map.hh"
 #include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
@@ -149,6 +150,13 @@ struct token_metadata_change {
     std::unordered_set<session_id> open_sessions;
 
     future<> destroy();
+};
+
+class schema_getter {
+public:
+    virtual flat_hash_map<sstring, locator::replication_strategy_ptr> get_keyspaces_replication() const = 0;
+    virtual future<> for_each_table_schema_gently(std::function<future<>(table_id, schema_ptr)> f) const = 0;
+    virtual ~schema_getter() {};
 };
 
 /**
@@ -302,7 +310,8 @@ private:
     // Prepares token metadata change without making it visible. Combined with commit function
     // and appropiate lock it does exactly the same as mutate_token_metadata.
     // Note: prepare_token_metadata_change must be called on shard 0.
-    future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr);
+    future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
+            const schema_getter& loader);
 
     // Commits prepared token metadata changes. Must be called under token_metadata_lock
     // and on all shards.

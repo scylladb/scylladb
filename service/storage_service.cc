@@ -3208,7 +3208,7 @@ future<> storage_service::join_cluster(sharded<service::storage_proxy>& proxy,
             std::move(loaded_endpoints), std::move(loaded_peer_features), get_ring_delay(), start_hm, new_generation);
 }
 
-future<token_metadata_change> storage_service::prepare_token_metadata_change(mutable_token_metadata_ptr tmptr) {
+future<token_metadata_change> storage_service::prepare_token_metadata_change(mutable_token_metadata_ptr tmptr, const schema_getter& schema_getter) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     std::exception_ptr ex;
     token_metadata_change change;
@@ -3246,10 +3246,8 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
         // TODO: at the moment create on shard 0 first
         // but in the future we may want to use hash() % smp::count
         // to evenly distribute the load.
-        auto& db = _db.local();
-        auto keyspaces = db.get_all_keyspaces();
-        for (auto& ks_name : keyspaces) {
-            auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+        auto replications = schema_getter.get_keyspaces_replication();
+        for (const auto& [ks_name, rs] : replications) {
             if (rs->is_per_table()) {
                 continue;
             }
@@ -3257,9 +3255,8 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
             change.pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
         }
         co_await container().invoke_on_others([&] (storage_service& ss) -> future<> {
-            auto& db = ss._db.local();
-            for (auto& ks_name : keyspaces) {
-                auto rs = db.find_keyspace(ks_name).get_replication_strategy_ptr();
+            auto replications = schema_getter.get_keyspaces_replication();
+            for (const auto& [ks_name, rs] : replications) {
                 if (rs->is_per_table()) {
                     continue;
                 }
@@ -3270,17 +3267,17 @@ future<token_metadata_change> storage_service::prepare_token_metadata_change(mut
         });
         // Prepare per-table erms.
         co_await container().invoke_on_all([&] (storage_service& ss) -> future<> {
-            auto& db = ss._db.local();
             auto tmptr = change.pending_token_metadata_ptr[this_shard_id()];
-            co_await db.get_tables_metadata().for_each_table_gently([&] (table_id id, lw_shared_ptr<replica::table> table) {
-                auto rs = db.find_keyspace(table->schema()->ks_name()).get_replication_strategy_ptr();
+            auto replications = schema_getter.get_keyspaces_replication();
+            co_await schema_getter.for_each_table_schema_gently([&] (table_id id, schema_ptr table_schema) {
+                auto rs = replications.at(table_schema->ks_name());
                 locator::effective_replication_map_ptr erm;
                 if (auto pt_rs = rs->maybe_as_per_table()) {
                     erm = pt_rs->make_replication_map(id, tmptr);
                 } else {
-                    erm = change.pending_effective_replication_maps[this_shard_id()][table->schema()->ks_name()];
+                    erm = change.pending_effective_replication_maps[this_shard_id()][table_schema->ks_name()];
                 }
-                if (table->schema()->is_view()) {
+                if (table_schema->is_view()) {
                     change.pending_view_erms[this_shard_id()].emplace(id, std::move(erm));
                 } else {
                     change.pending_table_erms[this_shard_id()].emplace(id, std::move(erm));
@@ -3323,7 +3320,6 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
     try {
         _shared_token_metadata.set(std::move(change.pending_token_metadata_ptr[this_shard_id()]));
         auto& db =_db.local();
-
         auto& erms = change.pending_effective_replication_maps[this_shard_id()];
         for (auto it = erms.begin(); it != erms.end(); ) {
             auto& ks = db.find_keyspace(it->first);
@@ -3339,11 +3335,11 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
             cf.update_effective_replication_map(std::move(it->second));
             for (const auto& view_ptr : cf.views()) {
                 const auto& view_id = view_ptr->id();
+                auto& view = db.find_column_family(view_id);
                 auto view_it = view_erms.find(view_id);
                 if (view_it == view_erms.end()) {
                     throw std::runtime_error(format("Could not find pending effective_replication_map for view {}.{} id={}", view_ptr->ks_name(), view_ptr->cf_name(), view_id));
                 }
-                auto& view = db.find_column_family(view_id);
                 view.update_effective_replication_map(std::move(view_it->second));
                 if (view.uses_tablets()) {
                     register_tablet_split_candidate(view_it->first);
@@ -3385,7 +3381,30 @@ void storage_service::commit_token_metadata_change(token_metadata_change& change
 future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmptr) noexcept {
     SCYLLA_ASSERT(this_shard_id() == 0);
     slogger.debug("Replicating token_metadata to all cores");
-    auto change = co_await prepare_token_metadata_change(tmptr);
+
+    class db_schema_getter : public schema_getter {
+    private:
+        sharded<replica::database>& _db;
+    public:
+        db_schema_getter(sharded<replica::database>& db) : _db(db) {};
+
+        virtual flat_hash_map<sstring, locator::replication_strategy_ptr> get_keyspaces_replication() const override {
+            flat_hash_map<sstring, locator::replication_strategy_ptr> out;
+            for (auto& [name, ks] : _db.local().get_keyspaces()) {
+                out.emplace(name, ks.get_replication_strategy_ptr());
+            }
+            return out;
+        };
+        virtual future<> for_each_table_schema_gently(std::function<future<>(table_id, schema_ptr)> f) const override {
+            auto ff = [&f](table_id id, lw_shared_ptr<replica::table> t) -> future<> {
+                return f(id, t->schema());
+            };
+            return _db.local().get_tables_metadata().for_each_table_gently(ff);
+        };
+    };
+
+    db_schema_getter getter{_db};
+    auto change = co_await prepare_token_metadata_change(tmptr, getter);
     co_await container().invoke_on_all([&change] (storage_service& ss) {
         ss.commit_token_metadata_change(change);
     });
