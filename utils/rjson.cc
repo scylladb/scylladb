@@ -280,6 +280,36 @@ future<> print(const rjson::value& value, seastar::output_stream<char>& os, size
   });
 }
 
+future<> print_with_extra_array(const rjson::value& value,
+        std::string_view array_name,
+        const utils::chunked_vector<rjson::value>& array,
+        seastar::output_stream<char>& os,
+        size_t max_nested_level) {
+    // Use a thread so that we can yield while printing the JSON. This is only called for large values.
+    return async([&value, array_name, &array, &os, max_nested_level] {
+        output_stream_buffer buf{ os };
+        using streamer = rapidjson::Writer<output_stream_buffer, encoding, encoding, allocator>;
+        guarded_yieldable_json_handler<streamer, true, output_stream_buffer> writer(buf, max_nested_level);
+        // We assume the given value is an object, output it as usual into the
+        // handler (based on how GenericValue::Accept() does it), but before
+        // ending the object with EndObject(), output also the extra array.
+        RAPIDJSON_ASSERT(value.IsObject());
+        writer.StartObject();
+        for (auto m = value.MemberBegin(); m != value.MemberEnd(); ++m) {
+            writer.Key(m->name.GetString(), m->name.GetStringLength());
+            m->value.Accept(writer);
+        }
+        writer.Key(array_name.data(), array_name.size());
+        writer.StartArray();
+        for (const rjson::value& v : array) {
+            v.Accept(writer);
+        }
+        writer.EndArray(array.size());
+        writer.EndObject(value.MemberCount() + 1); // +1 for the extra array
+        buf.Flush();
+    });
+}
+
 rjson::malformed_value::malformed_value(std::string_view name, const rjson::value& value)
     : malformed_value(name, print(value))
 {}
