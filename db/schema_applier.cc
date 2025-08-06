@@ -466,6 +466,8 @@ future<> schema_applier::merge_types()
         af.altered = co_await create_types(db, diff.altered, new_keyspaces_per_shard);
         af.dropped = co_await create_types(db, diff.dropped, new_keyspaces_per_shard);
     });
+
+    co_await _types_storage.init(_proxy.local().get_db(), _affected_keyspaces, _affected_user_types);
 }
 
 // Which side of the diff this schema is on?
@@ -869,7 +871,6 @@ future<> schema_applier::update() {
 
     co_await merge_keyspaces();
     co_await merge_types();
-    co_await _types_storage.init(_proxy.local().get_db(), _affected_keyspaces, _affected_user_types);
     co_await merge_tables_and_views();
     co_await merge_functions();
     co_await merge_aggregates();
