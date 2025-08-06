@@ -639,6 +639,7 @@ cql_server::connection::connection(cql_server& server, socket_address server_add
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr)
     , _current_scheduling_group(default_scheduling_group())
 {
+    update_scheduling_group_to_driver();
     _shedding_timer.set_callback([this] {
         clogger.debug("Shedding all incoming requests due to overload");
         _shed_incoming_requests = true;
@@ -979,6 +980,14 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     }
 
     co_return res;
+}
+
+void cql_server::connection::update_scheduling_group_to_driver() {
+    switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
+        auto shg = _server._sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+        _current_scheduling_group = shg;
+        return _server._sl_controller.with_service_level(qos::service_level_controller::driver_service_level_name, std::move(process_loop));
+    });
 }
 
 void cql_server::connection::update_scheduling_group_to_user() {
