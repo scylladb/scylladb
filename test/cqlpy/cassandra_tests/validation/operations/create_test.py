@@ -312,7 +312,7 @@ def testKeyspace(cql):
 def testCreateKeyspaceWithNTSOnlyAcceptsConfiguredDataCenterNames(cql, this_dc):
     n = unique_name()
     assertInvalidThrow(cql, n, ConfigurationException, "CREATE KEYSPACE %s WITH replication = { 'class' : 'NetworkTopologyStrategy', 'INVALID_DC' : 2 }")
-    execute(cql, n, "CREATE KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 2 }")
+    execute(cql, n, "CREATE KEYSPACE %s WITH replication = {'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     execute(cql, n, "DROP KEYSPACE IF EXISTS %s")
 
     # Mix valid and invalid, should throw an exception
