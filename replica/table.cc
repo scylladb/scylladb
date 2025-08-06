@@ -2287,6 +2287,89 @@ std::vector<sstables::shared_sstable> table::select_sstables(const dht::partitio
     return _sstables->select(range);
 }
 
+future<> table::drop_quarantined_sstables() {
+    class quarantine_removal_updater : public row_cache::external_updater_impl {
+        table& _t;
+        std::vector<sstables::shared_sstable>& _removed;
+        struct compaction_group_update {
+            lw_shared_ptr<sstables::sstable_set> new_main_sstables;
+            lw_shared_ptr<sstables::sstable_set> new_maintenance_sstables;
+            std::vector<sstables::shared_sstable> removed_main_sstables;
+        };
+        std::unordered_map<compaction_group*, compaction_group_update> _cg_updates;
+
+    public:
+        explicit quarantine_removal_updater(table& t, std::vector<sstables::shared_sstable>& removed)
+            : _t(t), _removed(removed) {}
+
+        virtual future<> prepare() override {
+            _t.for_each_compaction_group([&] (compaction_group& cg) {
+                auto new_main = make_lw_shared<sstables::sstable_set>(cg.make_main_sstable_set());
+                auto new_maintenance = cg.make_maintenance_sstable_set();
+                std::vector<sstables::shared_sstable> removed_main;
+
+                cg.main_sstables()->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                    if (sst->is_quarantined()) {
+                        _removed.emplace_back(sst);
+                        removed_main.emplace_back(sst);
+
+                    } else {
+                        new_main->insert(sst);
+                    }
+                });
+
+
+                cg.maintenance_sstables()->for_each_sstable([&] (const sstables::shared_sstable& sst) {
+                    if (sst->is_quarantined()) {
+                        _removed.emplace_back(sst);
+                    } else {
+                        new_maintenance->insert(sst);
+                    }
+                });
+
+                _cg_updates[&cg] = compaction_group_update{
+                    .new_main_sstables = std::move(new_main),
+                    .new_maintenance_sstables = std::move(new_maintenance),
+                    .removed_main_sstables = std::move(removed_main)
+                };
+            });
+            co_return;
+        }
+
+        virtual void execute() override {
+            for (auto& [cg, update] : _cg_updates) {
+                cg->set_main_sstables(std::move(update.new_main_sstables));
+                cg->set_maintenance_sstables(std::move(update.new_maintenance_sstables));
+            }
+            _t.refresh_compound_sstable_set();
+            for (auto& [cg, d] : _cg_updates) {
+                cg->get_backlog_tracker().replace_sstables(d.removed_main_sstables, {});
+            }
+        }
+
+        static std::unique_ptr<row_cache::external_updater_impl> make(table& t, std::vector<sstables::shared_sstable>& removed) {
+            return std::make_unique<quarantine_removal_updater>(t, removed);
+        }
+    };
+
+
+    _stats.pending_sstable_deletions++;
+    auto undo_stats = defer([this] {
+        _stats.pending_sstable_deletions--;
+    });
+
+    auto permit = co_await get_sstable_list_permit();
+
+    std::vector<sstables::shared_sstable> removed;
+    auto updater = row_cache::external_updater(quarantine_removal_updater::make(*this, removed));
+    co_await _cache.invalidate(std::move(updater));
+
+    _cache.refresh_snapshot();
+    rebuild_statistics();
+
+    co_await delete_sstables_atomically(permit, std::move(removed));
+}
+
 bool storage_group::no_compacted_sstable_undeleted() const {
     return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
         return cg->compacted_undeleted_sstables().empty();
