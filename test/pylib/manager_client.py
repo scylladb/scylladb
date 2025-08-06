@@ -549,6 +549,13 @@ class ManagerClient:
             data={"config_options": config_options},
         )
 
+    async def server_remove_config_option(self, server_id: ServerNum, key: str) -> None:
+        """Remove the provided option from the server's configuration file."""
+        await self.client.put_json(
+            resource_uri=f"/cluster/server/{server_id}/remove_config_option",
+            data={"key": key},
+        )
+
     async def server_update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
         await self.client.put_json(f"/cluster/server/{server_id}/update_cmdline",
                                    {"cmdline_options": cmdline_options})
