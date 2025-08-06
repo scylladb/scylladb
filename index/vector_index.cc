@@ -38,7 +38,9 @@ static void validate_unsigned_option(const sstring& value) {
 }
 
 static void validate_similarity_function(const sstring& value) {
-    if (value != "COSINE" && value != "EUCLIDEAN" && value != "DOT_PRODUCT") {
+    sstring similarity_function = value;
+    std::transform(similarity_function.begin(), similarity_function.end(), similarity_function.begin(), ::tolower);
+    if (similarity_function != "cosine" && similarity_function != "euclidean" && similarity_function != "dot_product") {
         throw exceptions::invalid_request_exception(format("Unsupported similarity function: {}", value));
     }
 }
@@ -50,7 +52,7 @@ const static std::unordered_map<sstring, std::function<void(const sstring&)>> su
         {"search_beam_width", validate_unsigned_option<4096>},
     };
 
-bool vector_index::should_create_view() const {
+bool vector_index::view_should_exist() const {
     return false;
 }
 

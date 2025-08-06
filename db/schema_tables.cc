@@ -1840,12 +1840,12 @@ void add_table_or_view_to_schema_mutation(schema_ptr s, api::timestamp_type time
 static schema_mutations make_view_mutations(view_ptr view, api::timestamp_type timestamp, bool with_columns);
 static void make_drop_table_or_view_mutations(schema_ptr schema_table, schema_ptr table_or_view, api::timestamp_type timestamp, utils::chunked_vector<mutation>& mutations);
 
-static bool should_create_view(const index_metadata & index) {
+bool view_should_exist(const index_metadata & index) {
     auto custom_class = secondary_index::secondary_index_manager::get_custom_class(index);
     if (!custom_class) {
         return true;
     }
-    return (*custom_class)->should_create_view();
+    return (*custom_class)->view_should_exist();
 }
 
 static void make_update_indices_mutations(
@@ -1863,7 +1863,7 @@ static void make_update_indices_mutations(
     for (auto&& name : diff.entries_only_on_left) {
         const index_metadata& index = old_table->all_indices().at(name);
         drop_index_from_schema_mutation(old_table, index, timestamp, mutations);
-        if (!should_create_view(index)) {
+        if (!view_should_exist(index)) {
             continue;
         }
         schema_ptr view;
@@ -1881,7 +1881,7 @@ static void make_update_indices_mutations(
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
         auto& cf = db.find_column_family(new_table);
-        if (!should_create_view(index)) {
+        if (!view_should_exist(index)) {
             return view_ptr(nullptr);
         }
         auto view = cf.get_index_manager().create_view_for_index(index);
