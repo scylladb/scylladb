@@ -542,5 +542,20 @@ async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
     for sl in service_levels:
         assert sl.service_level.startswith("sl_")
 
+def get_processed_tasks_for_group(metrics, group):
+    res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
+    if res is None:
+        return 0
+    return res
 
+@pytest.mark.asyncio
+async def test_driver_service_level_used_for_new_connection(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    metrics = await manager.metrics.query(server.ip_addr)
+
+    assert get_processed_tasks_for_group(metrics, 'sl:driver') > 0
 
