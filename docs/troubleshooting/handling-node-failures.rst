@@ -154,7 +154,15 @@ will leave the recovery mode and remove the obsolete internal Raft data.
    * **restart the recovery leader first**,
 
    * before restarting each node, add the ``recovery_leader`` property to its ``scylla.yaml`` file and set it to the
-     host ID of the recovery leader.
+     host ID of the recovery leader,
+
+   * after restarting each node, make sure it participated in Raft recovery; look for one of the following messages
+     in its logs:
+
+    .. code-block:: console
+
+        storage_service - Performing Raft-based recovery procedure with recovery leader <host ID of the recovery leader>/<IP address of the recovery leader>
+        storage_service - Raft-based recovery procedure - found group 0 with ID <ID of the new group 0; different from the one used in other steps>
 
    After completing this step, Raft should be fully functional.
 
