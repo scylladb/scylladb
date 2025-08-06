@@ -1650,11 +1650,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             dst = dst_opt.value().host;
                         }
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
+                        auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
+                            service::session_id::create_random_id() : trinfo->session_id;
                         auto res = gids.size() > 1 ?
                                 co_await ser::storage_service_rpc_verbs::send_tablet_repair_colocated(&_messaging,
-                                    dst, _as, raft::server_id(dst.uuid()), gid, gids, trinfo->session_id)
+                                    dst, _as, raft::server_id(dst.uuid()), gid, gids, session_id)
                                 : co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                    dst, _as, raft::server_id(dst.uuid()), gid, trinfo->session_id);
+                                    dst, _as, raft::server_id(dst.uuid()), gid, session_id);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
