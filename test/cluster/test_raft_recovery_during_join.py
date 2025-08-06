@@ -10,6 +10,7 @@ import time
 from uuid import UUID
 import pytest
 
+from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.conftest import skip_mode
@@ -103,12 +104,12 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
         await delete_discovery_state_and_group0_id(cql, h)
 
     recovery_leader_id = await manager.get_host_id(live_servers[0].server_id)
-    logging.info(f'Setting recovery leader to {live_servers[0].server_id} on {live_servers}')
-    for srv in live_servers:
+
+    async def set_recovery_leader(srv: ServerInfo):
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
-    logging.info(f'Restarting {live_servers}')
-    await manager.rolling_restart(live_servers)
+    logging.info(f'Restarting {live_servers} with recovery leader {live_servers[0].server_id}')
+    await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
 
     logging.info(f'Removing {dead_servers}')
     for i, being_removed in enumerate(dead_servers):
