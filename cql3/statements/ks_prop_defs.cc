@@ -146,6 +146,15 @@ static locator::replication_strategy_config_options prepare_options(
         throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
     }
 
+    if (uses_tablets) {
+        // We keep previously specified DC factors for safety.
+        for (const auto& opt: old_options) {
+            if (opt.first != ks_prop_defs::REPLICATION_FACTOR_KEY) {
+                options.insert(opt);
+            }
+        }
+    }
+
     return options;
 }
 
