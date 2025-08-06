@@ -136,7 +136,7 @@ fi
 PR_TITLE=$(jq -r .title <<< $PR_DATA)
 echo "    $PR_TITLE"
 PR_DESCR=$(jq -r .body <<< $PR_DATA)
-PR_LOGIN=$(jq -r .head.user.login <<< $PR_DATA)
+PR_LOGIN=$(jq -r .user.login <<< $PR_DATA)
 echo -n "Fetching full name of author $PR_LOGIN... "
 USER_NAME=$(curl -s "https://api.github.com/users/$PR_LOGIN" | jq -r .name)
 echo "$USER_NAME"
