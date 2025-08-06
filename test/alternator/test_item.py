@@ -879,3 +879,13 @@ def test_many_attributes(test_table_s):
         AttributeUpdates={key: {'Value': more_attributes[key], 'Action': 'PUT'} for key in more_attributes.keys()})
     item = {**item, **more_attributes}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == item
+
+def test_put_item_deletes_lsi_column(test_table_lsi_1):
+    key = {'p': random_string(), 'c': random_string()}
+    empty_item = {**key}
+    item = {**key, 'b': random_string()}
+
+    test_table_lsi_1.put_item(Item=item)
+    assert test_table_lsi_1.get_item(Key=key, ConsistentRead=True)['Item'] == item
+    test_table_lsi_1.put_item(Item=empty_item)
+    assert test_table_lsi_1.get_item(Key=key, ConsistentRead=True)['Item'] == empty_item

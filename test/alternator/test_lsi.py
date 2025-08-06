@@ -147,27 +147,6 @@ def test_lsi_wrong_no_sort_key(dynamodb):
 # A simple scenario for LSI. Base table has a partition key and a sort key,
 # index has the same partition key key but a different sort key - one of
 # the non-key attributes from the base table.
-@pytest.fixture(scope="module")
-def test_table_lsi_1(dynamodb):
-    table = create_test_table(dynamodb,
-        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
-        AttributeDefinitions=[
-                    { 'AttributeName': 'p', 'AttributeType': 'S' },
-                    { 'AttributeName': 'c', 'AttributeType': 'S' },
-                    { 'AttributeName': 'b', 'AttributeType': 'S' },
-        ],
-        LocalSecondaryIndexes=[
-            {   'IndexName': 'hello',
-                'KeySchema': [
-                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
-                    { 'AttributeName': 'b', 'KeyType': 'RANGE' }
-                ],
-                'Projection': { 'ProjectionType': 'ALL' }
-            }
-        ])
-    yield table
-    table.delete()
-
 def test_lsi_1(test_table_lsi_1):
     items1 = [{'p': random_string(), 'c': random_string(), 'b': random_string()} for i in range(10)]
     p1, b1 = items1[0]['p'], items1[0]['b']
