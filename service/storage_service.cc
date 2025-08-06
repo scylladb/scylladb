@@ -6210,8 +6210,8 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
     }
 }
 
-future<service::tablet_operation_repair_result> storage_service::repair_tablet(locator::global_tablet_id tablet) {
-    auto result = co_await do_tablet_operation(tablet, "Repair", [this, tablet] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
+future<service::tablet_operation_repair_result> storage_service::repair_tablet(locator::global_tablet_id tablet, service::session_id session_id) {
+    auto result = co_await do_tablet_operation(tablet, "Repair", [this, tablet, session_id] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         slogger.debug("Executing repair for tablet={}", tablet);
         auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
@@ -6224,11 +6224,8 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         if (trinfo->stage != locator::tablet_transition_stage::repair && trinfo->stage != locator::tablet_transition_stage::rebuild_repair) {
             throw std::runtime_error(fmt::format("Tablet {} stage is not at repair", tablet));
         }
-        if (trinfo->session_id) {
-            slogger.debug("repair_tablet: tablet={} session_id={}", tablet, trinfo->session_id);
-        } else {
-            throw std::runtime_error(fmt::format("Tablet {} session is not set", tablet));
-        }
+        auto session = session_id ? session_id : trinfo->session_id;
+        slogger.debug("repair_tablet: tablet={} session_id={}", tablet, session);
 
         tasks::task_info global_tablet_repair_task_info;
         std::optional<locator::tablet_replica_set> replicas = std::nullopt;
@@ -6241,7 +6238,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
 
         utils::get_local_injector().inject("repair_tablet_fail_on_rpc_call",
             [] { throw std::runtime_error("repair_tablet failed due to error injection"); });
-        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, trinfo->session_id, std::move(replicas), trinfo->stage);
+        auto time = co_await _repair.local().repair_tablet(_address_map, guard, tablet, global_tablet_repair_task_info, session, std::move(replicas), trinfo->stage);
         co_return service::tablet_operation_repair_result{time};
     });
     if (std::holds_alternative<service::tablet_operation_repair_result>(result)) {
@@ -6250,8 +6247,8 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
     on_internal_error(slogger, "Got wrong tablet_operation_repair_result");
 }
 
-future<service::tablet_operation_repair_result> storage_service::repair_colocated_tablets(locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets) {
-    auto base_repair_result = co_await repair_tablet(base_tablet);
+future<service::tablet_operation_repair_result> storage_service::repair_colocated_tablets(locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets, service::session_id session_id) {
+    auto base_repair_result = co_await repair_tablet(base_tablet, session_id);
     gc_clock::time_point min_repair_time = base_repair_result.repair_time;
 
     // repair derived co-located tablets
@@ -6260,7 +6257,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_colocate
             continue;
         }
 
-        auto tablet_repair_result = co_await repair_tablet(tablet);
+        auto tablet_repair_result = co_await repair_tablet(tablet, session_id);
 
         min_repair_time = std::min(min_repair_time, tablet_repair_result.repair_time);
     }
@@ -7513,15 +7510,15 @@ void storage_service::init_messaging_service() {
             return ss.stream_tablet(tablet);
         });
     });
-    ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet) {
-        return handle_raft_rpc(dst_id, [tablet] (auto& ss) -> future<service::tablet_operation_repair_result> {
-            auto res = co_await ss.repair_tablet(tablet);
+    ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet, rpc::optional<service::session_id> session_id) {
+        return handle_raft_rpc(dst_id, [tablet, session_id = session_id.value_or(service::session_id::create_null_id())] (auto& ss) -> future<service::tablet_operation_repair_result> {
+            auto res = co_await ss.repair_tablet(tablet, session_id);
             co_return res;
         });
     });
-    ser::storage_service_rpc_verbs::register_tablet_repair_colocated(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets) {
-        return handle_raft_rpc(dst_id, [base_tablet, tablets = std::move(tablets)] (auto& ss) -> future<service::tablet_operation_repair_result> {
-            auto res = co_await ss.repair_colocated_tablets(base_tablet, std::move(tablets));
+    ser::storage_service_rpc_verbs::register_tablet_repair_colocated(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets, rpc::optional<service::session_id> session_id) {
+        return handle_raft_rpc(dst_id, [base_tablet, tablets = std::move(tablets), session_id = session_id.value_or(service::session_id::create_null_id())] (auto& ss) -> future<service::tablet_operation_repair_result> {
+            auto res = co_await ss.repair_colocated_tablets(base_tablet, std::move(tablets), session_id);
             co_return res;
         });
     });
