@@ -2759,16 +2759,10 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_gossiper_peer
 }
 
 std::optional<db::system_keyspace::peer_info> storage_service::get_gossiper_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map) {
-    std::optional<db::system_keyspace::peer_info> ret;
+    using peer_info = db::system_keyspace::peer_info;
+    std::optional<peer_info> ret;
 
-    auto get_peer_info = [&] () -> db::system_keyspace::peer_info& {
-        if (!ret) {
-            ret.emplace();
-        }
-        return *ret;
-    };
-
-    auto set_field = [&]<typename T> (std::optional<T>& field,
+    auto set_field = [&]<typename T> (T peer_info::*f,
             const gms::versioned_value& value,
             std::string_view name,
             bool managed_by_raft_in_raft_topology)
@@ -2776,8 +2770,11 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_gossiper_peer
         if (raft_topology_change_enabled() && managed_by_raft_in_raft_topology) {
             return;
         }
+        if (!ret) {
+            ret.emplace();
+        }
         try {
-            field = T(value.value());
+            (*ret).*f = T(value.value());
         } catch (...) {
             on_internal_error(slogger, fmt::format("failed to parse {} {} for {}: {}", name, value.value(),
                 endpoint, std::current_exception()));
@@ -2787,28 +2784,28 @@ std::optional<db::system_keyspace::peer_info> storage_service::get_gossiper_peer
     for (const auto& [state, value] : app_state_map) {
         switch (state) {
         case application_state::DC:
-            set_field(get_peer_info().data_center, value, "data_center", true);
+            set_field(&peer_info::data_center, value, "data_center", true);
             break;
         case application_state::INTERNAL_IP:
-            set_field(get_peer_info().preferred_ip, value, "preferred_ip", false);
+            set_field(&peer_info::preferred_ip, value, "preferred_ip", false);
             break;
         case application_state::RACK:
-            set_field(get_peer_info().rack, value, "rack", true);
+            set_field(&peer_info::rack, value, "rack", true);
             break;
         case application_state::RELEASE_VERSION:
-            set_field(get_peer_info().release_version, value, "release_version", true);
+            set_field(&peer_info::release_version, value, "release_version", true);
             break;
         case application_state::RPC_ADDRESS:
-            set_field(get_peer_info().rpc_address, value, "rpc_address", false);
+            set_field(&peer_info::rpc_address, value, "rpc_address", false);
             break;
         case application_state::SCHEMA:
-            set_field(get_peer_info().schema_version, value, "schema_version", false);
+            set_field(&peer_info::schema_version, value, "schema_version", false);
             break;
         case application_state::TOKENS:
             // tokens are updated separately
             break;
         case application_state::SUPPORTED_FEATURES:
-            set_field(get_peer_info().supported_features, value, "supported_features", true);
+            set_field(&peer_info::supported_features, value, "supported_features", true);
             break;
         default:
             break;
