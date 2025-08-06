@@ -488,3 +488,50 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
     # Check if group0 is healthy
     s2 = await manager.server_add(config=auth_config, property_file={"dc": "dc1", "rack": "rack3"})
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+@pytest.mark.asyncio
+async def test_driver_service_level(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
+    s = servers[0]
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(service_levels) == 1
+    assert service_levels[0].workload_type == "batch"
+    assert service_levels[0].shares == 200
+    assert (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'service_level_driver_created'"))[0].value == "true"
+
+    # Test that sl:driver can be removed
+    await cql.run_async(f"DROP SERVICE LEVEL driver", host=h)
+    assert len(await cql.run_async("LIST ALL SERVICE LEVELS")) == 0
+
+    # Test that sl:driver is NOT recreated after a restart
+    await manager.rolling_restart(servers)
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
+    assert len(await cql.run_async("LIST ALL SERVICE LEVELS")) == 0
+
+    # Check that node startup doesn't fail if there is no slot for sl:driver
+    max_user_service_levels = 7
+    for i in range(max_user_service_levels + 1):
+        await cql.run_async(f"CREATE SERVICE_LEVEL sl_{i}", host=h)
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(service_levels) == (max_user_service_levels + 1)
+    for sl in service_levels:
+        assert sl.service_level.startswith("sl_")
+    await cql.run_async(f"UPDATE system.scylla_local SET value = 'false' WHERE key  = 'service_level_driver_created'", host=h)
+    await manager.rolling_restart(servers)
+
+    log_file = await manager.server_open_log(s.server_id)
+    await log_file.wait_for("Failed to create service level for driver", timeout=60)
+
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(service_levels) == (max_user_service_levels + 1)
+    for sl in service_levels:
+        assert sl.service_level.startswith("sl_")
+
+
+
