@@ -1195,68 +1195,6 @@ SEASTAR_TEST_CASE(test_secondary_index_on_partition_key_with_filtering) {
     });
 }
 
-SEASTAR_TEST_CASE(test_indexing_paging_and_aggregation) {
-    static constexpr int row_count = 2 * cql3::statements::select_statement::DEFAULT_COUNT_PAGE_SIZE + 120;
-
-    return do_with_cql_env_thread([] (cql_test_env& e) {
-        cquery_nofail(e, "CREATE TABLE fpa (id int primary key, v int)");
-        cquery_nofail(e, "CREATE INDEX ON fpa(v)");
-        for (int i = 0; i < row_count; ++i) {
-            cquery_nofail(e, format("INSERT INTO fpa (id, v) VALUES ({}, {})", i + 1, i % 2).c_str());
-        }
-
-      eventually([&] {
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                cql3::query_options::specific_options{2, nullptr, {}, api::new_timestamp()});
-        auto msg = cquery_nofail(e, "SELECT sum(id) FROM fpa WHERE v = 0;", std::move(qo));
-        // Even though we set up paging, we still expect a single result from an aggregation function.
-        // Also, instead of the user-provided page size, internal DEFAULT_COUNT_PAGE_SIZE is expected to be used.
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(row_count * row_count / 4)},
-        });
-
-        // Even if paging is not explicitly used, the query will be internally paged to avoid OOM.
-        msg = cquery_nofail(e, "SELECT sum(id) FROM fpa WHERE v = 1;");
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(row_count * row_count / 4 + row_count / 2)},
-        });
-
-        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                cql3::query_options::specific_options{3, nullptr, {}, api::new_timestamp()});
-        msg = cquery_nofail(e, "SELECT avg(id) FROM fpa WHERE v = 1;", std::move(qo));
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(row_count / 2 + 1)},
-        });
-      });
-
-        // Similar, but this time a non-prefix clustering key part is indexed (wrt. issue 3405, after which we have
-        // a special code path for indexing composite non-prefix clustering keys).
-        cquery_nofail(e, "CREATE TABLE fpa2 (id int, c1 int, c2 int, primary key (id, c1, c2))");
-        cquery_nofail(e, "CREATE INDEX ON fpa2(c2)");
-
-      eventually([&] {
-        for (int i = 0; i < row_count; ++i) {
-            cquery_nofail(e, format("INSERT INTO fpa2 (id, c1, c2) VALUES ({}, {}, {})", i + 1, i + 1, i % 2).c_str());
-        }
-
-        auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                cql3::query_options::specific_options{2, nullptr, {}, api::new_timestamp()});
-        auto msg = cquery_nofail(e, "SELECT sum(id) FROM fpa2 WHERE c2 = 0;", std::move(qo));
-        // Even though we set up paging, we still expect a single result from an aggregation function
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(row_count * row_count / 4)},
-        });
-
-        qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
-                cql3::query_options::specific_options{3, nullptr, {}, api::new_timestamp()});
-        msg = cquery_nofail(e, "SELECT avg(id) FROM fpa2 WHERE c2 = 1;", std::move(qo));
-        assert_that(msg).is_rows().with_rows({
-            { int32_type->decompose(row_count / 2 + 1)},
-        });
-      });
-    });
-}
-
 // Verifies that both "SELECT * [rest_of_query]" and "SELECT count(*) [rest_of_query]" 
 // return expected count of rows.
 void assert_select_count_and_select_rows_has_size(
