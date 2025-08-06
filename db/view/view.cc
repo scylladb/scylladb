@@ -2228,9 +2228,13 @@ future<> view_update_generator::mutate_MV(
             auto mut_ptr = remote_endpoints.empty() ? std::make_unique<frozen_mutation>(std::move(mut.fm)) : std::make_unique<frozen_mutation>(mut.fm);
             tracing::trace(tr_state, "Locally applying view update for {}.{}; base token = {}; view token = {}",
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
+            // For local view updates, we limit the number of concurrent view updates on each shard and for each service level
+            // to database::max_concurrent_local_view_updates. Local view updates are cpu-bound, so the cpu won't idle even
+            // if the concurrency is low and executing too many view updates concurrently can unnecessarily increase latency and memory usage.
+            auto count_units = co_await seastar::get_units(_db.get_view_update_concurrency_sem(), 1);
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            memory_units, this] (future<>&& f) mutable {
+                            count_units = std::move(count_units), memory_units, this] (future<>&& f) mutable {
                 --stats.writes;
                 memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();

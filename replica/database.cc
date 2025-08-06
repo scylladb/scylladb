@@ -1836,6 +1836,19 @@ reader_concurrency_semaphore& database::get_reader_concurrency_semaphore() {
     std::abort();
 }
 
+// With same concerns as read_concurrency_sem().
+db::timeout_semaphore& database::get_view_update_concurrency_sem() {
+    auto sem_it = _view_update_concurrency_semaphores.find(current_scheduling_group());
+    if (sem_it == _view_update_concurrency_semaphores.end()) {
+        dblog.error("View update concurrency semaphore for scheduling group '{}' not found, using default", current_scheduling_group().name());
+        sem_it = _view_update_concurrency_semaphores.find(_default_read_concurrency_group);
+        if (sem_it == _view_update_concurrency_semaphores.end()) {
+            seastar::on_internal_error(dblog, "Default view update concurrency semaphore wasn't found, something probably went wrong during database::start");
+        }
+    }
+    return sem_it->second;
+}
+
 future<reader_permit> database::obtain_reader_permit(table& tbl, const char* const op_name, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_ptr) {
     return get_reader_concurrency_semaphore().obtain_permit(tbl.schema(), op_name, tbl.estimate_read_memory_cost(), timeout, std::move(trace_ptr));
 }
@@ -2509,6 +2522,9 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
         _reader_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
         _view_update_read_concurrency_semaphores_group.add_or_update(_dbcfg.statement_scheduling_group, 1000);
     }
+    // In the default scheduling groups, view updates may be generated in the statement and streaming scheduling groups.
+    _view_update_concurrency_semaphores.emplace(_dbcfg.statement_scheduling_group, max_concurrent_local_view_updates);
+    _view_update_concurrency_semaphores.emplace(_dbcfg.streaming_scheduling_group, max_concurrent_local_view_updates);
 
     // This will wait for the semaphores to be given some memory.
     // We need this since the below statements (get_distributed_service_levels in particular) will need
@@ -2524,6 +2540,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
             _reader_concurrency_semaphores_group.add_or_update(service_level.sg, std::get<int32_t>(service_level.slo.shares));
             _view_update_read_concurrency_semaphores_group.add_or_update(service_level.sg, std::get<int32_t>(service_level.slo.shares));
         }
+        _view_update_concurrency_semaphores.emplace(service_level.sg, max_concurrent_local_view_updates);
     }
 
     co_await _reader_concurrency_semaphores_group.adjust();
@@ -2581,6 +2598,9 @@ future<> database::stop() {
         dblog.info("Shutting down schema commitlog");
         co_await _schema_commitlog->shutdown();
         dblog.info("Shutting down schema commitlog complete");
+    }
+    for (auto& [sg, sem] : _view_update_concurrency_semaphores) {
+        co_await sem.wait(max_concurrent_local_view_updates);
     }
     co_await _view_update_memory_sem.wait(max_memory_pending_view_updates());
     if (_commitlog) {
@@ -3429,12 +3449,17 @@ future<> database::on_before_service_level_add(qos::service_level_options slo, q
         // is completed, we need to wait for the operation to complete.
         co_await _reader_concurrency_semaphores_group.wait_adjust_complete();
         co_await _view_update_read_concurrency_semaphores_group.wait_adjust_complete();
+        _view_update_concurrency_semaphores.emplace(sl_info.sg, max_concurrent_local_view_updates);
     }
 }
 /** This callback is going to be called just after the service level is removed **/
 future<> database::on_after_service_level_remove(qos::service_level_info sl_info) {
     co_await _reader_concurrency_semaphores_group.remove(sl_info.sg);
     co_await _view_update_read_concurrency_semaphores_group.remove(sl_info.sg);
+    if (_view_update_concurrency_semaphores.contains(sl_info.sg)) {
+        co_await _view_update_concurrency_semaphores.at(sl_info.sg).wait(max_concurrent_local_view_updates);
+        _view_update_concurrency_semaphores.erase(sl_info.sg);
+    }
 }
 /** This callback is going to be called just before the service level is changed **/
 future<> database::on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after,
