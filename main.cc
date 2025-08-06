@@ -1319,7 +1319,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             cql_config.start(std::ref(*cfg)).get();
 
             checkpoint(stop_signal, "starting a vector store service");
-            vector_store_client.start(std::ref(*cfg)).get();
+            vector_store_client.start(std::ref(*cfg), std::ref(mm_notifier), std::ref(db)).get();
             auto stop_vector_store_client = defer_verbose_shutdown("vector store client", [&vector_store_client] {
                 vector_store_client.stop().get();
             });
