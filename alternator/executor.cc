@@ -1455,15 +1455,13 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             unused_attribute_definitions.erase(view_range_key);
             if (view_range_key == hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
-              }
-            if (view_range_key != range_key) {
-                add_column(builder, view_range_key, *attribute_definitions, column_kind::regular_column);
             }
-            add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key);
+            // TODO: zweryfikowac
+            add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, view_range_key != range_key);
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
             // key(s).
-            if  (!range_key.empty() && view_range_key != range_key) {
+            if (!range_key.empty() && view_range_key != range_key) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
             }
             view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
@@ -1581,6 +1579,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     co_await verify_create_permission(enforce_authorization, client_state);
 
     schema_ptr schema = builder.build();
+    elogger.trace("o lol schema {}", *schema.get());
     for (auto& view_builder : view_builders) {
         // Note below we don't need to add virtual columns, as all
         // base columns were copied to view. TODO: reconsider the need
@@ -2169,8 +2168,8 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
         _length_in_bytes += column_name.size();
         if (!cdef) {
-            // This attribute may be a key column of one of the GSI, in which
-            // case there are some limitations on the value
+            // This attribute may be a key column of one of the GSI or LSI, in
+            // which case there are some limitations on the value
             validate_value_if_gsi_key(key_attributes, column_name, it->value);
             bytes value = serialize_item(it->value);
             if (value.size()) {
@@ -2179,14 +2178,8 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
             }
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
         } else if (!cdef->is_primary_key()) {
-            // Fixed-type regular column can be used for LSI key
-            bytes value = get_key_from_typed_value(it->value, *cdef);
-            _cells->push_back({std::move(column_name),
-                    value});
-            if (value.size()) {
-                // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                _length_in_bytes += value.size() - 1;
-            }
+            // Alternator doesn't use regular columns other than :attrs.
+            SCYLLA_ASSERT(cdef->name_as_text() == executor::ATTRS_COLUMN_NAME);
         }
     }
     if (_pk.representation().size() > 2) {
