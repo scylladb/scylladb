@@ -239,7 +239,11 @@ future<> dirty_memory_manager::shutdown() {
 
 future<> dirty_memory_manager::flush_one(replica::memtable_list& mtlist, flush_permit&& permit) noexcept {
     return mtlist.seal_active_memtable(std::move(permit)).handle_exception([schema = mtlist.back()->schema()] (std::exception_ptr ep) {
-        dblog.error("Failed to flush memtable, {}:{} - {}", schema->ks_name(), schema->cf_name(), ep);
+        auto level = log_level::error;
+        if (try_catch<gate_closed_exception>(ep)) {
+            level = log_level::warn;
+        }
+        dblog.log(level, "Failed to flush memtable, {}:{} - {}", schema->ks_name(), schema->cf_name(), ep);
         return make_exception_future<>(ep);
     });
 }
