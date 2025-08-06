@@ -268,7 +268,26 @@ partitioned_sstable_set::query(const dht::partition_range& range) const {
 }
 
 bool partitioned_sstable_set::store_as_unleveled(const shared_sstable& sst) const {
-    return _use_level_metadata && sst->get_sstable_level() == 0;
+    // When a sstable spans most of the entire token range, we'll store it in a
+    // vector, to avoid triggering quadratic space complexity in the interval map,
+    // since many of such sstables would have presence on almost all intervals.
+    static constexpr float unleveled_threshold = 0.85f;
+    auto sst_tr = dht::token_range(sst->get_first_decorated_key().token(), sst->get_last_decorated_key().token());
+    bool as_unleveled = dht::overlap_ratio(_token_range, sst_tr) >= unleveled_threshold;
+
+    utils::get_local_injector().inject("sstable_set_insertion_verification", [&] () {
+        auto& i = utils::get_local_injector();
+        auto table_name = i.inject_parameter<std::string_view>("sstable_set_insertion_verification", "table").value();
+        bool expect_unleveled = i.inject_parameter<int>("sstable_set_insertion_verification", "expect_unleveled").value();
+        if (_schema->cf_name() != table_name) {
+            return;
+        }
+        sstlog.info("SSTable {}, as_unleveled={}, expect_unleveled={}, sst_tr={}, overlap_ratio={}",
+            sst->generation(), as_unleveled, expect_unleveled, sst_tr, dht::overlap_ratio(_token_range, sst_tr));
+        SCYLLA_ASSERT(as_unleveled == expect_unleveled);
+    });
+
+    return as_unleveled;
 }
 
 dht::ring_position partitioned_sstable_set::to_ring_position(const dht::compatible_ring_position_or_view& crp) {
@@ -297,10 +316,10 @@ dht::partition_range partitioned_sstable_set::to_partition_range(const dht::ring
     return dht::partition_range::make(std::move(lower_bound), std::move(upper_bound));
 }
 
-partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, bool use_level_metadata)
+partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, dht::token_range token_range)
         : _schema(std::move(schema))
         , _all(make_lw_shared<sstable_list>())
-        , _use_level_metadata(use_level_metadata) {
+        , _token_range(std::move(token_range)) {
 }
 
 static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unordered_map<run_id, shared_sstable_run>& runs) {
@@ -310,18 +329,18 @@ static std::unordered_map<run_id, shared_sstable_run> clone_runs(const std::unor
 }
 
 partitioned_sstable_set::partitioned_sstable_set(schema_ptr schema, const std::vector<shared_sstable>& unleveled_sstables, const interval_map_type& leveled_sstables,
-        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, bool use_level_metadata, uint64_t bytes_on_disk)
+        const lw_shared_ptr<sstable_list>& all, const std::unordered_map<run_id, shared_sstable_run>& all_runs, dht::token_range token_range, uint64_t bytes_on_disk)
         : sstable_set_impl(bytes_on_disk)
         , _schema(schema)
         , _unleveled_sstables(unleveled_sstables)
         , _leveled_sstables(leveled_sstables)
         , _all(make_lw_shared<sstable_list>(*all))
         , _all_runs(clone_runs(all_runs))
-        , _use_level_metadata(use_level_metadata) {
+        , _token_range(std::move(token_range)) {
 }
 
 std::unique_ptr<sstable_set_impl> partitioned_sstable_set::clone() const {
-    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _use_level_metadata, _bytes_on_disk);
+    return std::make_unique<partitioned_sstable_set>(_schema, _unleveled_sstables, _leveled_sstables, _all, _all_runs, _token_range, _bytes_on_disk);
 }
 
 std::vector<shared_sstable> partitioned_sstable_set::select(const dht::partition_range& range) const {
@@ -751,27 +770,26 @@ sstable_set_impl::selector_and_schema_t partitioned_sstable_set::make_incrementa
     return std::make_tuple(std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables, _leveled_sstables_change_cnt), std::cref(*_schema));
 }
 
-std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(schema_ptr schema) const {
-    // with use_level_metadata enabled, L0 sstables will not go to interval map, which suits well STCS.
-    return std::make_unique<partitioned_sstable_set>(schema, true);
+std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(const table_state& ts) const {
+    return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
-std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(schema_ptr schema) const {
-    return std::make_unique<partitioned_sstable_set>(std::move(schema));
+std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(const table_state& ts) const {
+    return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
-std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_set(schema_ptr schema) const {
-    return std::make_unique<time_series_sstable_set>(std::move(schema), _options.enable_optimized_twcs_queries);
+std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_set(const table_state& ts) const {
+    return std::make_unique<time_series_sstable_set>(ts.schema(), _options.enable_optimized_twcs_queries);
 }
 
-sstable_set make_partitioned_sstable_set(schema_ptr schema, bool use_level_metadata) {
-    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, use_level_metadata));
+sstable_set make_partitioned_sstable_set(schema_ptr schema, dht::token_range token_range) {
+    return sstable_set(std::make_unique<partitioned_sstable_set>(schema, std::move(token_range)));
 }
 
 sstable_set
-compaction_strategy::make_sstable_set(schema_ptr schema) const {
+compaction_strategy::make_sstable_set(const table_state& ts) const {
     return sstable_set(
-            _compaction_strategy_impl->make_sstable_set(schema));
+            _compaction_strategy_impl->make_sstable_set(ts));
 }
 
 using sstable_reader_factory_type = std::function<mutation_reader(shared_sstable&, const dht::partition_range& pr)>;

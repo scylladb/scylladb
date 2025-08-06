@@ -73,8 +73,8 @@ public:
     single_compaction_group(table_for_tests& t, sstables::sstables_manager& sst_man, std::function<shared_sstable()> sstable_factory)
             : _schema(t.schema())
             , _sst_man(sst_man)
-            , _main_set(sstables::make_partitioned_sstable_set(_schema, false))
-            , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, false))
+            , _main_set(sstables::make_partitioned_sstable_set(_schema, token_range()))
+            , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, token_range()))
             , _compaction_strategy(sstables::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
             , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
             , _tombstone_gc_state(nullptr)
@@ -97,6 +97,7 @@ public:
         }
     }
 
+    virtual dht::token_range token_range() const noexcept override { return dht::token_range::make(dht::first_token(), dht::last_token()); }
     virtual const schema_ptr& schema() const noexcept override { return _schema; }
     virtual unsigned min_compaction_threshold() const noexcept override { return _schema->min_compaction_threshold(); }
     virtual bool compaction_enforce_min_threshold() const noexcept override { return false; }
