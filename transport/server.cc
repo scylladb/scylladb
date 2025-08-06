@@ -981,7 +981,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     co_return res;
 }
 
-void cql_server::connection::update_scheduling_group() {
+void cql_server::connection::update_scheduling_group_to_user() {
     switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
         auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
         _current_scheduling_group = shg;
@@ -1000,7 +1000,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
             return audit::inspect_login(sasl_challenge->get_username(), client_state.get_client_address().addr(), failed).then(
                     [this, stream, challenge = std::move(challenge), &client_state, sasl_challenge, ff = std::move(f), trace_state = std::move(trace_state)] () mutable {
                 client_state.set_login(ff.get());
-                update_scheduling_group();
+                update_scheduling_group_to_user();
                 auto f = client_state.check_user_can_login();
                 f = f.then([&client_state] {
                     return client_state.maybe_update_per_service_level_params();
@@ -2194,7 +2194,7 @@ future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
 future<> cql_server::update_connections_scheduling_group() {
     return for_each_gently([] (generic_server::connection& conn) {
         connection& cql_conn = dynamic_cast<connection&>(conn);
-        cql_conn.update_scheduling_group();
+        cql_conn.update_scheduling_group_to_user();
     });
 }
 
@@ -2216,7 +2216,7 @@ future<> cql_server::update_connections_service_level_params() {
                 cs.update_per_service_level_params(*slo);
             }
         }
-        cql_conn.update_scheduling_group();
+        cql_conn.update_scheduling_group_to_user();
     });
 }
 
