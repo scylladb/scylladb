@@ -3198,6 +3198,26 @@ future<mutation> system_keyspace::make_view_builder_version_mutation(api::timest
     co_return std::move(muts[0]);
 }
 
+static constexpr auto SERVICE_LEVEL_DRIVER_CREATED_KEY = "service_level_driver_created";
+
+future<std::optional<mutation>> system_keyspace::get_service_level_driver_created_mutation() {
+    return get_scylla_local_mutation(_db, SERVICE_LEVEL_DRIVER_CREATED_KEY);
+}
+
+future<mutation> system_keyspace::make_service_level_driver_created_mutation(bool is_created, api::timestamp_type timestamp) {
+    static const sstring query = format("INSERT INTO {}.{} (key, value) VALUES (?, ?);", db::system_keyspace::NAME, db::system_keyspace::SCYLLA_LOCAL);
+    auto muts = co_await _qp.get_mutations_internal(query, internal_system_query_state(), timestamp, {SERVICE_LEVEL_DRIVER_CREATED_KEY, data_type_for<bool>()->to_string_impl(data_value(is_created))});
+
+    if (muts.size() != 1) {
+        on_internal_error(slogger, format("expecting single insert mutation, got {}", muts.size()));
+    }
+    co_return std::move(muts[0]);
+}
+
+future<std::optional<bool>> system_keyspace::get_service_level_driver_created() {
+    return get_scylla_local_param_as<bool>(SERVICE_LEVEL_DRIVER_CREATED_KEY);
+}
+
 static constexpr auto SERVICE_LEVELS_VERSION_KEY = "service_level_version";
 
 future<std::optional<mutation>> system_keyspace::get_service_levels_version_mutation() {
