@@ -278,7 +278,7 @@ async def find_tests(options: argparse.Namespace) -> None:
                 await suite.add_test_list()
 
 
-def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[SimpleNamespace]]:
+def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]:
     # When tests are executed in parallel on different hosts, we need to distinguish results from them.
     # So this host_id needed to not overwrite results from different hosts during Jenkins will copy to one directory.
     hostname = socket.gethostname()
@@ -286,7 +286,7 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
     failed_tests = []
     temp_dir = pathlib.Path(options.tmpdir).absolute()
     report_dir =  temp_dir / 'report'
-    junit_output_file = report_dir / f'pytest_cpp_{run_id}_{host_id}.xml'
+    junit_output_file = report_dir / f'pytest_cpp_{host_id}.xml'
     files_to_run = []
     test_names = []
     for name in options.name:
@@ -308,6 +308,7 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
         'pytest',
         "-s",  # don't capture print() output inside pytest
         '--color=yes',
+        f'--repeat={options.repeat}',
         modes,
     ]
     if options.list_tests:
@@ -319,7 +320,6 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
             "-rf",
             f'-n{int(options.jobs)}',
             f'--tmpdir={temp_dir}',
-            f'--run_id={run_id}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{host_id}"}',
             '-v' if options.verbose else '-q',
@@ -433,16 +433,9 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     failed = 0
     try:
         await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
-        for i in range(1, options.repeat + 1):
-            result = run_pytest(options, run_id=i)
-            total_tests += result[0]
-            if total_tests == 0:
-                # no tests found, nothing to run, so breaking the loop
-                break
-            failed_tests.extend(result[1])
-            if len(failed_tests) >= max_failures != 0:
-                print("Too much failures, stopping")
-                break
+        result = run_pytest(options)
+        total_tests += result[0]
+        failed_tests.extend(result[1])
         console.print_start_blurb()
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.all_tests():
@@ -521,7 +514,7 @@ async def main() -> int:
     if options.list_tests:
         print('\n'.join([f"{t.suite.mode:<8} {type(t.suite).__name__[:-9]:<11} {t.name}"
                          for t in TestSuite.all_tests()]))
-        run_pytest(options, run_id=1)
+        run_pytest(options)
         return 0
 
     if options.manual_execution and TestSuite.test_count() > 1:

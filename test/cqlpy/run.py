@@ -503,6 +503,7 @@ def run_pytest(pytest_dir, additional_parameters):
         # child:
         run_with_temporary_dir_pids = set() # no children to clean up on child
         run_pytest_pids = set()
+        os.environ.setdefault('SCYLLA_TEST_RUNNER', 'runpy')
         os.chdir(pytest_dir)
         os.setsid()
         os.execvp('pytest', ['pytest',
