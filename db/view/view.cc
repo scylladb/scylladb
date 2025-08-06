@@ -2159,9 +2159,8 @@ future<> view_update_generator::mutate_MV(
     // on the pairing algorithm.
     bool use_tablets_rack_aware_view_pairing = _db.features().tablet_rack_aware_view_pairing && ks.uses_tablets();
     auto me = base_ermp->get_topology().my_host_id();
-    static constexpr size_t max_concurrent_updates = 128;
     co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
-    co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
+    co_await max_concurrent_for_each(view_updates, view_update_generator::max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto view_ermp = erms.at(mut.s->id());
         auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
@@ -2228,9 +2227,10 @@ future<> view_update_generator::mutate_MV(
             auto mut_ptr = remote_endpoints.empty() ? std::make_unique<frozen_mutation>(std::move(mut.fm)) : std::make_unique<frozen_mutation>(mut.fm);
             tracing::trace(tr_state, "Locally applying view update for {}.{}; base token = {}; view token = {}",
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
+            auto count_units = co_await seastar::get_units(_db.get_view_update_concurrency_sem(), 1);
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            memory_units, this] (future<>&& f) mutable {
+                            count_units = std::move(count_units), memory_units, this] (future<>&& f) mutable {
                 --stats.writes;
                 memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
