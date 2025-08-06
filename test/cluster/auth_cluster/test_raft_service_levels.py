@@ -533,5 +533,15 @@ async def test_driver_service_level(manager: ManagerClient) -> None:
     for sl in service_levels:
         assert sl.service_level.startswith("sl_")
 
+@pytest.mark.asyncio
+async def test_driver_service_level_used_for_connections(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
 
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+    metrics = await manager.metrics.query(server.ip_addr)
 
+    assert metrics.get("scylla_scheduler_runtime_ms", {'group': 'sl:driver'}) > 0
+    # Sanity check that non-existing service levels returns None
+    assert metrics.get("scylla_scheduler_runtime_ms", {'group': 'sl:non-existing-driver'}) is None
