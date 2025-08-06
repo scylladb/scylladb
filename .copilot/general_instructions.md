@@ -1,4 +1,10 @@
-This file serves as a high-level guide for all code written in this repository. It establishes a common understanding of our project's goals and values.
+This file serves as a high-level guide for all code written in this repository. It establishes a common understanding of our project's goals and values. For more detailed guidance, see:
+
+* **`cpp_instructions.md`** - C++ specific coding standards and patterns
+* **`python_instructions.md`** - Python testing guidelines and conventions
+* **`testing_instructions.md`** - Comprehensive testing framework guidance
+* **`development_workflow.md`** - Project structure and development workflows
+* **`troubleshooting_guide.md`** - Error handling, debugging, and common issues
 
 # 1. Project Context
 
@@ -117,3 +123,19 @@ ninja build/dev/test/boost/combined_tests
 # Run test with verbose output for debugging
 ./test.py --no-gather-metric --mode dev cluster/test_tablets_lwt -v
 ```
+
+# 8. Debugging and Troubleshooting
+
+## Common Issues and Solutions
+* **Build Failures:** Check dependencies and run `./configure.py` with appropriate flags
+* **Test Failures:** Check `testlog/dev/` for detailed logs and error messages
+
+## Debug Build Configuration
+* **Debug Symbols:** Use `--tests-debuginfo` flag when building tests for debugging
+* **Sanitizers:** Use `sanitize` mode to catch memory errors and undefined behavior
+* **Verbose Logging:** Enable trace-level logging for detailed execution flow
+
+## IDE and Development Tool Integration
+* **Compile Commands:** Use generated `compile_commands.json` for IDE integration
+* **Clang-Format:** Ensure `.clang-format` is used by your IDE for consistent formatting
+* **GDB Integration:** Use provided `.gdbinit` and `scylla-gdb.py` for enhanced debugging

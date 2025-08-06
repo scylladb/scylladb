@@ -60,12 +60,53 @@ This document outlines the coding standards and best practices for Python code i
               my_function("invalid")
       ```
 
-# 4. Additional Recommendations for Copilot
+# 4. ScyllaDB-Specific Testing Patterns
 
-* **Type Hints:** Use Python's type hints (`typing` module) for all function arguments and return values. This improves code readability and allows for static analysis.
-* **Idiomatic Python:** Prefer idiomatic Python solutions over verbose, C-style code. Examples include:
-    * List comprehensions over explicit loops.
-    * The `with open(...)` statement for file I/O.
-    * `f-strings` for string formatting.
-* **Helper Functions:** When generating test code, suggest creating helper functions or fixtures for repetitive setup tasks. This keeps the test cases themselves clean and focused on the assertion logic.
-* **Clarity over Abstraction:** Just as in the C++ code, prefer clear and simple test logic. Avoid overly complex test structures that are difficult to debug or maintain.
+## Test Environment Setup
+* **Fixtures:** Use `cql` and `test_keyspace` fixtures provided by the test framework
+* **Connection Management:** The framework handles connection lifecycle automatically
+* **Keyspace Isolation:** Each test gets its own keyspace for isolation
+* **Server Management:** Test framework manages Scylla server instances
+
+## CQL Testing Patterns
+* **Schema Setup:** Create tables within test functions using the provided keyspace
+* **Data Preparation:** Use CQL INSERT statements or batch operations for test data
+* **Query Testing:** Test both successful queries and error conditions
+* **Result Validation:** Use `assert` statements to validate query results
+
+## Integration Test Structure
+```python
+def test_feature_name(cql, test_keyspace):
+    """
+    Test description explaining what this test validates.
+    """
+    # Arrange: Set up schema and test data
+    cql.execute(f"CREATE TABLE {test_keyspace}.test_table (id int PRIMARY KEY, data text)")
+    cql.execute(f"INSERT INTO {test_keyspace}.test_table (id, data) VALUES (1, 'test')")
+    
+    # Act: Perform the operation being tested
+    result = cql.execute(f"SELECT * FROM {test_keyspace}.test_table WHERE id = 1")
+    
+    # Assert: Validate the results
+    assert result.one().data == 'test'
+```
+
+## Error Testing Patterns
+* **Exception Testing:** Use `pytest.raises()` for expected database errors
+* **Invalid Queries:** Test malformed CQL statements
+* **Constraint Violations:** Test primary key, foreign key, and other constraint violations
+* **Timeout Testing:** Test operations under resource constraints
+
+## Multi-Node Testing (Topology Tests)
+* **Cluster Setup:** Use topology test framework for multi-node scenarios
+* **Node Operations:** Test node addition, removal, and failure scenarios
+* **Consistency Testing:** Validate data consistency across nodes
+* **Network Partitions:** Test behavior under network partition scenarios
+
+# 5. Additional Recommendations for Copilot
+
+* **Test Data Factories:** Create helper functions for generating test data consistently
+* **Async Testing:** Use `async`/`await` patterns when testing asynchronous operations
+* **Cleanup Patterns:** Ensure proper cleanup in teardown methods, though the framework handles most cleanup automatically
+* **Performance Considerations:** Be mindful of test execution time, especially in integration tests
+* **Database State:** Assume clean database state at test start, avoid dependencies between tests

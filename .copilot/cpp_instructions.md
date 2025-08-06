@@ -80,9 +80,36 @@ This document provides specific coding standards and best practices for C++ deve
         * `ninja run-tests` (for a general set of C++ unit tests)
     * If a new test has been created, ensure that it is included in the test run.
 
-# 8. Code Quality and Maintenance
+# 8. ScyllaDB-Specific Patterns and Conventions
+
+## Memory Management
+* **Seastar Allocators:** Prefer Seastar's memory management over standard allocators in hot paths
+* **lw_shared_ptr:** Use for lightweight shared ownership within Seastar contexts
+* **foreign_ptr:** Use when sharing data between Seastar and external code
+* **Avoid std::shared_ptr:** Unless interfacing with external C++ APIs
+
+## Database-Specific Patterns
+* **Schema Objects:** Always use schema pointers (`schema_ptr`) for schema references
+* **Mutation Handling:** Use `mutation` and `mutation_partition` for data modifications
+* **Key Handling:** Use appropriate key types (`partition_key`, `clustering_key`)
+* **Time Handling:** Use `api::timestamp_type` for database timestamps, `gc_clock` for garbage collection timing
+
+## Asynchronous Programming Patterns
+* **Coroutines First:** Prefer `co_await` over `.then()` chains for readability
+* **Seastar Futures:** Always use `seastar::future<T>` for async operations
+* **Gate Management:** Use `seastar::gate` for proper shutdown coordination
+* **Semaphore Usage:** Use `seastar::semaphore` for resource limiting, not `std::mutex`
+
+## Performance-Critical Guidelines
+* **Avoid Dynamic Allocation:** In hot paths, prefer stack allocation or pre-allocated pools
+* **NUMA Awareness:** Consider shard-per-core architecture in design
+* **Batch Operations:** Group operations to reduce syscall overhead
+* **Lock-Free Programming:** Prefer message passing over shared mutable state
+
+# 9. Code Quality and Maintenance
 
 * **Testability:** Write code that is easy to test. Use dependency injection to isolate components where necessary.
 * **Rule of Zero/Three/Five:** Classes that manage resources should explicitly define their move/copy constructors and assignment operators or explicitly delete them, following the Rule of Zero/Three/Five.
 * **Error Handling:** Use `seastar::future<T>` to propagate errors in asynchronous code. Avoid using exceptions for control flow in performance-sensitive paths.
 * **Clarity over Abstraction:** While abstraction is good, avoid premature or overly complex abstractions. Code should be as simple and direct as possible while achieving its goals.
+* **Documentation:** Include meaningful comments for complex algorithms, performance optimizations, or non-obvious design decisions. Avoid commenting obvious code.
