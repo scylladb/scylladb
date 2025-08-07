@@ -217,6 +217,7 @@ public:
     future<connected_socket> make([[maybe_unused]] abort_source* as) override {
         auto socket = co_await seastar::connect(_addr, {}, transport::TCP);
         socket.set_nodelay(true);
+        socket.set_keepalive(true);
         co_return socket;
     }
 };
