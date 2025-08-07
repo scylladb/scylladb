@@ -38,6 +38,13 @@ std::ostream& operator<<(std::ostream& out, const UUID& uuid) {
     return out;
 }
 
+std::istream& operator>>(std::istream& in, UUID& uuid) {
+    sstring uuid_string;
+    in >> uuid_string;
+    uuid = UUID(uuid_string);
+    return in;
+}
+
 UUID::UUID(std::string_view uuid) {
     sstring uuid_string(uuid.begin(), uuid.end());
     boost::erase_all(uuid_string, "-");
