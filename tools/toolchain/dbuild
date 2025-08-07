@@ -206,6 +206,14 @@ EOF
     # to /etc/containers/containers.conf
 fi
 
+# Forward authentication, to avoid docker hub unauthenticated rate limits.
+for auth_json in "${XDG_RUNTIME_DIR}/containers/auth.json" "${HOME}/.config/containers/auth.json"; do
+    if [[ -f "$auth_json" ]]; then
+        docker_common_args+=(-v "${auth_json}:${HOME}/.config/containers/auth.json")
+        break
+    fi
+done
+
 if [ "$PWD" != "$toplevel" ]; then
      docker_common_args+=(-v "$toplevel:$toplevel")
 fi
