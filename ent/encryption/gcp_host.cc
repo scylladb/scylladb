@@ -478,13 +478,14 @@ encryption::gcp_host::impl::get_default_credentials() {
         }
     }
 
-    {
+    auto home = std::getenv("HOME");
+    if (home) {
         std::string well_known_file;
         auto env_path = std::getenv("CLOUDSDK_CONFIG");
         if (env_path) {
-            well_known_file = fmt::format("~/{}/{}", env_path, WELL_KNOWN_CREDENTIALS_FILE);
+            well_known_file = fmt::format("{}/{}/{}", home, env_path, WELL_KNOWN_CREDENTIALS_FILE);
         } else {
-            well_known_file = fmt::format("~/.config/{}/{}", CLOUDSDK_CONFIG_DIRECTORY, WELL_KNOWN_CREDENTIALS_FILE);
+            well_known_file = fmt::format("{}/.config/{}/{}", home, CLOUDSDK_CONFIG_DIRECTORY, WELL_KNOWN_CREDENTIALS_FILE);
         }
 
         if (co_await seastar::file_exists(well_known_file)) {
@@ -672,7 +673,7 @@ encryption::gcp_host::impl::get_access_token(const google_credentials& creds, co
                 { "client_id", c.client_id },
                 { "client_secret", c.client_secret },
                 { "refresh_token", c.refresh_token },
-                { "grant_type", "grant_type" },
+                { "grant_type", "refresh_token" },
             }), "", httpd::operation_type::POST);
 
             co_return access_token{ json };
