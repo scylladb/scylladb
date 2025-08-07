@@ -531,6 +531,11 @@ class ManagerClient:
                                    value: Any = None,
                                    *,
                                    config_options: dict[str, Any] | None = None) -> None:
+        """
+        Update the server's configuration file.
+
+        You can update a single option by providing the (key, value) pair, or multiple options using config_options.
+        """
         if key is not None:
             if value is None:
                 raise RuntimeError("`value` is required if `key` is not None")
@@ -542,6 +547,13 @@ class ManagerClient:
         await self.client.put_json(
             resource_uri=f"/cluster/server/{server_id}/update_config",
             data={"config_options": config_options},
+        )
+
+    async def server_remove_config_option(self, server_id: ServerNum, key: str) -> None:
+        """Remove the provided option from the server's configuration file."""
+        await self.client.put_json(
+            resource_uri=f"/cluster/server/{server_id}/remove_config_option",
+            data={"key": key},
         )
 
     async def server_update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:

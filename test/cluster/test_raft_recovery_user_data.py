@@ -161,7 +161,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
     for srv in live_servers:
-        await manager.server_update_config(srv.server_id, 'recovery_leader', '')
+        await manager.server_remove_config_option(srv.server_id, 'recovery_leader')
 
     logging.info(f'Deleting persistent data of group 0 {first_group0_id} on {live_servers}')
     for h in hosts:
