@@ -31,6 +31,8 @@
 
 namespace {
 
+using namespace std::chrono_literals;
+
 using ann_error = service::vector_store_client::ann_error;
 using configuration_exception = exceptions::configuration_exception;
 using duration = lowres_clock::duration;
@@ -46,6 +48,7 @@ using port_number = service::vector_store_client::port_number;
 using primary_key = service::vector_store_client::primary_key;
 using primary_keys = service::vector_store_client::primary_keys;
 using service_reply_format_error = service::vector_store_client::service_reply_format_error;
+using tcp_keepalive_params = net::tcp_keepalive_params;
 using time_point = lowres_clock::time_point;
 
 // Wait time before retrying after an exception occurred
@@ -222,6 +225,12 @@ public:
     future<connected_socket> make([[maybe_unused]] abort_source* as) override {
         auto socket = co_await seastar::connect(_addr, {}, transport::TCP);
         socket.set_nodelay(true);
+        socket.set_keepalive_parameters(tcp_keepalive_params{
+                .idle = 60s,
+                .interval = 60s,
+                .count = 10,
+        });
+        socket.set_keepalive(true);
         co_return socket;
     }
 };
