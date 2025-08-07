@@ -600,16 +600,14 @@ def test_ttl_expiration_gsi_lsi(dynamodb, waits_for_expiration):
 # checked the case where TTL's expiration-time attribute is not a regular
 # attribute but one of the two key attributes. Alternator encodes these
 # attributes differently (as a real column in the schema - not a serialized
-# JSON inside a map column), so needed to check that such an attribute is
-# usable as well. LSI (and, currently, also GSI) *also* implement their keys
-# differently (like the base key), so let's check that having the TTL column
-# a GSI or LSI key still works. Even though it is unlikely that any user
-# would want to have such a use case.
-# The following test only tries LSI, which we're sure will always have this
-# special case (for GSI, we are considering changing the implementation
-# and make their keys regular attributes - to support adding GSIs after a
-# table already exists - so after such a change GSIs will no longer be a
-# special case.
+# JSON inside a map column), so we needed to check that such an attribute is
+# usable as well. LSI *also* currently implements their keys differently
+# (like the base key), so let's check that having the TTL column an LSI key
+# still works. Even though it is unlikely that any user would want to have
+# such a use case.
+# For GSIs, to support the ability to add a GSI to an existing table, a
+# GSI key can be any regular attribute in the base table, so we don't need
+# a special test for GSIs.
 def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
     # In my experiments, a 30-minute (1800 seconds) is the typical delay
     # for expiration in this test for DynamoDB
@@ -650,13 +648,10 @@ def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
         start_time = time.time()
         gsi_was_alive = False
         while time.time() < start_time + max_duration:
-            print(f"--- {int(time.time()-start_time)} seconds")
-            if 'Item' in table.get_item(Key={'p': p, 'c': c}):
-                print("base alive")
-            else:
+            if 'Item' not in table.get_item(Key={'p': p, 'c': c}):
                 # test is done - and successful:
                 return
-            time.sleep(max_duration/200)
+            time.sleep(sleep)
         pytest.fail('base not expired')
 
 # Check that in the DynamoDB Streams API, an event appears about an item
