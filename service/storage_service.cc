@@ -2526,7 +2526,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     slogger.debug("handle_state_normal: endpoint={} is_normal_token_owner={} remove_from_peers={} owned_tokens={}", endpoint, is_normal_token_owner, remove_from_peers.contains(endpoint), owned_tokens);
     if (!is_me(endpoint) && !owned_tokens.empty() && !remove_from_peers.count(endpoint)) {
         try {
-            auto info = get_gossiper_peer_info_for_update(host_id).value();
+            auto info = get_gossiper_peer_info_for_update(host_id).value_or(db::system_keyspace::peer_info{});
             info.tokens = std::move(owned_tokens);
             co_await _sys_ks.local().update_peer_info(endpoint, host_id, info);
         } catch (...) {
@@ -2749,7 +2749,7 @@ future<> storage_service::on_restart(gms::inet_address endpoint, locator::host_i
 std::optional<db::system_keyspace::peer_info> storage_service::get_gossiper_peer_info_for_update(locator::host_id endpoint) {
     auto ep_state = _gossiper.get_endpoint_state_ptr(endpoint);
     if (!ep_state) {
-        return db::system_keyspace::peer_info{};
+        return std::nullopt;
     }
     auto info = get_gossiper_peer_info_for_update(endpoint, ep_state->get_application_state_map());
     if (!info && !raft_topology_change_enabled()) {
