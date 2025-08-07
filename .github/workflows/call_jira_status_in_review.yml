@@ -1,0 +1,11 @@
+name: Call Jira Status In Review
+
+on:
+  pull_request:
+    types: [ready_for_review, review_requested]
+
+jobs:
+  call-jira-status-in-review:
+    uses: scylladb/github-automation/.github/workflows/main_update_jira_status_to_in_review.yml@main
+    secrets:
+      jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
