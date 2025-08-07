@@ -290,7 +290,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{host_id}.xml'
     files_to_run = []
-    test_names = []
     for name in options.name:
         file_name = name
         if '::' in name:
@@ -302,16 +301,12 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if not files_to_run:
         logging.info(f'No boost found. Skipping pytest execution for boost tests.')
         return 0, []
-    expression = ' or '.join(test_names)
-    if options.skip_patterns:
-        expression += f'{"and not ".join(options.skip_patterns)}'
-    modes = ' '.join(f'--mode={mode}' for mode in options.modes)
     args = [
         'pytest',
         "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
-        modes,
+        *[f'--mode={mode}' for mode in options.modes],
     ]
     if options.list_tests:
         args.extend(['--collect-only', '--quiet'])
@@ -339,8 +334,8 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.append(f'--timeout={options.timeout}')
     if options.session_timeout:
         args.append(f'--session-timeout={options.session_timeout}')
-    if len(expression) > 1:
-        args.extend(['-k', expression])
+    if options.skip_patterns:
+        args.append(f'-k={" and ".join([f"not {pattern}" for pattern in options.skip_patterns])}')
     if not options.save_log_on_success:
         args.append('--allure-no-capture')
     else:
@@ -349,7 +344,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.append(f'-m="{options.markers}"')
     args.extend(files_to_run)
 
-    args = shlex.split(' '.join(args))
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
     try:
         # Read output from pytest and print it to the console
