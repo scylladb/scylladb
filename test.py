@@ -177,6 +177,14 @@ def parse_cmd_line() -> argparse.Namespace:
                         choices=["CRITICAL", "ERROR", "WARNING", "INFO",
                                  "DEBUG"],
                         dest="log_level")
+    parser.add_argument('-k', metavar="EXPRESSION", action="store",
+                        help=f"Supported only for tests in {[str(d) for d in PYTEST_RUNNER_DIRECTORIES]} "
+                        "directories. Only run tests which match the given substring expression. An expression is a Python evaluable expression where all names are "
+                        "substring-matched against test names and their parent classes. Example: -k 'test_method or test_other' matches all test functions and "
+                        "classes whose name contains 'test_method' or 'test_other', while -k 'not test_method' matches those that don't contain 'test_method' "
+                        "in their names. -k 'not test_method and not test_other' will eliminate the matches. Additionally keywords are matched to classes and "
+                        "functions containing extra names in their 'extra_keyword_matches' set, as well as functions which have names assigned directly to "
+                        "them. The matching is case-insensitive.")
     parser.add_argument('--markers', action='store', metavar='MARKEXPR',
                         help="Only run tests that match the given mark expression. The syntax is the same "
                              "as in pytest, for example: --markers 'mark1 and not mark2'. The parameter "
@@ -223,6 +231,9 @@ def parse_cmd_line() -> argparse.Namespace:
                              help="Random number generator seed to be used by boost tests")
 
     args = parser.parse_args()
+
+    if args.skip_patterns and args.k:
+        parser.error(palette.fail('arguments --skip and -k are mutually exclusive, please use only one of them'))
 
     if not args.jobs:
         if not args.cpus:
@@ -336,14 +347,15 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.append(f'--session-timeout={options.session_timeout}')
     if options.skip_patterns:
         args.append(f'-k={" and ".join([f"not {pattern}" for pattern in options.skip_patterns])}')
+    if options.k:
+        args.append(f'-k={options.k}')
     if not options.save_log_on_success:
         args.append('--allure-no-capture')
     else:
         args.append('--save-log-on-success')
     if options.markers:
-        args.append(f'-m="{options.markers}"')
+        args.append(f'-m={options.markers}')
     args.extend(files_to_run)
-
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
     try:
         # Read output from pytest and print it to the console
