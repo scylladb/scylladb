@@ -22,17 +22,17 @@ from test.alternator.util import random_string, full_scan, full_query, multiset
 # attributes as well, one needs to select them explicitly. When no key
 # attributes are selected, an item may have *none* of the selected
 # attributes, and returned as an empty item.
-def test_projection_expression_toplevel(test_table):
+def test_projection_expression_toplevel(test_table_ss):
     p = random_string()
     c = random_string()
     item = {'p': p, 'c': c, 'a': 'hello', 'b': 'hi'}
-    test_table.put_item(Item=item)
+    test_table_ss.put_item(Item=item)
     for wanted in [ ['a'],             # only non-key attribute
                     ['c', 'a'],        # a key attribute (sort key) and non-key
                     ['p', 'c'],        # entire key
                     ['nonexistent']    # Our item doesn't have this
                    ]:
-        got_item = test_table.get_item(Key={'p': p, 'c': c}, ProjectionExpression=",".join(wanted), ConsistentRead=True)['Item']
+        got_item = test_table_ss.get_item(Key={'p': p, 'c': c}, ProjectionExpression=",".join(wanted), ConsistentRead=True)['Item']
         expected_item = {k: item[k] for k in wanted if k in item}
         assert expected_item == got_item
 
@@ -84,10 +84,10 @@ def test_projection_expression_scan(filled_test_table):
         expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
         assert multiset(expected_items) == multiset(got_items)
 
-def test_projection_expression_query(test_table):
+def test_projection_expression_query(test_table_ss):
     p = random_string()
     items = [{'p': p, 'c': str(i), 'a': str(i*10), 'b': str(i*100) } for i in range(10)]
-    with test_table.batch_writer() as batch:
+    with test_table_ss.batch_writer() as batch:
         for item in items:
             batch.put_item(item)
     for wanted in [ ['a'],             # only non-key attributes
@@ -95,7 +95,7 @@ def test_projection_expression_query(test_table):
                     ['p', 'c'],        # entire key
                     ['nonexistent']    # none of the items have this attribute!
                    ]:
-        got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ProjectionExpression=",".join(wanted))
+        got_items = full_query(test_table_ss, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ProjectionExpression=",".join(wanted))
         expected_items = [{k: x[k] for k in wanted if k in x} for x in items]
         assert multiset(expected_items) == multiset(got_items)
 
@@ -261,27 +261,27 @@ def test_projection_expression_path_conflict(test_table_s):
 
 # Above we nested paths in ProjectionExpression, but just for the GetItem
 # request. Let's verify they also work in Query and Scan requests:
-def test_query_projection_expression_path(test_table):
+def test_query_projection_expression_path(test_table_ss):
     p = random_string()
     items = [{'p': p, 'c': str(i), 'a': {'x': str(i*10), 'y': 'hi'}, 'b': 'hello' } for i in range(10)]
-    with test_table.batch_writer() as batch:
+    with test_table_ss.batch_writer() as batch:
         for item in items:
             batch.put_item(item)
-    got_items = full_query(test_table, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ProjectionExpression="a.x")
+    got_items = full_query(test_table_ss, KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}}, ProjectionExpression="a.x")
     expected_items = [{'a': {'x': x['a']['x']}} for x in items]
     assert multiset(expected_items) == multiset(got_items)
 
-def test_scan_projection_expression_path(test_table):
+def test_scan_projection_expression_path(test_table_ss):
     # This test is similar to test_query_projection_expression_path above,
     # but uses a scan instead of a query. The scan will generate unrelated
     # partitions created by other tests (hopefully not too many...) that we
     # need to ignore. We also need to ask for "p" too, so we can filter by it.
     p = random_string()
     items = [{'p': p, 'c': str(i), 'a': {'x': str(i*10), 'y': 'hi'}, 'b': 'hello' } for i in range(10)]
-    with test_table.batch_writer() as batch:
+    with test_table_ss.batch_writer() as batch:
         for item in items:
             batch.put_item(item)
-    got_items = [ x for x in full_scan(test_table, ProjectionExpression="p, a.x") if x['p'] == p]
+    got_items = [ x for x in full_scan(test_table_ss, ProjectionExpression="p, a.x") if x['p'] == p]
     expected_items = [{'p': p, 'a': {'x': x['a']['x']}} for x in items]
     assert multiset(expected_items) == multiset(got_items)
 
