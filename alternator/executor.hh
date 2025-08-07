@@ -58,10 +58,6 @@ namespace alternator {
 
 class rmw_operation;
 
-namespace parsed {
-class path;
-};
-
 schema_ptr get_table(service::storage_proxy& proxy, const rjson::value& request);
 bool is_alternator_keyspace(const sstring& ks_name);
 // Wraps the db::get_tags_of_table and throws if the table is missing the tags extension.
@@ -132,6 +128,7 @@ using attrs_to_get_node = attribute_path_map_node<std::monostate>;
 // optional means we should get all attributes, not specific ones.
 using attrs_to_get = attribute_path_map<std::monostate>;
 
+class prepared_expression_cache;
 
 class executor : public peering_sharded_service<executor> {
     gms::gossiper& _gossiper;
@@ -143,6 +140,8 @@ class executor : public peering_sharded_service<executor> {
     // An smp_service_group to be used for limiting the concurrency when
     // forwarding Alternator request between shards - if necessary for LWT.
     smp_service_group _ssg;
+
+    std::unique_ptr<prepared_expression_cache> _prepared_expression_cache;
 
 public:
     using client_state = service::client_state;
@@ -173,7 +172,9 @@ public:
              db::system_distributed_keyspace& sdks,
              cdc::metadata& cdc_metadata,
              smp_service_group ssg,
-             utils::updateable_value<uint32_t> default_timeout_in_ms);
+             utils::updateable_value<uint32_t> default_timeout_in_ms,
+             utils::updateable_value<uint32_t> expression_cache_size);
+    ~executor();
 
     future<request_return_type> create_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
     future<request_return_type> describe_table(client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, rjson::value request);
