@@ -346,7 +346,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     else:
         args.append('--save-log-on-success')
     if options.markers:
-        args.append(f"-m={options.markers}")
+        args.append(f'-m="{options.markers}"')
     args.extend(files_to_run)
 
     args = shlex.split(' '.join(args))
