@@ -1415,10 +1415,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     // any table.
     std::vector<schema_builder> view_builders;
     std::unordered_set<std::string> index_names;
-    // Remember the attributes used for LSI keys. Since LSI must be created
-    // with the table, we make these attributes real schema columns, and need
-    // to remember this below if the same attributes are used as GSI keys.
-    std::unordered_set<std::string> lsi_range_keys;
 
     const rjson::value* lsi = rjson::find(request, "LocalSecondaryIndexes");
     if (lsi) {
@@ -1456,7 +1452,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             if (view_range_key == hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
             }
-            // TODO: zweryfikowac
             add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, view_range_key != range_key);
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
@@ -1474,7 +1469,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
             view_builders.emplace_back(std::move(view_builder));
-            lsi_range_keys.emplace(view_range_key);
         }
     }
 
@@ -1501,19 +1495,14 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             auto [view_hash_key, view_range_key] = parse_key_schema(g, "GlobalSecondaryIndexes");
 
             // If an attribute is already a real column in the base table
-            // (i.e., a key attribute) or we already made it a real column
-            // as an LSI key above, we can use it directly as a view key.
+            // (i.e., a key attribute) we can use it directly as a view key.
             // Otherwise, we need to add it as a "computed column", which
             // extracts and deserializes the attribute from the ":attrs" map.
-            bool view_hash_key_real_column =
-                partial_schema->get_column_definition(to_bytes(view_hash_key)) ||
-                lsi_range_keys.contains(view_hash_key);
+            bool view_hash_key_real_column = partial_schema->get_column_definition(to_bytes(view_hash_key));
             add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
             unused_attribute_definitions.erase(view_hash_key);
             if (!view_range_key.empty()) {
-                bool view_range_key_real_column =
-                    partial_schema->get_column_definition(to_bytes(view_range_key)) ||
-                    lsi_range_keys.contains(view_range_key);
+                bool view_range_key_real_column = partial_schema->get_column_definition(to_bytes(view_range_key));
                 add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
                 if (!partial_schema->get_column_definition(to_bytes(view_range_key)) &&
                     !partial_schema->get_column_definition(to_bytes(view_hash_key))) {
@@ -1579,7 +1568,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     co_await verify_create_permission(enforce_authorization, client_state);
 
     schema_ptr schema = builder.build();
-    elogger.trace("o lol schema {}", *schema.get());
     for (auto& view_builder : view_builders) {
         // Note below we don't need to add virtual columns, as all
         // base columns were copied to view. TODO: reconsider the need
