@@ -876,6 +876,15 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                 continue; // some tables might not have been created if they were not used
             }
 
+            std::vector<sstring> col_names;
+            for (const auto& col : schema->all_columns()) {
+                col_names.push_back(col.name_as_cql_string());
+            }
+            sstring val_binders_str = "?";
+            for (size_t i = 1; i < col_names.size(); ++i) {
+                val_binders_str += ", ?";
+            }
+
             // use longer than usual timeout as we scan the whole table
             // but not infinite or very long as we want to fail reasonably fast
             const auto t = 5min;
@@ -891,14 +900,6 @@ future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_
                         cql3::query_processor::cache_internal::no);
                 if (rows->empty()) {
                     continue;
-                }
-                std::vector<sstring> col_names;
-                for (const auto& col : schema->all_columns()) {
-                    col_names.push_back(col.name_as_cql_string());
-                }
-                sstring val_binders_str = "?";
-                for (size_t i = 1; i < col_names.size(); ++i) {
-                    val_binders_str += ", ?";
                 }
                 for (const auto& row : *rows) {
                     std::vector<data_value_or_unset> values;
