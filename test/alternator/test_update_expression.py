@@ -100,7 +100,7 @@ def test_update_expression_set_nested_copy(test_table_s):
 # Test for getting a key value with read-before-write
 def test_update_expression_set_key(test_table_sn):
     p = random_string()
-    test_table_sn.update_item(Key={'p': p, 'c': 7});
+    test_table_sn.update_item(Key={'p': p, 'c': 7})
     test_table_sn.update_item(Key={'p': p, 'c': 7}, UpdateExpression='SET #n = #p',
          ExpressionAttributeNames={'#n': 'n', '#p': 'p'})
     test_table_sn.update_item(Key={'p': p, 'c': 7}, UpdateExpression='SET #nn = #c + #c',
@@ -387,36 +387,36 @@ def test_update_expression_spurious_name(test_table_s):
 
 # Test that the key attributes (hash key or sort key) cannot be modified
 # by an update
-def test_update_expression_cannot_modify_key(test_table):
+def test_update_expression_cannot_modify_key(test_table_ss):
     p = random_string()
     c = random_string()
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c},
+        test_table_ss.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET p = :val1', ExpressionAttributeValues={':val1': 4})
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c},
+        test_table_ss.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET c = :val1', ExpressionAttributeValues={':val1': 4})
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE p')
+        test_table_ss.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE p')
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE c')
+        test_table_ss.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE c')
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c},
+        test_table_ss.update_item(Key={'p': p, 'c': c},
             UpdateExpression='ADD p :val1', ExpressionAttributeValues={':val1': 4})
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c},
+        test_table_ss.update_item(Key={'p': p, 'c': c},
             UpdateExpression='ADD c :val1', ExpressionAttributeValues={':val1': 4})
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c},
+        test_table_ss.update_item(Key={'p': p, 'c': c},
             UpdateExpression='DELETE p :val1', ExpressionAttributeValues={':val1': set(['cat', 'mouse'])})
     with pytest.raises(ClientError, match='ValidationException.*key'):
-        test_table.update_item(Key={'p': p, 'c': c},
+        test_table_ss.update_item(Key={'p': p, 'c': c},
             UpdateExpression='DELETE c :val1', ExpressionAttributeValues={':val1': set(['cat', 'mouse'])})
     # As sanity check, verify we *can* modify a non-key column
-    test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='SET a = :val1', ExpressionAttributeValues={':val1': 4})
-    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'a': 4}
-    test_table.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE a')
-    assert test_table.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c}
+    test_table_ss.update_item(Key={'p': p, 'c': c}, UpdateExpression='SET a = :val1', ExpressionAttributeValues={':val1': 4})
+    assert test_table_ss.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c, 'a': 4}
+    test_table_ss.update_item(Key={'p': p, 'c': c}, UpdateExpression='REMOVE a')
+    assert test_table_ss.get_item(Key={'p': p, 'c': c}, ConsistentRead=True)['Item'] == {'p': p, 'c': c}
 
 # Test that trying to start an expression with some nonsense like HELLO
 # instead of SET, REMOVE, ADD or DELETE, fails.
