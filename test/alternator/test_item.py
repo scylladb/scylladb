@@ -7,7 +7,7 @@
 import pytest
 from botocore.exceptions import ClientError
 from decimal import Decimal
-from test.alternator.util import random_string, random_bytes
+from test.alternator.util import create_test_table, random_string, random_bytes
 
 # Basic test for creating a new item with a random name, and reading it back
 # with strong consistency.
@@ -879,3 +879,34 @@ def test_many_attributes(test_table_s):
         AttributeUpdates={key: {'Value': more_attributes[key], 'Action': 'PUT'} for key in more_attributes.keys()})
     item = {**item, **more_attributes}
     assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == item
+
+@pytest.fixture(scope="module")
+def test_table_sss_lsi(dynamodb):
+    table = create_test_table(dynamodb,
+        KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' } ],
+        AttributeDefinitions=[
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+                    { 'AttributeName': 'a', 'AttributeType': 'S' },
+        ],
+        LocalSecondaryIndexes=[
+            {   'IndexName': 'a_idx',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'a', 'KeyType': 'RANGE' }
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ])
+    yield table
+    table.delete()
+
+def test_put_item_deletes_lsi_column(test_table_sss_lsi):
+    key = {'p': random_string(), 'c': random_string()}
+    empty_item = {**key}
+    item = {**key, 'a': random_string()}
+
+    test_table_sss_lsi.put_item(Item=item)
+    assert test_table_sss_lsi.get_item(Key=key, ConsistentRead=True)['Item'] == item
+    test_table_sss_lsi.put_item(Item=empty_item)
+    assert test_table_sss_lsi.get_item(Key=key, ConsistentRead=True)['Item'] == empty_item
