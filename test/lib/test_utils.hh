@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include <filesystem>
+
 #include <seastar/core/future.hh>
 #include <seastar/util/source_location-compat.hh>
 #include <string>
@@ -22,7 +24,13 @@ using namespace seastar;
 // multiple shards, to avoid problems due to the BOOST versions not being thread
 // safe.
 
+namespace replica {
+    class table;
+}
+
 namespace tests {
+
+namespace fs = std::filesystem;
 
 [[nodiscard]] bool do_check(bool condition, seastar::compat::source_location sl, std::string_view msg);
 
@@ -96,6 +104,10 @@ inline std::string getenv_safe(std::string_view name) {
 extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id);
 future<bool> compare_files(std::string fa, std::string fb);
 future<> touch_file(std::string name);
+
+// Helper to get directory a table keeps its data in.
+// Only suitable for tests, that work with local storage type.
+fs::path table_dir(const replica::table& cf);
 
 extern std::mutex boost_logger_mutex;
 

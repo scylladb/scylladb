@@ -14,6 +14,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "utils/to_string.hh"
+#include "replica/database.hh"
 #include "seastarx.hh"
 #include <random>
 
@@ -98,5 +99,11 @@ future<> touch_file(std::string name) {
 }
 
 std::mutex boost_logger_mutex;
+
+// Helper to get directory a table keeps its data in.
+// Only suitable for tests, that work with local storage type.
+fs::path table_dir(const replica::table& cf) {
+    return std::get<data_dictionary::storage_options::local>(cf.get_storage_options().value).dir;
+}
 
 }
