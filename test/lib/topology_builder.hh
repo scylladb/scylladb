@@ -76,6 +76,7 @@ private:
     sstring _rack;
     shared_load_stats _load_stats;
     std::vector<locator::host_id> _hosts;
+    std::unordered_map<locator::host_id, gms::inet_address> _host_addresses;
 private:
     inet_address make_node_address(int n) {
         assert(n > 0);
@@ -227,6 +228,7 @@ public:
             }
         }
         _hosts.push_back(id);
+        _host_addresses.emplace(id, ip);
         return id;
     }
 
@@ -265,5 +267,9 @@ public:
 
     const std::vector<locator::host_id>& hosts() const {
         return _hosts;
+    }
+
+    const std::unordered_map<locator::host_id, gms::inet_address>& host_addresses() const {
+        return _host_addresses;
     }
 };
