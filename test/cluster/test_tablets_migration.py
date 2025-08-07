@@ -3,6 +3,8 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+from collections import defaultdict
+
 from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
@@ -26,11 +28,14 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled'}
     host_ids = []
     servers = []
+    hosts_by_rack = defaultdict(list)
 
     async def make_server(rack: str):
         s = await manager.server_add(config=cfg, property_file={"dc": "dc1", "rack": rack})
         servers.append(s)
-        host_ids.append(await manager.get_host_id(s.server_id))
+        host = await manager.get_host_id(s.server_id)
+        hosts_by_rack[rack].append(host)
+        host_ids.append(host)
         await manager.api.disable_tablet_balancing(s.ip_addr)
 
     await make_server("r1")
@@ -47,14 +52,19 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
         replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
         logger.info(f"Tablet is on [{replicas}]")
         assert len(replicas) == 1 and len(replicas[0].replicas) == 2
-        old_replica = replicas[0].replicas[0]
-        replicas = [ r[0] for r in replicas[0].replicas ]
-        for h in host_ids:
-            if h not in replicas:
+
+        old_replica = None
+        for r in replicas[0].replicas:
+            if r[0] in hosts_by_rack['r1']:
+                old_replica = r
+                break
+
+        for h in hosts_by_rack['r1']:
+            if h != old_replica[0]:
                 new_replica = (h, 0)
                 break
         else:
-            assert False, "Cannot find node without replica"
+            assert False, "Cannot find node without replica in rack r1"
 
         if action == 'move':
             logger.info(f"Move tablet {old_replica[0]} -> {new_replica[0]}")
