@@ -8,6 +8,7 @@
 
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/tablet_replication_strategy.hh"
+#include "locator/local_strategy.hh"
 #include "utils/class_registrator.hh"
 #include "exceptions/exceptions.hh"
 #include <fmt/ranges.h>
@@ -352,7 +353,7 @@ abstract_replication_strategy::get_pending_address_ranges(const token_metadata_p
 
 static const auto default_replication_map_key = dht::token::from_int64(0);
 
-future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
+future<mutable_static_effective_replication_map_ptr> calculate_vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
     replication_map replication_map;
     ring_mapping pending_endpoints;
     ring_mapping read_endpoints;
@@ -436,32 +437,36 @@ future<mutable_vnode_effective_replication_map_ptr> calculate_effective_replicat
     }
 
     auto rf = rs->get_replication_factor(*tmptr);
-    co_return make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(replication_map),
+    co_return make_vnode_effective_replication_map_ptr(std::move(rs), std::move(tmptr), std::move(replication_map),
         std::move(pending_endpoints), std::move(read_endpoints), std::move(dirty_endpoints), rf);
 }
 
-auto vnode_effective_replication_map::clone_data_gently() const -> future<std::unique_ptr<cloned_data>> {
-    auto result = std::make_unique<cloned_data>();
+future<mutable_static_effective_replication_map_ptr> vnode_effective_replication_map::clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const {
+    replication_map replication_map;
+    ring_mapping pending_endpoints;
+    ring_mapping read_endpoints;
+    std::unordered_set<locator::host_id> dirty_endpoints;
 
     for (auto& i : _replication_map) {
-        result->replication_map.emplace(i.first, i.second);
+        replication_map.emplace(i.first, i.second);
         co_await coroutine::maybe_yield();
     }
 
     for (const auto& i : *_pending_endpoints) {
-        *result->pending_endpoints += i;
+        *pending_endpoints += i;
         co_await coroutine::maybe_yield();
     }
 
     for (const auto& i : *_read_endpoints) {
-        *result->read_endpoints += i;
+        *read_endpoints += i;
         co_await coroutine::maybe_yield();
     }
 
     // no need to yield while copying since this is bound by nodes, not vnodes
-    result->dirty_endpoints = _dirty_endpoints;
+    dirty_endpoints = _dirty_endpoints;
 
-    co_return std::move(result);
+    co_return make_vnode_effective_replication_map_ptr(std::move(rs), std::move(tmptr), std::move(replication_map),
+        std::move(pending_endpoints), std::move(read_endpoints), std::move(dirty_endpoints), _replication_factor);
 }
 
 host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(const token& tok,
@@ -491,9 +496,14 @@ stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(
     return stop_iteration::no;
 }
 
-vnode_effective_replication_map::~vnode_effective_replication_map() {
+static_effective_replication_map::~static_effective_replication_map() {
     if (is_registered()) {
         _factory->erase_effective_replication_map(this);
+    }
+}
+
+vnode_effective_replication_map::~vnode_effective_replication_map() {
+    if (is_registered()) {
         try {
             _factory->submit_background_work(clear_gently(std::move(_replication_map),
                 std::move(*_pending_endpoints),
@@ -514,40 +524,44 @@ effective_replication_map::effective_replication_map(replication_strategy_ptr rs
         , _validity_abort_source(std::make_unique<abort_source>())
 { }
 
-vnode_effective_replication_map::factory_key vnode_effective_replication_map::make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr) {
+static_effective_replication_map::factory_key static_effective_replication_map::make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr) {
     return factory_key(rs->get_type(), rs->get_config_options(), tmptr->get_ring_version());
 }
 
-future<vnode_effective_replication_map_ptr> effective_replication_map_factory::create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
+future<static_effective_replication_map_ptr> effective_replication_map_factory::create_static_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
     // lookup key on local shard
-    auto key = vnode_effective_replication_map::make_factory_key(rs, tmptr);
+    auto key = static_effective_replication_map::make_factory_key(rs, tmptr);
     auto erm = find_effective_replication_map(key);
     if (erm) {
-        rslogger.debug("create_effective_replication_map: found {} [{}]", key, fmt::ptr(erm.get()));
+        rslogger.debug("create_static_effective_replication_map: found {} [{}]", key, fmt::ptr(erm.get()));
         co_return erm;
     }
 
-    // try to find a reference erm on shard 0
-    // TODO:
-    // - use hash of key to distribute the load
-    // - instaintiate only on NUMA nodes
-    auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<vnode_effective_replication_map_ptr>> {
-        auto erm = ermf.find_effective_replication_map(key);
-        co_return make_foreign<vnode_effective_replication_map_ptr>(std::move(erm));
-    });
-    mutable_vnode_effective_replication_map_ptr new_erm;
-    if (ref_erm) {
-        auto rf = ref_erm->get_replication_factor();
-        auto local_data = co_await ref_erm->clone_data_gently();
-        new_erm = make_effective_replication_map(std::move(rs), std::move(tmptr), std::move(local_data->replication_map),
-            std::move(local_data->pending_endpoints), std::move(local_data->read_endpoints), std::move(local_data->dirty_endpoints), rf);
+    mutable_static_effective_replication_map_ptr new_erm;
+
+    if (rs->is_local()) {
+        // Local replication strategy does not benefit from cloning across shards
+        // to save an expensive calculate function like `calculate_vnode_effective_replication_map`
+        new_erm = make_local_effective_replication_map_ptr(std::move(rs), std::move(tmptr));
     } else {
-        new_erm = co_await calculate_effective_replication_map(std::move(rs), std::move(tmptr));
+        // try to find a reference erm on shard 0
+        // TODO:
+        // - use hash of key to distribute the load
+        // - instaintiate only on NUMA nodes
+        auto ref_erm = co_await container().invoke_on(0, [key] (effective_replication_map_factory& ermf) -> future<foreign_ptr<static_effective_replication_map_ptr>> {
+            auto erm = ermf.find_effective_replication_map(key);
+            co_return make_foreign<static_effective_replication_map_ptr>(std::move(erm));
+        });
+        if (ref_erm) {
+            new_erm = co_await ref_erm->clone_gently(std::move(rs), std::move(tmptr));
+        } else {
+            new_erm = co_await calculate_vnode_effective_replication_map(std::move(rs), std::move(tmptr));
+        }
     }
     co_return insert_effective_replication_map(std::move(new_erm), std::move(key));
 }
 
-vnode_effective_replication_map_ptr effective_replication_map_factory::find_effective_replication_map(const vnode_effective_replication_map::factory_key& key) const {
+static_effective_replication_map_ptr effective_replication_map_factory::find_effective_replication_map(const static_effective_replication_map::factory_key& key) const {
     auto it = _effective_replication_maps.find(key);
     if (it != _effective_replication_maps.end()) {
         return it->second->shared_from_this();
@@ -555,7 +569,7 @@ vnode_effective_replication_map_ptr effective_replication_map_factory::find_effe
     return {};
 }
 
-vnode_effective_replication_map_ptr effective_replication_map_factory::insert_effective_replication_map(mutable_vnode_effective_replication_map_ptr erm, vnode_effective_replication_map::factory_key key) {
+static_effective_replication_map_ptr effective_replication_map_factory::insert_effective_replication_map(mutable_static_effective_replication_map_ptr erm, static_effective_replication_map::factory_key key) {
     auto [it, inserted] = _effective_replication_maps.insert({key, erm.get()});
     if (inserted) {
         rslogger.debug("insert_effective_replication_map: inserted {} [{}]", key, fmt::ptr(erm.get()));
@@ -567,7 +581,7 @@ vnode_effective_replication_map_ptr effective_replication_map_factory::insert_ef
     return res;
 }
 
-bool effective_replication_map_factory::erase_effective_replication_map(vnode_effective_replication_map* erm) {
+bool effective_replication_map_factory::erase_effective_replication_map(static_effective_replication_map* erm) {
     const auto& key = erm->get_factory_key();
     auto it = _effective_replication_maps.find(key);
     if (it == _effective_replication_maps.end()) {
@@ -621,7 +635,7 @@ void effective_replication_map_factory::submit_background_work(future<> fut) {
     });
 }
 
-future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+future<> global_static_effective_replication_map::get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
     return sharded_db.invoke_on(0, [this, &sharded_db, keyspace_name] (replica::database& db) -> future<> {
         // To ensure we get the same effective_replication_map
         // on all shards, acquire the shared_token_metadata lock.
@@ -636,7 +650,7 @@ future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<repli
         // all e_r_m:s and clone both on all shards. including the ring version,
         // all under the lock.
         auto lk = co_await db.get_shared_token_metadata().get_lock();
-        auto erm = db.find_keyspace(keyspace_name).get_vnode_effective_replication_map();
+        auto erm = db.find_keyspace(keyspace_name).get_static_effective_replication_map();
         utils::get_local_injector().inject("get_keyspace_erms_throw_no_such_keyspace",
                 [&keyspace_name] { throw data_dictionary::no_such_keyspace{keyspace_name}; });
         auto ring_version = erm->get_token_metadata().get_ring_version();
@@ -644,7 +658,7 @@ future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<repli
         co_await coroutine::parallel_for_each(std::views::iota(1u, smp::count), [this, &sharded_db, keyspace_name, ring_version] (unsigned shard) -> future<> {
             _erms[shard] = co_await sharded_db.invoke_on(shard, [keyspace_name, ring_version] (const replica::database& db) {
                 const auto& ks = db.find_keyspace(keyspace_name);
-                auto erm = ks.get_vnode_effective_replication_map();
+                auto erm = ks.get_static_effective_replication_map();
                 auto local_ring_version = erm->get_token_metadata().get_ring_version();
                 if (local_ring_version != ring_version) {
                     on_internal_error(rslogger, format("Inconsistent effective_replication_map ring_verion {}, expected {}", local_ring_version, ring_version));
@@ -655,8 +669,8 @@ future<> global_vnode_effective_replication_map::get_keyspace_erms(sharded<repli
     });
 }
 
-future<global_vnode_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
-    global_vnode_effective_replication_map ret;
+future<global_static_effective_replication_map> make_global_static_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name) {
+    global_static_effective_replication_map ret;
     co_await ret.get_keyspace_erms(sharded_db, keyspace_name);
     co_return ret;
 }
@@ -684,7 +698,7 @@ auto fmt::formatter<locator::replication_strategy_type>::format(locator::replica
     return fmt::format_to(ctx.out(), "{}", name);
 }
 
-auto fmt::formatter<locator::vnode_effective_replication_map::factory_key>::format(const locator::vnode_effective_replication_map::factory_key& key,
+auto fmt::formatter<locator::static_effective_replication_map::factory_key>::format(const locator::static_effective_replication_map::factory_key& key,
                                                                                    fmt::format_context& ctx) const -> decltype(ctx.out()) {
     auto out = fmt::format_to(ctx.out(), "{}.{}", key.rs_type, key.ring_version);
     char sep = ':';

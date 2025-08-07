@@ -74,7 +74,8 @@ static void verify_sorted(const dht::token_range_vector& trv) {
     BOOST_CHECK(std::ranges::adjacent_find(trv, not_strictly_before) == trv.end());
 }
 
-static future<> check_ranges_are_sorted(vnode_effective_replication_map_ptr erm, locator::host_id ep) {
+static future<> check_ranges_are_sorted(static_effective_replication_map_ptr ermp, locator::host_id ep) {
+    auto* erm = ermp->maybe_as_vnode_effective_replication_map();
     verify_sorted(co_await erm->get_ranges(ep));
     verify_sorted(co_await erm->get_primary_ranges(ep));
     verify_sorted(co_await erm->get_primary_ranges_within_dc(ep));
@@ -163,7 +164,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     const auto& topo = tm.get_topology();
     strategy_sanity_check(ars_ptr, tmptr, options);
 
-    auto erm = calculate_effective_replication_map(ars_ptr, tmptr).get();
+    auto erm = calculate_vnode_effective_replication_map(ars_ptr, tmptr).get();
 
     for (auto& rp : ring_points) {
         double cur_point1 = rp.point - 0.5;

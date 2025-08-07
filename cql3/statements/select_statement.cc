@@ -2183,8 +2183,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
     };
 
     auto is_local_table = [&] {
-        return underlying_schema->table().get_effective_replication_map()->get_replication_strategy().get_type()
-                == locator::replication_strategy_type::local;
+        return underlying_schema->table().get_effective_replication_map()->get_replication_strategy().is_local();
     };
 
     // Used to determine if an execution of this statement can be parallelized

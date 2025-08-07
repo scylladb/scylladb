@@ -55,7 +55,7 @@ using replication_map = std::unordered_map<token, host_id_vector_replica_set>;
 
 using host_id_set = utils::basic_sequenced_set<locator::host_id, host_id_vector_replica_set>;
 
-class vnode_effective_replication_map;
+class static_effective_replication_map;
 class effective_replication_map_factory;
 class per_table_replication_strategy;
 class tablet_aware_replication_strategy;
@@ -63,7 +63,7 @@ class effective_replication_map;
 
 
 class abstract_replication_strategy : public seastar::enable_shared_from_this<abstract_replication_strategy> {
-    friend class vnode_effective_replication_map;
+    friend class static_effective_replication_map;
     friend class per_table_replication_strategy;
     friend class tablet_aware_replication_strategy;
 protected:
@@ -143,6 +143,8 @@ public:
 
     bool uses_tablets() const { return _uses_tablets; }
     const tablet_aware_replication_strategy* maybe_as_tablet_aware() const;
+
+    bool is_local() const { return get_type() == replication_strategy_type::local; }
 
     // Use the token_metadata provided by the caller instead of _token_metadata
     // Note: must be called with initialized, non-empty token_metadata.
@@ -288,11 +290,20 @@ public:
     virtual effective_replication_map_ptr make_replication_map(table_id, token_metadata_ptr) const = 0;
 };
 
+class static_effective_replication_map;
+class vnode_effective_replication_map;
+class local_effective_replication_map;
+
+using static_effective_replication_map_ptr = shared_ptr<const static_effective_replication_map>;
+using mutable_static_effective_replication_map_ptr = shared_ptr<static_effective_replication_map>;
+using static_erm_ptr = static_effective_replication_map_ptr;
+using mutable_static_erm_ptr = mutable_static_effective_replication_map_ptr;
+
 // Holds the full replication_map resulting from applying the
 // effective replication strategy over the given token_metadata
 // and replication_strategy_config_options.
 // Used for token-based replication strategies.
-class vnode_effective_replication_map : public enable_shared_from_this<vnode_effective_replication_map>
+class static_effective_replication_map : public enable_shared_from_this<static_effective_replication_map>
                                       , public effective_replication_map {
 public:
     struct factory_key {
@@ -311,6 +322,86 @@ public:
 
         bool operator==(const factory_key& o) const = default;
     };
+private:
+    std::optional<factory_key> _factory_key = std::nullopt;
+    effective_replication_map_factory* _factory = nullptr;
+
+    friend class abstract_replication_strategy;
+    friend class effective_replication_map_factory;
+public:
+    explicit static_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, size_t replication_factor) noexcept
+        : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
+    { }
+    static_effective_replication_map() = delete;
+    static_effective_replication_map(static_effective_replication_map&&) = default;
+    ~static_effective_replication_map();
+
+    virtual const vnode_effective_replication_map* maybe_as_vnode_effective_replication_map() const {
+        return nullptr;
+    }
+
+    virtual const local_effective_replication_map* maybe_as_local_effective_replication_map() const {
+        return nullptr;
+    }
+
+    virtual future<mutable_static_effective_replication_map_ptr> clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const = 0;
+
+public:
+    static factory_key make_factory_key(const replication_strategy_ptr& rs, const token_metadata_ptr& tmptr);
+
+    const factory_key& get_factory_key() const noexcept {
+        return *_factory_key;
+    }
+
+    void set_factory(effective_replication_map_factory& factory, factory_key key) noexcept {
+        _factory = &factory;
+        _factory_key.emplace(std::move(key));
+    }
+
+    bool is_registered() const noexcept {
+        return _factory != nullptr;
+    }
+
+    void unregister() noexcept {
+        _factory = nullptr;
+    }
+};
+
+// Apply the replication strategy over the current configuration and the given token_metadata.
+future<mutable_static_erm_ptr> calculate_vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
+
+// Class to hold a coherent view of a keyspace
+// effective replication map on all shards
+class global_static_effective_replication_map {
+    std::vector<foreign_ptr<static_erm_ptr>> _erms;
+
+public:
+    global_static_effective_replication_map() : _erms(smp::count) {}
+    global_static_effective_replication_map(global_static_effective_replication_map&&) = default;
+    global_static_effective_replication_map& operator=(global_static_effective_replication_map&&) = default;
+
+    future<> get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
+
+    const static_effective_replication_map& get() const noexcept {
+        return *_erms[this_shard_id()];
+    }
+
+    const static_effective_replication_map& operator*() const noexcept {
+        return get();
+    }
+
+    const static_effective_replication_map* operator->() const noexcept {
+        return &get();
+    }
+};
+
+future<global_static_effective_replication_map> make_global_static_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
+
+// Holds the full replication_map resulting from applying the
+// effective replication strategy over the given token_metadata
+// and replication_strategy_config_options.
+// Used for token-based replication strategies.
+class vnode_effective_replication_map : public static_effective_replication_map {
 private:
     replication_map _replication_map;
     ring_mapping _pending_endpoints;
@@ -334,7 +425,7 @@ public: // effective_replication_map
 public:
     explicit vnode_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map,
             ring_mapping pending_endpoints, ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) noexcept
-        : effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
+        : static_effective_replication_map(std::move(rs), std::move(tmptr), replication_factor)
         , _replication_map(std::move(replication_map))
         , _pending_endpoints(std::move(pending_endpoints))
         , _read_endpoints(std::move(read_endpoints))
@@ -344,15 +435,11 @@ public:
     vnode_effective_replication_map(vnode_effective_replication_map&&) = default;
     ~vnode_effective_replication_map();
 
-    struct cloned_data {
-        replication_map replication_map;
-        ring_mapping pending_endpoints;
-        ring_mapping read_endpoints;
-        std::unordered_set<locator::host_id> dirty_endpoints;
-    };
-    // boost::icl::interval_map is not no_throw_move_constructible -> can't return cloned_data by val,
-    // since future_state requires T to be no_throw_move_constructible.
-    future<std::unique_ptr<cloned_data>> clone_data_gently() const;
+    virtual const vnode_effective_replication_map* maybe_as_vnode_effective_replication_map() const override {
+        return this;
+    }
+
+    virtual future<mutable_static_effective_replication_map_ptr> clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const override;
 
     // get_primary_ranges() returns the list of "primary ranges" for the given
     // endpoint. "Primary ranges" are the ranges that the node is responsible
@@ -409,47 +496,49 @@ public:
     }
 };
 
-using vnode_effective_replication_map_ptr = shared_ptr<const vnode_effective_replication_map>;
-using mutable_vnode_effective_replication_map_ptr = shared_ptr<vnode_effective_replication_map>;
-using vnode_erm_ptr = vnode_effective_replication_map_ptr;
-using mutable_vnode_erm_ptr = mutable_vnode_effective_replication_map_ptr;
-
-inline mutable_vnode_erm_ptr make_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
+inline mutable_static_erm_ptr make_vnode_effective_replication_map_ptr(replication_strategy_ptr rs, token_metadata_ptr tmptr, replication_map replication_map, ring_mapping pending_endpoints,
     ring_mapping read_endpoints, std::unordered_set<locator::host_id> dirty_endpoints, size_t replication_factor) {
     return seastar::make_shared<vnode_effective_replication_map>(
             std::move(rs), std::move(tmptr), std::move(replication_map),
         std::move(pending_endpoints), std::move(read_endpoints), std::move(dirty_endpoints), replication_factor);
 }
 
-// Apply the replication strategy over the current configuration and the given token_metadata.
-future<mutable_vnode_erm_ptr> calculate_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
-
-// Class to hold a coherent view of a keyspace
-// effective replication map on all shards
-class global_vnode_effective_replication_map {
-    std::vector<foreign_ptr<vnode_erm_ptr>> _erms;
-
+// Holds the full replication_map resulting from applying the
+// effective replication strategy over the given token_metadata
+// and replication_strategy_config_options.
+// Used for token-based replication strategies.
+class local_effective_replication_map : public static_effective_replication_map {
+    host_id_vector_replica_set _replica_set;
+    dht::token_range_vector _local_ranges;
 public:
-    global_vnode_effective_replication_map() : _erms(smp::count) {}
-    global_vnode_effective_replication_map(global_vnode_effective_replication_map&&) = default;
-    global_vnode_effective_replication_map& operator=(global_vnode_effective_replication_map&&) = default;
+    explicit local_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr) noexcept
+        : static_effective_replication_map(std::move(rs), std::move(tmptr), 1)
+        , _replica_set({_tmptr->get_topology().my_host_id()})
+        , _local_ranges({dht::token_range::make_open_ended_both_sides()})
+    { }
+    local_effective_replication_map() = delete;
+    local_effective_replication_map(local_effective_replication_map&&) = default;
 
-    future<> get_keyspace_erms(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
-
-    const vnode_effective_replication_map& get() const noexcept {
-        return *_erms[this_shard_id()];
+    virtual const local_effective_replication_map* maybe_as_local_effective_replication_map() const override {
+        return this;
     }
 
-    const vnode_effective_replication_map& operator*() const noexcept {
-        return get();
-    }
+    virtual future<mutable_static_effective_replication_map_ptr> clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const override;
 
-    const vnode_effective_replication_map* operator->() const noexcept {
-        return &get();
-    }
+    host_id_vector_replica_set get_natural_replicas(const token& search_token) const override;
+    host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
+    host_id_vector_replica_set get_replicas_for_reading(const token& token) const override;
+    host_id_vector_replica_set get_replicas(const token& search_token) const override;
+    std::optional<tablet_routing_info> check_locality(const token& token) const override;
+    bool has_pending_ranges(locator::host_id endpoint) const override;
+    std::unique_ptr<token_range_splitter> make_splitter() const override;
+    const dht::sharder& get_sharder(const schema& s) const override;
+    future<dht::token_range_vector> get_ranges(host_id ep) const override;
 };
 
-future<global_vnode_effective_replication_map> make_global_effective_replication_map(sharded<replica::database>& sharded_db, std::string_view keyspace_name);
+inline mutable_static_erm_ptr make_local_effective_replication_map_ptr(replication_strategy_ptr rs, token_metadata_ptr tmptr) {
+    return seastar::make_shared<local_effective_replication_map>(std::move(rs), std::move(tmptr));
+}
 
 } // namespace locator
 
@@ -459,14 +548,14 @@ struct fmt::formatter<locator::replication_strategy_type> : fmt::formatter<strin
 };
 
 template <>
-struct fmt::formatter<locator::vnode_effective_replication_map::factory_key> : fmt::formatter<string_view> {
-    auto format(const locator::vnode_effective_replication_map::factory_key&, fmt::format_context& ctx) const -> decltype(ctx.out());
+struct fmt::formatter<locator::static_effective_replication_map::factory_key> : fmt::formatter<string_view> {
+    auto format(const locator::static_effective_replication_map::factory_key&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template<>
-struct appending_hash<locator::vnode_effective_replication_map::factory_key> {
+struct appending_hash<locator::static_effective_replication_map::factory_key> {
     template<typename Hasher>
-    void operator()(Hasher& h, const locator::vnode_effective_replication_map::factory_key& key) const {
+    void operator()(Hasher& h, const locator::static_effective_replication_map::factory_key& key) const {
         feed_hash(h, key.rs_type);
         feed_hash(h, key.ring_version);
         for (const auto& [opt, val] : key.rs_config_options) {
@@ -479,10 +568,10 @@ struct appending_hash<locator::vnode_effective_replication_map::factory_key> {
 namespace std {
 
 template <>
-struct hash<locator::vnode_effective_replication_map::factory_key> {
-    size_t operator()(const locator::vnode_effective_replication_map::factory_key& key) const {
+struct hash<locator::static_effective_replication_map::factory_key> {
+    size_t operator()(const locator::static_effective_replication_map::factory_key& key) const {
         simple_xx_hasher h;
-        appending_hash<locator::vnode_effective_replication_map::factory_key>{}(h, key);
+        appending_hash<locator::static_effective_replication_map::factory_key>{}(h, key);
         return h.finalize();
     }
 };
@@ -492,18 +581,18 @@ struct hash<locator::vnode_effective_replication_map::factory_key> {
 namespace locator {
 
 class effective_replication_map_factory : public peering_sharded_service<effective_replication_map_factory> {
-    std::unordered_map<vnode_effective_replication_map::factory_key, vnode_effective_replication_map*> _effective_replication_maps;
+    std::unordered_map<static_effective_replication_map::factory_key, static_effective_replication_map*> _effective_replication_maps;
     future<> _background_work = make_ready_future<>();
     bool _stopped = false;
 
 public:
-    // looks up the vnode_effective_replication_map on the local shard.
+    // looks up the static_effective_replication_map on the local shard.
     // If not found, tries to look one up for reference on shard 0
     // so its replication map can be cloned.  Otherwise, calculates the
-    // vnode_effective_replication_map for the local shard.
+    // static_effective_replication_map for the local shard.
     //
     // Therefore create should be called first on shard 0, then on all other shards.
-    future<vnode_erm_ptr> create_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
+    future<static_erm_ptr> create_static_effective_replication_map(replication_strategy_ptr rs, token_metadata_ptr tmptr);
 
     future<> stop() noexcept;
 
@@ -512,13 +601,14 @@ public:
     }
 
 private:
-    vnode_erm_ptr find_effective_replication_map(const vnode_effective_replication_map::factory_key& key) const;
-    vnode_erm_ptr insert_effective_replication_map(mutable_vnode_erm_ptr erm, vnode_effective_replication_map::factory_key key);
+    static_erm_ptr find_effective_replication_map(const static_effective_replication_map::factory_key& key) const;
+    static_erm_ptr insert_effective_replication_map(mutable_static_erm_ptr erm, static_effective_replication_map::factory_key key);
 
-    bool erase_effective_replication_map(vnode_effective_replication_map* erm);
+    bool erase_effective_replication_map(static_effective_replication_map* erm);
 
     void submit_background_work(future<> fut);
 
+    friend class static_effective_replication_map;
     friend class vnode_effective_replication_map;
 };
 

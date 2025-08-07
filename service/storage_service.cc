@@ -3118,7 +3118,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
 
     std::vector<mutable_token_metadata_ptr> pending_token_metadata_ptr;
     pending_token_metadata_ptr.resize(smp::count);
-    std::vector<std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr>> pending_effective_replication_maps;
+    std::vector<std::unordered_map<sstring, locator::static_effective_replication_map_ptr>> pending_effective_replication_maps;
     pending_effective_replication_maps.resize(smp::count);
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms;
     std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms;
@@ -3167,7 +3167,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             if (rs->is_per_table()) {
                 continue;
             }
-            auto erm = co_await get_erm_factory().create_effective_replication_map(rs, tmptr);
+            auto erm = co_await get_erm_factory().create_static_effective_replication_map(rs, tmptr);
             pending_effective_replication_maps[base_shard].emplace(ks_name, std::move(erm));
         }
         co_await container().invoke_on_others([&] (storage_service& ss) -> future<> {
@@ -3178,7 +3178,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                     continue;
                 }
                 auto tmptr = pending_token_metadata_ptr[this_shard_id()];
-                auto erm = co_await ss.get_erm_factory().create_effective_replication_map(rs, tmptr);
+                auto erm = co_await ss.get_erm_factory().create_static_effective_replication_map(rs, tmptr);
                 pending_effective_replication_maps[this_shard_id()].emplace(ks_name, std::move(erm));
             }
         });
@@ -3236,7 +3236,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
             auto& erms = pending_effective_replication_maps[this_shard_id()];
             for (auto it = erms.begin(); it != erms.end(); ) {
                 auto& ks = db.find_keyspace(it->first);
-                ks.update_effective_replication_map(std::move(it->second));
+                ks.update_static_effective_replication_map(std::move(it->second));
                 it = erms.erase(it);
             }
 
@@ -3519,12 +3519,12 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             const replica::keyspace& ks = ss._db.local().find_keyspace(keyspace_name);
             // This is ugly, but it follows origin
             auto&& rs = ks.get_replication_strategy();  // clang complains about typeid(ks.get_replication_strategy());
-            if (typeid(rs) == typeid(locator::local_strategy)) {
+            if (rs.is_local()) {
                 throw std::runtime_error("Ownership values for keyspaces with LocalStrategy are meaningless");
             }
 
             if (table_name.empty()) {
-                erm = ks.get_vnode_effective_replication_map();
+                erm = ks.get_static_effective_replication_map();
             } else {
                 auto& cf = ss._db.local().find_column_family(keyspace_name, table_name);
                 erm = cf.get_effective_replication_map();
@@ -3543,7 +3543,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
             }
             keyspace_name = "system_traces";
             const auto& ks = ss._db.local().find_keyspace(keyspace_name);
-            erm = ks.get_vnode_effective_replication_map();
+            erm = ks.get_static_effective_replication_map();
         }
 
         // The following loops seems computationally heavy, but it's not as bad.
@@ -3571,7 +3571,7 @@ future<std::map<gms::inet_address, float>> storage_service::effective_ownership(
                 // calculate the ownership with replication and add the endpoint to the final ownership map
                 try {
                     float ownership = 0.0f;
-                    auto ranges = co_await ss.get_ranges_for_endpoint(erm, endpoint);
+                    auto ranges = co_await ss.get_ranges_for_endpoint(*erm, endpoint);
                     for (auto& r : ranges) {
                         // get_ranges_for_endpoint will unwrap the first range.
                         // With t0 t1 t2 t3, the first range (t3,t0] will be split
@@ -3840,7 +3840,7 @@ future<> storage_service::decommission() {
 
                 auto non_system_keyspaces = db.get_non_local_vnode_based_strategy_keyspaces();
                 for (const auto& keyspace_name : non_system_keyspaces) {
-                    if (ss._db.local().find_keyspace(keyspace_name).get_vnode_effective_replication_map()->has_pending_ranges(ss.get_token_metadata_ptr()->get_my_id())) {
+                    if (ss._db.local().find_keyspace(keyspace_name).get_static_effective_replication_map()->has_pending_ranges(ss.get_token_metadata_ptr()->get_my_id())) {
                         throw std::runtime_error("data is currently moving to this node; unable to leave the ring");
                     }
                 }
@@ -5129,7 +5129,7 @@ future<> storage_service::rebuild(utils::optional_param source_dc) {
                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(*source_dc));
                 }
                 for (const auto& [keyspace_name, erm] : ks_erms) {
-                    co_await streamer->add_ranges(keyspace_name, erm, co_await ss.get_ranges_for_endpoint(erm, ss.my_host_id()), ss._gossiper, false);
+                    co_await streamer->add_ranges(keyspace_name, erm, co_await ss.get_ranges_for_endpoint(*erm, ss.my_host_id()), ss._gossiper, false);
                 }
                 try {
                     co_await streamer->stream_async();
@@ -5169,9 +5169,9 @@ int32_t storage_service::get_exception_count() {
 }
 
 future<std::unordered_multimap<dht::token_range, locator::host_id>>
-storage_service::get_changed_ranges_for_leaving(locator::vnode_effective_replication_map_ptr erm, locator::host_id endpoint) {
+storage_service::get_changed_ranges_for_leaving(const locator::vnode_effective_replication_map* erm, locator::host_id endpoint) {
     // First get all ranges the leaving endpoint is responsible for
-    auto ranges = co_await get_ranges_for_endpoint(erm, endpoint);
+    auto ranges = co_await get_ranges_for_endpoint(*erm, endpoint);
 
     slogger.debug("Node {} ranges [{}]", endpoint, ranges);
 
@@ -5248,7 +5248,7 @@ future<> storage_service::unbootstrap() {
 
         auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
         for (const auto& [keyspace_name, erm] : ks_erms) {
-            auto ranges_mm = co_await get_changed_ranges_for_leaving(erm, my_host_id());
+            auto ranges_mm = co_await get_changed_ranges_for_leaving(erm->maybe_as_vnode_effective_replication_map(), my_host_id());
             if (slogger.is_enabled(logging::log_level::debug)) {
                 std::vector<wrapping_interval<token>> ranges;
                 for (auto& x : ranges_mm) {
@@ -5278,7 +5278,8 @@ future<> storage_service::unbootstrap() {
 future<> storage_service::removenode_add_ranges(lw_shared_ptr<dht::range_streamer> streamer, locator::host_id leaving_node) {
     auto my_address = my_host_id();
     auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-    for (const auto& [keyspace_name, erm] : ks_erms) {
+    for (const auto& [keyspace_name, ermp] : ks_erms) {
+        auto* erm = ermp->maybe_as_vnode_effective_replication_map();
         std::unordered_multimap<dht::token_range, locator::host_id> changed_ranges = co_await get_changed_ranges_for_leaving(erm, leaving_node);
         dht::token_range_vector my_new_ranges;
         for (auto& x : changed_ranges) {
@@ -5423,7 +5424,7 @@ future<> storage_service::shutdown_protocol_servers() {
 }
 
 future<std::unordered_multimap<locator::host_id, dht::token_range>>
-storage_service::get_new_source_ranges(locator::vnode_effective_replication_map_ptr erm, const dht::token_range_vector& ranges) const {
+storage_service::get_new_source_ranges(const locator::vnode_effective_replication_map* erm, const dht::token_range_vector& ranges) const {
     auto my_address = my_host_id();
     std::unordered_map<dht::token_range, host_id_vector_replica_set> range_addresses = co_await erm->get_range_host_ids();
     std::unordered_multimap<locator::host_id, dht::token_range> source_ranges;
@@ -6035,7 +6036,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                     streamer->add_source_filter(std::make_unique<dht::range_streamer::single_datacenter_filter>(source_dc));
                                 }
                                 for (const auto& [keyspace_name, erm] : ks_erms) {
-                                    co_await streamer->add_ranges(keyspace_name, erm, co_await get_ranges_for_endpoint(erm, my_host_id()), _gossiper, false);
+                                    auto ranges = co_await get_ranges_for_endpoint(*erm, my_host_id());
+                                    co_await streamer->add_ranges(keyspace_name, erm, std::move(ranges), _gossiper, false);
                                 }
                                 try {
                                     co_await streamer->stream_async();
@@ -7671,8 +7673,8 @@ storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrap
 };
 
 future<dht::token_range_vector>
-storage_service::get_ranges_for_endpoint(const locator::effective_replication_map_ptr& erm, const locator::host_id& ep) const {
-    return erm->get_ranges(ep);
+storage_service::get_ranges_for_endpoint(const locator::effective_replication_map& erm, const locator::host_id& ep) const {
+    return erm.get_ranges(ep);
 }
 
 // Caller is responsible to hold token_metadata valid until the returned future is resolved
@@ -7707,7 +7709,7 @@ storage_service::get_natural_endpoints(const sstring& keyspace,
     if (ks.uses_tablets()) {
         replicas = table.get_effective_replication_map()->get_natural_replicas(token);
     } else {
-        replicas = ks.get_vnode_effective_replication_map()->get_natural_replicas(token);
+        replicas = ks.get_static_effective_replication_map()->get_natural_replicas(token);
     }
     return replicas | std::views::transform([&] (locator::host_id id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>();
 }
@@ -7869,7 +7871,7 @@ storage_service::topology_change_kind storage_service::upgrade_state_to_topology
 future<bool> storage_service::is_cleanup_allowed(sstring keyspace) {
     return container().invoke_on(0, [keyspace = std::move(keyspace)] (storage_service& ss) {
         const auto my_id = ss.get_token_metadata().get_my_id();
-        const auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_vnode_effective_replication_map()->has_pending_ranges(my_id);
+        const auto pending_ranges = ss._db.local().find_keyspace(keyspace).get_static_effective_replication_map()->has_pending_ranges(my_id);
         const bool is_bootstrap_mode = ss._operation_mode == mode::BOOTSTRAP;
         slogger.debug("is_cleanup_allowed: keyspace={}, is_bootstrap_mode={}, pending_ranges={}",
                 keyspace, is_bootstrap_mode, pending_ranges);

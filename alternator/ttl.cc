@@ -313,7 +313,7 @@ static size_t random_offset(size_t min, size_t max) {
 //
 // The function is to be used with vnodes only
 static future<std::vector<std::pair<dht::token_range, locator::host_id>>> get_secondary_ranges(
-        const locator::effective_replication_map_ptr& erm,
+        const locator::effective_replication_map* erm,
         locator::host_id ep) {
     const auto& tm = *erm->get_token_metadata_ptr();
     const auto& sorted_tokens = tm.sorted_tokens();
@@ -393,7 +393,7 @@ class ranges_holder_primary {
     dht::token_range_vector _token_ranges;
 public:
     explicit ranges_holder_primary(dht::token_range_vector token_ranges) : _token_ranges(std::move(token_ranges)) {}
-    static future<ranges_holder_primary> make(const locator::vnode_effective_replication_map_ptr& erm, locator::host_id ep) {
+    static future<ranges_holder_primary> make(const locator::vnode_effective_replication_map* erm, locator::host_id ep) {
         co_return ranges_holder_primary(co_await erm->get_primary_ranges(ep));
     }
     std::size_t size() const { return _token_ranges.size(); }
@@ -413,7 +413,7 @@ public:
     explicit ranges_holder_secondary(std::vector<std::pair<dht::token_range, locator::host_id>> token_ranges, const gms::gossiper& g)
         : _token_ranges(std::move(token_ranges))
         , _gossiper(g) {}
-    static future<ranges_holder_secondary> make(const locator::effective_replication_map_ptr& erm, locator::host_id ep, const gms::gossiper& g) {
+    static future<ranges_holder_secondary> make(const locator::vnode_effective_replication_map* erm, locator::host_id ep, const gms::gossiper& g) {
         co_return ranges_holder_secondary(co_await get_secondary_ranges(erm, ep), g);
     }
     std::size_t size() const { return _token_ranges.size(); }
@@ -769,8 +769,12 @@ static future<bool> scan_table(
             }
         }
     } else {  // VNodes
-        locator::vnode_effective_replication_map_ptr erm =
-                db.real_database().find_keyspace(s->ks_name()).get_vnode_effective_replication_map();
+        locator::static_effective_replication_map_ptr ermp =
+                db.real_database().find_keyspace(s->ks_name()).get_static_effective_replication_map();
+        auto* erm = ermp->maybe_as_vnode_effective_replication_map();
+        if (!erm) {
+            on_internal_error(tlogger, format("Keyspace {} is local", s->ks_name()));
+        }
         auto my_host_id = erm->get_topology().my_host_id();
         token_ranges_owned_by_this_shard my_ranges(s, co_await ranges_holder_primary::make(erm, my_host_id));
         while (std::optional<dht::partition_range> range = my_ranges.next_partition_range()) {

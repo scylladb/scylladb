@@ -216,7 +216,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
         // - segregate resharded tables into compaction groups
         // - split the keyspace local ranges per compaction_group as done in table::perform_cleanup_compaction
         //   so that cleanup can be considered per compaction group
-        const auto& erm = db.local().find_keyspace(ks).get_vnode_effective_replication_map();
+        const auto& erm = db.local().find_keyspace(ks).get_static_effective_replication_map();
         auto owned_ranges_ptr = skip_cleanup ? lw_shared_ptr<dht::token_range_vector>(nullptr) : compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(erm).get());
         reshard(directory, db, ks, cf, make_sstable, owned_ranges_ptr).get();
         if (!skip_reshape) {

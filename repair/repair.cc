@@ -9,6 +9,7 @@
 #include "db/config.hh"
 #include "repair.hh"
 #include "gms/gossip_address_map.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "repair/row_level.hh"
 
 #include "locator/network_topology_strategy.hh"
@@ -1210,15 +1211,17 @@ future<int> repair_service::do_repair_start(gms::gossip_address_map& addr_map, s
         }
     }
 
-    auto germs = make_lw_shared(co_await locator::make_global_effective_replication_map(sharded_db, keyspace));
-    auto& erm = germs->get();
-    auto& topology = erm.get_token_metadata().get_topology();
-    auto my_host_id = erm.get_topology().my_host_id();
+    auto germs = make_lw_shared(co_await locator::make_global_static_effective_replication_map(sharded_db, keyspace));
+    auto* ermp = germs->get().maybe_as_vnode_effective_replication_map();
 
-    if (erm.get_replication_strategy().get_type() == locator::replication_strategy_type::local) {
+    if (!ermp) {
         rlogger.info("repair[{}]: completed successfully: nothing to repair for keyspace {} with local replication strategy", id.uuid(), keyspace);
         co_return id.id;
     }
+
+    auto& erm = *ermp;
+    auto& topology = erm.get_token_metadata().get_topology();
+    auto my_host_id = erm.get_topology().my_host_id();
 
     if (!_gossiper.local().is_normal(my_host_id)) {
         throw std::runtime_error("Node is not in NORMAL status yet!");
@@ -1482,7 +1485,7 @@ future<> repair::data_sync_repair_task_impl::run() {
     auto& keyspace = _status.keyspace;
     auto& sharded_db = rs.get_db();
     auto& db = sharded_db.local();
-    auto germs_fut = co_await coroutine::as_future(locator::make_global_effective_replication_map(sharded_db, keyspace));
+    auto germs_fut = co_await coroutine::as_future(locator::make_global_static_effective_replication_map(sharded_db, keyspace));
     if (germs_fut.failed()) {
         auto ex = germs_fut.get_exception();
         if (try_catch<data_dictionary::no_such_keyspace>(ex)) {
@@ -1621,7 +1624,7 @@ future<> repair_service::bootstrap_with_repair(locator::token_metadata_ptr tmptr
             auto nr_tables = get_nr_tables(db, keyspace_name);
           if (small_table_optimization) {
             try {
-                auto germs = make_lw_shared(locator::make_global_effective_replication_map(get_db(), keyspace_name).get());
+                auto germs = make_lw_shared(locator::make_global_static_effective_replication_map(get_db(), keyspace_name).get());
                 auto nodes = germs->get().get_token_metadata().get_normal_token_owners();
                 auto range = dht::token_range(dht::token_range::bound(dht::minimum_token(), false), dht::token_range::bound(dht::maximum_token(), false));
                 auto nodes_vec = std::vector<locator::host_id>(nodes.begin(), nodes.end());
@@ -1990,7 +1993,7 @@ future<> repair_service::removenode_with_repair(locator::token_metadata_ptr tmpt
     });
 }
 
-future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, sstring op, utils::optional_param source_dc, streaming::stream_reason reason, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node) {
+future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, sstring op, utils::optional_param source_dc, streaming::stream_reason reason, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     return seastar::async([this, ks_erms = std::move(ks_erms), tmptr = std::move(tmptr), source_dc = std::move(source_dc), op = std::move(op), reason, ignore_nodes = std::move(ignore_nodes), replaced_node] () mutable {
         auto& db = get_db().local();
@@ -2190,7 +2193,7 @@ future<> repair_service::do_rebuild_replace_with_repair(std::unordered_map<sstri
     });
 }
 
-future<> repair_service::rebuild_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, utils::optional_param source_dc) {
+future<> repair_service::rebuild_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, utils::optional_param source_dc) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto op = sstring("rebuild_with_repair");
     const auto& topology = tmptr->get_topology();
@@ -2207,7 +2210,7 @@ future<> repair_service::rebuild_with_repair(std::unordered_map<sstring, locator
     });
 }
 
-future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator::vnode_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node) {
+future<> repair_service::replace_with_repair(std::unordered_map<sstring, locator::static_effective_replication_map_ptr> ks_erms, locator::token_metadata_ptr tmptr, std::unordered_set<dht::token> replacing_tokens, std::unordered_set<locator::host_id> ignore_nodes, locator::host_id replaced_node) {
     SCYLLA_ASSERT(this_shard_id() == 0);
     auto cloned_tm = co_await tmptr->clone_async();
     auto op = sstring("replace_with_repair");
