@@ -663,8 +663,6 @@ def fetch_more(dynamodbstreams, iterators, output):
 # Note that the order of events is only guaranteed (and therefore compared)
 # inside a single partition.
 def compare_events(expected_events, output, mode):
-    print('compare events output', output)
-    print('compare events expected', expected_events)
     # The order of expected_events is only meaningful inside a partition, so
     # let's convert it into a map indexed by partition key.
     expected_events_map = {}

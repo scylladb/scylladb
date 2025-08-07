@@ -905,7 +905,7 @@ def test_put_item_deletes_lsi_column(test_table_sss_lsi):
     key = {'p': random_string(), 'c': random_string()}
     empty_item = {**key}
     item = {**key, 'a': random_string()}
-    
+
     test_table_sss_lsi.put_item(Item=item)
     assert test_table_sss_lsi.get_item(Key=key, ConsistentRead=True)['Item'] == item
     test_table_sss_lsi.put_item(Item=empty_item)
