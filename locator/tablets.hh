@@ -169,11 +169,12 @@ struct tablet_task_info {
     db_clock::time_point sched_time;
     std::unordered_set<locator::host_id> repair_hosts_filter;
     std::unordered_set<sstring> repair_dcs_filter;
+    std::unordered_set<table_id> tables_filter;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
     bool is_user_repair_request() const;
     bool selected_by_filters(const tablet_replica& replica, const topology& topo) const;
-    static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+    static tablet_task_info make_user_repair_request(table_id table, std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
     static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
     static tablet_task_info make_migration_request();
     static tablet_task_info make_intranode_migration_request();
@@ -181,19 +182,23 @@ struct tablet_task_info {
     static tablet_task_info make_merge_request();
     static sstring serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter);
     static sstring serialize_repair_dcs_filter(std::unordered_set<sstring> filter);
+    static sstring serialize_tables_filter(std::unordered_set<table_id> filter);
     static std::unordered_set<locator::host_id> deserialize_repair_hosts_filter(sstring filter);
     static std::unordered_set<sstring> deserialize_repair_dcs_filter(sstring filter);
+    static std::unordered_set<table_id> deserialize_tables_filter(sstring filter);
 };
+
+using repair_time_map = std::unordered_map<table_id, db_clock::time_point>;
 
 /// Stores information about a single tablet.
 struct tablet_info {
     tablet_replica_set replicas;
-    db_clock::time_point repair_time;
+    repair_time_map repair_times;
     locator::tablet_task_info repair_task_info;
     locator::tablet_task_info migration_task_info;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info);
+    tablet_info(tablet_replica_set, repair_time_map, tablet_task_info, tablet_task_info);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;

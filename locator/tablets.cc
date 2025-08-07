@@ -182,15 +182,15 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& 
     return false;
 }
 
-tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info)
+tablet_info::tablet_info(tablet_replica_set replicas, repair_time_map repair_times, tablet_task_info repair_task_info, tablet_task_info migration_task_info)
     : replicas(std::move(replicas))
-    , repair_time(repair_time)
+    , repair_times(std::move(repair_times))
     , repair_task_info(std::move(repair_task_info))
     , migration_task_info(std::move(migration_task_info))
 {}
 
 tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{})
+    : tablet_info(std::move(replicas), repair_time_map{}, tablet_task_info{}, tablet_task_info{})
 {}
 
 std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
@@ -206,8 +206,12 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
         return {};
     }
 
-    auto repair_time = std::max(a.repair_time, b.repair_time);
-    return tablet_info(std::move(a.replicas), repair_time, a.repair_task_info, a.migration_task_info);
+    auto repair_times = a.repair_times;
+    for (auto&& [table, time] : b.repair_times) {
+        repair_times[table] = std::max(repair_times[table], time);
+    }
+
+    return tablet_info(std::move(a.replicas), std::move(repair_times), a.repair_task_info, a.migration_task_info);
 }
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
@@ -1368,6 +1372,7 @@ auto fmt::formatter<locator::tablet_task_info>::format(const locator::tablet_tas
         {"sched_time", fmt::to_string(db_clock::to_time_t(info.sched_time))},
         {"repair_hosts_filter", locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)},
         {"repair_dcs_filter", locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)},
+        {"tables_filter", locator::tablet_task_info::serialize_tables_filter(info.tables_filter)},
     };
     return fmt::format_to(ctx.out(), "{}", rjson::print(rjson::from_string_map(ret)));
 };
@@ -1397,10 +1402,11 @@ locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(st
     return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
+locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(table_id table, std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
+    std::unordered_set<table_id> tables_filter = {table};
+    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter, tables_filter};
 }
 
 sstring locator::tablet_task_info::serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter) {
@@ -1427,6 +1433,18 @@ sstring locator::tablet_task_info::serialize_repair_dcs_filter(std::unordered_se
     return res;
 }
 
+sstring locator::tablet_task_info::serialize_tables_filter(std::unordered_set<table_id> filter) {
+    sstring res = "";
+    bool first = true;
+    for (const auto& table : filter) {
+        if (!std::exchange(first, false)) {
+            res += ",";
+        }
+        res += table.to_sstring();
+    }
+    return res;
+}
+
 std::unordered_set<locator::host_id> locator::tablet_task_info::deserialize_repair_hosts_filter(sstring filter) {
     if (filter.empty()) {
         return {};
@@ -1444,6 +1462,16 @@ std::unordered_set<sstring> locator::tablet_task_info::deserialize_repair_dcs_fi
     sstring delim = ",";
     return std::ranges::views::split(filter, delim) | std::views::transform([](auto&& h) {
         return sstring{std::string_view{h}};
+    }) | std::ranges::to<std::unordered_set>();
+}
+
+std::unordered_set<table_id> locator::tablet_task_info::deserialize_tables_filter(sstring filter) {
+    if (filter.empty()) {
+        return {};
+    }
+    sstring delim = ",";
+    return std::ranges::views::split(filter, delim) | std::views::transform([](auto&& t) {
+        return table_id(utils::UUID(std::string_view{t}));
     }) | std::ranges::to<std::unordered_set>();
 }
 

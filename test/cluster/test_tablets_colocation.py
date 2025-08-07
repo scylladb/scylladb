@@ -390,7 +390,7 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 1. Create a base table and a co-located view table with a single tablet and RF=2 (replica on each node)
 # 2. write data to the base table while one node is down
 # 3. bring the node back up - it is now missing some data
-# 4. run tablet repair on the base table
+# 4. run tablet repair on the base and view tables
 # 5. verify both the base table and the view contain the missing data on the node that was down
 @pytest.mark.asyncio
 async def test_repair_colocated_base_and_view(manager: ManagerClient):
@@ -406,6 +406,9 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+
+        base_table_id = await manager.get_table_id(ks, "test")
+        view_table_id = await manager.get_view_id(ks, "tv")
 
         cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES(1, 10)", consistency_level=ConsistencyLevel.ONE))
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
@@ -433,6 +436,14 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
         # Trigger repair of the single tablet
         tablet_token = 0
         await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', tablet_token)
+        tinfo = await get_tablet_info(manager, servers[0], ks, "test", tablet_token)
+        assert base_table_id in tinfo.repair_times
+        assert view_table_id not in tinfo.repair_times
+
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, 'tv', tablet_token)
+        tinfo = await get_tablet_info(manager, servers[0], ks, "test", tablet_token)
+        assert base_table_id in tinfo.repair_times
+        assert view_table_id in tinfo.repair_times
 
         # Verify the view is repaired on server 2
         rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv", consistency_level=ConsistencyLevel.ONE))
