@@ -59,6 +59,7 @@
 namespace fs = std::filesystem;
 
 using namespace sstables;
+using namespace tests;
 
 static const sstring some_keyspace("ks");
 static const sstring some_column_family("cf");
@@ -1805,22 +1806,6 @@ SEASTAR_TEST_CASE(test_skipping_using_index) {
         }
       }
     });
-}
-
-static void copy_directory(fs::path src_dir, fs::path dst_dir) {
-    fs::create_directory(dst_dir);
-    auto src_dir_components = std::distance(src_dir.begin(), src_dir.end());
-    using rdi = fs::recursive_directory_iterator;
-    // Boost 1.55.0 doesn't support range for on recursive_directory_iterator
-    // (even though previous and later versions do support it)
-    for (auto&& dirent = rdi{src_dir}; dirent != rdi(); ++dirent) {
-        auto&& path = dirent->path();
-        auto new_path = dst_dir;
-        for (auto i = std::next(path.begin(), src_dir_components); i != path.end(); ++i) {
-            new_path /= *i;
-        }
-        fs::copy(path, new_path);
-    }
 }
 
 SEASTAR_TEST_CASE(test_unknown_component) {

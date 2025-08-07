@@ -109,6 +109,9 @@ future<> touch_file(std::string name);
 // Only suitable for tests, that work with local storage type.
 fs::path table_dir(const replica::table& cf);
 
+// Recursively copy a directory from src_dir to dst_dir.
+void copy_directory(fs::path src_dir, fs::path dst_dir, fs::copy_options opts = fs::copy_options::overwrite_existing);
+
 extern std::mutex boost_logger_mutex;
 
 #define THREADSAFE_BOOST_CHECK( BOOST_CHECK_EXPR ) {                    \
