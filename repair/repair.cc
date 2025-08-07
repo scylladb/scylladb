@@ -2263,7 +2263,8 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         }
         table_id tid = t->schema()->id();
         // Invoke group0 read barrier before obtaining erm pointer so that it sees all prior metadata changes
-        auto dropped = co_await streaming::table_sync_and_check(_db.local(), _mm, tid);
+        auto dropped = !utils::get_local_injector().enter("repair_tablets_no_sync") &&
+            co_await streaming::table_sync_and_check(_db.local(), _mm, tid);
         if (dropped) {
             rlogger.debug("repair[{}] Table {}.{} does not exist anymore", rid.uuid(), keyspace_name, table_name);
             continue;
@@ -2272,11 +2273,15 @@ future<> repair_service::repair_tablets(repair_uniq_id rid, sstring keyspace_nam
         while (true) {
             _repair_module->check_in_shutdown();
             erm = t->get_effective_replication_map();
+            auto local_version = erm->get_token_metadata().get_version();
             const locator::tablet_map& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
-            if (!tmap.has_transitions()) {
+            if (!tmap.has_transitions() && co_await container().invoke_on(0, [local_version] (repair_service& rs) {
+                    // We need to ensure that there is no ongoing global request.
+                    return local_version == rs._tsm.local()._topology.version && !rs._tsm.local()._topology.is_busy();
+                })) {
                 break;
             }
-            rlogger.info("repair[{}] Table {}.{} has tablet transitions, waiting for topology to quiesce", rid.uuid(), keyspace_name, table_name);
+            rlogger.info("repair[{}] Topology is busy, waiting for it to quiesce", rid.uuid());
             erm = nullptr;
             co_await container().invoke_on(0, [] (repair_service& rs) {
                 return rs._tsm.local().await_not_busy();
