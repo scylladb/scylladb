@@ -33,14 +33,14 @@ def test_table_sn_with_sorted_partition(test_table_sn):
     yield test_table_sn, p, items
 
 @pytest.fixture(scope="module")
-def test_table_ss_with_sorted_partition(test_table):
+def test_table_ss_with_sorted_partition(test_table_ss):
     p = random_string()
     items = [{'p': p, 'c': str(i).zfill(3), 'a': random_string()} for i in range(12)]
-    with test_table.batch_writer() as batch:
+    with test_table_ss.batch_writer() as batch:
         for item in items:
             batch.put_item(item)
         batch.put_item({'p': random_string(), 'c': '123', 'a': random_string()})
-    yield test_table, p, items
+    yield test_table_ss, p, items
 
 @pytest.fixture(scope="module")
 def test_table_sb_with_sorted_partition(test_table_sb):
