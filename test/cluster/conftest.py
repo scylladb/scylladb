@@ -65,6 +65,8 @@ def pytest_addoption(parser):
                         help='username for authentication')
     parser.addoption('--auth_password', action='store', default=None,
                         help='password for authentication')
+    parser.addoption('--skip-internet-dependent-tests', action='store_true',
+                     help='Skip tests which depend on artifacts from the internet')
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
                           'with logs')

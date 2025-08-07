@@ -142,6 +142,9 @@ if [[ -z "$CARGO_HOME" ]]; then
     mkdir -p "$CARGO_HOME"
 fi
 
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+mkdir -p "$XDG_CACHE_HOME/scylladb"
+
 is_podman="$($tool --help | grep -o podman)"
 
 docker_common_args=()
@@ -211,6 +214,8 @@ docker_common_args+=(
        -v /etc/localtime:/etc/localtime:ro \
        --env CARGO_HOME \
        -v "${CARGO_HOME}:${CARGO_HOME}" \
+       --env XDG_CACHE_HOME \
+       -v "${XDG_CACHE_HOME}/scylladb:${XDG_CACHE_HOME}/scylladb" \
        -w "$PWD" \
        -e HOME="$HOME" \
        "${docker_args[@]}" \
