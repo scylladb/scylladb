@@ -211,6 +211,21 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
     return std::move(keys);
 }
 
+class client_connection_factory : public http::experimental::connection_factory {
+    socket_address _addr;
+
+public:
+    explicit client_connection_factory(socket_address addr)
+        : _addr(addr) {
+    }
+
+    future<connected_socket> make([[maybe_unused]] abort_source* as) override {
+        auto socket = co_await seastar::connect(_addr, {}, transport::TCP);
+        socket.set_nodelay(true);
+        co_return socket;
+    }
+};
+
 class http_client {
 
     host_port _host_port;
@@ -222,7 +237,7 @@ public:
     http_client(host_port host_port_, inet_address addr)
         : _host_port(std::move(host_port_))
         , _addr(std::move(addr))
-        , impl(socket_address(addr, _host_port.port)) {
+        , impl(std::make_unique<client_connection_factory>(socket_address(addr, _host_port.port))) {
     }
 
     bool connects_to(inet_address const& a, port_number p) const {
