@@ -32,13 +32,23 @@ tests::proc::process_fixture::process_fixture(std::unique_ptr<impl> i)
 tests::proc::process_fixture::process_fixture(process_fixture&&) noexcept = default;
 tests::proc::process_fixture::~process_fixture() = default;
 
+extern char **environ;
+
 future<tests::proc::process_fixture> tests::proc::process_fixture::create(const std::filesystem::path& exec
     , const std::vector<std::string>& args
     , const std::vector<std::string>& env
     , handler_type stdout_handler
     , handler_type stderr_handler
+    , bool inherit_env
 ) {
     experimental::spawn_parameters params;
+
+    if (inherit_env) {
+        // copy existing env
+        for (auto** p = environ; *p != nullptr; ++p) {
+            params.env.emplace_back(*p);
+        }
+    }
 
     std::copy(args.begin(), args.end(), std::back_inserter(params.argv));
     std::copy(env.begin(), env.end(), std::back_inserter(params.env));
