@@ -657,6 +657,18 @@ query_processor::do_execute_prepared(
     co_return co_await process_authorized_statement(std::move(statement), query_state, options, std::move(guard));
 }
 
+template<typename Func>
+auto maybe_change_sl_to_driver(const ::shared_ptr<cql_statement>& statement, service::query_state& query_state, Func&& fn)
+{
+    if (statement->depends_on("system_schema", std::optional<std::string_view>{}) || statement->depends_on("system", "peers") || statement->depends_on("system", "local")) {
+        if (query_state.get_client_state().has_service_level_controller() && query_state.get_client_state().get_service_level_controller().has_service_level(qos::service_level_controller::driver_service_level_name)) {
+            return query_state.get_client_state().get_service_level_controller().with_service_level(qos::service_level_controller::driver_service_level_name, fn);
+        }
+    }
+    return fn();
+}
+
+
 future<::shared_ptr<result_message>>
 query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> statement, service::query_state& query_state, const query_options& options, std::optional<service::group0_guard> guard) {
     auto& client_state = query_state.get_client_state();
@@ -665,7 +677,9 @@ query_processor::process_authorized_statement(const ::shared_ptr<cql_statement> 
 
     statement->validate(*this, client_state);
 
-    auto msg = co_await statement->execute_without_checking_exception_message(*this, query_state, options, std::move(guard));
+    auto msg = co_await maybe_change_sl_to_driver(statement, query_state, [&] {
+        return statement->execute_without_checking_exception_message(*this, query_state, options, std::move(guard));
+    });
 
     if (msg) {
        co_return std::move(msg);
@@ -1000,9 +1014,11 @@ query_processor::do_execute_with_params(
         shared_ptr<cql_statement> statement,
         const query_options& options, std::optional<service::group0_guard> guard) {
     statement->validate(*this, service::client_state::for_internal_calls());
-    co_return co_await statement->execute(*this, query_state, options, std::move(guard));
+  
+    co_return co_await maybe_change_sl_to_driver(statement, query_state, [&] {
+        return statement->execute(*this, query_state, options, std::move(guard));
+    });
 }
-
 
 future<::shared_ptr<cql_transport::messages::result_message>>
 query_processor::execute_batch_without_checking_exception_message(
