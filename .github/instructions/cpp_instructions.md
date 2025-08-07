@@ -2,26 +2,40 @@ This document provides specific coding standards and best practices for C++ deve
 
 # 1. Coding Style and Formatting
 
-* **Auto-Formatting:** All C++ code must be formatted using the `.clang-format` file located in the repository root. This is a non-negotiable rule.
+* **Auto-Formatting:** C++ code should be formatted using the `.clang-format` file located in the repository root.
+* **Minimal Patches:** Patches must be minimal (non-negotiable rule). Any eventual re-formatting must only be done on the code being actually modified for the required changes. Do not reformat entire files or unrelated code sections.
 * **Line Length:** The preferred line length is 120 characters, with a hard maximum of 160 characters for complex statements or function signatures to maintain readability.
 * **Brace Style:** Opening braces (`{`) should be on the same line as the control structure or function definition.
 * **Indentation:** Use 4 spaces for indentation.
 
 # 2. Naming Conventions
 
-* **`snake_case`:** All identifiers, including classes, structs, enums, functions, variables, member variables, and namespaces, must be in `snake_case`.
+* **`snake_case`:** Most identifiers, including classes, enums, functions, variables, and namespaces, must be in `snake_case`.
     * **Example:** `my_class_name`, `http_request`, `local_variable`.
+* **Template Parameters:** Template parameters are usually in `CamelCase`.
+    * **Example:** `template<typename ValueType, class ContainerType>`
+* **Member Variables:** Member variables for classes are prefixed with a single underscore (`_`).
+    * **Example:** `class my_class { private: int _member_variable; };`
+* **Structs:** Structs are used for value-only structures where everything is public, with no leading underscore on member variables.
+    * **Example:** `struct point { int x; int y; };`
 * **Constants:** Global constants and `constexpr` variables should also be in `snake_case`. While `UPPER_SNAKE_CASE` may be present in older code, `snake_case` is the preferred convention for new code.
     * **Example:** `static constexpr int max_connections = 100;`
 * **File Naming:** Header files should have a `.hh` extension and source files a `.cc` extension. Header file names should match the main class or module they contain (e.g., `http_server.hh` for `class http_server`).
 
-#### 3\. Modern C++ Usage
+# 3. Modern C++ Usage
 
-* **C++ Standard:** The codebase uses C++20 or newer. Prefer features from these standards, especially coroutines, as they improve code clarity and safety.
+* **C++ Standard:** The codebase uses C++23. Prefer features from this standard, especially coroutines, as they improve code clarity and safety.
 * **Resource Management:** Use Seastar-specific smart pointers and resource management types.
-    * Prefer `foreign_ptr` for sharing resources between Seastar and other code.
-    * Use `lw_shared_ptr` and `shared_ptr` for shared ownership within the Seastar framework.
-    * Avoid `std::unique_ptr`, `std::shared_ptr`, and raw pointers unless there is a clear, documented reason (e.g., interfacing with C-style APIs).
+    * Use `seastar::lw_shared_ptr` and `seastar::shared_ptr` for shared ownership within the same shard in the Seastar framework.
+    * Use `seastar::foreign_ptr` for sharing resources across shards.
+    * Prefer `std::unique_ptr` when single ownership is sufficient, as it's lighter weight than shared ownership alternatives.
+    * Avoid raw pointers unless there is a clear, documented reason (e.g., interfacing with C-style APIs).
+    * Avoid `std::shared_ptr` unless interfacing with external C++ APIs that require it.
+* **Database-Specific Types:** Use appropriate ScyllaDB types for database operations.
+    * Always use schema pointers (`schema_ptr`) for schema references.
+    * Use `mutation` and `mutation_partition` for data modifications.
+    * Use appropriate key types (`partition_key`, `clustering_key`).
+    * Use `api::timestamp_type` for database timestamps, `gc_clock` for garbage collection timing.
 * **Headers:**
     * Use `#pragma once` for include guards.
     * Include project headers first, followed by third-party library headers, and finally standard library headers.
@@ -33,15 +47,27 @@ This document provides specific coding standards and best practices for C++ deve
 # 4. Concurrency and Asynchrony
 
 * **Coroutines are Preferred:** The primary asynchronous programming model is coroutines. Prefer using coroutines over traditional callbacks or continuations for all new code.
+    * Prefer `co_await` over `.then()` chains for readability, but consider performance implications in hot paths.
+    * In performance-critical code where futures are expected to be immediately ready, continuations may be more efficient than coroutines.
+    * For single async calls, return the result directly instead of using `co_await` when possible.
 * **Seastar Framework:** Adhere to the concurrency model and best practices of the Seastar framework. The code should be written to take advantage of Seastar's shard-per-core architecture.
-* **Thread Safety:** Pay close attention to thread safety. Shared data should be protected by appropriate synchronization primitives (e.g., `seastar::mutex`, `std::atomic`), or structured to avoid sharing entirely (e.g., using message passing or per-core data).
-* **`co_await` Semantics:** When using `co_await`, ensure you understand the execution context and potential for context switching.
+    * Always use `seastar::future<T>` for async operations.
+    * Use `seastar::gate` for proper shutdown coordination.
+    * Use `seastar::semaphore` for resource limiting, not `std::mutex`.
+* **Thread Safety:** Pay close attention to thread safety. Shared data should be protected by appropriate synchronization primitives (e.g., `seastar::mutex`), or structured to avoid sharing entirely (e.g., using message passing or per-core data). Avoid `std::atomic` completely.
+* **`co_await` Semantics:** When using `co_await`, ensure you understand the execution context and potential for context switching. Be cautious of temporaries when using direct returns or continuations.
 * **Avoid Blocking:** Never perform blocking I/O or long-running computations on the reactor thread. Such operations must be offloaded to dedicated thread pools.
+* **Break Long Loops:** Break potentially long loops with `maybe_yield()` to avoid reactor stalls and maintain responsiveness.
 
 # 5. Performance and Optimization
 
 * **Zero-Overhead Abstractions:** Prefer abstractions that have zero or minimal runtime overhead.
-* **Avoid Dynamic Allocation:** Minimize dynamic memory allocations, especially in hot code paths. Prefer stack-based or pre-allocated objects.
+* **Avoid Dynamic Allocation:** Minimize dynamic memory allocations, especially in hot code paths. Prefer stack-based, pre-allocated objects, or pre-allocated pools.
+* **Fragmented Containers:** Use fragmented containers (`utils::chunked_vector`) over `std::vector` where there is potential to exceed the contiguous allocation limit (currently 128kB), to avoid large contiguous memory allocations.
+* **NUMA Awareness:** Consider shard-per-core architecture in design decisions.
+* **Batch Operations:** Group operations to reduce syscall overhead.
+* **Lock-Free Programming:** Prefer message passing over shared mutable state.
+* **Seastar Allocators:** Prefer Seastar's memory management over standard allocators in hot paths.
 * **Compiler Optimizations:** Write code that is easy for the compiler to optimize. Avoid aliasing, use `constexpr` where possible, and prefer standard library algorithms that can be vectorized.
 * **Benchmarking:** Any performance-critical change should be accompanied by benchmarks to validate its impact.
 
@@ -80,33 +106,7 @@ This document provides specific coding standards and best practices for C++ deve
         * `ninja run-tests` (for a general set of C++ unit tests)
     * If a new test has been created, ensure that it is included in the test run.
 
-# 8. ScyllaDB-Specific Patterns and Conventions
-
-## Memory Management
-* **Seastar Allocators:** Prefer Seastar's memory management over standard allocators in hot paths
-* **lw_shared_ptr:** Use for lightweight shared ownership within Seastar contexts
-* **foreign_ptr:** Use when sharing data between Seastar and external code
-* **Avoid std::shared_ptr:** Unless interfacing with external C++ APIs
-
-## Database-Specific Patterns
-* **Schema Objects:** Always use schema pointers (`schema_ptr`) for schema references
-* **Mutation Handling:** Use `mutation` and `mutation_partition` for data modifications
-* **Key Handling:** Use appropriate key types (`partition_key`, `clustering_key`)
-* **Time Handling:** Use `api::timestamp_type` for database timestamps, `gc_clock` for garbage collection timing
-
-## Asynchronous Programming Patterns
-* **Coroutines First:** Prefer `co_await` over `.then()` chains for readability
-* **Seastar Futures:** Always use `seastar::future<T>` for async operations
-* **Gate Management:** Use `seastar::gate` for proper shutdown coordination
-* **Semaphore Usage:** Use `seastar::semaphore` for resource limiting, not `std::mutex`
-
-## Performance-Critical Guidelines
-* **Avoid Dynamic Allocation:** In hot paths, prefer stack allocation or pre-allocated pools
-* **NUMA Awareness:** Consider shard-per-core architecture in design
-* **Batch Operations:** Group operations to reduce syscall overhead
-* **Lock-Free Programming:** Prefer message passing over shared mutable state
-
-# 9. Code Quality and Maintenance
+# 8. Code Quality and Maintenance
 
 * **Testability:** Write code that is easy to test. Use dependency injection to isolate components where necessary.
 * **Rule of Zero/Three/Five:** Classes that manage resources should explicitly define their move/copy constructors and assignment operators or explicitly delete them, following the Rule of Zero/Three/Five.
