@@ -23,6 +23,7 @@
 #include "service/memory_limiter.hh"
 #include "service/storage_proxy.hh"
 #include "service/qos/service_level_controller.hh"
+#include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
 #include <seastar/core/coroutine.hh>
@@ -679,6 +680,16 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+    cd.hostname = fmt::format("{}", _client_state.get_remote_address().addr());
+
+    if (const auto& cfg = _server._query_processor.local().db().get_config();
+        cfg.native_transport_port_ssl.is_set() && cfg.native_transport_port_ssl() == _fd.local_address()) {
+        cd.ssl_enabled = true;
+        cd.ssl_protocol = tls::get_protocol_version(_fd).get();
+        cd.ssl_cipher_suite = tls::get_cipher_suite(_fd).get();
+    } else {
+        cd.ssl_enabled = false;
+    }
     return cd;
 }
 
