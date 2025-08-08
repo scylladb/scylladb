@@ -247,14 +247,33 @@ public:
     }
 };
 
+bool should_vector_store_service_be_disabled(std::string_view const& uri) {
+    return uri.empty();
+}
+
+auto get_host_port(std::string_view uri) -> std::optional<host_port> {
+    if (should_vector_store_service_be_disabled(uri)) {
+        vslogger.info("Vector Store service URI is empty, disabling Vector Store service");
+        return std::nullopt;
+    }
+    auto parsed = parse_service_uri(uri);
+    if (!parsed) {
+        throw configuration_exception(format("Invalid Vector Store service URI: {}", uri));
+    }
+    vslogger.info("Vector Store service URI is set to '{}'", uri);
+    return *parsed;
+}
+
 } // namespace
 
 namespace service {
 
 struct vector_store_client::impl {
+
+    utils::observer<sstring> uri_observer;
     lw_shared_ptr<http_client> current_client;
     std::vector<lw_shared_ptr<http_client>> old_clients;
-    host_port _host_port;
+    std::optional<host_port> _host_port;
     time_point last_dns_refresh;
     gate tasks_gate;
     condition_variable refresh_cv;
@@ -266,8 +285,17 @@ struct vector_store_client::impl {
     std::function<future<std::optional<inet_address>>(sstring const&)> dns_resolver;
     sequential_producer<lw_shared_ptr<http_client>> client_producer;
 
-    impl(host_port host_port_)
-        : _host_port{std::move(host_port_)}
+    impl(utils::config_file::named_value<sstring> cfg)
+        : uri_observer(cfg.observe([this](std::string_view uri) {
+            try {
+                _host_port = get_host_port(uri);
+                trigger_dns_refresh();
+            } catch (const configuration_exception& e) {
+                vslogger.error("Failed to parse Vector Store service URI: {}", e.what());
+                _host_port = std::nullopt;
+            }
+        }))
+        , _host_port(get_host_port(cfg()))
         , dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
             auto addr = co_await coroutine::as_future(net::dns::resolve_name(host));
             if (addr.failed()) {
@@ -286,12 +314,34 @@ struct vector_store_client::impl {
         }) {
     }
 
+    auto is_disabled() const -> bool {
+        return !bool{_host_port};
+    }
+
+    auto host() const -> std::expected<host_name, disabled> {
+        if (is_disabled()) {
+            return std::unexpected{disabled{}};
+        }
+        return _host_port->host;
+    }
+
+    auto port() const -> std::expected<port_number, disabled> {
+        if (is_disabled()) {
+            return std::unexpected{disabled{}};
+        }
+        return _host_port->port;
+    }
+
     /// Refresh the http client with a new address resolved from the DNS name.
     /// If the DNS resolution fails, the current client is set to nullptr.
     /// If the address is the same as the current one, do nothing.
     /// Old clients are saved for later cleanup in a specific task.
     auto refresh_addr() -> future<> {
-        auto [host, port] = _host_port;
+        if (is_disabled()) {
+            current_client = nullptr;
+            co_return;
+        }
+        auto [host, port] = *_host_port;
         auto new_addr = co_await dns_resolver(host);
         if (!new_addr) {
             current_client = nullptr;
@@ -304,7 +354,7 @@ struct vector_store_client::impl {
         }
 
         old_clients.emplace_back(current_client);
-        current_client = make_lw_shared<http_client>(_host_port, std::move(*new_addr));
+        current_client = make_lw_shared<http_client>(*_host_port, std::move(*new_addr));
     }
 
     /// A task for refreshing the vector store http client.
@@ -389,10 +439,13 @@ struct vector_store_client::impl {
         });
     }
 
-    using get_client_error = std::variant<aborted, addr_unavailable>;
+    using get_client_error = std::variant<aborted, addr_unavailable, disabled>;
 
     /// Get the current http client or wait for a new one to be available.
     auto get_client(abort_source& as) -> future<std::expected<lw_shared_ptr<http_client>, get_client_error>> {
+        if (is_disabled()) {
+            co_return std::unexpected{disabled{}};
+        }
         if (current_client) {
             co_return current_client;
         }
@@ -418,7 +471,7 @@ struct vector_store_client::impl {
         std::vector<temporary_buffer<char>> content; ///< The content of the response.
     };
 
-    using make_request_error = std::variant<aborted, addr_unavailable, service_unavailable>;
+    using make_request_error = std::variant<aborted, addr_unavailable, service_unavailable, disabled>;
 
     auto make_request(operation_type method, http_path path, std::optional<json_content> content, abort_source& as)
             -> future<std::expected<make_request_response, make_request_error>> {
@@ -461,28 +514,13 @@ struct vector_store_client::impl {
     }
 };
 
-vector_store_client::vector_store_client(config const& cfg) {
-    auto config_uri = cfg.vector_store_uri();
-    if (config_uri.empty()) {
-        vslogger.info("Vector Store service URI is not configured.");
-        return;
-    }
-
-    auto parsed_uri = parse_service_uri(config_uri);
-    if (!parsed_uri) {
-        throw configuration_exception(format("Invalid Vector Store service URI: {}", config_uri));
-    }
-    _impl = std::make_unique<impl>(std::move(*parsed_uri));
-    vslogger.info("Vector Store service uri = {}:{}.", _impl->_host_port.host, _impl->_host_port.port);
+vector_store_client::vector_store_client(config const& cfg)
+    : _impl(std::make_unique<impl>(cfg.vector_store_uri)) {
 }
 
 vector_store_client::~vector_store_client() = default;
 
 void vector_store_client::start_background_tasks() {
-    if (is_disabled()) {
-        return;
-    }
-
     /// start the background task to refresh the service address
     (void)try_with_gate(_impl->tasks_gate, [this] {
         return _impl->refresh_addr_task();
@@ -492,27 +530,21 @@ void vector_store_client::start_background_tasks() {
 }
 
 auto vector_store_client::stop() -> future<> {
-    if (is_disabled()) {
-        co_return;
-    }
-
     _impl->abort_refresh.request_abort();
     _impl->refresh_cv.signal();
     co_await _impl->tasks_gate.close();
 }
 
+auto vector_store_client::is_disabled() const -> bool {
+    return _impl->is_disabled();
+}
+
 auto vector_store_client::host() const -> std::expected<host_name, disabled> {
-    if (is_disabled()) {
-        return std::unexpected{disabled{}};
-    }
-    return {_impl->_host_port.host};
+    return _impl->host();
 }
 
 auto vector_store_client::port() const -> std::expected<port_number, disabled> {
-    if (is_disabled()) {
-        return std::unexpected{disabled{}};
-    }
-    return {_impl->_host_port.port};
+    return _impl->port();
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
@@ -548,44 +580,26 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set dns_refresh_interval on a disabled vector store client");
-    }
     vsc._impl->dns_refresh_interval = interval;
 }
 
 void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set wait_for_client_timeout on a disabled vector store client");
-    }
     vsc._impl->wait_for_client_timeout = timeout;
 }
 
 void vector_store_client_tester::set_http_request_retries(vector_store_client& vsc, unsigned retries) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set http_request_retries on a disabled vector store client");
-    }
     vsc._impl->http_request_retries = retries;
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set dns_resolver on a disabled vector store client");
-    }
     vsc._impl->dns_resolver = std::move(resolver);
 }
 
 void vector_store_client_tester::trigger_dns_resolver(vector_store_client& vsc) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot trigger a dns resolver on a disabled vector store client");
-    }
     vsc._impl->trigger_dns_refresh();
 }
 
 auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::optional<inet_address>> {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot check hostname resolving on a disabled vector store client");
-    }
     auto client = co_await vsc._impl->get_client(as);
     if (!client) {
         co_return std::nullopt;
