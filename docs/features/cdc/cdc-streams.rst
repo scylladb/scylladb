@@ -5,7 +5,8 @@ CDC Streams
 Streams are partitions in CDC log tables. They are identified by their keys: *stream identifiers*. 
 When you perform a base table write, ScyllaDB chooses a stream ID for the corresponding CDC log entries based on two things:
 
-* the currently operating *CDC generation* (:doc:`./cdc-stream-generations`),
+* in a vnode-based keyspace, the currently operating *CDC generation* (:doc:`./cdc-stream-changes`),
+* in a tablets-based keyspace, the currently operating stream set for the base table,
 * the base write's partition key.
 
 Example:
@@ -38,8 +39,16 @@ returns:
 
 Observe that in the example above, all base writes made to partition ``0`` were sent to the same stream. The same is true for all base writes made to partition ``1``.
 
-Underneath, ScyllaDB uses the token of the base write's partition key to decide the stream ID. 
-It stores a mapping from the token ring (the set of all tokens, which are 64-bit integers) to the set of stream IDs associated with the currently operating CDC generation. 
+Mapping Partition Keys to Stream IDs
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Underneath, ScyllaDB uses the token of the base write's partition key to decide the stream ID.
+The method for mapping partition keys to stream IDs depends on whether the keyspace is vnode-based or tablets-based:
+
+Vnode-based Keyspaces
+~~~~~~~~~~~~~~~~~~~~~
+
+ScyllaDB stores a mapping from the token ring (the set of all tokens, which are 64-bit integers) to the set of stream IDs associated with the currently operating CDC generation.
 Thus, choosing a stream proceeds in two steps:
 
 .. code-block:: none
@@ -108,6 +117,17 @@ returns:
 As the example above illustrates, even writes made to two different tables will use the same stream ID for their corresponding CDC log entries if their partition keys are the same, assuming that the operating CDC generation doesn't change in between those writes.
 
 More generally, two base writes will use the same stream IDs if the tokens of their partition keys get mapped to the same stream ID by the CDC generation.
+
+Tablets-based Keyspaces
+~~~~~~~~~~~~~~~~~~~~~~~
+
+In a tablets-based keyspace, each base table has its own set of streams operating at any given moment, with an associated mapping from the entire token ring to the set of streams.
+The stream ID is chosen by mapping the base write's partition key to a token, and then choosing from the currently operating stream set of the base table the appropriate stream for that token.
+
+Similarly to vnode-based keyspaces, writes to a single partition key in a given table will be mapped to the same stream ID, unless the stream set changes.
+Writes to different partition keys in one table may or may not be mapped to the same stream ID, depending on whether the tokens of those partition keys are mapped to the same tablet.
+
+However, writes made to different tables will always be mapped to different stream IDs, because each table has its own distinct set of streams.
 
 Ordering
 ^^^^^^^^

@@ -37,10 +37,32 @@ class metadata final {
     using container_t = std::map<api::timestamp_type, std::optional<topology_description>>;
     container_t _gens;
 
+    struct pending_stream_entry {
+        std::vector<cdc::stream_id> stream_set;
+        std::optional<db_clock::time_point> committed_time;
+    };
+
+    struct table_streams {
+        std::map<api::timestamp_type, committed_stream_set> committed;
+        std::optional<pending_stream_entry> pending;
+    };
+
+    using table_streams_ptr = lw_shared_ptr<const table_streams>;
+    using tablet_streams_map = std::unordered_map<table_id, table_streams_ptr>;
+
+    tablet_streams_map _tablet_streams;
+
     /* The timestamp used in the last successful `get_stream` call. */
     api::timestamp_type _last_stream_timestamp = api::missing_timestamp;
 
     container_t::const_iterator gen_used_at(api::timestamp_type ts) const;
+
+    future<> do_update_tablet_streams_map(
+            tablet_streams_map& new_map,
+            const cdc::base_streams_state& base_data,
+            const cdc::pending_streams& pending_data,
+            const cdc::streams_history& history_data);
+
 public:
     /* Is a generation with the given timestamp already known or obsolete? It is obsolete if and only if
      * it is older than the generation operating at `now - get_generation_leeway()`.
@@ -62,6 +84,11 @@ public:
      */
     stream_id get_stream(api::timestamp_type ts, dht::token tok);
 
+    const std::vector<stream_id>& get_current_tablet_stream_set(table_id tid) const;
+    const std::vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
+
+    std::pair<stream_id, std::optional<stream_id>> get_tablet_stream(table_id tid, api::timestamp_type ts, dht::token tok);
+
     /* Insert the generation given by `gen` with timestamp `ts` to be used by the `get_stream` function,
      * if the generation is not already known or older than the currently known ones.
      *
@@ -82,6 +109,43 @@ public:
      * Returns true iff this generation is not obsolete and wasn't previously prepared nor inserted.
      */
     bool prepare(db_clock::time_point ts);
+
+    /* Constructs a new tablet streams map based on data read from the CDC system tables. */
+    future<> load_tablet_streams_map(
+            const base_streams_state& base_data,
+            const pending_streams& pending_data,
+            const streams_history& history_data);
+
+    /* Modifies the existing tablet streams map for tables in `changed_tables` based on data read from the CDC system tables.
+     * If a table is in `changed_tables` and has data, then the table's entry is updated with the new data.
+     * If a table is in `changed_tables` and has no data, it means the table was dropped, and the entry is removed from the map.
+     */
+    future<> load_tablet_streams_map(
+            const base_streams_state& base_data,
+            const pending_streams& pending_data,
+            const streams_history& history_data,
+            const std::unordered_set<table_id>& changed_tables);
+
+    const tablet_streams_map& get_all_tablet_streams() const {
+        return _tablet_streams;
+    }
+
+    table_streams_ptr get_table_streams_ptr(table_id tid) const {
+        if (auto it = _tablet_streams.find(tid); it != _tablet_streams.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
+
+    static future<std::vector<stream_id>> construct_next_stream_set(
+        const std::vector<cdc::stream_id>& prev_stream_set,
+        std::vector<cdc::stream_id> opened,
+        const std::vector<cdc::stream_id>& closed);
+
+    static future<cdc_stream_diff> generate_stream_diff(
+        const std::vector<stream_id>& before,
+        const std::vector<stream_id>& after);
+
 };
 
 } // namespace cdc
