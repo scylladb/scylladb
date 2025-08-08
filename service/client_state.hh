@@ -188,6 +188,10 @@ public:
         return _timeout_config;
     }
 
+    bool has_service_level_controller() const {
+        return _sl_controller != nullptr;
+    }
+
     qos::service_level_controller& get_service_level_controller() const {
         return *_sl_controller;
     }
