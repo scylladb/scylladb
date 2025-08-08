@@ -545,3 +545,28 @@ async def test_driver_service_level_used_for_connections(manager: ManagerClient)
     assert metrics.get("scylla_scheduler_runtime_ms", {'group': 'sl:driver'}) > 0
     # Sanity check that non-existing service levels returns None
     assert metrics.get("scylla_scheduler_runtime_ms", {'group': 'sl:non-existing-driver'}) is None
+
+@pytest.mark.asyncio
+async def test_driver_service_level_used_for_driver_queries(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    number_of_requests = 1000
+
+    metrics = await manager.metrics.query(server.ip_addr)
+    initial_tasks_processed = metrics.get("scylla_scheduler_tasks_processed", {'group': 'sl:driver'})
+    await asyncio.gather(*[cql.run_async(f"SELECT * from system.scylla_local") for i in range(number_of_requests)])
+    metrics = await manager.metrics.query(server.ip_addr)
+    tasks_processed = metrics.get("scylla_scheduler_tasks_processed", {'group': 'sl:driver'})
+    assert tasks_processed - initial_tasks_processed < number_of_requests
+
+    for routed_tables in ["system.peers", "system.local", "system_schema.tables"]:
+        initial_tasks_processed = tasks_processed
+        await asyncio.gather(*[cql.run_async(f"SELECT * from {routed_tables}") for i in range(number_of_requests)])
+        metrics = await manager.metrics.query(server.ip_addr)
+        tasks_processed = metrics.get("scylla_scheduler_tasks_processed", {'group': 'sl:driver'})
+        assert tasks_processed - initial_tasks_processed >= number_of_requests
+
