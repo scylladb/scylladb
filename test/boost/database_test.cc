@@ -1724,4 +1724,188 @@ SEASTAR_TEST_CASE(test_drop_quarantined_sstables) {
     });
 }
 
+SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
+    auto table_gc_mode_timeout = schema_builder("test", "table_gc_mode_timeout")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "timeout"} }))
+            .set_gc_grace_seconds(10)
+            .build();
+    auto table_gc_mode_disabled = schema_builder("test", "table_gc_mode_disabled")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "disabled"} }))
+            .build();
+    auto table_gc_mode_immediate = schema_builder("test", "table_gc_mode_immediate")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "immediate"} }))
+            .build();
+    auto table_gc_mode_repair1 = schema_builder("test", "table_gc_mode_repair1")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "188"} }))
+            .build();
+    auto table_gc_mode_repair2 = schema_builder("test", "table_gc_mode_repair2")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "288"} }))
+            .build();
+    auto table_gc_mode_repair3 = schema_builder("test", "table_gc_mode_repair3")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_tombstone_gc_options(tombstone_gc_options({ {"mode", "repair"}, {"propagation_delay_in_seconds", "388"} }))
+            .build();
+
+    schema_builder::register_static_configurator([] (const sstring& ks_name, const sstring& cf_name, schema_static_props& props) {
+        if (ks_name == "test" && cf_name == "table_gc_mode_group0") {
+            props.is_group0_table = true;
+        }
+    });
+    auto table_gc_mode_group0 = schema_builder("test", "table_gc_mode_group0")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .build();
+
+    BOOST_REQUIRE(table_gc_mode_group0->static_props().is_group0_table);
+
+    // One pk to rule them all, all schemas have the same partition key, so we
+    // can reuse a single key for this test.
+    const auto pk = partition_key::from_single_value(*table_gc_mode_timeout, utf8_type->decompose(data_value("pk")));
+    const auto dk = dht::decorate_key(*table_gc_mode_timeout, pk);
+
+    const auto repair_range = dht::token_range::make(dht::first_token(), dk.token());
+
+    shared_tombstone_gc_state shared_state;
+
+    const auto first_repair_time = gc_clock::now() - gc_clock::duration(std::chrono::hours(6));
+
+    shared_state.update_repair_time(table_gc_mode_repair1->id(), repair_range, first_repair_time);
+    shared_state.update_repair_time(table_gc_mode_repair2->id(), repair_range, first_repair_time);
+
+    shared_state.update_group0_refresh_time(first_repair_time);
+
+    auto snapshot = shared_state.snapshot();
+    BOOST_REQUIRE_LE(gc_clock::now() - snapshot.query_time(), gc_clock::duration(std::chrono::seconds(1)));
+
+    // Advance gc clock and change the gc state to simulate a later point in time.
+    // Then check that gc-before against the shared-state yields the current
+    // state, while gc-before against the snapshot yields the before state.
+
+    const auto now = gc_clock::now() + gc_clock::duration(std::chrono::hours(6));
+    const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
+
+    const auto second_repair_time = gc_clock::now() + gc_clock::duration(std::chrono::hours(3));
+
+    shared_state.update_repair_time(table_gc_mode_repair1->id(), repair_range, second_repair_time);
+    shared_state.drop_repair_history_for_table(table_gc_mode_repair2->id());
+    shared_state.update_repair_time(table_gc_mode_repair3->id(), repair_range, second_repair_time);
+
+    shared_state.update_group0_refresh_time(second_repair_time);
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_timeout, dk, now), now - table_gc_mode_timeout->gc_grace_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_timeout, dk, false), snapshot.query_time() - table_gc_mode_timeout->gc_grace_seconds());
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_disabled, dk, now), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_disabled, dk, false), gc_clock::time_point::min());
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_immediate, dk, now), now);
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_immediate, dk, false), snapshot.query_time());
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair1, dk, now), second_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair2, dk, now), gc_clock::time_point::min());
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_repair3, dk, now), second_repair_time - table_gc_mode_repair3->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair1, dk, false), first_repair_time - table_gc_mode_repair1->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair2, dk, false), first_repair_time - table_gc_mode_repair2->tombstone_gc_options().propagation_delay_in_seconds());
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_repair3, dk, false), gc_clock::time_point::min());
+
+    BOOST_REQUIRE_EQUAL(gc_state.get_gc_before_for_key(table_gc_mode_group0, dk, now), second_repair_time);
+    BOOST_REQUIRE_EQUAL(snapshot.get_gc_before_for_key(table_gc_mode_group0, dk, false), first_repair_time);
+}
+
+SEASTAR_TEST_CASE(test_max_purgeable_combine) {
+    const gc_clock::time_point t_pre_treshold = gc_clock::now();
+    const gc_clock::time_point t1 = t_pre_treshold + std::chrono::seconds(10);
+    const gc_clock::time_point t2 = t1 + std::chrono::seconds(10);
+    const gc_clock::time_point t_post_treshold = t2 + std::chrono::seconds(10);
+
+    auto check_tombstone = [] (const max_purgeable& mp, const max_purgeable& combined, tombstone t, bool expected_can_purge, std::source_location loc = std::source_location::current()) {
+        testlog.trace("check_tombstone({}, {}, {}, {}) @ {}:{}", mp, combined, t, expected_can_purge, loc.file_name(), loc.line());
+        BOOST_REQUIRE_EQUAL(expected_can_purge, mp.can_purge(t).can_purge);
+        if (!expected_can_purge) {
+            // The combined max_purgeable can be weaker than this input, if
+            // the other input had no expiry threshold.
+            BOOST_REQUIRE(!combined.can_purge(t).can_purge);
+        }
+    };
+    auto check_tombstones = [&] (const max_purgeable& mp, const max_purgeable& combined) {
+        if (mp) {
+            check_tombstone(mp, combined, {mp.timestamp() - 1, t_post_treshold}, true);
+            check_tombstone(mp, combined, {mp.timestamp() + 1, t_post_treshold}, false);
+            if (mp.expiry_threshold()) {
+                check_tombstone(mp, combined, {mp.timestamp() - 1, t_pre_treshold}, true);
+                check_tombstone(mp, combined, {mp.timestamp() + 1, t_pre_treshold}, true);
+            }
+        } else {
+            check_tombstone(mp, combined, {1, t_post_treshold}, true);
+        }
+    };
+
+    auto check = [&] (const max_purgeable& a, const max_purgeable& b, const max_purgeable& expected, std::source_location loc = std::source_location::current()) {
+        auto combined = a;
+        combined.combine(b);
+
+        testlog.debug("combine({}, {}) => {} == {} @ {}:{}", a, b, combined, expected, loc.file_name(), loc.line());
+
+        BOOST_REQUIRE(a || b);
+        BOOST_REQUIRE_EQUAL(combined, expected);
+
+        check_tombstones(a, combined);
+        check_tombstones(b, combined);
+    };
+
+    check({}, max_purgeable{100}, max_purgeable{100});
+    check(max_purgeable{100}, {}, max_purgeable{100});
+    check(max_purgeable{10}, max_purgeable{100}, max_purgeable{10});
+
+    const auto ts_mt = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
+    const auto ts_sst = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
+
+    check({}, max_purgeable{100, ts_mt}, max_purgeable{100, ts_mt});
+    check(max_purgeable{100, ts_mt}, {}, max_purgeable{100, ts_mt});
+    check(max_purgeable{10, ts_sst}, max_purgeable{100, ts_mt}, max_purgeable{10, ts_sst});
+
+    check({}, max_purgeable{100, t1, ts_mt}, max_purgeable{100, t1, ts_mt});
+    check(max_purgeable{10, ts_mt}, max_purgeable{100, t1, ts_sst}, max_purgeable{10, ts_mt});
+    check(max_purgeable{100, ts_mt}, max_purgeable{10, t1, ts_sst}, max_purgeable{10, ts_sst});
+    check(max_purgeable{10, t1, ts_mt}, max_purgeable{100, t2, ts_sst}, max_purgeable{10, t1, ts_mt});
+    check(max_purgeable{100, t1, ts_mt}, max_purgeable{10, t2, ts_sst}, max_purgeable{10, t1, ts_sst});
+
+    return make_ready_future<>();
+}
+
+SEASTAR_TEST_CASE(test_max_purgeable_can_purge) {
+    const gc_clock::time_point t_pre_treshold = gc_clock::now();
+    const gc_clock::time_point t1 = t_pre_treshold + std::chrono::seconds(10);
+    const gc_clock::time_point t_post_treshold = t1 + std::chrono::seconds(10);
+
+    const auto ts_mt = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
+    const auto ts_sst = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
+
+    auto check = [] (const max_purgeable& mp, tombstone t, bool expected_can_gc) {
+        const auto res = mp.can_purge(t);
+        BOOST_REQUIRE_EQUAL(res.can_purge, expected_can_gc);
+        BOOST_REQUIRE_EQUAL(res.timestamp_source, mp.source());
+    };
+
+    check({}, {100, t1}, true);
+
+    check(max_purgeable{10, ts_mt}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{100, ts_sst}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{200, ts_sst}, tombstone{100, t_post_treshold}, true);
+
+    check(max_purgeable{10, t1, ts_sst}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{100, t1, ts_sst}, tombstone{100, t_post_treshold}, false);
+    check(max_purgeable{200, t1, ts_sst}, tombstone{100, t_post_treshold}, true);
+
+    check(max_purgeable{10, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
+    check(max_purgeable{100, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
+    check(max_purgeable{200, t1, ts_sst}, tombstone{100, t_pre_treshold}, true);
+
+    return make_ready_future<>();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
