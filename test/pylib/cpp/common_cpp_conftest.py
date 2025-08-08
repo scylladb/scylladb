@@ -97,7 +97,7 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
         SCYLLA_TEST_ENV='yes',
     )
     pytest_config = parent.config
-    run_id = pytest_config.getoption('run_id')
+    repeat = pytest_config.getoption('repeat')
     modes = get_modes_to_run(parent.session.config)
     suite_config = read_suite_config(file_path.parent)
     no_parallel_cases = suite_config.get('no_parallel_cases', [])
@@ -115,9 +115,9 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     if len(custom_args) > 1:
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, parameters=custom_args,
                                    no_parallel_run=no_parallel_run, modes=modes, disabled_tests=disabled_tests,
-                                   run_id=run_id, facade=facade, env=test_env, coverage_config=coverage_config)
+                                   repeat=repeat, facade=facade, env=test_env, coverage_config=coverage_config)
     else:
         args.extend(custom_args)
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, no_parallel_run=no_parallel_run,
-                                   modes=modes, disabled_tests=disabled_tests, run_id=run_id, facade=facade,
+                                   modes=modes, disabled_tests=disabled_tests, repeat=repeat, facade=facade,
                                    env=test_env, coverage_config=coverage_config)
