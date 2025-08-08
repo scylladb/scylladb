@@ -2854,6 +2854,7 @@ void print_query_results_json(const cql3::result& result) {
             writer.Key(column_metadata[i]->name->text());
             if (!row[i]) {
                 writer.Null();
+                continue;
             }
             const auto value = to_json_string(*column_metadata[i]->type, *row[i]);
             const auto type = to_json_type(*column_metadata[i]->type, *row[i]);
