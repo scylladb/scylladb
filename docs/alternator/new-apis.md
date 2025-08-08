@@ -84,6 +84,12 @@ request.
 Note that currently only `Scan` and `Query` on system tables is supported -
 `GetItem` is not (so use `Query` even to read a single item).
 
+If the `alternator_allow_system_table_write` configuration option is set to
+true (by default, it is false), system tables can also be written to. This
+can be useful for, for example, modifying configuration options. Even when
+writing system tables is enabled, the role sending the command must be a
+superuser or the write will be denied.
+
 ### Listing ongoing requests
 One useful system table to read is `.scylla.alternator.system.clients`,
 which lists the currently active Alternator clients. Reading from this
