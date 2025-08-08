@@ -89,6 +89,8 @@ public:
 
     columns_assertions with_columns_of_row(size_t row_index);
 
+    rows_assertions& assert_for_columns_of_each_row(std::function<void(columns_assertions&)> func);
+
     rows_assertions is_null();
     rows_assertions is_not_null();
 };
