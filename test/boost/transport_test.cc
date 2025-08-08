@@ -98,22 +98,22 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
 
     bytes_ostream linearization_buffer;
     auto req = cql_transport::request_reader(fbufs.get_istream(), linearization_buffer);
-    BOOST_CHECK_EQUAL(unsigned(uint8_t(req.read_byte())), version | 0x80);
-    BOOST_CHECK_EQUAL(unsigned(req.read_byte()), 0); // flags
-    BOOST_CHECK_EQUAL(req.read_short(), stream_id);
-    BOOST_CHECK_EQUAL(unsigned(req.read_byte()), unsigned(opcode));
-    BOOST_CHECK_EQUAL(req.read_int() + 9, total_length);
+    BOOST_CHECK_EQUAL(unsigned(uint8_t(req.read_byte().value())), version | 0x80);
+    BOOST_CHECK_EQUAL(unsigned(req.read_byte().value()), 0); // flags
+    BOOST_CHECK_EQUAL(req.read_short().value(), stream_id);
+    BOOST_CHECK_EQUAL(unsigned(req.read_byte().value()), unsigned(opcode));
+    BOOST_CHECK_EQUAL(req.read_int().value() + 9, total_length);
 
-    auto v1 = req.read_value_view(version);
+    auto v1 = req.read_value_view(version).value();
     BOOST_CHECK(!v1.unset && v1.value.is_null());
-    auto v2 = req.read_value_view(version);
+    auto v2 = req.read_value_view(version).value();
     BOOST_CHECK(v2.unset);
-    BOOST_CHECK_EQUAL(to_bytes(req.read_value_view(version).value), value);
+    BOOST_CHECK_EQUAL(to_bytes(req.read_value_view(version).value().value), value);
 
     std::vector<std::string_view> names;
     std::vector<cql3::raw_value_view> values;
     cql3::unset_bind_variable_vector unset;
-    req.read_name_and_value_list(version, names, values, unset);
+    BOOST_CHECK(req.read_name_and_value_list(version, names, values, unset));
     BOOST_CHECK(std::none_of(unset.begin(), unset.end(), std::identity()));
     BOOST_CHECK(std::ranges::equal(names, names_and_values | std::views::transform([] (auto& name_and_value) {
         return std::string_view(name_and_value.first);
@@ -126,37 +126,37 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     })));
 
     auto received_string_list = std::vector<sstring>();
-    req.read_string_list(received_string_list);
+    BOOST_CHECK(req.read_string_list(received_string_list));
     BOOST_CHECK_EQUAL(received_string_list, string_list);
 
-    auto received_string_map = req.read_string_map();
+    auto received_string_map = req.read_string_map().value();
     BOOST_CHECK_EQUAL(received_string_map, string_unordered_map);
 
-    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
-    BOOST_CHECK_EQUAL(req.read_string(), "KEYSPACE");
-    BOOST_CHECK_EQUAL(req.read_string(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "KEYSPACE");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "foo");
 
-    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
-    BOOST_CHECK_EQUAL(req.read_string(), "TABLE");
-    BOOST_CHECK_EQUAL(req.read_string(), "foo");
-    BOOST_CHECK_EQUAL(req.read_string(), "bar");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "TABLE");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "bar");
 
-    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
-    BOOST_CHECK_EQUAL(req.read_string(), "TYPE");
-    BOOST_CHECK_EQUAL(req.read_string(), "foo");
-    BOOST_CHECK_EQUAL(req.read_string(), "bar");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "TYPE");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "bar");
 
-    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
-    BOOST_CHECK_EQUAL(req.read_string(), "FUNCTION");
-    BOOST_CHECK_EQUAL(req.read_string(), "foo");
-    BOOST_CHECK_EQUAL(req.read_string(), "bar");
-    BOOST_CHECK_EQUAL(req.read_short(), 1);
-    BOOST_CHECK_EQUAL(req.read_string(), "zed");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "FUNCTION");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "bar");
+    BOOST_CHECK_EQUAL(req.read_short().value(), 1);
+    BOOST_CHECK_EQUAL(req.read_string().value(), "zed");
 
-    BOOST_CHECK_EQUAL(req.read_string(), "CREATED");
-    BOOST_CHECK_EQUAL(req.read_string(), "AGGREGATE");
-    BOOST_CHECK_EQUAL(req.read_string(), "foo");
-    BOOST_CHECK_EQUAL(req.read_string(), "bar");
-    BOOST_CHECK_EQUAL(req.read_short(), 1);
-    BOOST_CHECK_EQUAL(req.read_string(), "zed");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "CREATED");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "AGGREGATE");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "foo");
+    BOOST_CHECK_EQUAL(req.read_string().value(), "bar");
+    BOOST_CHECK_EQUAL(req.read_short().value(), 1);
+    BOOST_CHECK_EQUAL(req.read_string().value(), "zed");
 }
