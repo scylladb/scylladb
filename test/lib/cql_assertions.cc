@@ -208,6 +208,9 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
 
 columns_assertions rows_assertions::with_columns_of_row(size_t row_index) {
     const auto& rs = _rows->rs().result_set();
+    if (row_index >= rs.rows().size()) {
+        fail(format("Requested row index {} is out of range, result has {} rows", row_index, rs.rows().size()));
+    }
     return columns_assertions(rs.get_metadata(), rs.rows().at(row_index));
 }
 
