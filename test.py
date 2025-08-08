@@ -150,9 +150,7 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument('--repeat', action="store", default="1", type=int,
                         help="number of times to repeat test execution")
     parser.add_argument('--timeout', action="store", default="24000", type=int,
-                        help="timeout value for single test execution")
-    parser.add_argument('--session-timeout', action="store", default="24000", type=int,
-                        help="timeout value for test.py/pytest session execution")
+                        help="timeout value for test execution")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
     parser.add_argument('--jobs', '-j', action="store", type=int,
@@ -335,10 +333,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.append(f'--x-log2-compaction-groups={options.x_log2_compaction_groups}')
     if options.gather_metrics:
         args.append('--gather-metrics')
-    if options.timeout:
-        args.append(f'--timeout={options.timeout}')
-    if options.session_timeout:
-        args.append(f'--session-timeout={options.session_timeout}')
     if len(expression) > 1:
         args.extend(['-k', expression])
     if not options.save_log_on_success:
@@ -437,7 +431,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     total_tests = 0
     max_failures = options.max_failures
     failed = 0
-    deadline = time.perf_counter() + options.session_timeout
     try:
         await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
         result = run_pytest(options)
@@ -451,9 +444,6 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 # Wait for some task to finish
                 done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
                 failed += await reap(done, pending, signaled)
-                if time.perf_counter() > deadline:
-                    print("Session timeout reached")
-                    await cancel(pending, "Session timeout reached")
                 if max_failures != 0 and max_failures <= failed:
                     print("Too much failures, stopping")
                     await cancel(pending, "Too much failures, stopping")
