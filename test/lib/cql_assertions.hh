@@ -35,14 +35,28 @@ public:
     columns_assertions& with_raw_column(const char* name, managed_bytes_view value);
 
     template <typename T>
-    columns_assertions& with_typed_column(const char* name, std::function<bool(const T& value)> predicate) {
+    columns_assertions& with_typed_column(const char* name, std::function<bool(const T* value)> predicate) {
         return do_with_raw_column(name, [this, name, predicate] (data_type type, managed_bytes_view value) {
             if (type != data_type_for<T>()) {
                 fail(seastar::format("Column {} is not of type {}, but of type {}", name, data_type_for<T>()->name(), type->name()));
             }
-            if (!predicate(value_cast<T>(type->deserialize(value)))) {
+            std::optional<T> t_opt;
+            if (!value.empty()) {
+                t_opt.emplace(value_cast<T>(type->deserialize(value)));
+            }
+            if (!predicate(t_opt.has_value() ? &t_opt.value() : nullptr)) {
                 fail(seastar::format("Column {} failed predicate check: value = {}", name, value));
             }
+        });
+    }
+
+    template <typename T>
+    columns_assertions& with_typed_column(const char* name, std::function<bool(const T& value)> predicate) {
+        return with_typed_column<T>(name, [this, name, predicate] (const T* value) {
+            if (!value) {
+                fail(seastar::format("Column {} is null", name));
+            }
+            return predicate(*value);
         });
     }
 
