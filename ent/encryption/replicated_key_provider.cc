@@ -433,9 +433,6 @@ namespace bfs = std::filesystem;
 shared_ptr<key_provider> replicated_key_provider_factory::get_provider(encryption_context& ctxt, const options& map) {
     opt_wrapper opts(map);
     auto system_key_name = opts(SYSTEM_KEY_FILE).value_or("system_key");
-    if (system_key_name.find('/') != sstring::npos) {
-        throw std::invalid_argument("system_key cannot contain '/'");
-    }
 
     auto system_key = ctxt.get_system_key(system_key_name);
     auto local_key_file = bfs::absolute(bfs::path(opts(SECRET_KEY_FILE).value_or(default_key_file_path)));

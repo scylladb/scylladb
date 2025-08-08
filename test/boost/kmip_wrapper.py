@@ -1,6 +1,11 @@
+import os
 import ssl
 import sys
+import socket
+import signal
 import functools
+import threading
+from time import sleep
 
 import sqlalchemy
 from sqlalchemy.pool import StaticPool
@@ -8,6 +13,8 @@ from sqlalchemy.pool import StaticPool
 from kmip.services import auth
 from kmip.services.server.server import build_argument_parser
 from kmip.services.server.server import KmipServer
+from kmip import enums
+from kmip.pie.client import ProxyKmipClient
 
 # Helper wrapper for running pykmip in scylla testing. Needed for the following
 # reasons:
@@ -56,6 +63,7 @@ class TLS13AuthenticationSuite(auth.TLS12AuthenticationSuite):
 def main():
     # Build argument parser and parser command-line arguments.
     parser = build_argument_parser()
+    parser.add_option('--create-key', action='store_true', help='Create a KMIP key after starting the server')
     opts, args = parser.parse_args(sys.argv[1:])
 
     kwargs = {}
@@ -105,7 +113,8 @@ def main():
         ctxt.load_cert_chain(certfile=certfile, keyfile=keyfile)
         ctxt.verify_mode = cert_reqs
         ctxt.load_verify_locations(cafile=ca_certs)
-        ctxt.set_ciphers(ciphers)
+        if ciphers:
+            ctxt.set_ciphers(ciphers)
         return ctxt.wrap_socket(sock, server_side=server_side
                               , do_handshake_on_connect=do_handshake_on_connect
                               , suppress_ragged_eofs=suppress_ragged_eofs)
@@ -115,8 +124,50 @@ def main():
     print("Starting...")
 
     with s:
-        print("Listening on {}".format(s._socket.getsockname()[1]))
-        sys.stdout.flush()
+        hostname = kwargs.get('hostname', '127.0.0.1')
+        port = s._socket.getsockname()[1]
+
+        print("Listening on {}".format(port), flush=True)
+
+        if opts.create_key:
+            def run_client():
+                try:
+                    max_retries = 50  # 5 seconds
+                    delay = 0.1
+                    for attempt in range(max_retries):
+                        try:
+                            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            test_sock.settimeout(max_retries * delay)
+                            test_sock.connect((hostname, port))
+                            test_sock.close()
+                            break
+                        except socket.error as e:
+                            if attempt >= max_retries - 1:
+                                print(f"Key creation failed: Server not ready after {max_retries * delay} seconds: {e}")
+                                os.kill(os.getpid(), signal.SIGTERM)
+                                return
+                        sleep(delay)
+                    with ProxyKmipClient(
+                        hostname=hostname,
+                        port=port,
+                        cert=s.config.settings.get('certificate_path'),
+                        key=s.config.settings.get('key_path'),
+                        ca=s.config.settings.get('ca_path'),
+                        config_file=kwargs.get('config_path'),
+                    ) as client:
+                        key_id = client.create(
+                            algorithm=enums.CryptographicAlgorithm.AES,
+                            length=256
+                        )
+                        print(f"Created key with id: {key_id}", flush=True)
+
+                except Exception as e:
+                    print(f"Key creation failed: {e}")
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            client_thread = threading.Thread(target=run_client)
+            client_thread.start()
+
         s.serve()
 
 if __name__ == '__main__':

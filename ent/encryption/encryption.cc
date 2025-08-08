@@ -368,8 +368,10 @@ public:
 
         if (kmip_system_key::is_kmip_path(name)) {
             k = make_shared<kmip_system_key>(*this, name);
-        } else {
+        } else if (local_system_key::is_local_file_name(name)) {
             k = make_shared<local_system_key>(*this, name);
+        } else {
+            throw std::invalid_argument(fmt::format("Invalid system key name: '{}'. Must be a file name (paths not allowed) or a valid KMIP URI.", name));
         }
 
         if (k != nullptr) {
