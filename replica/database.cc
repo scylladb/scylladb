@@ -2671,7 +2671,8 @@ future<> database::truncate(db::system_keyspace& sys_ks, column_family& cf, cons
     // since we don't want to leave behind data on disk with RP lower than the one we set
     // in the truncation table.
     if (st.did_flush && rp != db::replay_position() && st.low_mark < rp) {
-        on_internal_error(dblog, "Data written after truncation time was incorrectly truncated. Truncate is known to not work well with concurrent writes. Retry!");
+        dblog.warn("Data in table {}.{} is written after truncation time and was incorrectly truncated. truncated_at: {} low_mark: {} rp: {}",
+                    cf.schema()->ks_name(), cf.schema()->cf_name(), truncated_at, st.low_mark, rp);
     }
     if (rp == db::replay_position()) {
         // If this shard had no mutations, st.low_mark will be an empty, default constructed
