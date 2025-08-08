@@ -765,7 +765,7 @@ SEASTAR_TEST_CASE(test_prepared_statement_small_cache) {
 
         int how_many_in_cache = 0;
         for (auto& prepared_id : prepared_ids_privileged) {
-            if (e.local_qp().get_prepared(prepared_id)) {
+            if (e.local_qp().get_prepared(prepared_id).get()) {
                 how_many_in_cache++;
             }
         }
