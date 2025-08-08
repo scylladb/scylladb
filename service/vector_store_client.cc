@@ -206,6 +206,22 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
     return std::move(keys);
 }
 
+class client_connection_factory : public http::experimental::connection_factory {
+    socket_address _addr;
+
+public:
+    explicit client_connection_factory(socket_address addr)
+        : _addr(addr) {
+    }
+
+    future<connected_socket> make([[maybe_unused]] abort_source* as) override {
+        auto socket = co_await seastar::connect(_addr, {}, transport::TCP);
+        socket.set_nodelay(true);
+        socket.set_keepalive(true);
+        co_return socket;
+    }
+};
+
 } // namespace
 
 namespace service {
@@ -266,7 +282,7 @@ struct vector_store_client::impl {
 
         addr = *new_addr;
         old_clients.emplace_back(current_client);
-        current_client = make_lw_shared<http_client>(socket_address(addr, port));
+        current_client = make_lw_shared<http_client>(std::make_unique<client_connection_factory>(socket_address(addr, port)));
     }
 
     /// A task for refreshing the vector store http client.
