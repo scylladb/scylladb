@@ -105,6 +105,7 @@ std::set<std::string_view> feature_service::supported_feature_set() const {
         "PER_TABLE_CACHING"sv,
         "DIGEST_FOR_NULL_VALUES"sv,
         "CORRECT_IDX_TOKEN_IN_SECONDARY_INDEX"sv,
+        "UUID_SSTABLE_IDENTIFIERS"sv,
     };
 
     if (is_test_only_feature_deprecated()) {

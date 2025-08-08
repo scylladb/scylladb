@@ -55,6 +55,7 @@
 
 using namespace std::chrono_literals;
 using namespace sstables;
+using namespace tests;
 
 class database_test_wrapper {
     replica::database& _db;
@@ -613,12 +614,6 @@ future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name 
                 ks_name, cf_name, snapshot_name, skip_flush, std::current_exception());
         throw;
     }
-}
-
-// Helper to get directory a table keeps its data in.
-// Only suitable for tests, that work with local storage type.
-fs::path table_dir(const replica::column_family& cf) {
-    return std::get<data_dictionary::storage_options::local>(cf.get_storage_options().value).dir;
 }
 
 static future<> snapshot_works(const std::string& table_name) {

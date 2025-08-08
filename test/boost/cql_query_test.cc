@@ -21,6 +21,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
+#include "test/lib/test_utils.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/sleep.hh>
@@ -50,11 +51,15 @@
 #include "db/paxos_grace_seconds_extension.hh"
 #include "db/per_partition_rate_limit_extension.hh"
 #include "replica/schema_describe_helper.hh"
+#include "sstables/sstables.hh"
+#include "replica/distributed_loader.hh"
+#include "compaction/compaction_manager.hh"
 
 
 BOOST_AUTO_TEST_SUITE(cql_query_test)
 
 using namespace std::literals::chrono_literals;
+using namespace tests;
 
 SEASTAR_TEST_CASE(test_create_keyspace_statement) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
@@ -6064,6 +6069,45 @@ SEASTAR_TEST_CASE(test_schema_change_events) {
         res = e.execute_cql("create type if not exists my_type (first text);").get();
         BOOST_REQUIRE(dynamic_pointer_cast<event_t>(res));
      });
+}
+
+// check that we can load sstable with mixed numerical and uuid generation types
+SEASTAR_TEST_CASE(test_sstable_load_mixed_generation_type) {
+    return do_with_cql_env_thread([] (cql_test_env& e) {
+        // Create table
+        e.execute_cql("create table ks.test (k int PRIMARY KEY, v int);").get();
+
+        auto& tbl = e.local_db().find_column_family("ks", "test");
+        auto upload_dir = table_dir(tbl) / sstables::upload_dir;
+
+        // Load sstables with mixed generation types
+        copy_directory("test/resource/sstables/mixed_generation_type", upload_dir);
+        replica::distributed_loader::process_upload_dir(e.db(), e.view_builder(), "ks", "test", false, false).get();
+
+        // Verify the expected data is present
+        assert_that(e.execute_cql("SELECT * FROM ks.test").get()).is_rows()
+            .with_size(3)
+            .with_rows_ignore_order({
+                {int32_type->decompose(0), int32_type->decompose(0)},
+                {int32_type->decompose(1), int32_type->decompose(1)},
+                {int32_type->decompose(2), int32_type->decompose(2)}
+            });
+
+        // Run major compaction to ensure that the mixed generation types are handled correctly
+        auto& compaction_module = e.local_db().get_compaction_manager().get_task_manager_module();
+        std::vector<table_info> table_infos({{"test", tbl.schema()->id()}});
+        auto task = compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, "ks", tasks::task_id::create_null_id(), e.db(), table_infos, flush_mode::skip, false).get();
+        task->done().get();
+
+        // Verify the expected data again
+        assert_that(e.execute_cql("SELECT * FROM ks.test").get()).is_rows()
+            .with_size(3)
+            .with_rows_ignore_order({
+                {int32_type->decompose(0), int32_type->decompose(0)},
+                {int32_type->decompose(1), int32_type->decompose(1)},
+                {int32_type->decompose(2), int32_type->decompose(2)}
+            });
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()

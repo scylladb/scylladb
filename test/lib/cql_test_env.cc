@@ -349,6 +349,10 @@ public:
         return _auth_service.local();
     }
 
+    virtual distributed<db::view::view_builder>& view_builder() override {
+        return _view_builder;
+    }
+
     virtual db::view::view_builder& local_view_builder() override {
         return _view_builder.local();
     }

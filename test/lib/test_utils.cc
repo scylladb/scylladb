@@ -14,6 +14,7 @@
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
 #include "utils/to_string.hh"
+#include "replica/database.hh"
 #include "seastarx.hh"
 #include <random>
 
@@ -98,5 +99,29 @@ future<> touch_file(std::string name) {
 }
 
 std::mutex boost_logger_mutex;
+
+// Helper to get directory a table keeps its data in.
+// Only suitable for tests, that work with local storage type.
+fs::path table_dir(const replica::table& cf) {
+    return std::get<data_dictionary::storage_options::local>(cf.get_storage_options().value).dir;
+}
+
+void copy_directory(fs::path src_dir, fs::path dst_dir, fs::copy_options opts) {
+    if (!fs::exists(dst_dir)) {
+        fs::create_directory(dst_dir);
+    }
+    auto src_dir_components = std::distance(src_dir.begin(), src_dir.end());
+    using rdi = fs::recursive_directory_iterator;
+    // Boost 1.55.0 doesn't support range for on recursive_directory_iterator
+    // (even though previous and later versions do support it)
+    for (auto&& dirent = rdi{src_dir}; dirent != rdi(); ++dirent) {
+        auto&& path = dirent->path();
+        auto new_path = dst_dir;
+        for (auto i = std::next(path.begin(), src_dir_components); i != path.end(); ++i) {
+            new_path /= *i;
+        }
+        fs::copy(path, new_path, opts);
+    }
+}
 
 }

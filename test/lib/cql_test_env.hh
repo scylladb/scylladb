@@ -157,6 +157,7 @@ public:
 
     virtual auth::service& local_auth_service() = 0;
 
+    virtual distributed<db::view::view_builder>& view_builder() = 0;
     virtual db::view::view_builder& local_view_builder() = 0;
 
     virtual db::view::view_update_generator& local_view_update_generator() = 0;
