@@ -117,6 +117,7 @@
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include <csignal>
 #include "utils/labels.hh"
+#include "replica/out_of_space_controller.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -200,7 +201,8 @@ storage_service::storage_service(abort_source& abort_source,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
     std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
-    utils::disk_space_monitor* disk_space_monitor
+    utils::disk_space_monitor* disk_space_monitor,
+    replica::out_of_space_controller* out_of_space_controller
     )
         : _abort_source(abort_source)
         , _feature_service(feature_service)
@@ -236,6 +238,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _topology_state_machine(topology_state_machine)
         , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
         , _disk_space_monitor(disk_space_monitor)
+        , _out_of_space_controller(out_of_space_controller)
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
     tm.register_module(_tablets_module->get_name(), _tablets_module);
@@ -6937,6 +6940,9 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
 
     auto this_host = _db.local().get_token_metadata().get_my_id();
     load_stats.capacity[this_host] = _disk_space_monitor->space().capacity;
+    if (_out_of_space_controller) {
+        load_stats.critical_disk_utilization[this_host] = _out_of_space_controller->is_critical_disk_utilization_threshold_reached();
+    }
 
     co_return std::move(load_stats);
 }

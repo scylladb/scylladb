@@ -8,6 +8,7 @@ Error Messages
    address-already-in-use
    schema-mismatch
    invalid-ssl-prot-error
+   critical-disk-utilization
 
 
 .. panel-box::
@@ -22,3 +23,5 @@ Error Messages
   * :doc:`Schema Mismatch </troubleshooting/error-messages/schema-mismatch>`
 
   * :doc:`Invalid SSL Protocol </troubleshooting/error-messages/invalid-ssl-prot-error>`
+
+  * :doc:`Critical disk utilization </troubleshooting/error-messages/critical-disk-utilization/>`
