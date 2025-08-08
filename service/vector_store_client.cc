@@ -72,11 +72,17 @@ auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     return port;
 }
 
-auto parse_service_uri(std::string_view uri) -> std::optional<std::tuple<host_name, port_number>> {
+struct host_port {
+    host_name host;
+    port_number port;
+};
+
+auto parse_service_uri(std::string_view uri) -> std::optional<host_port> {
     constexpr auto URI_REGEX = R"(^http:\/\/([a-z0-9._-]+):([0-9]+)$)";
     auto const uri_regex = std::regex(URI_REGEX);
     auto uri_match = std::smatch{};
     auto uri_txt = std::string(uri);
+
     if (!std::regex_match(uri_txt, uri_match, uri_regex) || uri_match.size() != 3) {
         return {};
     }
@@ -206,26 +212,26 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
 }
 
 class http_client {
-    host_name host;
+
+    host_port _host_port;
     inet_address _addr;
-    port_number port;
+
     http::experimental::client impl;
 
 public:
-    http_client(host_name host, inet_address addr, port_number port)
-        : host(std::move(host))
+    http_client(host_port host_port_, inet_address addr)
+        : _host_port(std::move(host_port_))
         , _addr(std::move(addr))
-        , port(port)
-        , impl(socket_address(addr, port)) {
+        , impl(socket_address(addr, _host_port.port)) {
     }
 
     bool connects_to(inet_address const& a, port_number p) const {
-        return _addr == a && port == p;
+        return _addr == a && _host_port.port == p;
     }
 
     seastar::future<> make_request(
             operation_type method, http_path path, std::optional<json_content> content, http::experimental::client::reply_handler&& handle, abort_source* as) {
-        auto req = http::request::make(method, host, std::move(path));
+        auto req = http::request::make(method, _host_port.host, std::move(path));
         if (content) {
             req.write_body("json", std::move(*content));
         }
@@ -248,8 +254,7 @@ namespace service {
 struct vector_store_client::impl {
     lw_shared_ptr<http_client> current_client;
     std::vector<lw_shared_ptr<http_client>> old_clients;
-    host_name host;
-    port_number port{};
+    host_port _host_port;
     time_point last_dns_refresh;
     gate tasks_gate;
     condition_variable refresh_cv;
@@ -261,9 +266,8 @@ struct vector_store_client::impl {
     std::function<future<std::optional<inet_address>>(sstring const&)> dns_resolver;
     sequential_producer<lw_shared_ptr<http_client>> client_producer;
 
-    impl(host_name host_, port_number port_)
-        : host(std::move(host_))
-        , port(port_)
+    impl(host_port host_port_)
+        : _host_port{std::move(host_port_)}
         , dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
             auto addr = co_await coroutine::as_future(net::dns::resolve_name(host));
             if (addr.failed()) {
@@ -287,6 +291,7 @@ struct vector_store_client::impl {
     /// If the address is the same as the current one, do nothing.
     /// Old clients are saved for later cleanup in a specific task.
     auto refresh_addr() -> future<> {
+        auto [host, port] = _host_port;
         auto new_addr = co_await dns_resolver(host);
         if (!new_addr) {
             current_client = nullptr;
@@ -299,7 +304,7 @@ struct vector_store_client::impl {
         }
 
         old_clients.emplace_back(current_client);
-        current_client = make_lw_shared<http_client>(host, std::move(*new_addr), port);
+        current_client = make_lw_shared<http_client>(_host_port, std::move(*new_addr));
     }
 
     /// A task for refreshing the vector store http client.
@@ -467,10 +472,8 @@ vector_store_client::vector_store_client(config const& cfg) {
     if (!parsed_uri) {
         throw configuration_exception(format("Invalid Vector Store service URI: {}", config_uri));
     }
-
-    auto [host, port] = *parsed_uri;
-    _impl = std::make_unique<impl>(std::move(host), port);
-    vslogger.info("Vector Store service uri = {}:{}.", _impl->host, _impl->port);
+    _impl = std::make_unique<impl>(std::move(*parsed_uri));
+    vslogger.info("Vector Store service uri = {}:{}.", _impl->_host_port.host, _impl->_host_port.port);
 }
 
 vector_store_client::~vector_store_client() = default;
@@ -502,14 +505,14 @@ auto vector_store_client::host() const -> std::expected<host_name, disabled> {
     if (is_disabled()) {
         return std::unexpected{disabled{}};
     }
-    return {_impl->host};
+    return {_impl->_host_port.host};
 }
 
 auto vector_store_client::port() const -> std::expected<port_number, disabled> {
     if (is_disabled()) {
         return std::unexpected{disabled{}};
     }
-    return {_impl->port};
+    return {_impl->_host_port.port};
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
