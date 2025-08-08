@@ -13,6 +13,7 @@
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include <functional>
+#include <chrono>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/net/api.hh>
@@ -75,7 +76,8 @@ auto listen_on_ephemeral_port(std::unique_ptr<http_server> server) -> future<std
 }
 
 auto new_http_server(std::function<void(routes& r)> set_routes) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-    auto server = std::make_unique<http_server>("test_vector_store_client");
+    static unsigned id = 0;
+    auto server = std::make_unique<http_server>(fmt::format("test_vector_store_client_{}", id++));
     set_routes(server->_routes);
     server->set_content_streaming(true);
     co_return co_await listen_on_ephemeral_port(std::move(server));
@@ -509,4 +511,96 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
             },
             cfg);
     co_await server->stop();
+}
+
+SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
+    auto cfg = config();
+    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    auto vs = vector_store_client{cfg};
+
+    cfg.vector_store_uri.set("");
+
+    BOOST_CHECK(vs.is_disabled());
+    co_await vs.stop();
+}
+
+SEASTAR_TEST_CASE(vector_store_client_uri_update_to_non_empty) {
+    auto cfg = config();
+    std::vector<std::string> resolved;
+    auto vs = vector_store_client{cfg};
+    configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&resolved](auto const& host) -> future<std::optional<inet_address>> {
+        resolved.push_back(host);
+        co_return inet_address("127.0.0.1");
+    });
+
+    vs.start_background_tasks();
+
+    cfg.vector_store_uri.set("http://good.authority.here:6080");
+
+    BOOST_CHECK(!vs.is_disabled());
+    // Wait for the DNS resolver to be called
+    BOOST_CHECK(co_await repeat_until(std::chrono::seconds(1), [&]() -> future<bool> {
+        co_return resolved.size() > 0;
+    }));
+    BOOST_CHECK_EQUAL(resolved.back(), "good.authority.here");
+    co_await vs.stop();
+}
+
+SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
+    auto cfg = config();
+    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    auto vs = vector_store_client{cfg};
+
+    vs.start_background_tasks();
+
+    cfg.vector_store_uri.set("invalid-uri");
+
+    // vs becomes disabled
+    BOOST_CHECK(vs.is_disabled());
+    co_await vs.stop();
+}
+
+SEASTAR_TEST_CASE(vector_store_client_uri_update) {
+    // Test verifies that when vector store uri is update, the client
+    // will switch to the new uri within the DNS refresh interval.
+    // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
+    auto make_vs_server = [](status_type status) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+        return new_http_server([status](routes& r) {
+            auto ann = [status](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                rep->set_status(status);
+                co_return rep;
+            };
+            r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
+        });
+    };
+    auto [s1, addr_s1] = co_await make_vs_server(status_type::not_found);
+    auto [s2, addr_s2] = co_await make_vs_server(status_type::service_unavailable);
+
+    constexpr auto is_s2_response = [](const auto& keys) -> bool {
+        return !keys && std::holds_alternative<vector_store_client::service_error>(keys.error()) &&
+               std::get<vector_store_client::service_error>(keys.error()).status == status_type::service_unavailable;
+    };
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr_s1.port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                constexpr auto DNS_REFRESH_INTERVAL = std::chrono::milliseconds(10);
+                configure(vs).with_dns_refresh_interval(DNS_REFRESH_INTERVAL).with_dns({{"good.authority.here", "127.0.0.1"}});
+
+                vs.start_background_tasks();
+
+                env.db_config().vector_store_uri.set(format("http://good.authority.here:{}", addr_s2.port()));
+
+                // Wait until requests are handled by s2
+                BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
+                    co_return is_s2_response(co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as));
+                }));
+            },
+            cfg);
+    co_await s1->stop();
+    co_await s2->stop();
 }
