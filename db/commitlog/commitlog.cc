@@ -635,7 +635,7 @@ static void write(fragmented_temporary_buffer::ostream& out, T value) {
 
 template<std::integral T, typename Input>
 T read(Input& in) {
-    return net::ntoh(in.template read<T>());
+    return net::ntoh(in.template read<T>().value());
 }
 
 detail::sector_split_iterator::sector_split_iterator(const sector_split_iterator&) noexcept = default;
@@ -1793,7 +1793,7 @@ future<> db::commitlog::segment_manager::oversized_allocation(entry_writer& writ
                 auto max_write = data_size - off;
                 auto to_write = std::min(avail, max_write);
                 auto rem = max_write - to_write;
-                partial_writer pw(writer, i, to_write, strm.read_view(to_write), rem, off, id);
+                partial_writer pw(writer, i, to_write, strm.read_view(to_write).value(), rem, off, id);
 
                 switch (s->allocate(pw, fake_permit, timeout)) {
                     case write_result::ok_need_batch_sync:
