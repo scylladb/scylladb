@@ -344,29 +344,14 @@ class calculator_impl {
     static uint64_t calc_voters_max(
             uint64_t voters_max, const group0_voter_calculator::nodes_list_t& nodes, const datacenters_store_t& datacenters, size_t dc_largest_size) {
         auto num_voters = std::min(voters_max, nodes.size());
-        // Any number of voters under 3 is allowed
-        // TODO (scylladb/scylladb#23266): Enforce an odd number of voters in this case (remove this condition)
-        if (num_voters <= 3) {
+
+        // Return unchanged if 0 nodes or already odd
+        if (num_voters == 0 || num_voters % 2 != 0) {
             return num_voters;
         }
 
-        // Odd number of voters is always allowed
-        if (num_voters % 2 != 0) {
-            return num_voters;
-        }
-
-        // With 2 DCs having an equal number of nodes, we want an asymmetric distribution
-        // to survive the loss of one DC. Enforce an odd number of voters.
-        if (datacenters.size() == 2 && dc_largest_size * 2 == nodes.size()) {
-            return num_voters - 1;
-        }
-
-        // TODO(issue-23266): Enforce an odd number of voters in other cases as well
-        //
-        // Forcing an odd number of voters causes further tests to fail, so there will
-        // be a separate follow-up. Note that the previous code allowed any number of voters,
-        // so allowing even number of voters is not a regression.
-        return num_voters;
+        // Convert even count to odd by reducing by 1
+        return num_voters - 1;
     }
 
     static uint64_t calc_voters_max_per_dc(
