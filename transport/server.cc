@@ -1175,7 +1175,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     auto prepared = qp.local().get_prepared(client_state.user(), cache_key);
     if (!prepared) {
         needs_authorization = true;
-        prepared = qp.local().get_prepared(cache_key);
+        prepared = co_await qp.local().get_prepared(cache_key);
     }
 
     if (!prepared) {
@@ -1223,7 +1223,7 @@ process_execute_internal(service::client_state& client_state, distributed<cql3::
     }
 
     tracing::trace(trace_state, "Processing a statement");
-    return qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
+    co_return co_await qp.local().execute_prepared_without_checking_exception_message(query_state, std::move(stmt), options, std::move(prepared), std::move(cache_key), needs_authorization)
             .then([trace_state = query_state.get_trace_state(), skip_metadata, q_state = std::move(q_state), stream, version, metadata_id = std::move(metadata_id)] (auto msg) mutable {
         if (msg->move_to_shard()) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg)));
@@ -1284,9 +1284,9 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
             // look for the prepared statement and then authorize it.
             ps = qp.local().get_prepared(client_state.user(), cache_key);
             if (!ps) {
-                ps = qp.local().get_prepared(cache_key);
+                ps = co_await qp.local().get_prepared(cache_key);
                 if (!ps) {
-                    return make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(id));
+                    co_return co_await make_exception_future<cql_server::process_fn_return_type>(exceptions::prepared_query_not_found_exception(id));
                 }
                 // authorize a particular prepared statement only once
                 needs_authorization = pending_authorization_entries.emplace(std::move(cache_key), ps->checked_weak_from_this()).second;
@@ -1297,13 +1297,13 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
             break;
         }
         default:
-            return make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(
+            co_return co_await make_exception_future<cql_server::process_fn_return_type>(exceptions::protocol_exception(
                     "Invalid query kind in BATCH messages. Must be 0 or 1 but got "
                             + std::to_string(int(kind))));
         }
 
         if (dynamic_cast<cql3::statements::modification_statement*>(ps->statement.get()) == nullptr) {
-            return make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
+            co_return co_await make_exception_future<cql_server::process_fn_return_type>(exceptions::invalid_request_exception("Invalid statement in batch: only UPDATE, INSERT and DELETE statements are allowed."));
         }
         ::shared_ptr<cql3::statements::modification_statement> modif_statement_ptr = static_pointer_cast<cql3::statements::modification_statement>(ps->statement);
         if (init_trace) {
@@ -1319,7 +1319,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
 
         auto stmt = ps->statement;
         if (stmt->get_bound_terms() != tmp.size()) {
-            return make_exception_future<cql_server::process_fn_return_type>(
+            co_return co_await make_exception_future<cql_server::process_fn_return_type>(
                     exceptions::invalid_request_exception(format("There were {:d} markers(?) in CQL but {:d} bound variables",
                             stmt->get_bound_terms(), tmp.size())));
         }
@@ -1345,7 +1345,7 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
     }
 
     auto batch = ::make_shared<cql3::statements::batch_statement>(cql3::statements::batch_statement::type(type), std::move(modifications), cql3::attributes::none(), qp.local().get_cql_stats());
-    return qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
+    co_return co_await qp.local().execute_batch_without_checking_exception_message(batch, query_state, options, std::move(pending_authorization_entries))
             .then([stream, batch, q_state = std::move(q_state), trace_state = query_state.get_trace_state(), version] (auto msg) {
         if (msg->move_to_shard()) {
             return cql_server::process_fn_return_type(make_foreign(dynamic_pointer_cast<messages::result_message::bounce_to_shard>(msg)));
