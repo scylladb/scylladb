@@ -375,7 +375,20 @@ public:
     future<std::vector<sstring>> list_existing_segments() const;
     future<std::vector<sstring>> list_existing_segments(const sstring& dir) const;
 
-    gc_clock::time_point min_gc_time(const cf_id_type&) const;
+    // Returns the expiry-treshold for the commitlog segments holding data for the given table id.
+    //
+    // Tombstones, whose deletion time is before this point, can be safely
+    // garbage collected.
+    // If `exclude` is provided, segments that are only referenced by the
+    // provided rp_set are excluded from the calculation. For the purposes of
+    // gc-before time calculation, this is equivalent to the following:
+    //
+    //      cl->discard_completed_segments(cfid, *exclude);
+    //      const auto gc_before = cl->min_gc_time(cfid);
+    //
+    // However, unlike in the snipped above, when using
+    // min_gc_time(cfid, exclude), the commitlog segments are not mutated.
+    gc_clock::time_point min_gc_time(const cf_id_type& cfid, const rp_set* exclude = nullptr) const;
 
     // Return the lowest possible replay position across all existing or future commitlog segments.
     // In other words, only positions greater or equal to min_position() can

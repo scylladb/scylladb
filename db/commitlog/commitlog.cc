@@ -488,7 +488,7 @@ public:
     future<std::vector<descriptor>> list_descriptors(sstring dir) const;
     future<std::vector<sstring>> get_segments_to_replay() const;
 
-    gc_clock::time_point min_gc_time(const cf_id_type&) const;
+    gc_clock::time_point min_gc_time(const cf_id_type&, const rp_set* exclude) const;
 
     flush_handler_id add_flush_handler(flush_handler h) {
         auto id = ++_flush_ids;
@@ -1493,9 +1493,27 @@ public:
     sstring get_segment_name() const {
         return _desc.filename();
     }
-    gc_clock::time_point min_time(const cf_id_type& id) const {
+    gc_clock::time_point min_time(const cf_id_type& id, uint64_t count) const {
         auto i = _cf_min_time.find(id);
-        return i == _cf_min_time.end() ? gc_clock::time_point::max() : i->second;
+        // No expiry treshold for this table.
+        if (i == _cf_min_time.end()) {
+            return gc_clock::time_point::max();
+        }
+        // No memtable excluded for this expiry threshold check, return as-is.
+        if (!count) {
+            return i->second;
+        }
+        // If we are still allocating, or if there is more than one dirty table
+        // for this segment, the segment won't be collected after the current
+        // memtable flush, so we cannot elide the expiry treshold check.
+        if (is_still_allocating() || _cf_dirty.size() > 1) {
+            return i->second;
+        }
+        // If this memtable is the only one keeping this segment alive, we can
+        // elide the expiry treshold check, the memtable content doesn't shadow
+        // any other data.
+        auto j = _cf_dirty.find(id);
+        return j->second > count ? i->second : gc_clock::time_point::max();
     }
 };
 
@@ -2034,10 +2052,18 @@ future<std::vector<sstring>> db::commitlog::segment_manager::get_segments_to_rep
     co_return segments_to_replay;
 }
 
-gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id) const {
+gc_clock::time_point db::commitlog::segment_manager::min_gc_time(const cf_id_type& id, const rp_set* exclude) const {
+    auto get_usage_count = [exclude] (segment_id_type sid) -> uint64_t {
+        if (!exclude) {
+            return 0;
+        }
+        const auto i = exclude->usage().find(sid);
+        return i == exclude->usage().end() ? 0 : i->second;
+    };
+
     auto res = gc_clock::time_point::max();
     for (auto& s : _segments) {
-        res = std::min(res, s->min_time(id));
+        res = std::min(res, s->min_time(id, get_usage_count(s->_desc.id)));
     }
     return res;
 }
@@ -3927,8 +3953,8 @@ future<std::vector<sstring>> db::commitlog::list_existing_segments(const sstring
     });
 }
 
-gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id) const {
-    return _segment_manager->min_gc_time(id);
+gc_clock::time_point db::commitlog::min_gc_time(const cf_id_type& id, const rp_set* exclude) const {
+    return _segment_manager->min_gc_time(id, exclude);
 }
 
 db::replay_position db::commitlog::min_position() const {

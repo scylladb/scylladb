@@ -1886,16 +1886,16 @@ sharded<locator::shared_token_metadata> token_metadata;
                 auto cl = db.local().commitlog();
                 auto scl = db.local().schema_commitlog();
                 if (cl && scl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl, scl](const table_id& id) {
-                        return std::min(cl->min_gc_time(id), scl->min_gc_time(id));
+                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl, scl](const table_id& id, const db::rp_set* exclude) {
+                        return std::min(cl->min_gc_time(id, exclude), scl->min_gc_time(id, exclude));
                     });
                 } else if (cl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl](const table_id& id) {
-                        return cl->min_gc_time(id);
+                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl](const table_id& id, const db::rp_set* exclude) {
+                        return cl->min_gc_time(id, exclude);
                     });
                 } else if (scl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([scl](const table_id& id) {
-                        return scl->min_gc_time(id);
+                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([scl](const table_id& id, const db::rp_set* exclude) {
+                        return scl->min_gc_time(id, exclude);
                     });
                 }
             }).get();
