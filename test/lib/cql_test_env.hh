@@ -24,6 +24,7 @@
 #include "cql3/values.hh"
 #include "cql3/prepared_statements_cache.hh"
 #include "cql3/query_processor.hh"
+#include "cql3/statements/batch_statement.hh"
 #include "bytes.hh"
 #include "schema/schema.hh"
 #include "service/tablet_allocator.hh"
@@ -126,7 +127,7 @@ public:
 
     /// Processes queries (which must be modifying queries) as a batch.
     virtual future<::shared_ptr<cql_transport::messages::result_message>> execute_batch(
-        const std::vector<std::string_view>& queries, std::unique_ptr<cql3::query_options> qo) = 0;
+        const std::vector<std::string_view>& queries, cql3::statements::batch_statement::type batch_type, std::unique_ptr<cql3::query_options> qo) = 0;
 
     virtual future<cql3::prepared_cache_key_type> prepare(sstring query) = 0;
 
