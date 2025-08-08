@@ -2229,8 +2229,7 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                         paxos::paxos_state::logger.trace("CAS[{}] prepare_ballot: fail to send ballot {} to {}: {}", _id,
                                 ballot, peer, ex);
                         if (_required_participants + request_tracker.errors > _live_endpoints.size()) {
-                            auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
-                                        _schema->cf_name(), _cl_for_paxos, summary.committed_ballots_by_replica.size(),
+                            auto e = std::make_exception_ptr(mutation_write_failure_exception(format("{}", ex), _cl_for_paxos, summary.committed_ballots_by_replica.size(),
                                         request_tracker.errors, _required_participants, db::write_type::CAS));
                             request_tracker.set_exception(std::move(e));
                         }
@@ -2336,6 +2335,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
         size_t accepts = 0;
         size_t rejects = 0;
         size_t errors = 0;
+        std::optional<sstring> replica_error;
 
         size_t all_replies() const {
             return accepts + rejects + errors;
@@ -2382,8 +2382,9 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                                 _id, *proposal, peer);
                         is_timeout = true;
                     } else {
+                        request_tracker.replica_error = format("{}", ex);
                         paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: failure while sending proposal {} to {}: {}", _id,
-                                *proposal, peer, ex);
+                                *proposal, peer, *request_tracker.replica_error);
                         request_tracker.errors++;
                     }
                 }
@@ -2397,7 +2398,7 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
             if (accepted) {
                 tracing::trace(tr_state, "accept_proposal: got \"{}\" from /{}", *accepted ? "accepted" : "rejected", peer);
                 paxos::paxos_state::logger.trace("CAS[{}] accept_proposal: got \"{}\" from {}", _id,
-                        accepted ? "accepted" : "rejected", peer);
+                        *accepted ? "accepted" : "rejected", peer);
 
                 *accepted ? request_tracker.accepts++ : request_tracker.rejects++;
             }
@@ -2427,8 +2428,8 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                 // We got one too many errors. The quorum is no longer reachable. We can fail here
                 // timeout_if_partially_accepted or not because failing is always safe - a client cannot
                 // assume that the value was not committed.
-                auto e = std::make_exception_ptr(mutation_write_failure_exception(_schema->ks_name(),
-                            _schema->cf_name(), _cl_for_paxos, request_tracker.non_error_replies(),
+                auto e = std::make_exception_ptr(mutation_write_failure_exception(format("{}", request_tracker.replica_error.value_or("<unknown error>")),
+                            _cl_for_paxos, request_tracker.non_error_replies(),
                             request_tracker.errors, _required_participants, db::write_type::CAS));
                 request_tracker.set_exception(std::move(e));
             } else if (_required_participants + request_tracker.non_accept_replies()  > _live_endpoints.size() && !timeout_if_partially_accepted) {
@@ -2454,9 +2455,12 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                     // TODO: we report write timeout exception to be compatible with Cassandra,
                     // which uses write_timeout_exception to signal any "unknown" state.
                     // To be changed in scope of work on https://issues.apache.org/jira/browse/CASSANDRA-15350
-                    auto e = std::make_exception_ptr(mutation_write_timeout_exception(_schema->ks_name(),
-                                _schema->cf_name(), _cl_for_paxos, request_tracker.accepts, _required_participants,
-                                db::write_type::CAS));
+                    auto e = std::make_exception_ptr(mutation_write_timeout_exception(
+                        format("write timeout due to uncertainty{}",
+                            request_tracker.replica_error
+                            ? format(", replica error {}", *request_tracker.replica_error)
+                            : ""), 
+                        _cl_for_paxos, request_tracker.accepts, _required_participants, db::write_type::CAS));
                     request_tracker.set_exception(std::move(e));
                 }
             } // wait for more replies
@@ -6487,19 +6491,19 @@ static lw_shared_ptr<query::read_command> read_nothing_read_command(schema_ptr s
 }
 
 static read_timeout_exception write_timeout_to_read(schema_ptr s, mutation_write_timeout_exception& ex) {
-    return read_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, false);
+    return read_timeout_exception(ex.get_message(), ex.consistency, ex.received, ex.block_for, false);
 }
 
 static read_failure_exception write_failure_to_read(schema_ptr s, mutation_write_failure_exception& ex) {
-    return read_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
+    return read_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, false);
 }
 
 static mutation_write_timeout_exception read_timeout_to_write(schema_ptr s, read_timeout_exception& ex) {
-    return mutation_write_timeout_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.block_for, db::write_type::CAS);
+    return mutation_write_timeout_exception(ex.get_message(), ex.consistency, ex.received, ex.block_for, db::write_type::CAS);
 }
 
 static mutation_write_failure_exception read_failure_to_write(schema_ptr s, read_failure_exception& ex) {
-    return mutation_write_failure_exception(s->ks_name(), s->cf_name(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
+    return mutation_write_failure_exception(ex.get_message(), ex.consistency, ex.received, ex.failures, ex.block_for, db::write_type::CAS);
 }
 
 /**
