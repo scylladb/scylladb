@@ -268,6 +268,8 @@ add_scylla_test(transport_test
   KIND SEASTAR)
 add_scylla_test(bti_node_sink_test
   KIND BOOST)
+add_scylla_test(trie_traversal_test
+  KIND SEASTAR)
 add_scylla_test(trie_writer_test
   KIND BOOST)
 add_scylla_test(types_test
