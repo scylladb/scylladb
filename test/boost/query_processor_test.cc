@@ -220,7 +220,7 @@ SEASTAR_TEST_CASE(test_query_counters) {
 
         // Executes a batch of (modifying) statements and waits for it to complete.
         auto process_batch = [&e](const std::vector<std::string_view>& queries, clevel cl) mutable {
-            e.execute_batch(queries, make_options(cl)).get();
+            e.execute_batch(queries, cql3::statements::batch_statement::type::UNLOGGED, make_options(cl)).get();
         };
 
         auto expected = get_query_metrics();
