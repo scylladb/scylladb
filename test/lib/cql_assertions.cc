@@ -214,6 +214,15 @@ columns_assertions rows_assertions::with_columns_of_row(size_t row_index) {
     return columns_assertions(rs.get_metadata(), rs.rows().at(row_index));
 }
 
+rows_assertions& rows_assertions::assert_for_columns_of_each_row(std::function<void(columns_assertions&)> func) {
+    const auto& rs = _rows->rs().result_set();
+    for (size_t i = 0; i < rs.size(); ++i) {
+        auto columns = with_columns_of_row(i);
+        func(columns);
+    }
+    return *this;
+}
+
 result_msg_assertions::result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg)
     : _msg(msg)
 { }
