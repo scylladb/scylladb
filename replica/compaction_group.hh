@@ -13,6 +13,8 @@
 #include "compaction/compaction_descriptor.hh"
 #include "compaction/compaction_backlog_manager.hh"
 #include "compaction/compaction_strategy_state.hh"
+// FIXME: un-nest compaction_reenabler, so we can forward declare it and remove this include.
+#include "compaction/compaction_manager.hh"
 #include "locator/tablets.hh"
 #include "sstables/sstable_set.hh"
 #include "utils/chunked_vector.hh"
@@ -30,6 +32,14 @@ namespace replica {
 
 using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 
+enum class repair_sstable_classification {
+    unrepaired,
+    repairing,
+    repaired,
+};
+
+using repair_classifier_func = std::function<repair_sstable_classification(const sstables::shared_sstable&)>;
+
 // Compaction group is a set of SSTables which are eligible to be compacted together.
 // By this definition, we can say:
 //      - A group contains SSTables that are owned by the same shard.
@@ -38,8 +48,20 @@ using enable_backlog_tracker = bool_class<class enable_backlog_tracker_tag>;
 //          isolated from other groups.
 class compaction_group {
     table& _t;
-    class table_state;
-    std::unique_ptr<table_state> _table_state;
+    // The compaction group views are the logical compaction groups, each having its own logical
+    // set of sstables. Even though they share the same instance of sstable_set, compaction will
+    // only see the sstables belonging to a particular view, with the help of the classifier.
+    // This way, we guarantee that sstables falling under different groups cannot be compacted
+    // together.
+    class compaction_group_view;
+    // This is held throughout group lifetime, in order to have compaction disabled on non-compacting views.
+    std::vector<compaction_manager::compaction_reenabler> _compaction_disabler_for_views;
+    // Logical compaction group representing the unrepaired sstables.
+    std::unique_ptr<compaction_group_view> _unrepaired_view;
+    // Logical compaction group representing the repairing sstables. Compaction disabled altogether on it.
+    std::unique_ptr<compaction_group_view> _repairing_view;
+    // Logical compaction group representing the repaired sstables.
+    std::unique_ptr<compaction_group_view> _repaired_view;
     size_t _group_id;
     // Tokens included in this compaction_groups
     dht::token_range _token_range;
@@ -60,7 +82,12 @@ class compaction_group {
     // Gates flushes.
     seastar::named_gate _flush_gate;
     bool _tombstone_gc_enabled = true;
+    std::optional<compaction_backlog_tracker> _backlog_tracker;
+    repair_classifier_func _repair_sstable_classifier;
 private:
+    std::unique_ptr<compaction_group_view> make_compacting_view();
+    std::unique_ptr<compaction_group_view> make_non_compacting_view();
+
     // Adds new sstable to the set of sstables
     // Doesn't update the cache. The cache must be synchronized in order for reads to see
     // the writes contained in this sstable.
@@ -87,8 +114,11 @@ private:
     // seen timestamp remains the same and there is no need to update the variable in those cases.
     api::timestamp_type _max_seen_timestamp = api::missing_timestamp;
 public:
-    compaction_group(table& t, size_t gid, dht::token_range token_range);
+    compaction_group(table& t, size_t gid, dht::token_range token_range, repair_classifier_func repair_classifier);
     ~compaction_group();
+
+    // Create a group with same metadata of base like range, id, but with empty data (sstable & memtable).
+    static lw_shared_ptr<compaction_group> make_empty_group(const compaction_group& base);
 
     void update_id(size_t id) {
         _group_id = id;
@@ -101,6 +131,8 @@ public:
     size_t group_id() const noexcept {
         return _group_id;
     }
+
+    const schema_ptr& schema() const;
 
     // Stops all activity in the group, synchronizes with in-flight writes, before
     // flushing memtable(s), so all data can be found in the SSTable set.
@@ -175,14 +207,23 @@ public:
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept;
     // Triggers regular compaction.
     void trigger_compaction();
+    bool compaction_disabled() const;
+    future<unsigned> estimate_pending_compactions() const;
 
     compaction_backlog_tracker& get_backlog_tracker();
+    void register_backlog_tracker(compaction_backlog_tracker new_backlog_tracker);
 
     size_t live_sstable_count() const noexcept;
     uint64_t live_disk_space_used() const noexcept;
     uint64_t total_disk_space_used() const noexcept;
 
-    compaction::table_state& as_table_state() const noexcept;
+    // With static sharding, i.e. vnodes, there will be only one active view.
+    compaction::compaction_group_view& as_view_for_static_sharding() const;
+    // Default view to be used on newly created sstables, e.g. those produced by repair or memtable.
+    compaction::compaction_group_view& view_for_unrepaired_data() const;
+    // Gets the view a sstable currently belongs to.
+    compaction::compaction_group_view& view_for_sstable(const sstables::shared_sstable& sst) const;
+    utils::small_vector<compaction::compaction_group_view*, 3> all_views() const;
 
     seastar::condition_variable& get_staging_done_condition() noexcept {
         return _staging_done_condition;
@@ -198,6 +239,12 @@ public:
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
+
+    future<> split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
+
+    void set_repair_sstable_classifier(repair_classifier_func repair_sstable_classifier) {
+        _repair_sstable_classifier = std::move(repair_sstable_classifier);
+    }
 
     friend class storage_group;
 };

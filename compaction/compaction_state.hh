@@ -19,12 +19,18 @@
 
 namespace compaction {
 
+// There's 1:1 relationship between compaction_grop_view and compaction_state.
+// Two or more compaction_group_view can be served by the same instance of sstable::sstable_set,
+// so it's not safe to track any sstable state here.
 struct compaction_state {
     // Used both by compaction tasks that refer to the compaction_state
     // and by any function running under run_with_compaction_disabled().
     seastar::named_gate gate;
 
-    // Prevents table from running major and minor compaction at the same time.
+    // Used for synchronizing selection of sstable for compaction.
+    // Write lock is held when getting sstable list, feeding them into strategy, and registering compacting sstables.
+    // The lock prevents two concurrent compaction tasks from picking the same sstables. And it also helps major
+    // to synchronize with minor, such that major doesn't miss any sstable.
     seastar::rwlock lock;
 
     // Raised by any function running under run_with_compaction_disabled();
@@ -33,14 +39,13 @@ struct compaction_state {
     // Signaled whenever a compaction task completes.
     condition_variable compaction_done;
 
-    std::optional<compaction_backlog_tracker> backlog_tracker;
-
+    // Used only with vnodes, will not work with tablets. Can be removed once vnodes are gone.
     std::unordered_set<sstables::shared_sstable> sstables_requiring_cleanup;
     compaction::owned_ranges_ptr owned_ranges_ptr;
 
     gc_clock::time_point last_regular_compaction;
 
-    explicit compaction_state(table_state& t);
+    explicit compaction_state(compaction_group_view& t);
     compaction_state(compaction_state&&) = delete;
     ~compaction_state();
 

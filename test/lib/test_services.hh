@@ -31,17 +31,17 @@
 #include "replica/database.hh"
 #include "cell_locking.hh"
 #include "compaction/compaction_manager.hh"
-#include "compaction/table_state.hh"
+#include "compaction/compaction_group_view.hh"
 #include "sstables/sstables_manager.hh"
 
 struct table_for_tests {
-    class table_state;
+    class compaction_group_view;
     struct data {
         schema_ptr s;
         replica::cf_stats cf_stats{0};
         cell_locker_stats cl_stats;
         lw_shared_ptr<replica::column_family> cf;
-        std::unique_ptr<table_state> table_s;
+        std::unique_ptr<compaction_group_view> table_s;
         data_dictionary::storage_options storage;
         data();
         ~data();
@@ -62,9 +62,10 @@ struct table_for_tests {
     replica::column_family* operator->() { return _data->cf.get(); }
     const replica::column_family* operator->() const { return _data->cf.get(); }
 
-    compaction::table_state& as_table_state() noexcept;
+    compaction::compaction_group_view& as_compaction_group_view() noexcept;
 
     future<> stop();
 
     void set_tombstone_gc_enabled(bool tombstone_gc_enabled) noexcept;
+    void set_repair_sstable_classifier(replica::repair_classifier_func repair_sstable_classifier);
 };
