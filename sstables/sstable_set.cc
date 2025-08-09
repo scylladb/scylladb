@@ -764,15 +764,15 @@ sstable_set_impl::selector_and_schema_t partitioned_sstable_set::make_incrementa
     return std::make_tuple(std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables, _leveled_sstables_change_cnt), std::cref(*_schema));
 }
 
-std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(const table_state& ts) const {
+std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(const compaction_group_view& ts) const {
     return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
-std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(const table_state& ts) const {
+std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
     return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
-std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_set(const table_state& ts) const {
+std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
     return std::make_unique<time_series_sstable_set>(ts.schema(), _options.enable_optimized_twcs_queries);
 }
 
@@ -781,7 +781,7 @@ sstable_set make_partitioned_sstable_set(schema_ptr schema, dht::token_range tok
 }
 
 sstable_set
-compaction_strategy::make_sstable_set(const table_state& ts) const {
+compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
     return sstable_set(
             _compaction_strategy_impl->make_sstable_set(ts));
 }

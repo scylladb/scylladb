@@ -142,6 +142,7 @@ public:
     gms::feature fragmented_commitlog_entries { *this, "FRAGMENTED_COMMITLOG_ENTRIES"sv };
     gms::feature maintenance_tenant { *this, "MAINTENANCE_TENANT"sv };
 
+    gms::feature tablet_incremental_repair { *this, "TABLET_INCREMENTAL_REPAIR"sv };
     gms::feature tablet_repair_scheduler { *this, "TABLET_REPAIR_SCHEDULER"sv };
     gms::feature tablet_merge { *this, "TABLET_MERGE"sv };
     gms::feature tablet_rack_aware_view_pairing { *this, "TABLET_RACK_AWARE_VIEW_PAIRING"sv };

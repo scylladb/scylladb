@@ -24,6 +24,7 @@
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "schema/schema_registry.hh"
 #include "utils/chunked_vector.hh"
+#include "repair/incremental.hh"
 
 BOOST_AUTO_TEST_SUITE(repair_test)
 
@@ -190,7 +191,7 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
             });
             auto read_all = [&](repair_reader::read_strategy strategy) -> future<std::vector<mutation_fragment>> {
                 auto reader = repair_reader(e.db(), cf, cf.schema(), make_reader_permit(e),
-                    random_range, remote_sharder, remote_shard, 0, strategy, gc_clock::now());
+                    random_range, remote_sharder, remote_shard, 0, strategy, gc_clock::now(), incremental_repair_meta());
                 std::vector<mutation_fragment> result;
                 while (auto mf = co_await reader.read_mutation_fragment()) {
                     result.push_back(std::move(*mf));
