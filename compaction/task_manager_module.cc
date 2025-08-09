@@ -158,7 +158,7 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     // There is a semaphore inside the compaction manager in run_resharding_jobs. So we
     // parallel_for_each so the statistics about pending jobs are updated to reflect all
     // jobs. But only one will run in parallel at a time
-    auto& t = table.try_get_table_state_with_static_sharding();
+    auto& t = table.try_get_compaction_group_view_with_static_sharding();
     co_await coroutine::parallel_for_each(buckets, [&] (std::vector<sstables::shared_sstable>& sstlist) mutable {
         return table.get_compaction_manager().run_custom_job(t, sstables::compaction_type::Reshard, "Reshard compaction", [&] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) -> future<> {
             auto erm = table.get_effective_replication_map(); // keep alive around compaction.
@@ -581,7 +581,7 @@ future<> table_upgrade_sstables_compaction_task_impl::run() {
     auto owned_ranges_ptr = co_await get_owned_ranges(_status.keyspace);
     tasks::task_info info{_status.id, _status.shard};
     co_await run_on_table("upgrade_sstables", _db, _status.keyspace, _ti, [&] (replica::table& t) -> future<> {
-        return t.parallel_foreach_table_state([&] (compaction::table_state& ts) -> future<> {
+        return t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) -> future<> {
             return t.get_compaction_manager().perform_sstable_upgrade(owned_ranges_ptr, ts, _exclude_current_version, info);
         });
     });
@@ -620,7 +620,7 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
     auto& cm = _db.get_compaction_manager();
     auto& cf = _db.find_column_family(_status.keyspace, _status.table);
     tasks::task_info info{_status.id, _status.shard};
-    co_await cf.parallel_foreach_table_state([&] (compaction::table_state& ts) mutable -> future<> {
+    co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) mutable -> future<> {
         auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
         _stats += r.value_or(sstables::compaction_stats{});
     });
@@ -648,9 +648,9 @@ future<> shard_reshaping_compaction_task_impl::run() {
     auto holder = table.async_gate().hold();
     tasks::task_info info{_status.id, _status.shard};
 
-    std::unordered_map<compaction::table_state*, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
+    std::unordered_map<compaction::compaction_group_view*, std::unordered_set<sstables::shared_sstable>> sstables_grouped_by_compaction_group;
     for (auto& sstable : _dir.get_unshared_local_sstables()) {
-        auto& t = table.table_state_for_sstable(sstable);
+        auto& t = table.compaction_group_view_for_sstable(sstable);
         sstables_grouped_by_compaction_group[&t].insert(sstable);
     }
 
@@ -660,7 +660,7 @@ future<> shard_reshaping_compaction_task_impl::run() {
     }
 }
 
-future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compaction::table_state& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
+future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compaction::compaction_group_view& t, std::unordered_set<sstables::shared_sstable>& sstables_in_cg, replica::column_family& table, const tasks::task_info& info) {
 
     while (true) {
         auto reshape_candidates = sstables_in_cg
