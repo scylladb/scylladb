@@ -137,7 +137,8 @@ target_link_libraries(cql3
     ANTLR3::antlr3
   PRIVATE
     lang
-    transport)
+    transport
+    scylla-precompiled-header)
 
 check_headers(check-headers cql3
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
