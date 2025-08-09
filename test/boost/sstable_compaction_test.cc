@@ -51,7 +51,7 @@
 #include "mutation/mutation_compactor.hh"
 #include "db/config.hh"
 #include "mutation_writer/partition_based_splitting_writer.hh"
-#include "compaction/table_state.hh"
+#include "compaction/compaction_group_view.hh"
 #include "mutation/mutation_rebuilder.hh"
 #include "mutation/mutation_source_metadata.hh"
 #include "mutation/mutation_partition.hh"
@@ -121,16 +121,18 @@ public:
         : _has_ongoing_compaction(has_ongoing_compaction)
         , _candidates_opt(candidates) {}
 
-    bool has_ongoing_compaction(table_state& table_s) const noexcept override {
+    bool has_ongoing_compaction(compaction_group_view& table_s) const noexcept override {
         return _has_ongoing_compaction;
     }
 
-    std::vector<sstables::shared_sstable> candidates(table_state& t) const override {
-        return _candidates_opt.value_or(*t.main_sstable_set().all() | std::ranges::to<std::vector>());
+    future<std::vector<sstables::shared_sstable>> candidates(compaction_group_view& t) const override {
+        auto main_set = co_await t.main_sstable_set();
+        co_return _candidates_opt.value_or(*main_set->all() | std::ranges::to<std::vector>());
     }
 
-    std::vector<sstables::frozen_sstable_run> candidates_as_runs(table_state& t) const override {
-        return t.main_sstable_set().all_sstable_runs();
+    future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction_group_view& t) const override {
+        auto main_set = co_await t.main_sstable_set();
+        co_return main_set->all_sstable_runs();
     }
 };
 
@@ -139,12 +141,12 @@ static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has
 }
 
 template <typename CompactionStrategy>
-requires requires(CompactionStrategy cs, table_state& t, strategy_control& c) {
-    { cs.get_sstables_for_compaction(t, c) } -> std::same_as<sstables::compaction_descriptor>;
+requires requires(CompactionStrategy cs, compaction_group_view& t, strategy_control& c) {
+    { cs.get_sstables_for_compaction(t, c) } -> std::same_as<future<sstables::compaction_descriptor>>;
 }
-static compaction_descriptor get_sstables_for_compaction(CompactionStrategy& cs, table_state& t, std::vector<shared_sstable> candidates) {
+static future<compaction_descriptor> get_sstables_for_compaction(CompactionStrategy& cs, compaction_group_view& t, std::vector<shared_sstable> candidates) {
     auto control = make_strategy_control_for_test(false, std::move(candidates));
-    return cs.get_sstables_for_compaction(t, *control);
+    co_return co_await cs.get_sstables_for_compaction(t, *control);
 }
 
 static void assert_table_sstable_count(table_for_tests& t, size_t expected_count) {
@@ -377,7 +379,7 @@ static future<compact_sstables_result> compact_sstables(test_env& env, std::vect
                 candidates.push_back(sst);
             }
             sstables::size_tiered_compaction_strategy_options stcs_options;
-            leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, 1, stcs_options);
+            leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
             std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
             std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
             auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -675,7 +677,7 @@ SEASTAR_TEST_CASE(leveled_01) {
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, max_sstable_size_in_mb, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
@@ -726,7 +728,7 @@ SEASTAR_TEST_CASE(leveled_02) {
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, max_sstable_size_in_mb, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 3);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
@@ -778,7 +780,7 @@ SEASTAR_TEST_CASE(leveled_03) {
     auto max_sstable_size_in_mb = 1;
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, max_sstable_size_in_mb, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 2);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
@@ -833,7 +835,7 @@ SEASTAR_TEST_CASE(leveled_04) {
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, max_sstable_size_in_mb, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 1);
     BOOST_REQUIRE(manifest.get_level_size(1) == 2);
     BOOST_REQUIRE(manifest.get_level_size(2) == 1);
@@ -891,7 +893,7 @@ SEASTAR_TEST_CASE(leveled_06) {
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, max_sstable_size_in_mb, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     BOOST_REQUIRE(manifest.get_level_size(0) == 0);
     BOOST_REQUIRE(manifest.get_level_size(1) == 1);
     BOOST_REQUIRE(manifest.get_level_size(2) == 0);
@@ -918,7 +920,7 @@ SEASTAR_TEST_CASE(leveled_07) {
     }
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, 1, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
     auto desc = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
@@ -954,7 +956,7 @@ SEASTAR_TEST_CASE(leveled_invariant_fix) {
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, 1, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, 1, stcs_options);
     std::vector<std::optional<dht::decorated_key>> last_compacted_keys(leveled_manifest::MAX_LEVELS);
     std::vector<int> compaction_counter(leveled_manifest::MAX_LEVELS);
 
@@ -999,7 +1001,7 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
     sstables::size_tiered_compaction_strategy_options stcs_options;
 
     {
-        leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, sstable_max_size_in_mb, stcs_options);
+        leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, stcs_options);
         BOOST_REQUIRE(!manifest.worth_promoting_L0_candidates(manifest.get_level(0)));
         auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         BOOST_REQUIRE(candidate.level == 0);
@@ -1011,7 +1013,7 @@ SEASTAR_TEST_CASE(leveled_stcs_on_L0) {
     }
     {
         candidates.resize(2);
-        leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, sstable_max_size_in_mb, stcs_options);
+        leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, sstable_max_size_in_mb, stcs_options);
         auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
         BOOST_REQUIRE(candidate.level == 0);
         BOOST_REQUIRE(candidate.sstables.empty());
@@ -1044,7 +1046,7 @@ SEASTAR_TEST_CASE(overlapping_starved_sstables_test) {
 
     auto candidates = get_candidates_for_leveled_strategy(*cf);
     sstables::size_tiered_compaction_strategy_options stcs_options;
-    leveled_manifest manifest = leveled_manifest::create(cf.as_table_state(), candidates, max_sstable_size_in_mb, stcs_options);
+    leveled_manifest manifest = leveled_manifest::create(cf.as_compaction_group_view(), candidates, max_sstable_size_in_mb, stcs_options);
     auto candidate = manifest.get_compaction_candidates(last_compacted_keys, compaction_counter);
     BOOST_REQUIRE(candidate.level == 2);
     BOOST_REQUIRE(candidate.sstables.size() == 3);
@@ -1587,7 +1589,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto sst2 = add_sstable_for_overlapping_test(env, cf, min_key.key(), keys[2].key(), build_stats(t0, t1, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(env, cf, min_key.key(), max_key.key(), build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(cf.as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(15) + cf->schema()->gc_grace_seconds());
+        auto expired = get_fully_expired_sstables(cf.as_compaction_group_view(), compacting, /*gc before*/gc_clock::from_time_t(15) + cf->schema()->gc_grace_seconds());
         BOOST_REQUIRE(expired.size() == 0);
     }
 
@@ -1599,7 +1601,7 @@ SEASTAR_TEST_CASE(get_fully_expired_sstables_test) {
         auto sst2 = add_sstable_for_overlapping_test(env, cf, min_key.key(), keys[2].key(), build_stats(t2, t3, std::numeric_limits<int32_t>::max()));
         auto sst3 = add_sstable_for_overlapping_test(env, cf, min_key.key(), max_key.key(), build_stats(t3, t4, std::numeric_limits<int32_t>::max()));
         std::vector<sstables::shared_sstable> compacting = { sst1, sst2 };
-        auto expired = get_fully_expired_sstables(cf.as_table_state(), compacting, /*gc before*/gc_clock::from_time_t(25) + cf->schema()->gc_grace_seconds());
+        auto expired = get_fully_expired_sstables(cf.as_compaction_group_view(), compacting, /*gc before*/gc_clock::from_time_t(25) + cf->schema()->gc_grace_seconds());
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst == sst1);
@@ -1631,7 +1633,7 @@ SEASTAR_TEST_CASE(compaction_with_fully_expired_table) {
 
         auto ssts = std::vector<shared_sstable>{ sst };
 
-        auto expired = get_fully_expired_sstables(cf.as_table_state(), ssts, gc_clock::now());
+        auto expired = get_fully_expired_sstables(cf.as_compaction_group_view(), ssts, gc_clock::now());
         BOOST_REQUIRE(expired.size() == 1);
         auto expired_sst = *expired.begin();
         BOOST_REQUIRE(expired_sst == sst);
@@ -1754,13 +1756,13 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         }
 
         auto now = api::timestamp_clock::now().time_since_epoch().count();
-        auto new_bucket = twcs.newest_bucket(cf.as_table_state(), *control, buckets, 4, 32,
+        auto new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 4, 32,
             time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now));
         // incoming bucket should not be accepted when it has below the min threshold SSTables
         BOOST_REQUIRE(new_bucket.empty());
 
         now = api::timestamp_clock::now().time_since_epoch().count();
-        new_bucket = twcs.newest_bucket(cf.as_table_state(), *control, buckets, 2, 32,
+        new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 2, 32,
             time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now));
         // incoming bucket should be accepted when it is larger than the min threshold SSTables
         BOOST_REQUIRE(!new_bucket.empty());
@@ -1795,7 +1797,7 @@ SEASTAR_TEST_CASE(time_window_strategy_correctness_test) {
         }
 
         now = api::timestamp_clock::now().time_since_epoch().count();
-        new_bucket = twcs.newest_bucket(cf.as_table_state(), *control, buckets, 4, 32,
+        new_bucket = twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, 4, 32,
             time_window_compaction_strategy::get_window_lower_bound(duration_cast<seconds>(hours(1)), now));
         // new bucket should be trimmed to max threshold of 32
         BOOST_REQUIRE(new_bucket.size() == size_t(32));
@@ -1856,7 +1858,7 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
         auto control = make_strategy_control_for_test(false);
 
         // past window cannot be compacted because it has a single SSTable
-        BOOST_REQUIRE(twcs.newest_bucket(cf.as_table_state(), *control, buckets, min_threshold, max_threshold, now).size() == 0);
+        BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now).size() == 0);
 
         // create min_threshold-1 sstables into current time window
         for (api::timestamp_type t = 0; t < min_threshold - 1; t++) {
@@ -1869,12 +1871,12 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
 
         // past window can now be compacted into a single SSTable because it was the previous current (active) window.
         // current window cannot be compacted because it has less than min_threshold SSTables
-        BOOST_REQUIRE(twcs.newest_bucket(cf.as_table_state(), *control, buckets, min_threshold, max_threshold, now).size() == 2);
+        BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now).size() == 2);
 
         major_compact_bucket(past_window_ts);
 
         // now past window cannot be compacted again, because it was already compacted into a single SSTable, now it switches to STCS mode.
-        BOOST_REQUIRE(twcs.newest_bucket(cf.as_table_state(), *control, buckets, min_threshold, max_threshold, now).size() == 0);
+        BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now).size() == 0);
 
         // make past window contain more than min_threshold similar-sized SSTables, allowing it to be compacted again.
         for (api::timestamp_type t = 1; t < min_threshold; t++) {
@@ -1882,7 +1884,7 @@ SEASTAR_TEST_CASE(time_window_strategy_size_tiered_behavior_correctness) {
         }
 
         // now past window can be compacted again because it switched to STCS mode and has more than min_threshold SSTables.
-        BOOST_REQUIRE(twcs.newest_bucket(cf.as_table_state(), *control, buckets, min_threshold, max_threshold, now).size() == size_t(min_threshold));
+        BOOST_REQUIRE(twcs.newest_bucket(cf.as_compaction_group_view(), *control, buckets, min_threshold, max_threshold, now).size() == size_t(min_threshold));
     });
 }
 
@@ -1958,7 +1960,7 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
         sstables::test(sst).set_data_file_size(1);
         candidates.push_back(std::move(sst));
     }
-    auto desc = get_sstables_for_compaction(cs, cf.as_table_state(), std::move(candidates));
+    auto desc = get_sstables_for_compaction(cs, cf.as_compaction_group_view(), std::move(candidates)).get();
     BOOST_REQUIRE(desc.sstables.size() == size_t(max_threshold));
   });
 }
@@ -2029,17 +2031,17 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
         // that's needed because sstable with expired data should be old enough.
         sstables::test(sst).set_data_file_write_time(db_clock::time_point::min());
-        auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_table_state(), { sst });
+        auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
-        // Makes sure that get_sstables_for_compaction() is called with a table_state which will provide
+        // Makes sure that get_sstables_for_compaction() is called with a compaction_group_view which will provide
         // the correct LCS state.
         auto lcs_table = env.make_table_for_tests(make_schema("lcs", sstables::compaction_strategy_type::leveled));
         auto close_lcs_table = deferred_stop(lcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, options);
         sst->set_sstable_level(1);
-        descriptor = get_sstables_for_compaction(cs, lcs_table.as_table_state(), { sst });
+        descriptor = get_sstables_for_compaction(cs, lcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
         // make sure sstable picked for tombstone compaction removal won't be promoted or demoted.
@@ -2049,10 +2051,10 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         auto twcs_table = env.make_table_for_tests(make_schema("twcs", sstables::compaction_strategy_type::time_window));
         auto close_twcs_table = deferred_stop(twcs_table);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, {});
-        descriptor = get_sstables_for_compaction(cs, twcs_table.as_table_state(), { sst });
+        descriptor = get_sstables_for_compaction(cs, twcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 0);
         cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, options);
-        descriptor = get_sstables_for_compaction(cs, twcs_table.as_table_state(), { sst });
+        descriptor = get_sstables_for_compaction(cs, twcs_table.as_compaction_group_view(), { sst }).get();
         BOOST_REQUIRE(descriptor.sstables.size() == 1);
         BOOST_REQUIRE(descriptor.sstables.front() == sst);
 
@@ -2061,7 +2063,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             std::map<sstring, sstring> options;
             options.emplace("tombstone_threshold", "0.5f");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
-            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_table_state(), { sst });
+            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which was recently created won't be included due to min interval
@@ -2070,7 +2072,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             options.emplace("tombstone_compaction_interval", "3600");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now());
-            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_table_state(), { sst });
+            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
         // sstable which should not be included because of droppable ratio of 0.3, will actually be included
@@ -2082,7 +2084,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
             options.emplace("unchecked_tombstone_compaction", "true");
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::seconds(7200));
-            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_table_state(), { sst });
+            auto descriptor = get_sstables_for_compaction(cs, stcs_table.as_compaction_group_view(), { sst }).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 1);
         }
     });
@@ -2257,8 +2259,8 @@ SEASTAR_TEST_CASE(sstable_cleanup_correctness_test) {
     });
 }
 
-future<> foreach_table_state_with_thread(table_for_tests& table, std::function<void(compaction::table_state&)> action) {
-    return table->parallel_foreach_table_state([action] (compaction::table_state& ts) {
+future<> foreach_compaction_group_view_with_thread(table_for_tests& table, std::function<void(compaction::compaction_group_view&)> action) {
+    return table->parallel_foreach_compaction_group_view([action] (compaction::compaction_group_view& ts) {
         return seastar::async([action, &ts] {
             action(ts);
         });
@@ -2315,7 +2317,7 @@ enum class random_schema { no, yes };
 template <random_schema create_random_schema>
 class scrub_test_framework {
 public:
-    using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
+    using test_func = std::function<void(table_for_tests&, compaction::compaction_group_view&, std::vector<sstables::shared_sstable>)>;
 
 private:
     std::unique_ptr<sstable_compressor_factory> scf = make_sstable_compressor_factory_for_tests_in_thread();
@@ -2377,8 +2379,8 @@ public:
         verify_fragments({sst}, env.make_reader_permit(), frags);
 
         bool found_sstable = false;
-        foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
-            auto sstables = in_strategy_sstables(ts);
+        foreach_compaction_group_view_with_thread(table, [&] (compaction::compaction_group_view& ts) {
+            auto sstables = in_strategy_sstables(ts).get();
             if (sstables.empty()) {
                 return;
             }
@@ -2399,7 +2401,7 @@ public:
 template <>
 class scrub_test_framework<random_schema::no> {
 public:
-    using test_func = std::function<void(table_for_tests&, compaction::table_state&, std::vector<sstables::shared_sstable>)>;
+    using test_func = std::function<void(table_for_tests&, compaction::compaction_group_view&, std::vector<sstables::shared_sstable>)>;
 
 private:
 
@@ -2428,8 +2430,8 @@ public:
         table->add_sstable_and_update_cache(sst).get();
 
         bool found_sstable = false;
-        foreach_table_state_with_thread(table, [&] (compaction::table_state& ts) {
-            auto sstables = in_strategy_sstables(ts);
+        foreach_compaction_group_view_with_thread(table, [&] (compaction::compaction_group_view& ts) {
+            auto sstables = in_strategy_sstables(ts).get();
             if (sstables.empty()) {
                 return;
             }
@@ -2455,7 +2457,7 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
             std::uniform_int_distribution<size_t>(10, 10)).get();
     std::swap(*muts.begin(), *(muts.begin() + 1));
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2467,7 +2469,7 @@ void scrub_validate_corrupted_content(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2482,7 +2484,7 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(10, 10)).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2503,7 +2505,7 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2518,7 +2520,7 @@ void scrub_validate_corrupted_digest(compress_sstable compress) {
             tests::no_expiry_expiry_generator(),
             std::uniform_int_distribution<size_t>(10, 10)).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2541,7 +2543,7 @@ void scrub_validate_corrupted_digest(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2552,7 +2554,7 @@ void scrub_validate_no_digest(compress_sstable compress) {
 
     auto muts = tests::generate_random_mutations(test.random_schema()).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2568,8 +2570,8 @@ void scrub_validate_no_digest(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
         BOOST_REQUIRE(!sst->get_checksum());
 
         // Corrupt the data to cause an invalid checksum.
@@ -2586,7 +2588,7 @@ void scrub_validate_no_digest(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_GT(stats->validation_errors, 0);
         BOOST_REQUIRE(sst->is_quarantined());
-        BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -2597,7 +2599,7 @@ void scrub_validate_valid(compress_sstable compress) {
 
     auto muts = tests::generate_random_mutations(test.random_schema()).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2609,8 +2611,8 @@ void scrub_validate_valid(compress_sstable compress) {
         BOOST_REQUIRE(stats.has_value());
         BOOST_REQUIRE_EQUAL(stats->validation_errors, 0);
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
     });
 }
 
@@ -2660,7 +2662,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
 
     auto muts = tests::generate_random_mutations(test.random_schema()).get();
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2695,8 +2697,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_multiple_instances_unc
         when_all_succeed(std::move(scrub1), std::move(scrub2)).get();
 
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
         // Checksum component released after scrub instances terminate.
         BOOST_REQUIRE(sst->get_checksum() == nullptr);
 
@@ -2758,7 +2760,7 @@ void scrub_validate_cassandra_compat(const compression_parameters& cp, sstring s
             .build();
     auto sst = test.env().reusable_sst(schema, sstable_dir, gen, version).get();
 
-    test.run(schema, sst, [valid] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, sst, [valid] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2776,8 +2778,8 @@ void scrub_validate_cassandra_compat(const compression_parameters& cp, sstring s
             BOOST_REQUIRE_GT(stats->validation_errors, 0);
         }
         BOOST_REQUIRE(!sst->is_quarantined());
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).size(), 1);
-        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).front(), sst);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().size(), 1);
+        BOOST_REQUIRE_EQUAL(in_strategy_sstables(ts).get().front(), sst);
         BOOST_REQUIRE(!sst->get_checksum());
     });
 }
@@ -2977,7 +2979,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
     auto muts = tests::generate_random_mutations(test.random_schema(), 3).get();
     std::swap(*muts.begin(), *(muts.begin() + 1));
 
-    test.run(schema, muts, [] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -2988,8 +2990,8 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
         BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
 
-        BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
-        BOOST_REQUIRE(in_strategy_sstables(ts).front() == sst);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().front() == sst);
     });
 }
 
@@ -3023,7 +3025,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
     auto scrubbed_fragments = explode(test.env().make_reader_permit(), std::move(scrubbed_muts));
     scrubbed_fragments.erase(scrubbed_fragments.begin() + first_cr_index);
 
-    test.run(schema, std::move(corrupt_fragments), [&] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, std::move(corrupt_fragments), [&] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
         auto sst = sstables.front();
 
@@ -3034,10 +3036,10 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
         table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
-        BOOST_REQUIRE(in_strategy_sstables(ts).size() == 1);
-        BOOST_REQUIRE(in_strategy_sstables(ts).front() != sst);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().front() != sst);
 
-        verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), scrubbed_fragments);
+        verify_fragments(in_strategy_sstables(ts).get(), test.env().make_reader_permit(), scrubbed_fragments);
     });
 }
 
@@ -3065,7 +3067,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
     BOOST_REQUIRE_EQUAL(cr2.mutation_fragment_kind(), mutation_fragment_v2::kind::clustering_row);
     std::swap(cr1, cr2);
 
-    test.run(schema, std::move(corrupt_fragments), [&] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+    test.run(schema, std::move(corrupt_fragments), [&] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
         BOOST_REQUIRE(sstables.size() == 1);
 
         testlog.info("Scrub in segregate mode");
@@ -3075,9 +3077,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
         opts.operation_mode = sstables::compaction_type_options::scrub::mode::segregate;
         table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
-        testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
-        BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
-        verify_fragments(in_strategy_sstables(ts), test.env().make_reader_permit(), explode(test.env().make_reader_permit(), muts));
+        testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).get().size());
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().size() > 1);
+        verify_fragments(in_strategy_sstables(ts).get(), test.env().make_reader_permit(), explode(test.env().make_reader_permit(), muts));
     });
 }
 
@@ -3104,7 +3106,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
     };
     for (auto qmode : quarantine_modes) {
         testlog.info("Checking qurantine mode {}", qmode);
-        test.run(schema, corrupt_muts, [&] (table_for_tests& table, compaction::table_state& ts, std::vector<sstables::shared_sstable> sstables) {
+        test.run(schema, corrupt_muts, [&] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
             BOOST_REQUIRE(sstables.size() == 1);
             auto sst = sstables.front();
 
@@ -3117,7 +3119,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
             table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
-            BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+            BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
             BOOST_REQUIRE(sst->is_quarantined());
             verify_fragments({sst}, permit, corrupt_fragments);
 
@@ -3132,13 +3134,13 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_quarantine_mode_test) {
             case sstables::compaction_type_options::scrub::quarantine_mode::include:
             case sstables::compaction_type_options::scrub::quarantine_mode::only:
                 // The sstable should be found and scrubbed when scrub::quarantine_mode is scrub::quarantine_mode::{include,only}
-                testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).size());
-                BOOST_REQUIRE(in_strategy_sstables(ts).size() > 1);
-                verify_fragments(in_strategy_sstables(ts), permit, scrubbed_fragments);
+                testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).get().size());
+                BOOST_REQUIRE(in_strategy_sstables(ts).get().size() > 1);
+                verify_fragments(in_strategy_sstables(ts).get(), permit, scrubbed_fragments);
                 break;
             case sstables::compaction_type_options::scrub::quarantine_mode::exclude:
                 // The sstable should not be found when scrub::quarantine_mode is scrub::quarantine_mode::exclude
-                BOOST_REQUIRE(in_strategy_sstables(ts).empty());
+                BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
                 BOOST_REQUIRE(sst->is_quarantined());
                 verify_fragments({sst}, permit, corrupt_fragments);
                 break;
@@ -3403,25 +3405,25 @@ SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
 
         // add the sstable to cf's maintenance set
         cf->add_sstable_and_update_cache(sst, sstables::offstrategy::yes).get();
-        auto& cf_ts = cf.as_table_state();
-        auto maintenance_sst_set = cf_ts.maintenance_sstable_set();
-        BOOST_REQUIRE_EQUAL(maintenance_sst_set.size(), 1);
-        BOOST_REQUIRE_EQUAL(*maintenance_sst_set.all()->begin(), sst);
+        auto& cf_ts = cf.as_compaction_group_view();
+        auto maintenance_sst_set = cf_ts.maintenance_sstable_set().get();
+        BOOST_REQUIRE_EQUAL(maintenance_sst_set->size(), 1);
+        BOOST_REQUIRE_EQUAL(*maintenance_sst_set->all()->begin(), sst);
         // confirm main sstable_set is empty
-        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().get()->size(), 0);
 
         // Perform scrub on the table
         cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
 
         // main set should have the resultant sst and the maintenance set should be empty now
-        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
-        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().get()->size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().get()->size(), 0);
 
         // Now that there is an sstable in main set, perform scrub on the table
         // again to verify that the result ends up again in main sstable_set
         cf->get_compaction_manager().perform_sstable_scrub(cf_ts, {}, {}).get();
-        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().size(), 1);
-        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().size(), 0);
+        BOOST_REQUIRE_EQUAL(cf_ts.main_sstable_set().get()->size(), 1);
+        BOOST_REQUIRE_EQUAL(cf_ts.maintenance_sstable_set().get()->size(), 0);
     });
 }
 
@@ -3461,8 +3463,8 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
                 BOOST_REQUIRE(!sstables.contains(new_sst));
                 sstables.insert(new_sst);
             }
-            column_family_test(cf).rebuild_sstable_list(cf.as_table_state(), new_sstables, old_sstables).get();
-            env.test_compaction_manager().propagate_replacement(cf.as_table_state(), old_sstables, new_sstables);
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, old_sstables).get();
+            env.test_compaction_manager().propagate_replacement(cf.as_compaction_group_view(), old_sstables, new_sstables);
         };
 
         auto do_incremental_replace = [&] (auto old_sstables, auto new_sstables, auto& expected_sst, auto& closed_sstables_tracker) {
@@ -3488,7 +3490,7 @@ SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
 
         auto do_compaction = [&] (size_t expected_input, size_t expected_output) mutable -> std::vector<shared_sstable> {
             auto input_ssts = std::vector<shared_sstable>(sstables.begin(), sstables.end());
-            auto desc = get_sstables_for_compaction(cs, cf.as_table_state(), std::move(input_ssts));
+            auto desc = get_sstables_for_compaction(cs, cf.as_compaction_group_view(), std::move(input_ssts)).get();
 
             // nothing to compact, move on.
             if (desc.sstables.empty()) {
@@ -3570,14 +3572,14 @@ SEASTAR_TEST_CASE(compaction_strategy_aware_major_compaction_test) {
 
         {
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, cf.schema()->compaction_strategy_options());
-            auto descriptor = cs.get_major_compaction_job(cf.as_table_state(), candidates);
+            auto descriptor = cs.get_major_compaction_job(cf.as_compaction_group_view(), candidates);
             BOOST_REQUIRE(descriptor.sstables.size() == candidates.size());
             BOOST_REQUIRE(uint32_t(descriptor.level) == leveled_compaction_strategy::ideal_level_for_input(candidates, 160*1024*1024));
         }
 
         {
             auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, cf.schema()->compaction_strategy_options());
-            auto descriptor = cs.get_major_compaction_job(cf.as_table_state(), candidates);
+            auto descriptor = cs.get_major_compaction_job(cf.as_compaction_group_view(), candidates);
             BOOST_REQUIRE(descriptor.sstables.size() == candidates.size());
             BOOST_REQUIRE(descriptor.level == 0);
         }
@@ -3614,7 +3616,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             };
 
             for (auto& sst : ssts) {
-                cf.as_table_state().get_backlog_tracker().replace_sstables({}, {sst});
+                cf.as_compaction_group_view().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             // Start compaction, then stop tracking compaction, switch to TWCS, wait for compaction to finish and check for backlog.
@@ -3625,7 +3627,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
             // set_compaction_strategy() itself is responsible for transferring charges from old to new backlog tracker.
             cf->set_compaction_strategy(sstables::compaction_strategy_type::time_window);
             for (auto& sst : ssts) {
-                cf.as_table_state().get_backlog_tracker().replace_sstables({}, {sst});
+                cf.as_compaction_group_view().get_backlog_tracker().replace_sstables({}, {sst});
             }
 
             auto ret = fut.get();
@@ -3633,7 +3635,7 @@ SEASTAR_TEST_CASE(backlog_tracker_correctness_after_changing_compaction_strategy
         }
         // triggers code that iterates through registered compactions.
         cf->get_compaction_manager().backlog();
-        cf.as_table_state().get_backlog_tracker().backlog();
+        cf.as_compaction_group_view().get_backlog_tracker().backlog();
     });
 }
 
@@ -3667,7 +3669,7 @@ SEASTAR_TEST_CASE(partial_sstable_run_filtered_out_test) {
         BOOST_REQUIRE(generation_exists(partial_sstable_run_sst->generation()));
 
         // register partial sstable run
-        run_compaction_task(env, partial_sstable_run_identifier, cf.as_table_state(), [&cf] (sstables::compaction_data&) {
+        run_compaction_task(env, partial_sstable_run_identifier, cf.as_compaction_group_view(), [&cf] (sstables::compaction_data&) {
             return cf->compact_all_sstables(tasks::task_info{});
         }).get();
 
@@ -3858,23 +3860,27 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
             return m;
         };
 
-        const auto keys = tests::generate_partition_keys(3, s);
+        const auto keys = tests::generate_partition_keys(4, s);
         const auto& alpha = keys[0];
         const auto& beta = keys[1];
         const auto& gamma = keys[2];
+        const auto& zetta = keys[3];
 
         auto ttl = 5;
 
         auto mut1 = make_insert(alpha);
         auto mut2 = make_insert(beta);
         auto mut3 = make_insert(gamma);
+        auto mut4 = make_insert(zetta);
         auto mut1_deletion = make_delete(alpha);
 
         auto non_expired_sst = make_sstable_containing(sst_gen, {mut1, mut2, mut3});
+        auto non_expired_sst_2 = make_sstable_containing(sst_gen, {mut4});
         auto expired_sst = make_sstable_containing(sst_gen, {mut1_deletion});
 
         std::vector<shared_sstable> sstables = {
                 non_expired_sst,
+                non_expired_sst_2,
                 expired_sst,
         };
 
@@ -3913,7 +3919,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
                     .produces(mut2)
                     .produces_end_of_stream();
             }
-            column_family_test(cf).rebuild_sstable_list(cf.as_table_state(), new_sstables, old_sstables).get();
+            column_family_test(cf).rebuild_sstable_list(cf.as_compaction_group_view(), new_sstables, old_sstables).get();
             // force compaction failure after sstable containing expired tombstone is removed from set.
             throw std::runtime_error("forcing compaction failure on early replacement");
         };
@@ -3922,7 +3928,7 @@ SEASTAR_TEST_CASE(incremental_compaction_data_resurrection_test) {
         // That needs to happen after fragments were inserted into sstable_set, as they'll placed into different runs due to detected overlapping.
         auto run_id = sstables::run_id::create_random_id();
         sstables::test(non_expired_sst).set_run_identifier(run_id);
-        sstables::test(expired_sst).set_run_identifier(run_id);
+        sstables::test(non_expired_sst_2).set_run_identifier(run_id);
 
         bool swallowed = false;
         try {
@@ -4036,7 +4042,7 @@ SEASTAR_TEST_CASE(autocompaction_control_test) {
         cf->start();
         auto stop_cf = deferred_stop(*cf);
         cf->trigger_compaction();
-        cm.submit(cf.as_table_state());
+        cm.submit(cf.as_compaction_group_view());
         BOOST_REQUIRE(cm.get_stats().pending_tasks == 0 && cm.get_stats().active_tasks == 0 && ss.completed_tasks == 0);
         // enable auto compaction
         cf->enable_auto_compaction();
@@ -4746,7 +4752,7 @@ SEASTAR_TEST_CASE(test_twcs_single_key_reader_filtering) {
 
         auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::time_window, {});
 
-        auto set = cs.make_sstable_set(cf.as_table_state());
+        auto set = cs.make_sstable_set(cf.as_compaction_group_view());
         set.insert(std::move(sst1));
         set.insert(std::move(sst2));
 
@@ -5056,8 +5062,8 @@ SEASTAR_TEST_CASE(twcs_single_key_reader_through_compound_set_test) {
         auto close_cf = deferred_stop(cf);
         cf->start();
 
-        auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(cf.as_table_state()));
-        auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(cf.as_table_state()));
+        auto set1 = make_lw_shared<sstable_set>(cs.make_sstable_set(cf.as_compaction_group_view()));
+        auto set2 = make_lw_shared<sstable_set>(cs.make_sstable_set(cf.as_compaction_group_view()));
 
         auto sst_gen = env.make_sst_factory(s);
 
@@ -5206,11 +5212,11 @@ future<> run_controller_test(sstables::compaction_strategy_type compaction_strat
             auto key = tests::generate_partition_key(t.schema()).key();
             sstables::test(sst).set_values_for_leveled_strategy(data_size, level, 0 /*max ts*/, key, key);
             SCYLLA_ASSERT(sst->data_size() == data_size);
-            auto backlog_before = t.as_table_state().get_backlog_tracker().backlog();
+            auto backlog_before = t.as_compaction_group_view().get_backlog_tracker().backlog();
             t->add_sstable_and_update_cache(sst).get();
             testlog.debug("\tNew sstable of size={} level={}; Backlog diff={};",
                           utils::pretty_printed_data_size(data_size), level,
-                          t.as_table_state().get_backlog_tracker().backlog() - backlog_before);
+                          t.as_compaction_group_view().get_backlog_tracker().backlog() - backlog_before);
         };
 
         auto create_table = [&] () {
@@ -5351,7 +5357,7 @@ SEASTAR_TEST_CASE(test_compaction_strategy_cleanup_method) {
             }
 
             auto strategy = cf->get_compaction_strategy();
-            auto jobs = strategy.get_cleanup_compaction_jobs(cf.as_table_state(), candidates);
+            auto jobs = strategy.get_cleanup_compaction_jobs(cf.as_compaction_group_view(), candidates);
             return std::make_pair(std::move(candidates), std::move(jobs));
         };
 
@@ -5822,7 +5828,7 @@ static future<> run_incremental_compaction_test(sstables::offstrategy offstrateg
             ssts = {}; // releases references
             auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
             run_compaction(t, std::move(owned_ranges_ptr)).get();
-            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_table_state_with_static_sharding()).empty());
+            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
             testlog.info("Cleanup has finished");
         }
 
@@ -5930,7 +5936,7 @@ SEASTAR_TEST_CASE(cleanup_during_offstrategy_incremental_compaction_test) {
             ssts = {}; // releases references
             auto owned_ranges_ptr = make_lw_shared<const dht::token_range_vector>(std::move(owned_token_ranges));
             t->perform_cleanup_compaction(std::move(owned_ranges_ptr), tasks::task_info{}).get();
-            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_table_state_with_static_sharding()).empty());
+            BOOST_REQUIRE(cm.sstables_requiring_cleanup(t->try_get_compaction_group_view_with_static_sharding()).empty());
             testlog.info("Cleanup has finished");
         }
 
@@ -6127,11 +6133,11 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
 
         auto& cm = t->get_compaction_manager();
         auto split_opt = compaction_type_options::split{classify_fn};
-        auto new_ssts = cm.maybe_split_sstable(input, t.as_table_state(), split_opt).get();
+        auto new_ssts = cm.maybe_split_sstable(input, t.as_compaction_group_view(), split_opt).get();
         BOOST_REQUIRE(new_ssts.size() == expected_output_size);
         for (auto& sst : new_ssts) {
             // split sstables don't require further split.
-            auto ssts = cm.maybe_split_sstable(sst, t.as_table_state(), split_opt).get();
+            auto ssts = cm.maybe_split_sstable(sst, t.as_compaction_group_view(), split_opt).get();
             BOOST_REQUIRE(ssts.size() == 1);
             BOOST_REQUIRE(ssts.front() == sst);
         }
@@ -6143,7 +6149,7 @@ SEASTAR_TEST_CASE(splitting_compaction_test) {
             }
             return classify_fn(t);
         };
-        BOOST_REQUIRE_THROW(cm.maybe_split_sstable(input, t.as_table_state(), compaction_type_options::split{throwing_classifier}).get(),
+        BOOST_REQUIRE_THROW(cm.maybe_split_sstable(input, t.as_compaction_group_view(), compaction_type_options::split{throwing_classifier}).get(),
                             std::runtime_error);
     });
 }

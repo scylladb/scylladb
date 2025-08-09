@@ -81,13 +81,13 @@ public:
     enum class bucket_compaction_mode { none, size_tiered, major };
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
-    virtual compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control) override;
+    virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const override;
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const override;
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 private:
-    time_window_compaction_strategy_state& get_state(table_state& table_s) const;
+    time_window_compaction_strategy_state& get_state(compaction_group_view& table_s) const;
 
     static api::timestamp_type
     to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
@@ -111,9 +111,9 @@ private:
     compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
 
     std::vector<shared_sstable>
-    get_next_non_expired_sstables(table_state& table_s, strategy_control& control, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
+    get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
 
-    std::vector<shared_sstable> get_compaction_candidates(table_state& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables);
+    std::vector<shared_sstable> get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables);
 public:
     // Find the lowest timestamp for window of given size
     static api::timestamp_type
@@ -126,7 +126,7 @@ public:
     get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options);
 
     std::vector<shared_sstable>
-    newest_bucket(table_state& table_s, strategy_control& control, std::map<api::timestamp_type, std::vector<shared_sstable>> buckets,
+    newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<api::timestamp_type, std::vector<shared_sstable>> buckets,
         int min_threshold, int max_threshold, api::timestamp_type now);
 
     static std::vector<shared_sstable>
@@ -144,13 +144,13 @@ public:
 private:
     friend class time_window_backlog_tracker;
 public:
-    virtual int64_t estimated_pending_compactions(table_state& table_s) const override;
+    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
 
     virtual compaction_strategy_type type() const override {
         return compaction_strategy_type::time_window;
     }
 
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const table_state& ts) const override;
+    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const override;
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 

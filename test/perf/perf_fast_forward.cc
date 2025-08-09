@@ -1832,7 +1832,7 @@ void populate(const std::vector<dataset*>& datasets, cql_test_env& env, const ta
 
         output_mgr->set_test_param_names({{"flush@ (MiB)", "{:<12}"}}, test_result::stats_names());
 
-        db.get_compaction_manager().run_with_compaction_disabled(cf.try_get_table_state_with_static_sharding(), [&] {
+        db.get_compaction_manager().run_with_compaction_disabled(cf.try_get_compaction_group_view_with_static_sharding(), [&] {
             return seastar::async([&] {
                 auto gen = ds.make_generator(s, cfg);
                 while (auto mopt = gen()) {
@@ -1946,7 +1946,7 @@ auto make_compaction_disabling_guard(replica::database& db, std::vector<replica:
     shared_promise<> pr;
     for (auto&& t : tables) {
         // FIXME: discarded future.
-        (void)db.get_compaction_manager().run_with_compaction_disabled(t->try_get_table_state_with_static_sharding(), [f = shared_future<>(pr.get_shared_future())] {
+        (void)db.get_compaction_manager().run_with_compaction_disabled(t->try_get_compaction_group_view_with_static_sharding(), [f = shared_future<>(pr.get_shared_future())] {
             return f.get_future();
         });
     }

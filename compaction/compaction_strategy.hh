@@ -12,7 +12,7 @@
 #include "sstables/shared_sstable.hh"
 #include "exceptions/exceptions.hh"
 #include "compaction_strategy_type.hh"
-#include "table_state.hh"
+#include "compaction_group_view.hh"
 #include "strategy_control.hh"
 
 struct mutation_source_metadata;
@@ -41,15 +41,15 @@ public:
     compaction_strategy& operator=(compaction_strategy&&);
 
     // Return a list of sstables to be compacted after applying the strategy.
-    compaction_descriptor get_sstables_for_compaction(table_state& table_s, strategy_control& control);
+    future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control);
 
-    compaction_descriptor get_major_compaction_job(table_state& table_s, std::vector<shared_sstable> candidates);
+    compaction_descriptor get_major_compaction_job(compaction_group_view& table_s, std::vector<shared_sstable> candidates);
 
-    std::vector<compaction_descriptor> get_cleanup_compaction_jobs(table_state& table_s, std::vector<shared_sstable> candidates) const;
+    std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const;
 
     // Some strategies may look at the compacted and resulting sstables to
     // get some useful information for subsequent compactions.
-    void notify_completion(table_state& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
+    void notify_completion(compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
     // Return if parallel compaction is allowed by strategy.
     bool parallel_compaction() const;
@@ -58,7 +58,7 @@ public:
     bool use_clustering_key_filter() const;
 
     // An estimation of number of compaction for strategy to be satisfied.
-    int64_t estimated_pending_compactions(table_state& table_s) const;
+    future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const;
 
     static sstring name(compaction_strategy_type type) {
         switch (type) {
@@ -105,7 +105,7 @@ public:
         return name(type());
     }
 
-    sstable_set make_sstable_set(const table_state& ts) const;
+    sstable_set make_sstable_set(const compaction_group_view& ts) const;
 
     compaction_backlog_tracker make_backlog_tracker() const;
 

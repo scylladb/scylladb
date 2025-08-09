@@ -244,7 +244,7 @@ incremental_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 }
 
 compaction_descriptor
-incremental_compaction_strategy::find_garbage_collection_job(const compaction::table_state& t, std::vector<size_bucket_t>& buckets) {
+incremental_compaction_strategy::find_garbage_collection_job(const compaction::compaction_group_view& t, std::vector<size_bucket_t>& buckets) {
     auto worth_dropping_tombstones = [this, &t, now = db_clock::now()] (const sstable_run& run, gc_clock::time_point compaction_time) {
         if (run.all().empty()) {
             return false;
@@ -318,9 +318,9 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::t
     return compaction_descriptor(runs_to_sstables(std::move(input)), 0, _fragment_size);
 }
 
-compaction_descriptor
-incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, strategy_control& control) {
-    auto candidates = control.candidates_as_runs(t);
+future<compaction_descriptor>
+incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_view& t, strategy_control& control) {
+    auto candidates = co_await control.candidates_as_runs(t);
 
     // make local copies so they can't be changed out from under us mid-method
     size_t min_threshold = t.min_compaction_threshold();
@@ -330,28 +330,28 @@ incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, str
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
     }
     // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
     if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to
     // increase overall efficiency.
     if (control.has_ongoing_compaction(t)) {
-        return sstables::compaction_descriptor();
+        co_return sstables::compaction_descriptor();
     }
 
     auto desc = find_garbage_collection_job(t, buckets);
     if (!desc.sstables.empty()) {
-        return desc;
+        co_return desc;
     }
 
     if (_space_amplification_goal) {
         if (buckets.size() < 2) {
-            return sstables::compaction_descriptor();
+            co_return sstables::compaction_descriptor();
         }
         // Let S0 be the size of largest tier
         // Let S1 be the size of second-largest tier,
@@ -383,33 +383,34 @@ incremental_compaction_strategy::get_sstables_for_compaction(table_state& t, str
             cross_tier_input.reserve(cross_tier_input.size() + s1.size());
             std::move(s1.begin(), s1.end(), std::back_inserter(cross_tier_input));
 
-            return sstables::compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
+            co_return sstables::compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
                                                    0, _fragment_size);
         }
     }
 
-    return sstables::compaction_descriptor();
+    co_return sstables::compaction_descriptor();
 }
 
 compaction_descriptor
-incremental_compaction_strategy::get_major_compaction_job(table_state& t, std::vector<sstables::shared_sstable> candidates) {
+incremental_compaction_strategy::get_major_compaction_job(compaction_group_view& t, std::vector<sstables::shared_sstable> candidates) {
     if (candidates.empty()) {
         return compaction_descriptor();
     }
     return make_major_compaction_job(std::move(candidates), 0, _fragment_size);
 }
 
-int64_t incremental_compaction_strategy::estimated_pending_compactions(table_state& t) const {
+future<int64_t> incremental_compaction_strategy::estimated_pending_compactions(compaction_group_view& t) const {
     size_t min_threshold = t.schema()->min_compaction_threshold();
     size_t max_threshold = t.schema()->max_compaction_threshold();
     int64_t n = 0;
 
-    for (auto& bucket : get_buckets(t.main_sstable_set().all_sstable_runs())) {
+    auto main_set = co_await t.main_sstable_set();
+    for (auto& bucket : get_buckets(main_set->all_sstable_runs())) {
         if (bucket.size() >= min_threshold) {
             n += (bucket.size() + max_threshold - 1) / max_threshold;
         }
     }
-    return n;
+    co_return n;
 }
 
 std::vector<shared_sstable>
@@ -483,7 +484,7 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 std::vector<compaction_descriptor>
-incremental_compaction_strategy::get_cleanup_compaction_jobs(table_state& t, std::vector<shared_sstable> candidates) const {
+incremental_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     const auto& schema = t.schema();
     unsigned max_threshold = schema->max_compaction_threshold();
