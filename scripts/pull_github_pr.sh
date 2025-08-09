@@ -39,6 +39,7 @@ for required in jq curl; do
 done
 
 FORCE=0
+ALLOW_SUBMODULE=0
 
 while [[ $# -gt 0 ]]
 do
@@ -46,6 +47,10 @@ do
         "--force"|"-f")
             FORCE=1
             shift 1
+            ;;
+        --allow-submodule)
+            ALLOW_SUBMODULE=1
+            shift
             ;;
         +([0-9]))
             PR_NUM=$1
@@ -147,6 +152,10 @@ nr_commits=$(git log --pretty=oneline HEAD..FETCH_HEAD | wc -l)
 
 closes="${NL}${NL}Closes ${PROJECT}#${PR_NUM}${NL}"
 
+if [[ "$PR_TITLE" = *submodule* ]]; then
+    ALLOW_SUBMODULE=1
+fi
+
 if [[ $nr_commits == 1 ]]; then
 	commit=$(git log --pretty=oneline HEAD..FETCH_HEAD | awk '{print $1}')
 	message="$(git log -1 "$commit" --format="format:%s%n%n%b")"
@@ -164,6 +173,29 @@ if [[ $nr_commits == 1 ]]; then
 else
 	git merge --no-ff --log=1000 FETCH_HEAD -m "Merge '$PR_TITLE' from $USER_NAME" -m "${PR_DESCR}${closes}"
 fi
+
+mapfile -t files_changed < <(git diff --name-only HEAD~1 HEAD)
+mapfile -t submodules < <(git show HEAD~1:.gitmodules | sed -n 's/.*path = //p')
+
+submodules+=(.gitmodules)
+
+# Check if any changed files are in submodule directories
+has_submodule_changes=0
+for submodule in "${submodules[@]}"; do
+    for file in "${files_changed[@]}"; do
+        if [[ "$file" == "$submodule" ]]; then
+            has_submodule_changes=1
+            echo "Found submodule change: $file"
+        fi
+    done
+done
+
+if (( has_submodule_changes && ! ALLOW_SUBMODULE )); then
+    echo "ERROR: This pull request includes submodule changes but --allow-submodule flag was not provided"
+    echo "NOTE:  The bad commit was left in the tree, do not push it."
+    exit 1
+fi
+
 git commit --amend # for a manual double-check
 
 # Check PR tests status
