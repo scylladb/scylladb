@@ -193,9 +193,7 @@ service_level_resource_view::service_level_resource_view(const resource &r) {
 
 sstring encode_signature(std::string_view name, std::vector<data_type> args) {
     return seastar::format("{}[{}]", name,
-            fmt::join(args | std::views::transform([] (const data_type t) {
-                return t->name();
-            }), "^"));
+            fmt::join(args | std::views::transform(&abstract_type::name), "^"));
 }
 
 std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view encoded_signature) {
@@ -221,9 +219,7 @@ std::pair<sstring, std::vector<data_type>> decode_signature(std::string_view enc
 static sstring decoded_signature_string(std::string_view encoded_signature) {
     auto [function_name, arg_types] = decode_signature(encoded_signature);
     return seastar::format("{}({})", cql3::util::maybe_quote(sstring(function_name)),
-            fmt::join(arg_types | std::views::transform([] (data_type t) {
-                return t->cql3_type_name();
-            }), ", "));
+            fmt::join(arg_types | std::views::transform(&abstract_type::cql3_type_name), ", "));
 }
 
 resource make_functions_resource(const cql3::functions::function& f) {
