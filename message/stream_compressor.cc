@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "utils/stream_compressor.hh"
+#include "stream_compressor.hh"
 
 #include <array>
 #include <memory>
@@ -21,7 +21,7 @@
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 
-namespace utils {
+namespace netw {
 
 namespace {
 
@@ -396,7 +396,7 @@ rpc::snd_buf compress_impl(size_t head_space, const rpc::snd_buf& data, stream_c
     ZSTD_inBuffer inbuf = {};
     ZSTD_outBuffer outbuf = {};
 
-    small_vector<temporary_buffer<char>, 16> dst_buffers;
+    utils::small_vector<temporary_buffer<char>, 16> dst_buffers;
 
     // Note: we always allocate chunk_size here, then we resize it to fit at the end.
     // Maybe that's a waste of cycles, and we should allocate a buffer that's about as big
@@ -506,7 +506,7 @@ rpc::rcv_buf decompress_impl(const seastar::rpc::rcv_buf& data, stream_decompres
         it = std::get<std::vector<temporary_buffer<char>>>(data.bufs).data();
     }
 
-    small_vector<temporary_buffer<char>, 16> dst_buffers;
+    utils::small_vector<temporary_buffer<char>, 16> dst_buffers;
 
     ZSTD_inBuffer inbuf = {};
     ZSTD_outBuffer outbuf = {};
@@ -562,4 +562,4 @@ rpc::rcv_buf decompress_impl(const seastar::rpc::rcv_buf& data, stream_decompres
     throw;
 }
 
-} // namespace utils
+} // namespace netw

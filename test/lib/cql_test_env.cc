@@ -144,7 +144,7 @@ private:
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
     sharded<service::topology_state_machine> _topology_state_machine;
-    sharded<utils::walltime_compressor_tracker> _compressor_tracker;
+    sharded<netw::walltime_compressor_tracker> _compressor_tracker;
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
     sharded<gms::gossiper> _gossiper;
@@ -765,7 +765,7 @@ private:
             }).get();
 
             auto arct_cfg = [&] {
-                return utils::advanced_rpc_compressor::tracker::config{
+                return netw::advanced_rpc_compressor::tracker::config{
                     .zstd_quota_fraction{1.0},
                     .register_metrics = true,
                 };

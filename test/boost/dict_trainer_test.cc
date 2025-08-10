@@ -10,17 +10,18 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/sleep.hh>
 #include "test/lib/scylla_test_case.hh"
-#include "utils/dict_trainer.hh"
+#include "message/dict_trainer.hh"
 #include "test/lib/random_utils.hh"
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
 
 using namespace seastar;
 using namespace std::chrono_literals;
+using namespace netw;
 
 static auto bytes_to_page(bytes_view b) {
     auto view = std::span(reinterpret_cast<const std::byte*>(b.data()), b.size());
-    return utils::dict_sampler::page_type(view.begin(), view.end());
+    return dict_sampler::page_type(view.begin(), view.end());
 }
 
 // 1. Compute several random page. Each page is incompressible by itself.
@@ -31,7 +32,7 @@ SEASTAR_THREAD_TEST_CASE(test_zdict_train) {
     // Compute some random pages and concatenate them to form the test message.
     int pagesize = 1024;
     int n_unique_pages = 64;
-    auto unique_pages = std::vector<utils::dict_sampler::page_type>();
+    auto unique_pages = std::vector<dict_sampler::page_type>();
     auto message = std::vector<std::byte>();
     for (int i = 0; i < n_unique_pages; ++i) {
         unique_pages.push_back(bytes_to_page(tests::random::get_bytes(pagesize)));
@@ -39,9 +40,9 @@ SEASTAR_THREAD_TEST_CASE(test_zdict_train) {
     }
 
     // Feed the pages to the sampler, many times.
-    utils::dict_sampler dt;
+    dict_sampler dt;
     seastar::abort_source as;
-    auto fut = dt.sample(utils::dict_sampler::request{
+    auto fut = dt.sample(dict_sampler::request{
         .min_sampling_duration = seastar::sleep<manual_clock>(1s),
         .min_sampling_bytes = 0,
         .page_size = 1000,
@@ -58,7 +59,7 @@ SEASTAR_THREAD_TEST_CASE(test_zdict_train) {
     auto pages = fut.get();
  
     // Train on the sample.
-    auto dict = utils::zdict_train(pages, {.max_dict_size=128000});
+    auto dict = zdict_train(pages, {.max_dict_size=128000});
 
     // A reasonable dict should contain the repetitive pages verbatim.
     BOOST_CHECK_GT(dict.size(), n_unique_pages * pagesize);
@@ -86,13 +87,13 @@ SEASTAR_THREAD_TEST_CASE(test_zdict_train) {
 }
 
 SEASTAR_THREAD_TEST_CASE(test_zstd_max_dict_size) {
-    auto pages = std::vector<utils::dict_sampler::page_type>();
+    auto pages = std::vector<dict_sampler::page_type>();
     for (size_t i = 0; i < 1024; ++i) {
         pages.push_back(bytes_to_page(tests::random::get_bytes(1024)));
     }
-    auto dict = utils::zdict_train(pages, {.max_dict_size = 1024 * 128});
+    auto dict = zdict_train(pages, {.max_dict_size = 1024 * 128});
     BOOST_REQUIRE_EQUAL(dict.size(), 1024 * 128);
-    dict = utils::zdict_train(pages, {.max_dict_size = 1024});
+    dict = zdict_train(pages, {.max_dict_size = 1024});
     BOOST_REQUIRE_EQUAL(dict.size(), 1024);
 }
 
@@ -110,9 +111,9 @@ static void check_future_is_aborted(future<> fut, abort_source& as) {
 }
 
 static void test_min_bytes_condition_impl(bool should_abort) {
-    utils::dict_sampler dt;
+    dict_sampler dt;
     seastar::abort_source as;
-    auto fut = dt.sample(utils::dict_sampler::request{
+    auto fut = dt.sample(dict_sampler::request{
         .min_sampling_duration = seastar::sleep<manual_clock>(1s),
         .min_sampling_bytes = 8096,
         .page_size = 1024,
@@ -144,9 +145,9 @@ SEASTAR_THREAD_TEST_CASE(test_min_bytes_condition) {
 }
 
 static void test_min_duration_condition_impl(bool should_abort) {
-    utils::dict_sampler dt;
+    dict_sampler dt;
     seastar::abort_source as;
-    auto fut = dt.sample(utils::dict_sampler::request{
+    auto fut = dt.sample(dict_sampler::request{
         .min_sampling_duration = seastar::sleep_abortable<manual_clock>(1s, as),
         .min_sampling_bytes = 8096,
         .page_size = 1024,
