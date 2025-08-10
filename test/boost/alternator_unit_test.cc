@@ -166,3 +166,39 @@ BOOST_AUTO_TEST_CASE(test_magnitude_and_precision) {
     res = alternator::internal::get_magnitude_and_precision("1e-1000000000000");
     BOOST_CHECK(res.magnitude < -1000);
 }
+
+// Test edge cases that could cause bugs in get_magnitude_and_precision
+BOOST_AUTO_TEST_CASE(test_magnitude_and_precision_edge_cases) {
+    // Test empty string - should not crash and handle gracefully
+    try {
+        auto res = alternator::internal::get_magnitude_and_precision("");
+        // The function should handle empty string gracefully, not crash
+        BOOST_CHECK(true); // If we get here, it didn't crash
+    } catch (...) {
+        BOOST_FAIL("Empty string should not cause exception");
+    }
+    
+    // Test just decimal point - should not crash  
+    try {
+        auto res = alternator::internal::get_magnitude_and_precision(".");
+        BOOST_CHECK(true); // If we get here, it didn't crash
+    } catch (...) {
+        BOOST_FAIL("Single decimal point should not cause exception");
+    }
+    
+    // Test sign with decimal only
+    try {
+        auto res = alternator::internal::get_magnitude_and_precision("+.");
+        BOOST_CHECK(true);
+    } catch (...) {
+        BOOST_FAIL("Sign with decimal should not cause exception");
+    }
+    
+    // Test number with 'e' but no exponent
+    try {
+        auto res = alternator::internal::get_magnitude_and_precision("1e");
+        BOOST_CHECK(true);
+    } catch (...) {
+        BOOST_FAIL("Number with 'e' but no exponent should not cause exception");
+    }
+}
