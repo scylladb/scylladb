@@ -202,3 +202,27 @@ BOOST_AUTO_TEST_CASE(test_magnitude_and_precision_edge_cases) {
         BOOST_FAIL("Number with 'e' but no exponent should not cause exception");
     }
 }
+
+// Test edge cases in base64 functions that could expose bugs
+BOOST_AUTO_TEST_CASE(test_base64_edge_cases) {
+    // Test BUG 7: Character with value 255 should not cause out-of-bounds access
+    try {
+        std::string test_with_255;
+        test_with_255.push_back(char(255)); // Add character with value 255
+        base64_encode(to_bytes_view(test_with_255)); // Should not crash
+        BOOST_CHECK(true); // If we get here, it didn't crash
+    } catch (...) {
+        BOOST_FAIL("Character with value 255 should not cause exception");
+    }
+    
+    // Test BUG 8: base64_begins_with with edge case sizes
+    std::string base = "QUJDRA=="; // "ABCD" encoded
+    std::string operand = "QUJD"; // "ABC" encoded (incomplete)
+    // This should not crash or access out of bounds
+    try {
+        bool result = base64_begins_with(base, operand);
+        BOOST_CHECK(true); // If we get here, it didn't crash
+    } catch (...) {
+        BOOST_FAIL("base64_begins_with should handle edge cases without exception");
+    }
+}

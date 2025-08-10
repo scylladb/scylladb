@@ -17,10 +17,10 @@ public:
     static constexpr const char to[] =
             "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     static constexpr uint8_t invalid_char = 255;
-    uint8_t from[255];
+    uint8_t from[256];  // BUG FIX 7: Increased size to handle all unsigned char values (0-255)
     base64_chars() {
         static_assert(sizeof(to) == 64 + 1);
-        for (int i = 0; i < 255; i++) {
+        for (int i = 0; i < 256; i++) {  // BUG FIX 7: Loop to 256 to initialize all indices
             from[i] = invalid_char; // signal invalid character
         }
         for (int i = 0; i < 64; i++) {
@@ -128,7 +128,7 @@ bool base64_begins_with(std::string_view base, std::string_view operand) {
         return false;
     }
     // Decode and compare last 4 bytes of base64-encoded strings
-    const std::string base_remainder = base64_decode_string(base.substr(operand.size() - 4, operand.size()));
+    const std::string base_remainder = base64_decode_string(base.substr(operand.size() - 4, 4));  // BUG FIX 8: Fixed substr length parameter
     const std::string operand_remainder = base64_decode_string(operand.substr(operand.size() - 4));
     return base_remainder.starts_with(operand_remainder);
 }
