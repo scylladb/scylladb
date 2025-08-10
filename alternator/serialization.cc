@@ -9,6 +9,7 @@
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include "utils/log.hh"
+#include "utils/on_internal_error.hh"
 #include "serialization.hh"
 #include "error.hh"
 #include "concrete_types.hh"
@@ -67,9 +68,11 @@ type_representation represent_type(alternator_type atype) {
 
 
 internal::magnitude_and_precision internal::get_magnitude_and_precision(std::string_view s) {
-    // BUG FIX 1: Handle empty string case
+    // Check for empty string - this should never happen as the caller
+    // parse_and_validate_number() should fail on empty strings when
+    // parsing as big_decimal before calling this function.
     if (s.empty()) {
-        return magnitude_and_precision{0, 0};
+        utils::on_internal_error("get_magnitude_and_precision called with empty string");
     }
     
     size_t e_or_end = s.find_first_of("eE");
@@ -84,14 +87,16 @@ internal::magnitude_and_precision internal::get_magnitude_and_precision(std::str
     if (dot_or_end != std::string_view::npos) {
         if (nonzero == dot_or_end) {
             // 0.000031 => magnitude = -5 (like 3.1e-5), precision = 2.
-            // BUG FIX 2: Check bounds before accessing fraction
-            if (dot_or_end + 1 < base.size()) {
-                std::string_view fraction = base.substr(dot_or_end + 1);
-                size_t nonzero2 = fraction.find_first_not_of("0");
-                if (nonzero2 != std::string_view::npos) {
-                    magnitude = -nonzero2 - 1;
-                    precision = fraction.size() - nonzero2;
-                }
+            // Check bounds before accessing fraction - this should never happen
+            // as the caller should validate the string format first
+            if (dot_or_end + 1 >= base.size()) {
+                utils::on_internal_error("get_magnitude_and_precision: decimal point at end with no fraction");
+            }
+            std::string_view fraction = base.substr(dot_or_end + 1);
+            size_t nonzero2 = fraction.find_first_not_of("0");
+            if (nonzero2 != std::string_view::npos) {
+                magnitude = -nonzero2 - 1;
+                precision = fraction.size() - nonzero2;
             }
         } else {
             // 000123.45678 => magnitude = 2, precision = 8.
@@ -130,22 +135,16 @@ internal::magnitude_and_precision internal::get_magnitude_and_precision(std::str
     if (precision && e_or_end != std::string_view::npos) {
         std::string_view exponent = s.substr(e_or_end + 1);
         if (exponent.size() > 4) {
-            // BUG FIX 3: Check if exponent is not empty before accessing [0]
-            if (!exponent.empty()) {
-                magnitude = exponent[0]=='-' ? -9999 : 9999;
-            } else {
-                magnitude = 9999; // Default to overflow case
+            // Check if exponent is not empty before accessing [0] - this should never
+            // happen as the caller should validate the string format first
+            if (exponent.empty()) {
+                utils::on_internal_error("get_magnitude_and_precision: exponent marker with no exponent");
             }
+            magnitude = exponent[0]=='-' ? -9999 : 9999;
         } else {
             try {
                 int32_t exp_val = boost::lexical_cast<int32_t>(exponent);
-                // BUG FIX 4: Check for potential integer overflow
-                if ((magnitude > 0 && exp_val > INT_MAX - magnitude) ||
-                    (magnitude < 0 && exp_val < INT_MIN - magnitude)) {
-                    magnitude = (exp_val > 0) ? 9999 : -9999;
-                } else {
-                    magnitude += exp_val;
-                }
+                magnitude += exp_val;
             } catch (...) {
                 magnitude = 9999;
             }

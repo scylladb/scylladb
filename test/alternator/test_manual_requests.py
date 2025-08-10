@@ -305,6 +305,17 @@ def test_base64_malformed_updateitem(dynamodb, test_table_b):
     r = update_item_binary_data(dynamodb, test_table_b, "YWJj??!!")
     assert r.status_code == 400 and 'SerializationException' in r.text
 
+# Test for base64 handling with high-value characters (like 255)
+# This tests the fix for the array bounds issue in base64.cc
+def test_base64_high_value_chars(dynamodb, test_table_b):
+    # Create a byte array with high-value characters including 255
+    high_bytes = bytes([253, 254, 255])
+    valid_base64 = base64.b64encode(high_bytes).decode()
+    
+    # This should work correctly without array bounds issues
+    r = put_item_binary_data_in_non_key(dynamodb, test_table_b, valid_base64)
+    assert r.status_code == 200
+
 def scan_with_binary_data_in_cond_expr(dynamodb, test_table_b, filter_expr, expr_attr_values):
     payload ='''{
         "TableName": "%s",

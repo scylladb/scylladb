@@ -3470,11 +3470,7 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     // names are unique so add() makes sense
                     rjson::add_with_string_name(item, attr_name, std::move(v));
                 } else if (item_length_in_bytes) {
-                    auto len = value_cast<bytes>(entry.second).length();
-                    // BUG FIX 9: Prevent unsigned integer underflow
-                    if (len > 0) {
-                        (*item_length_in_bytes) += len - 1;
-                    }
+                    (*item_length_in_bytes) += value_cast<bytes>(entry.second).length() - 1;
                 }
             }
         }
