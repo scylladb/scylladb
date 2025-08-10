@@ -319,7 +319,7 @@ future<> service_level_controller::update_service_levels_cache(qos::query_contex
     });
 }
 
-future<> service_level_controller::auth_integration::reload_cache() {
+future<> service_level_controller::auth_integration::reload_cache(qos::query_context ctx) {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
     const auto _ = _stop_gate.hold();
 
@@ -336,11 +336,12 @@ future<> service_level_controller::auth_integration::reload_cache() {
     }
     auto units = co_await get_units(_sl_controller._global_controller_db->notifications_serializer, 1);
 
+    auto& qs = qos_query_state(ctx);
     auto& role_manager = _auth_service.underlying_role_manager();
-    const auto all_roles = co_await role_manager.query_all();
-    const auto hierarchy = co_await role_manager.query_all_directly_granted();
+    const auto all_roles = co_await role_manager.query_all(qs);
+    const auto hierarchy = co_await role_manager.query_all_directly_granted(qs);
     // includes only roles with attached service level
-    const auto attributes = co_await role_manager.query_attribute_for_all("service_level");
+    const auto attributes = co_await role_manager.query_attribute_for_all("service_level", qs);
 
     std::map<sstring, service_level_options> effective_sl_map;
 
@@ -403,7 +404,7 @@ future<> service_level_controller::update_cache(update_both_cache_levels update_
     }
 
     if (_auth_integration) {
-        co_await _auth_integration->reload_cache();
+        co_await _auth_integration->reload_cache(ctx);
     }
 }
 
