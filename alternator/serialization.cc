@@ -98,7 +98,6 @@ internal::magnitude_and_precision internal::get_magnitude_and_precision(std::str
             magnitude = dot_or_end - nonzero - 1;
             precision = base.size() - nonzero - 1;
         }
-        }
         // trailing zeros don't count to precision, e.g., precision
         // of 1000.0, 1.0 or 1.0000 are just 1.
         size_t last_significant = base.find_last_not_of(".0");
