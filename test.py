@@ -321,6 +321,24 @@ def run_pytest(options: argparse.Namespace, run_id: int) -> tuple[int, list[Simp
             f'--alluredir={report_dir / f"allure_{host_id}"}',
             '-v' if options.verbose else '-q',
         ])
+<<<<<<< HEAD
+||||||| parent of 71b875c932 (test.py: add bypassing random seed to boost tests)
+    if options.pytest_arg:
+        # If pytest_arg is provided, it should be a string with arguments to pass to pytest
+        args.extend(shlex.split(options.pytest_arg))
+=======
+    if options.pytest_arg:
+        # If pytest_arg is provided, it should be a string with arguments to pass to pytest
+        args.extend(shlex.split(options.pytest_arg))
+    if options.random_seed:
+        args.append(f'--random-seed={options.random_seed}')
+<<<<<<< HEAD
+>>>>>>> 71b875c932 (test.py: add bypassing random seed to boost tests)
+||||||| parent of f7c7877ba6 (test.py: add bypassing x_log2_compaction_groups to boost tests)
+=======
+    if options.x_log2_compaction_groups:
+        args.append(f'--x-log2-compaction-groups={options.x_log2_compaction_groups}')
+>>>>>>> f7c7877ba6 (test.py: add bypassing x_log2_compaction_groups to boost tests)
     if options.gather_metrics:
         args.append('--gather-metrics')
     if len(expression) > 1:
