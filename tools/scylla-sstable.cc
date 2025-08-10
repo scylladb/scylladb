@@ -2622,10 +2622,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     }
     auto input_file = vm["input-file"].as<std::string>();
     auto output_dir = vm["output-dir"].as<std::string>();
-    if (!vm.count("generation")) {
-        throw std::invalid_argument("missing required option '--generation'");
-    }
-    auto generation = sstables::generation_type(vm["generation"].as<int64_t>());
+    auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
     auto format = sstables::sstable_format_types::big;
     auto version = sstables::get_highest_sstable_version();
 
@@ -3294,7 +3291,6 @@ for more information on this operation, including the schema of the JSON input.
             {
                     typed_option<std::string>("input-file", "the file containing the input"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
-                    typed_option<sstables::generation_type::int_t>("generation", "generation of generated sstable"),
                     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
             }},
             write_operation},
