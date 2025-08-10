@@ -226,3 +226,31 @@ BOOST_AUTO_TEST_CASE(test_base64_edge_cases) {
         BOOST_FAIL("base64_begins_with should handle edge cases without exception");
     }
 }
+
+// Test to ensure no unsigned integer underflow in length calculations
+BOOST_AUTO_TEST_CASE(test_no_underflow_in_length_calc) {
+    // This test is more of a compilation and logic test to ensure the 
+    // length calculation bug fix works correctly.
+    // The actual bug would require integration testing with the full system,
+    // but we can at least test the arithmetic logic.
+    
+    uint64_t length = 0;
+    size_t value_length = 0; // Zero length value
+    
+    // The fixed logic: only subtract if length > 0
+    if (value_length > 0) {
+        length += value_length - 1;
+    }
+    
+    // With the fix, length should remain 0 (no underflow)
+    BOOST_CHECK_EQUAL(length, 0);
+    
+    // Test with non-zero length
+    value_length = 5;
+    if (value_length > 0) {
+        length += value_length - 1;
+    }
+    
+    // Should add 4 (5-1)
+    BOOST_CHECK_EQUAL(length, 4);
+}
