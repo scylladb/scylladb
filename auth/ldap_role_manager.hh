@@ -77,9 +77,9 @@ class ldap_role_manager : public role_manager {
 
     future<role_set> query_granted(std::string_view, recursive_role_query) override;
 
-    future<role_to_directly_granted_map> query_all_directly_granted() override;
+    future<role_to_directly_granted_map> query_all_directly_granted(::service::query_state&) override;
 
-    future<role_set> query_all() override;
+    future<role_set> query_all(::service::query_state&) override;
 
     future<bool> exists(std::string_view) override;
 
@@ -87,9 +87,9 @@ class ldap_role_manager : public role_manager {
 
     future<bool> can_login(std::string_view) override;
 
-    future<std::optional<sstring>> get_attribute(std::string_view, std::string_view) override;
+    future<std::optional<sstring>> get_attribute(std::string_view, std::string_view, ::service::query_state&) override;
 
-    future<role_manager::attribute_vals> query_attribute_for_all(std::string_view) override;
+    future<role_manager::attribute_vals> query_attribute_for_all(std::string_view, ::service::query_state&) override;
 
     future<> set_attribute(std::string_view, std::string_view, std::string_view, ::service::group0_batch& mc) override;
 
