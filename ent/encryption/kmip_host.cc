@@ -724,9 +724,11 @@ future<> kmip_host::impl::connect() {
 }
 
 future<> kmip_host::impl::disconnect() {
-    return do_for_each(_options.hosts, [this](const sstring& host) {
+    co_await do_for_each(_options.hosts, [this](const sstring& host) {
         return clear_connections(host);
     });
+    co_await _attr_cache.stop();
+    co_await _id_cache.stop();
 }
 
 static unsigned from_str(unsigned (*f)(char*, int, int*), const sstring& s, const sstring& what) {
