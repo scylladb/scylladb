@@ -510,6 +510,37 @@ def test_ttl_stats(dynamodb, metrics, alternator_ttl_period_in_seconds):
                 time.sleep(0.1)
             assert not 'Item' in table.get_item(Key={'p': p0})
 
+# Some users looked for a metric which counts read and write activity and
+# that both CQL and Alternator operations increment, and found the metrics
+# scylla_storage_proxy_coordinator_{read,write}_latency_count. This is a
+# regression test to make sure that Alternator operations continue to
+# increment these metrics. We can modify or remove this test if we decide
+# one day that we don't really need these specific metrics
+def test_storage_proxy_coordinator_metrics(test_table_s, metrics):
+    read_count = 'scylla_storage_proxy_coordinator_read_latency_count'
+    write_count = 'scylla_storage_proxy_coordinator_write_latency_count'
+    p = random_string()
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.get_item(Key={'p': p})
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {'Keys': [{'p': p}], 'ConsistentRead': True}})
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.query(KeyConditions={
+            'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+            ConsistentRead=True)
+    with check_increases_metric(metrics, [read_count]):
+        test_table_s.scan(ConsistentRead=True, Limit=1)
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.put_item(Item={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.delete_item(Key={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        test_table_s.update_item(Key={'p': p})
+    with check_increases_metric(metrics, [write_count]):
+        with test_table_s.batch_writer() as batch:
+            batch.put_item(Item={'p': p})
+
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
 # reads_before_write, write_using_lwt, shard_bounce_for_lwt,
