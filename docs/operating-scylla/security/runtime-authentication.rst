@@ -13,11 +13,15 @@ This procedure allows you to enable authentication on a live ScyllaDB cluster wi
 Procedure
 ---------
 
-#. Update the ``authenticator`` parameter in ``scylla.yaml`` for all the nodes in the cluster: Change ``authenticator: AllowAllAuthenticator`` to ``authenticator: com.scylladb.auth.TransitionalAuthenticator``.
+#. Update the ``scylla.yaml`` file for all the nodes in the cluster:
+   
+   * Change the value of the ``authenticator`` parameter from ``AllowAllAuthenticator`` to ``com.scylladb.auth.TransitionalAuthenticator``.
+   * Ensure ``authorizer`` is set to ``CassandraAuthorizer``.
 
    .. code-block:: yaml
 
        authenticator:  com.scylladb.auth.TransitionalAuthenticator
+       authorizer:  CassandraAuthorizer
 
 #. Run the :doc:`nodetool drain </operating-scylla/nodetool-commands/drain>` command (ScyllaDB stops listening to its connections from the client and other nodes).
 
@@ -66,6 +70,7 @@ Procedure
      .. code-block:: yaml
  
         authenticator: PasswordAuthenticator
+        authorizer:  CassandraAuthorizer
 
 #. Restart the nodes one by one to apply the effect.
 
