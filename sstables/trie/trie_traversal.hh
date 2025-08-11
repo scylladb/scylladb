@@ -47,6 +47,10 @@ struct trail_entry {
 struct ancestor_trail : utils::small_vector<trail_entry, 8> {
 };
 
+template <typename T>
+concept bytespan_ref = std::same_as<T, std::span<std::byte>&&>
+    || std::same_as<T, std::span<const std::byte>&&>;
+
 // Converting keys from the regular Scylla format to the BTI byte-comparable format
 // can be expensive, so we allow the conversion to happen lazily.
 // To support that, the traversal routines take the key as an iterator/generator
@@ -57,7 +61,7 @@ template <typename T>
 concept comparable_bytes_iterator = requires (T it) {
     // Users of comparable_bytes_iterator want to modify the contents of `*it`
     // (for their convenience, not due to necessity), so operator* returns a reference.
-    { *it } -> std::same_as<const_bytes&&>;
+    { *it } -> bytespan_ref;
     // Allowed to destroy `*it`;
     { ++it };
     // Since this concept is designed for lazy evaluation,
