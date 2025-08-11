@@ -304,7 +304,11 @@ future<> service_level_controller::update_service_levels_cache(qos::query_contex
                 sl_logger.info("service level \"{}\" was updated. New values: (timeout: {}, workload_type: {}, shares: {})",
                         sl.first, sl.second.timeout, sl.second.workload, sl.second.shares);
             }
-            _effective_service_levels_db.clear();
+
+            if (_esl_controller) {
+                _esl_controller->clear_cache();
+            }
+
             for (auto&& sl : service_levels_for_add) {
                 bool make_room = false;
                 std::map<sstring, service_level>::reverse_iterator it;

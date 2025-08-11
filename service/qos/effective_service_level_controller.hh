@@ -35,6 +35,9 @@ struct effective_service_level_event_subscriber {
 /// NOTICE: Dummy implementation for now -- work in progress.
 class effective_service_level_controller : public peering_sharded_service<effective_service_level_controller> {
 private:
+    friend class service_level_controller;
+
+private:
     [[maybe_unused]] service_level_controller& _sl_controller;
     [[maybe_unused]] auth::service& _auth_service;
 

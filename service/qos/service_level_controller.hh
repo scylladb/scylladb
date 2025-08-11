@@ -162,8 +162,6 @@ private:
     //            `effective_service_level_controller` instance that can be used freely.
     effective_service_level_controller* _esl_controller;
 
-    // role name -> effective service_level_options 
-    std::map<sstring, service_level_options> _effective_service_levels_db;
     // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
     std::set<sstring> _effectively_dropped_sls;
     std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];

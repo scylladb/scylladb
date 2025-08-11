@@ -43,12 +43,12 @@ future<std::optional<service_level_options>> effective_service_level_controller:
     const auto _ = seastar::gate::holder{_stop_gate};
 
     if (_sl_controller._sl_data_accessor->can_use_effective_service_level_cache()) {
-        auto effective_sl_it = _sl_controller._effective_service_levels_db.find(role_name);
-        co_return effective_sl_it != _sl_controller._effective_service_levels_db.end()
+        auto effective_sl_it = _mapping_cache.find(role_name);
+        co_return effective_sl_it != _mapping_cache.end()
             ? std::optional<service_level_options>(effective_sl_it->second)
             : std::nullopt;
     } else {
-        auto& role_manager = _sl_controller._auth_service.local().underlying_role_manager();
+        auto& role_manager = _auth_service.underlying_role_manager();
         auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
 
         // converts a list of roles into the chosen service level.
@@ -90,8 +90,8 @@ std::optional<service_level_options> effective_service_level_controller::find_ca
         return std::nullopt;
     }
 
-    auto effective_sl_it = _sl_controller._effective_service_levels_db.find(role_name);
-    return effective_sl_it != _sl_controller._effective_service_levels_db.end()
+    auto effective_sl_it = _mapping_cache.find(role_name);
+    return effective_sl_it != _mapping_cache.end()
         ? std::optional<service_level_options>(effective_sl_it->second)
         : std::nullopt;
 }
@@ -112,7 +112,7 @@ future<scheduling_group> effective_service_level_controller::get_user_scheduling
 future<std::vector<cql3::description>> effective_service_level_controller::describe_attached_service_levels() {
     const auto _ = seastar::gate::holder{_stop_gate};
 
-    const auto attached_service_levels = co_await _sl_controller._auth_service.local().underlying_role_manager().query_attribute_for_all("service_level");
+    const auto attached_service_levels = co_await _auth_service.underlying_role_manager().query_attribute_for_all("service_level");
 
     std::vector<cql3::description> result{};
     result.reserve(attached_service_levels.size());
@@ -162,7 +162,7 @@ future<> effective_service_level_controller::reload_cache() {
     }
     auto units = co_await get_units(_sl_controller._global_controller_db->notifications_serializer, 1);
 
-    auto& role_manager = _sl_controller._auth_service.local().underlying_role_manager();
+    auto& role_manager = _auth_service.underlying_role_manager();
     const auto all_roles = co_await role_manager.query_all();
     const auto hierarchy = co_await role_manager.query_all_directly_granted();
     // includes only roles with attached service level
@@ -212,9 +212,9 @@ future<> effective_service_level_controller::reload_cache() {
         co_await coroutine::maybe_yield();
     }
 
-    co_await _sl_controller.container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) -> future<> {
-        sl_controller._effective_service_levels_db = std::move(effective_sl_map);
-        co_await sl_controller.get_effective_service_level_controller()->notify_cache_reloaded();
+    co_await container().invoke_on_all([effective_sl_map] (effective_service_level_controller& esl_controller) -> future<> {
+        esl_controller._mapping_cache = std::move(effective_sl_map);
+        co_await esl_controller.notify_cache_reloaded();
     });
 }
 
