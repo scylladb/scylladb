@@ -3364,11 +3364,6 @@ future<> database::on_before_service_level_change(qos::service_level_options slo
     }
 }
 
-future<>
-database::on_effective_service_levels_cache_reloaded() {
-    co_return;
-}
-
 void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) const {
     SCYLLA_ASSERT(get_config().rf_rack_valid_keyspaces());
 

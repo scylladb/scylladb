@@ -461,12 +461,6 @@ std::optional<sstring> service_level_controller::get_active_service_level() {
     }
 }
 
-future<> service_level_controller::notify_effective_service_levels_cache_reloaded() {
-    co_await _subscribers.for_each([] (qos_configuration_change_subscriber* subscriber) -> future<> {
-        return subscriber->on_effective_service_levels_cache_reloaded();
-    });
-}
-
 void service_level_controller::maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client) {
     if (this_shard_id() != global_controller) {
         throw std::runtime_error(format("Service level updates from distributed data can only be activated on shard {}", global_controller));

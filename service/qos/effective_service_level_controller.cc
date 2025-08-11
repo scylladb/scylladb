@@ -214,7 +214,7 @@ future<> effective_service_level_controller::reload_cache() {
 
     co_await _sl_controller.container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) -> future<> {
         sl_controller._effective_service_levels_db = std::move(effective_sl_map);
-        co_await sl_controller.notify_effective_service_levels_cache_reloaded();
+        co_await sl_controller.get_effective_service_level_controller()->notify_cache_reloaded();
     });
 }
 
