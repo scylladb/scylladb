@@ -57,10 +57,10 @@ using namespace replica;
 using namespace service;
 
 static inline
-future<mutation> tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
+future<mutation> tablet_map_to_mutation(const shared_tablet_map& tablets, const locator::per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
                        api::timestamp_type ts, const gms::feature_service& features) {
     std::optional<mutation> ret;
-    co_await tablet_map_to_mutations(tablets, id, keyspace_name, table_name, ts, features, [&] (mutation m) {
+    co_await tablet_map_to_mutations(tablets, per_table_map, id, keyspace_name, table_name, ts, features, [&] (mutation m) {
         SCYLLA_ASSERT(!ret.has_value());
         ret = std::move(m);
         return make_ready_future();
@@ -621,7 +621,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
+                    tablet_map_to_mutation(tmap, per_table_tablet_map(), table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
@@ -656,7 +656,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table2, table2_schema->ks_name(), table2_schema->cf_name(), ++ts, db.features()).get(),
+                    tablet_map_to_mutation(tmap, per_table_tablet_map(), table2, table2_schema->ks_name(), table2_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
@@ -711,7 +711,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
+                    tablet_map_to_mutation(tmap, per_table_tablet_map(), table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
@@ -729,7 +729,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_update) {
             });
 
             verify_tablet_metadata_update(e, tm, {
-                    tablet_map_to_mutation(tmap, table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
+                    tablet_map_to_mutation(tmap, per_table_tablet_map(), table1, table1_schema->ks_name(), table1_schema->cf_name(), ++ts, db.features()).get(),
             });
         }
 
