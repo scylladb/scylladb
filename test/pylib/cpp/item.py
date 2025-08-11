@@ -87,6 +87,8 @@ class CppTestFunction(pytest.Item):
         self.file_name = file_name
         self.originalname = kwargs['name']
         self.test_unique_name = test_unique_name
+        self.name = f'{self.name}.{self.mode}.{run_id}'
+        self._nodeid = f'{self._nodeid}.{self.mode}.{run_id}'
         self._arguments = arguments
         self.env = env
         self.run_id = run_id
@@ -105,7 +107,7 @@ class CppTestFunction(pytest.Item):
     def runtest(self) -> None:
 
         failures, output = self.facade.run_test(self.executable, self.originalname, self.test_unique_name, self.mode,
-                                                self.file_name, self._arguments, env=self.env)
+                                                self.file_name, self._arguments, env=self.env, run_id=self.run_id)
         # Report the c++ output in its own sections
         self.add_report_section("call", "c++", output)
 
@@ -127,12 +129,12 @@ class CppFile(pytest.File):
     Represents the C++ test file with all necessary information for test execution
     """
     def __init__(self, *, no_parallel_run: bool = False, modes: list[str], disabled_tests: dict[str, set[str]],
-                 run_id=None, facade: CppTestFacade, arguments: Sequence[str], coverage_config: coverage,
+                 repeat: int = 1, facade: CppTestFacade, arguments: Sequence[str], coverage_config: coverage,
                  parameters: list[str] = None, env: dict = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.facade = facade
         self.modes = modes
-        self.run_id = run_id
+        self.repeat = repeat
         self.disabled_tests = disabled_tests
         self.no_parallel_run = no_parallel_run
         self.parameters = parameters
@@ -142,25 +144,26 @@ class CppFile(pytest.File):
 
     def collect(self) -> Iterator[CppTestFunction]:
         for mode in self.modes:
-            test_name = self.path.stem
-            self.env['TMPDIR'] = (self.facade.temp_dir / mode).absolute()
-            if test_name in self.disabled_tests[mode]:
-                continue
-            executable = Path(f'{BUILD_DIR}/{mode}/test/{self.path.parent.name}/{test_name}')
-            combined, tests = self.facade.list_tests(executable, self.no_parallel_run, mode)
-            if combined:
-                executable = executable.parent / COMBINED_TESTS.stem
-            if mode == "coverage":
-                self.env.update(coverage_script.env(executable))
-            for test_name in tests:
-                if '/' in test_name:
-                    test_name = test_name.replace('/', '_')
-                if self.parameters:
-                    for index, parameter in enumerate(self.parameters):
-                        yield CppTestFunction.from_parent(self, name=test_name, executable=executable,
-                                                          facade=self.facade, mode=mode, test_unique_name=f'{test_name}.{index + 1}',
-                                                          file_name=self.path, run_id=self.run_id, env=self.env,
-                                                          arguments=[*self._arguments, parameter])
-                else:
-                    yield CppTestFunction.from_parent(self, name=test_name, executable=executable, facade=self.facade, mode=mode,
-                                                      file_name=self.path, test_unique_name=test_name, run_id=self.run_id, env=self.env, arguments=self._arguments)
+            for i in range(1, self.repeat + 1):
+                test_name = self.path.stem
+                self.env['TMPDIR'] = (self.facade.temp_dir / mode).absolute()
+                if test_name in self.disabled_tests[mode]:
+                    continue
+                executable = Path(f'{BUILD_DIR}/{mode}/test/{self.path.parent.name}/{test_name}')
+                combined, tests = self.facade.list_tests(executable, self.no_parallel_run, mode)
+                if combined:
+                    executable = executable.parent / COMBINED_TESTS.stem
+                if mode == "coverage":
+                    self.env.update(coverage_script.env(executable))
+                for test_name in tests:
+                    if '/' in test_name:
+                        test_name = test_name.replace('/', '_')
+                    if self.parameters:
+                        for index, parameter in enumerate(self.parameters):
+                            yield CppTestFunction.from_parent(self, name=test_name, executable=executable,
+                                                              facade=self.facade, mode=mode, test_unique_name=f'{test_name}.{index + 1}',
+                                                              file_name=self.path, run_id=i, env=self.env,
+                                                              arguments=[*self._arguments, parameter])
+                    else:
+                        yield CppTestFunction.from_parent(self, name=test_name, executable=executable, facade=self.facade, mode=mode,
+                                                          file_name=self.path, test_unique_name=test_name, run_id=i, env=self.env, arguments=self._arguments)

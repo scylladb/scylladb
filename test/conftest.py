@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import re
 import logging
 import sys
 from argparse import BooleanOptionalAction
@@ -16,8 +18,9 @@ from typing import TYPE_CHECKING
 import pytest
 
 from test import ALL_MODES, TEST_RUNNER, TOP_SRC_DIR
+from test.pylib.cpp.item import CppTestFunction
 from test.pylib.report_plugin import ReportPlugin
-from test.pylib.util import get_configured_modes
+from test.pylib.util import get_configured_modes, get_modes_to_run
 from test.pylib.suite.base import (
     TestSuite,
     get_testpy_test,
@@ -74,6 +77,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--extra-scylla-cmdline-options", default=[],
                      help="Passing extra scylla cmdline options for all tests.  Options should be space separated:"
                           " '--logger-log-level raft=trace --default-log-level error'")
+    parser.addoption('--repeat', action="store", default="1", type=int,
+                     help="number of times to repeat test execution")
 
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
@@ -93,6 +98,29 @@ def build_mode(request: pytest.FixtureRequest) -> str:
         return mode[0]
     return "unknown"
 
+@pytest.fixture(scope="function")
+def get_params(request: pytest.FixtureRequest) -> Generator[None]:
+    # this dummy fixture only needed to modify the test name with run id and mode. We don't want to parametrize with
+    # some parameters, so we are returning existing params that function is accepting. This method only needed for
+    # pytest_generate_tests method
+    return request.param
+
+
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    if TEST_RUNNER == "runpy":
+        return
+    repeat_count = metafunc.config.getoption("--repeat")
+    modes = get_modes_to_run(metafunc.config)
+
+    all_combinations = [*itertools.product(modes, range(repeat_count))]
+
+    metafunc.fixturenames.append('get_params')
+    metafunc.parametrize(
+        'get_params',
+        range(len(all_combinations)),
+        ids=[f"%{mode}.{run_id + 1}%" for mode, run_id in all_combinations],
+        indirect=True
+    )
 
 @pytest.fixture(autouse=True)
 def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]:
@@ -140,29 +168,37 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     This is a standard pytest method.
     This is needed to modify the test names with dev mode and run id to differ them one from another
     """
-    run_id = config.getoption('run_id', None)
+    testpy_run_id = config.getoption('run_id', None)
+
+    def modify_test_name(s: str, testpy_run_id) -> str:
+        """
+        Modify the test name to extract run id from parameterized test name to the end of the name.
+        Convert names like:
+        cluster/test_multidc.py::test_multidc[%dev.1%]
+        cluster/test_multidc.py::test_putget_2dc_with_rf[%release.1%-nodes_list0-1]
+        to:
+        cluster/test_multidc.py::test_multidc.dev.1
+        cluster/test_multidc.py::test_putget_2dc_with_rf[nodes_list0-1].release.1
+        """
+        match = re.search(r'\[%([a-zA-Z_][\w]*)\.(\d+)%(-[^]]+)?]', s)
+        if not match:
+            return s
+
+        mode = match.group(1)
+        run_id = match.group(2)
+        suffix = match.group(3)
+        if suffix:
+            s = re.sub(r'\[%[a-zA-Z_][\w]*\.\d+%(-[^]]+)]', f'[{suffix[1:]}]', s)
+        else:
+            s = re.sub(r'\[%[a-zA-Z_][\w]*\.\d+%]', '', s)
+        return f"{s}.{mode}.{testpy_run_id}" if testpy_run_id else f"{s}.{mode}.{run_id}"
 
     for item in items:
-        # check if this is custom cpp tests that have additional attributes for name modification
-        if hasattr(item, 'mode'):
-            # modify name with mode that is always present in cpp tests
-            item.nodeid = f'{item.nodeid}.{item.mode}'
-            item.name = f'{item.name}.{item.mode}'
-            if item.run_id:
-                item.nodeid = f'{item.nodeid}.{item.run_id}'
-                item.name = f'{item.name}.{item.run_id}'
-        else:
-            # here go python tests that are executed through test.py
-            # since test.py is responsible for creating several tests with the required mode,
-            # a list with modes contains only one value,
-            # that's why in name modification the first element is used
-            modes = config.getoption('modes')
-            if modes:
-                item._nodeid = f'{item._nodeid}.{modes[0]}'
-                item.name = f'{item.name}.{modes[0]}'
-            if run_id:
-                item._nodeid = f'{item._nodeid}.{run_id}'
-                item.name = f'{item.name}.{run_id}'
+        if not isinstance(item, CppTestFunction):
+            # pytest_generate_tests is not triggered for C++ tests, so they have their own logic for test name
+            # modification that handled in CppTestFunction class.
+            item._nodeid = modify_test_name(item._nodeid, testpy_run_id)
+            item.name = modify_test_name(item.name, testpy_run_id)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
