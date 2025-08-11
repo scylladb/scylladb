@@ -589,7 +589,7 @@ void view_building_coordinator::generate_tablet_migration_updates(utils::chunked
     out.emplace_back(builder.build());
 }
 
-void view_building_coordinator::generate_tablet_resize_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+void view_building_coordinator::generate_tablet_resize_updates(utils::chunked_vector<canonical_mutation>& out, const service::group0_guard& guard, table_id table_id, const locator::tablet_map& old_tmap, const locator::shared_tablet_map& new_tmap) {
     vbc_logger.debug("Generating updates for tablet resize for table {}", table_id);
     if (!_vb_sm.building_state.tasks_state.contains(table_id)) {
         vbc_logger.debug("No view building tasks for table {} - skipping tablet migration updates generation", table_id);

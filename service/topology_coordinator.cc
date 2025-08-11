@@ -2074,12 +2074,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
 
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
-            auto s = _db.find_schema(table_id);
-            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
+        for (auto& base_table_id : plan.resize_plan().finalize_resize) {
+            auto s = _db.find_schema(base_table_id);
+            auto [new_tablet_map, new_per_table_map] = co_await _tablet_allocator.resize_tablets(tm, base_table_id);
             co_await replica::tablet_map_to_mutations(
                 new_tablet_map,
-                table_id,
+                base_table_id,
                 s->ks_name(),
                 s->cf_name(),
                 guard.write_timestamp(),
@@ -2089,14 +2089,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 });
 
             // Clears the resize decision for a table.
-            generate_resize_update(updates, guard, table_id, locator::resize_decision{});
-            _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
+            generate_resize_update(updates, guard, base_table_id, locator::resize_decision{});
 
-            for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
+            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(base_table_id);
+
+            for (auto table_id : tm->tablets().all_table_groups().at(base_table_id)) {
+                _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tmap, new_tablet_map);
                 co_await _cdc_gens.generate_tablet_resize_update(updates, table_id, new_tablet_map, guard.write_timestamp());
             }
 
-            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             auto old_cnt = tmap.tablet_count();
             auto new_cnt = new_tablet_map.tablet_count();
             if (old_cnt > new_cnt) {
@@ -2109,14 +2110,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                 }
                 if (_feature_service.tablet_incremental_repair) {
-                    rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
+                    rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", base_table_id, replicas, old_cnt, new_cnt);
                     if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
                         rtlogger.info("Got handle_tablet_resize_finalization_for_merge_error old_cnt={} new_cnt={}", old_cnt, new_cnt);
                         co_await sleep_abortable(std::chrono::minutes(1), _as);
                     }
-                    co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
-                        co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
-                    });
+                    for (auto table_id : tm->tablets().all_table_groups().at(base_table_id)) {
+                        co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
+                            co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
+                        });
+                    }
                 }
             }
         }

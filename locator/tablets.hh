@@ -288,7 +288,7 @@ struct tablet_info_view {
 //  - they cannot have active repair task, since each task has a different id
 //  - their replicas must be all co-located.
 // If tablet infos are mergeable, merged info is returned. Otherwise, nullopt.
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b);
+std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet_info(tablet_info_view a, tablet_info_view b);
 
 /// Represents states of the tablet migration state machine.
 ///

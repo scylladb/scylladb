@@ -196,8 +196,8 @@ tablet_info::tablet_info(tablet_replica_set replicas)
     : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{}, int64_t(0))
 {}
 
-std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
-    auto repair_task_info = tablet_task_info::merge_repair_tasks(a.repair_task_info, b.repair_task_info);
+std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet_info(tablet_info_view a, tablet_info_view b) {
+    auto repair_task_info = tablet_task_info::merge_repair_tasks(a.repair_task_info(), b.repair_task_info());
     if (!repair_task_info) {
         return {};
     }
@@ -206,14 +206,17 @@ std::optional<tablet_info> merge_tablet_info(tablet_info a, tablet_info b) {
         std::ranges::sort(rs, std::less<tablet_replica>());
         return rs;
     };
-    if (sorted(a.replicas) != sorted(b.replicas)) {
+    if (sorted(a.replicas()) != sorted(b.replicas())) {
         return {};
     }
 
-    auto repair_time = std::max(a.repair_time, b.repair_time);
-    int64_t sstables_repaired_at = std::max(a.sstables_repaired_at, b.sstables_repaired_at);
-    auto info = tablet_info(std::move(a.replicas), repair_time, *repair_task_info, a.migration_task_info, sstables_repaired_at);
-    return info;
+    auto repair_time = std::max(a.repair_time(), b.repair_time());
+    int64_t sstables_repaired_at = std::max(a.sstables_repaired_at(), b.sstables_repaired_at());
+
+    return std::make_pair(
+        shared_tablet_info(a.replicas(), repair_time, *repair_task_info, a.migration_task_info(), sstables_repaired_at),
+        per_table_tablet_info(repair_time, *repair_task_info, sstables_repaired_at)
+    );
 }
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
