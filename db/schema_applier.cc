@@ -649,10 +649,6 @@ future<> schema_applier::merge_tables_and_views()
     });
 
     auto& db = _proxy.local().get_db();
-    // adding and dropping uses this locking mechanism
-    _affected_tables_and_views.locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
-            co_await replica::database::prepare_tables_metadata_change_on_all_shards(db));
-
     co_await max_concurrent_for_each(local_views.dropped, max_concurrent, [&db, this] (schema_ptr& dt) -> future<> {
         auto uuid = dt->id();
         _affected_tables_and_views.table_shards.insert({uuid,
@@ -845,6 +841,19 @@ future<> schema_applier::prepare(utils::chunked_vector<mutation>& muts) {
     }
 }
 
+future<> schema_applier::lock_tables_metadata() {
+    // Adding and dropping tables, or changing tablet metadata, uses this
+    // locking mechanism to prevent changes to tables_metadata during preemptive
+    // iteration over it (e.g., tables_metadata::for_each_table_gently).
+    // However, we can only acquire the (write) lock after preparing all
+    // entities for the pending schema change that need to iterate over tables_metadata;
+    // otherwise, such iteration would deadlock.
+    auto& db = _proxy.local().get_db();
+    _metadata_locks = std::make_unique<
+            replica::tables_metadata_lock_on_all_shards>(
+            co_await replica::database::lock_tables_metadata(db));
+}
+
 // Loads metadata into a single source of truth to ensure consistency.
 // It will be committed later if required by the current schema change.
 future<> schema_applier::load_mutable_token_metadata() {
@@ -865,6 +874,7 @@ future<> schema_applier::update() {
     co_await merge_keyspaces();
     co_await merge_types();
     co_await merge_tables_and_views();
+    co_await lock_tables_metadata();
     co_await merge_functions();
     co_await merge_aggregates();
 }
@@ -952,7 +962,7 @@ future<> schema_applier::commit() {
         commit_on_shard(db);
     });
     // unlock as some functions in post_commit() may read data under those locks
-    _affected_tables_and_views.locks = nullptr;
+    _metadata_locks = nullptr;
 }
 
 future<> schema_applier::finalize_tables_and_views() {
