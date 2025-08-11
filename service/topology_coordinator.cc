@@ -2089,6 +2089,28 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     updates.emplace_back(co_await make_canonical_mutation_gently(m));
                 });
 
+            for (auto colocated_table_id : tm->tablets().all_table_groups().at(base_table_id)) {
+                if (colocated_table_id == base_table_id) {
+                    continue;
+                }
+                // _new_colocated_tablet_map is unused because we use the shared_tablet_map of the base table
+                // which should be the same.
+                auto [_new_colocated_tablet_map, new_per_table_map] = co_await _tablet_allocator.resize_tablets(tm, colocated_table_id);
+                auto s = _db.find_schema(colocated_table_id);
+                co_await replica::colocated_tablet_map_to_mutations(
+                    new_tablet_map,
+                    new_per_table_map,
+                    colocated_table_id,
+                    s->ks_name(),
+                    s->cf_name(),
+                    base_table_id,
+                    guard.write_timestamp(),
+                    _feature_service,
+                    [&] (mutation m) -> future<> {
+                        updates.emplace_back(co_await make_canonical_mutation_gently(m));
+                    });
+            }
+
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, base_table_id, locator::resize_decision{});
 

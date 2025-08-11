@@ -117,6 +117,33 @@ data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler
     return result;
 };
 
+static void add_per_table_static_mutations(mutation& m, const per_table_tablet_map& map, api::timestamp_type ts, const gms::feature_service& features) {
+    if (features.tablet_repair_scheduler) {
+        auto config = map.get_repair_scheduler_config();
+        if (config) {
+            m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(*config), ts);
+        }
+    }
+}
+
+static void add_per_table_tablet_mutations(mutation& m, const auto& ck, const per_table_tablet_info& tablet, api::timestamp_type ts, const gms::feature_service& features) {
+    if (features.tablet_repair_scheduler) {
+        if (tablet.repair_task_info.is_valid()) {
+            m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+            if (features.tablet_incremental_repair) {
+                m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info.repair_incremental_mode), ts);
+            }
+        }
+        if (tablet.repair_time != db_clock::time_point{}) {
+            m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
+        }
+    }
+
+    if (features.tablet_incremental_repair) {
+        m.set_clustered_cell(ck, "sstables_repaired_at", data_value(tablet.sstables_repaired_at), ts);
+    }
+}
+
 // Based on calibration run measuring 6ms time to freeze
 // mutation with 16K tablets (with 9 replicas each) on a
 // 3.4GHz amd64 cpu, and twice as much for unfreeze.
@@ -150,13 +177,7 @@ tablet_map_to_mutations(const shared_tablet_map& tablets, const per_table_tablet
     if (features.tablet_resize_virtual_task && tablets.resize_task_info().is_valid()) {
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
     }
-
-    if (features.tablet_repair_scheduler) {
-        auto config = per_table_map.get_repair_scheduler_config();
-        if (config) {
-            m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(*config), ts);
-        }
-    }
+    add_per_table_static_mutations(m, per_table_map, ts, features);
 
     tablet_id tid = tablets.first_tablet();
     size_t tablets_in_mutation = 0;
@@ -166,28 +187,14 @@ tablet_map_to_mutations(const shared_tablet_map& tablets, const per_table_tablet
             co_await coroutine::maybe_yield();
             co_await process_mutation(std::exchange(m, make_mutation()));
         }
-        const auto& per_table_tablet = per_table_map.get_tablet_info(tid);
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
         if (features.tablet_migration_virtual_task && tablet.migration_task_info.is_valid()) {
             m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
         }
-        if (features.tablet_repair_scheduler) {
-            if (per_table_tablet.repair_task_info.is_valid()) {
-                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(per_table_tablet.repair_task_info), ts);
-                if (features.tablet_incremental_repair) {
-                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(per_table_tablet.repair_task_info.repair_incremental_mode), ts);
-                }
-            }
-            if (per_table_tablet.repair_time != db_clock::time_point{}) {
-                m.set_clustered_cell(ck, "repair_time", data_value(per_table_tablet.repair_time), ts);
-            }
-        }
 
-        if (features.tablet_incremental_repair) {
-            m.set_clustered_cell(ck, "sstables_repaired_at", data_value(per_table_tablet.sstables_repaired_at), ts);
-        }
+        add_per_table_tablet_mutations(m, ck, per_table_map.get_tablet_info(tid), ts, features);
 
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
@@ -202,21 +209,47 @@ tablet_map_to_mutations(const shared_tablet_map& tablets, const per_table_tablet
     co_await process_mutation(std::move(m));
 }
 
-mutation
-colocated_tablet_map_to_mutation(table_id id, const sstring& keyspace_name, const sstring& table_name, table_id base_table, api::timestamp_type ts) {
+future<>
+colocated_tablet_map_to_mutations(const shared_tablet_map& tablets, const per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
+        table_id base_table, api::timestamp_type ts, const gms::feature_service& features, std::function<future<>(mutation)> process_mutation) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
 
-    mutation m(s, partition_key::from_single_value(*s,
+    auto key = partition_key::from_single_value(*s,
         data_value(id.uuid()).serialize_nonnull()
-    ));
+    );
+
+    auto make_mutation = [&] () {
+        mutation m(s, key);
+        m.partition().apply(tombstone(tombstone_ts, gc_now));
+        return m;
+    };
+
+    auto m = make_mutation();
     m.partition().apply(tombstone(tombstone_ts, gc_now));
     m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
     m.set_static_cell("base_table", data_value(base_table.uuid()), ts);
 
-    return m;
+    if (features.tablet_map_per_colocated_table) {
+        add_per_table_static_mutations(m, per_table_map, ts, features);
+
+        size_t tablets_in_mutation = 0;
+        for (auto&& [tid, per_table] : per_table_map.tablets()) {
+            if (++tablets_in_mutation >= min_tablets_in_mutation && seastar::need_preempt()) {
+                tablets_in_mutation = 0;
+                co_await coroutine::maybe_yield();
+                co_await process_mutation(std::exchange(m, make_mutation()));
+            }
+            auto last_token = tablets.get_last_token(tid);
+            auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
+
+            add_per_table_tablet_mutations(m, ck, per_table, ts, features);
+        }
+    }
+
+    co_await process_mutation(std::move(m));
 }
 
 tablet_mutation_builder&
@@ -440,14 +473,15 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
         const auto& shared_map = *tm.get_tablet_map_view(base_id).shared;
         for (auto id : tables) {
             auto s = db.find_schema(id);
+            const auto& per_table_map = *tm.get_tablet_map_view(id).per_table;
             if (id == base_id) {
-                const auto& per_table_map = *tm.get_tablet_map_view(id).per_table;
                 co_await tablet_map_to_mutations(shared_map, per_table_map, id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
                     muts.emplace_back(co_await freeze_gently(m));
                 });
             } else {
-                muts.emplace_back(
-                        colocated_tablet_map_to_mutation(id, s->ks_name(), s->cf_name(), base_id, ts));
+                co_await colocated_tablet_map_to_mutations(shared_map, per_table_map, id, s->ks_name(), s->cf_name(), base_id, ts, db.features(), [&] (mutation m) -> future<> {
+                    muts.emplace_back(co_await freeze_gently(m));
+                });
             }
         }
     }
@@ -505,10 +539,6 @@ static void do_validate_tablet_metadata_change(const locator::tablet_metadata& t
 
     if (mp.partition_tombstone() || !mp.row_tombstones().empty() || !mp.static_row().empty()) {
         return;
-    }
-
-    if (mp.row_count() && !tm.is_base_table(table_id)) {
-        throw std::runtime_error(fmt::format("Table {} is a co-located table, it cannot have clustering rows.", table_id));
     }
 
     auto& r_cdef = *s.get_column_definition("replicas");
