@@ -54,17 +54,11 @@ public:
 
     /// Find the effective service level for a given role.
     /// If there is no applicable service level for it, `std::nullopt` is returned instead.
-    future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name) {
-        co_return std::nullopt;
-    }
+    future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name);
     /// Synchronous version of `find_effective_service_level` that only checks the cache.
-    std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name) {
-        return std::nullopt;
-    }
+    std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name);
 
-    future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
-        co_return scheduling_group{};
-    }
+    future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
 
     template <typename Func, typename Ret = std::invoke_result_t<Func>>
         requires std::invocable<Func>
@@ -81,14 +75,10 @@ public:
         }
     }
 
-    future<std::vector<cql3::description>> describe_attached_service_levels() {
-        co_return std::vector<cql3::description>{};
-    }
+    future<std::vector<cql3::description>> describe_attached_service_levels();
 
     /// Must be executed on shard 0.
-    future<> reload_cache() {
-        co_return;
-    }
+    future<> reload_cache();
 
     void register_subscriber(effective_service_level_event_subscriber*);
     future<> unregister_subscriber(effective_service_level_event_subscriber*);
