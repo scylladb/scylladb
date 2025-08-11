@@ -17,6 +17,7 @@ import stat
 import logging
 import pyudev
 import psutil
+import platform
 from pathlib import Path
 from scylla_util import *
 from subprocess import run, SubprocessError
@@ -100,6 +101,21 @@ def is_selinux_enabled():
         if p.fstype == 'selinuxfs':
             if os.path.exists(p.mountpoint + '/enforce'):
                 return True
+    return False
+
+def is_kernel_version_at_least(major, minor):
+    """Check if the Linux kernel version is at least major.minor"""
+    try:
+        kernel_version = platform.release()
+        # Extract major.minor from version string like "5.15.0-56-generic"
+        version_parts = kernel_version.split('.')
+        if len(version_parts) >= 2:
+            kernel_major = int(version_parts[0])
+            kernel_minor = int(version_parts[1])
+            return (kernel_major, kernel_minor) >= (major, minor)
+    except (ValueError, IndexError):
+        # If we can't parse the version, assume older kernel for safety
+        pass
     return False
 
 if __name__ == '__main__':
@@ -231,8 +247,17 @@ if __name__ == '__main__':
     # see https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git/tree/mkfs/xfs_mkfs.c .
     # and it also cannot be smaller than the sector size.
     block_size = max(1024, sector_size)
+
     run('udevadm settle', shell=True, check=True)
-    run(f'mkfs.xfs -b size={block_size} {fsdev} -K -m rmapbt=0 -m reflink=0', shell=True, check=True)
+
+    # On Linux 5.12+, sub-block overwrites are supported well, so keep the default block
+    # size, which will play better with the SSD.
+    if is_kernel_version_at_least(5, 12):
+        block_size_opt = ""
+    else:
+        block_size_opt = f"-b size={block_size}"
+
+    run(f'mkfs.xfs {block_size_opt} {fsdev} -K -m rmapbt=0 -m reflink=0', shell=True, check=True)
     run('udevadm settle', shell=True, check=True)
 
     if is_debian_variant():
