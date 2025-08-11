@@ -3882,7 +3882,7 @@ public:
                     const auto& s = *new_cfms_map[base_id];
                     lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
                     auto base_map = allocate_tablets_for_new_base_table(tablet_rs, s);
-                    tablet_map_to_mutations(base_map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features(), [&] (mutation m) {
+                    tablet_map_to_mutations(base_map, per_table_tablet_map(), s.id(), s.ks_name(), s.cf_name(), ts, _db.features(), [&] (mutation m) {
                         muts.emplace_back(std::move(m));
                         return make_ready_future<>();
                     }).get();
