@@ -64,6 +64,8 @@ struct service_level {
 
 using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
 
+class effective_service_level_controller;
+
 /**
  *  The service_level_controller class is an implementation of the service level
  *  controller design.
@@ -123,6 +125,8 @@ public:
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
 private:
+    friend class effective_service_level_controller;
+
     struct global_controller_data {
         service_levels_info  static_configurations{};
         std::deque<scheduling_group> deleted_scheduling_groups{};
@@ -150,6 +154,14 @@ private:
 
     // service level name -> service_level object
     std::map<sstring, service_level> _service_levels_db;
+
+    // Pointer to the corresponding `effective_service_level_controller`
+    // for this `service_level_controller`.
+    //
+    // Invariant: The pointer is non-NULL if and only if it points to a valid and working
+    //            `effective_service_level_controller` instance that can be used freely.
+    effective_service_level_controller* _esl_controller;
+
     // role name -> effective service_level_options 
     std::map<sstring, service_level_options> _effective_service_levels_db;
     // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
@@ -167,6 +179,7 @@ private:
 public:
     service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
             scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain = false);
+    ~service_level_controller() noexcept;
 
     /**
      * this function must be called *once* from any shard before any other functions are called.
@@ -182,6 +195,16 @@ public:
      * stored in scylla_local table.
      */
     future<> reload_distributed_data_accessor(cql3::query_processor&, service::raft_group0_client&, db::system_keyspace&, db::system_distributed_keyspace&);
+
+    /**
+     * Precondition: this object does NOT have `_esl_controller` set to a non-NULL value.
+     */
+    void register_effective_service_level_controller(effective_service_level_controller&) noexcept;
+    /**
+     * Precondition: this object DOES have `_esl_controller` set to a pointer pointing to
+                     a valid instance of `effective_service_level_controller`.
+     */
+    void unregister_effective_service_level_controller() noexcept;
 
     /**
      *  Adds a service level configuration if it doesn't exists, and updates

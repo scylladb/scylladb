@@ -44,7 +44,8 @@ constexpr const char* deleted_scheduling_group_name_pattern = "sl_deleted:{}";
 constexpr const char* temp_scheduling_group_name_pattern = "sl_temp:{}";
 
 service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config, scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain)
-        : _sl_data_accessor(nullptr)
+        : _esl_controller(nullptr)
+        , _sl_data_accessor(nullptr)
         , _auth_service(auth_service)
         , _token_metadata(tm)
         , _last_successful_config_update(seastar::lowres_clock::now())
@@ -62,6 +63,10 @@ service_level_controller::service_level_controller(sharded<auth::service>& auth_
         // need to throw the given group to the pool of scheduling groups for reuse.
         _global_controller_db->deleted_scheduling_groups.emplace_back(default_scheduling_group);
     }
+}
+
+service_level_controller::~service_level_controller() noexcept {
+    SCYLLA_ASSERT(_esl_controller == nullptr);
 }
 
 future<> service_level_controller::add_service_level(sstring name, service_level_options slo, bool is_static) {
@@ -115,6 +120,35 @@ future<> service_level_controller::reload_distributed_data_accessor(cql3::query_
             qp,
             g0);
     set_distributed_data_accessor(std::move(accessor));
+}
+
+void service_level_controller::register_effective_service_level_controller(effective_service_level_controller& esl_controller) noexcept {
+    // Sanity check. Trying to change a non-NULL pointer to another non-NULL pointer
+    // would be a sign of a bug. There should be one instance of `service_level_controller`
+    // per shard and one instance of `effective_service_level_controller` per shard.
+    // Those instances should be related to each other.
+    //
+    // As soon as we materialize `effective_service_level_controller`, we should register it here.
+    // Similarly, as soon as the lifetime `effective_service_level_controller` comes to an end,
+    // it should unregister itself using `service_level_controller::unregister_effective_service_level_controller`.
+    //
+    // Those situations should be the ONLY ones when we change the value of `_esl_controller`.
+    SCYLLA_ASSERT(_esl_controller == nullptr);
+    _esl_controller = std::addressof(esl_controller);
+}
+
+void service_level_controller::unregister_effective_service_level_controller() noexcept {
+    // Sanity check. Unregistering an unregistered `effective_service_level_controller`
+    // is a sign of a bug.
+    //
+    // As soon as we materialize `effective_service_level_controller`, we should register it using
+    // `service_level_controller::register_effective_service_level_controller`.
+    // Similarly, as soon as the lifetime `effective_service_level_controller` comes to an end,
+    // it should unregister itself using this function.
+    //
+    // Those situations should be the ONLY ones when we change the value of `_esl_controller`.
+    SCYLLA_ASSERT(_esl_controller != nullptr);
+    _esl_controller = nullptr;
 }
 
 void service_level_controller::do_abort() noexcept {
