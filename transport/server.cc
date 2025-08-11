@@ -22,6 +22,7 @@
 #include "service/storage_service.hh"
 #include "service/memory_limiter.hh"
 #include "service/storage_proxy.hh"
+#include "service/qos/effective_service_level_controller.hh"
 #include "service/qos/service_level_controller.hh"
 #include "db/consistency_level_type.hh"
 #include "db/write_type.hh"
@@ -983,9 +984,11 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
 
 void cql_server::connection::update_scheduling_group() {
     switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
-        auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
+        qos::effective_service_level_controller* esl_controller = _server._sl_controller.get_effective_service_level_controller();
+
+        auto shg = co_await esl_controller->get_user_scheduling_group(_client_state.user());
         _current_scheduling_group = shg;
-        co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
+        co_return co_await esl_controller->with_user_service_level(_client_state.user(), std::move(process_loop));
     });
 }
 
@@ -2211,7 +2214,7 @@ future<> cql_server::update_connections_service_level_params() {
         auto& user = cs.user();
 
         if (user && user->name) {
-            auto slo = _sl_controller.find_cached_effective_service_level(user->name.value());
+            auto slo = _sl_controller.get_effective_service_level_controller()->find_cached_effective_service_level(user->name.value());
             if (slo) {
                 cs.update_per_service_level_params(*slo);
             }
