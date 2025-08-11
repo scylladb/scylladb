@@ -1863,6 +1863,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
             updates.emplace_back(co_await replica::tablet_map_to_mutation(
                 new_tablet_map,
+                locator::per_table_tablet_map()/*TODO*/,
                 table_id,
                 s->ks_name(),
                 s->cf_name(),

@@ -3255,7 +3255,7 @@ public:
                     const auto& s = *new_cfms_map[base_id];
                     lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
                     auto base_map = allocate_tablets_for_new_base_table(tablet_rs, s);
-                    muts.emplace_back(tablet_map_to_mutation(base_map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
+                    muts.emplace_back(tablet_map_to_mutation(base_map, per_table_tablet_map(), s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
                     _db.get_notifier().before_allocate_tablet_map(base_map, s, muts, ts);
 
                     create_colocated_tablet_maps(base_map);
