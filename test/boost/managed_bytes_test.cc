@@ -405,3 +405,10 @@ BOOST_AUTO_TEST_CASE(test_to_hex) {
     });
 }
 
+static constexpr bool constexpr_managed_bytes() {
+    managed_bytes mb1;
+    auto mb2 = std::move(mb1);
+    return std::is_constant_evaluated();
+}
+
+static_assert(constexpr_managed_bytes());

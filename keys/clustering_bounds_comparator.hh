@@ -32,7 +32,7 @@ bound_kind reverse_kind(bound_kind k);
 int32_t weight(bound_kind k);
 
 class bound_view {
-    const static thread_local clustering_key _empty_prefix;
+    const static thread_local constinit clustering_key_prefix _empty_prefix;
     std::reference_wrapper<const clustering_key_prefix> _prefix;
     bound_kind _kind;
 public:

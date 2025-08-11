@@ -106,7 +106,7 @@ int32_t weight(bound_kind k) {
     abort();
 }
 
-const thread_local clustering_key_prefix bound_view::_empty_prefix = clustering_key::make_empty();
+const thread_local constinit clustering_key_prefix bound_view::_empty_prefix = clustering_key_prefix::make_empty();
 
 std::ostream&
 operator<<(std::ostream& os, const exploded_clustering_prefix& ecp) {
