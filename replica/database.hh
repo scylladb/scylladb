@@ -2006,7 +2006,7 @@ public:
     // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
 
-    static future<tables_metadata_lock_on_all_shards> prepare_tables_metadata_change_on_all_shards(sharded<database>& sharded_db);
+    static future<tables_metadata_lock_on_all_shards> lock_tables_metadata(sharded<database>& sharded_db);
 
     // Drops the table and removes the table directory if there are no snapshots,
     // it's executed in 3 steps: prepare, drop and cleanup so that the middle step

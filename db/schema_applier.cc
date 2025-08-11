@@ -649,10 +649,6 @@ future<> schema_applier::merge_tables_and_views()
     });
 
     auto& db = _proxy.local().get_db();
-    // adding and dropping uses this locking mechanism
-    _affected_tables_and_views.locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
-            co_await replica::database::prepare_tables_metadata_change_on_all_shards(db));
-
     co_await max_concurrent_for_each(local_views.dropped, max_concurrent, [&db, this] (schema_ptr& dt) -> future<> {
         auto uuid = dt->id();
         _affected_tables_and_views.table_shards.insert({uuid,
@@ -942,6 +938,14 @@ void schema_applier::commit_on_shard(replica::database& db) {
 // (requires switching all affected subsystems to 'applier' interface first)
 future<> schema_applier::commit() {
     auto& sharded_db = _proxy.local().get_db();
+    // Adding and dropping tables, or changing tablet metadata, uses this
+    // locking mechanism to prevent changes to tables_metadata during preemptive
+    // iteration over it (e.g., tables_metadata::for_each_table_gently).
+    // However, we can only acquire the (write) lock after preparing all
+    // entities for the pending schema change that need to iterate over tables_metadata;
+    // otherwise, such iteration would deadlock.
+    _metadata_locks = std::make_unique<replica::tables_metadata_lock_on_all_shards>(
+            co_await replica::database::lock_tables_metadata(sharded_db));
     // Run func first on shard 0
     // to allow "seeding" of the effective_replication_map
     // with a new e_r_m instance.
@@ -951,7 +955,7 @@ future<> schema_applier::commit() {
         commit_on_shard(db);
     });
     // unlock as some functions in post_commit() may read data under those locks
-    _affected_tables_and_views.locks = nullptr;
+    _metadata_locks = nullptr;
 }
 
 future<> schema_applier::finalize_tables_and_views() {
