@@ -1618,16 +1618,26 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
         auto tm = stm.get();
         const auto& old_tmap = tm->tablets().get_tablet_map(table_id);
 
-        auto new_tmap = co_await talloc.resize_tablets(tm, table_id);
+        auto [new_tmap, new_per_table_tmap] = co_await talloc.resize_tablets(tm, table_id);
         auto new_resize_decision = locator::resize_decision{};
         new_resize_decision.sequence_number = old_tmap.resize_decision().next_sequence_number();
         new_tmap.set_resize_decision(std::move(new_resize_decision));
 
-        co_await stm.mutate_token_metadata([table_id, &new_tmap, &changed] (token_metadata& tm) {
+        co_await stm.mutate_token_metadata([table_id, &new_tmap, &new_per_table_tmap, &changed] (token_metadata& tm) {
             changed = true;
-            tm.tablets().set_tablet_map(table_id, std::move(new_tmap));
+            tm.tablets().set_tablet_map(table_id, std::move(new_tmap), std::move(new_per_table_tmap));
             return make_ready_future<>();
         });
+
+        for (auto colocated_table_id : tm->tablets().all_table_groups().at(table_id)) {
+            if (colocated_table_id == table_id) {
+                continue;
+            }
+            auto [_new_colocated_tmap, new_per_table_tmap] = co_await talloc.resize_tablets(tm, colocated_table_id);
+            co_await stm.mutate_token_metadata([colocated_table_id, table_id, &new_per_table_tmap] (token_metadata& tm) {
+                return tm.tablets().set_colocated_table(colocated_table_id, table_id, std::move(new_per_table_tmap));
+            });
+        }
     }
 
     if (changed) {
