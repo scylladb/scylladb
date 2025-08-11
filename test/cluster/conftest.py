@@ -16,7 +16,7 @@ import urllib.parse
 from multiprocessing import Event, Process
 from pathlib import Path
 from typing import TYPE_CHECKING
-from test.conftest import testpy_test_fixture_scope
+from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
