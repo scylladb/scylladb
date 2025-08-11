@@ -35,6 +35,7 @@
 #include <seastar/util/log.hh>
 #include <map>
 #include <set>
+#include "bytes.hh"
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
 #include "common.hh"
@@ -103,6 +104,7 @@ public:
     // but since the callers usually know the mismatch point for other reasons,
     // I figured this API spares us from a double key comparison.
     void add(size_t depth, const_bytes key_tail, const trie_payload& p);
+    void add_partial(size_t depth, const_bytes key_fragment);
     // Flushes all remaining nodes and returns the position of the root node.
     // The position is valid iff at least one key was added.
     sink_pos finish();
@@ -403,19 +405,26 @@ inline void trie_writer<Output>::complete_until_depth(size_t depth) {
 
 template <trie_writer_sink Output>
 inline void trie_writer<Output>::add(size_t depth, const_bytes key_tail, const trie_payload& p) {
+    SCYLLA_ASSERT(p._payload_bits);
+    add_partial(depth, key_tail);
+    _stack.back()->set_payload(p);
+}
+
+
+template <trie_writer_sink Output>
+inline void trie_writer<Output>::add_partial(size_t depth, const_bytes key_frag) {
+    expensive_log("writer_node::add_partial: end, stack={}, depth={}, _current_depth={} tail={}", _stack.size(), depth, _current_depth, fmt_hex(key_frag));
     expensive_assert(_stack.size() >= 1);
     SCYLLA_ASSERT(_current_depth >= depth);
     // There is only one case where a zero-length tail is legal:
     // when inserting the empty key.
-    SCYLLA_ASSERT(!key_tail.empty() || depth == 0);
-    SCYLLA_ASSERT(p._payload_bits);
+    SCYLLA_ASSERT(!key_frag.empty() || depth == 0);
 
     complete_until_depth(depth);
-    if (key_tail.size()) {
-        _stack.push_back(_stack.back()->add_child(key_tail, _allocator));
-        _current_depth = depth + key_tail.size();
+    if (key_frag.size()) {
+        _stack.push_back(_stack.back()->add_child(key_frag, _allocator));
+        _current_depth = depth + key_frag.size();
     }
-    _stack.back()->set_payload(p);
 }
 
 template <trie_writer_sink Output>
