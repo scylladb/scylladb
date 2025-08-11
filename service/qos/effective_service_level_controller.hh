@@ -32,22 +32,21 @@ struct effective_service_level_event_subscriber {
     virtual future<> on_effective_service_levels_cache_reloaded() = 0;
 };
 
-/// NOTICE: Dummy implementation for now -- work in progress.
 class effective_service_level_controller : public peering_sharded_service<effective_service_level_controller> {
 private:
     friend class service_level_controller;
 
 private:
-    [[maybe_unused]] service_level_controller& _sl_controller;
-    [[maybe_unused]] auth::service& _auth_service;
+    service_level_controller& _sl_controller;
+    auth::service& _auth_service;
 
     /// Mappings `role name` -> `service level options`.
-    [[maybe_unused]] std::map<sstring, service_level_options> _mapping_cache;
-    [[maybe_unused]] atomic_vector<effective_service_level_event_subscriber*> _subscribers;
+    std::map<sstring, service_level_options> _mapping_cache;
+    atomic_vector<effective_service_level_event_subscriber*> _subscribers;
     /// This gate is supposed to synchronize `effective_service_level_controller::stop`
     /// with other tasks that this interface performs. Because of that, every coroutine
     /// function of this class should hold it throughout its execution.
-    [[maybe_unused]] seastar::named_gate _stop_gate;
+    seastar::named_gate _stop_gate;
 
 public:
     effective_service_level_controller(service_level_controller&, auth::service&);
