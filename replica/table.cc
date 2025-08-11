@@ -2437,7 +2437,8 @@ const std::vector<sstables::shared_sstable>& compaction_group::compacted_undelet
 lw_shared_ptr<memtable_list>
 table::make_memory_only_memtable_list() {
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group,
+        &get_compaction_manager().get_shared_tombstone_gc_state());
 }
 
 lw_shared_ptr<memtable_list>
@@ -2447,7 +2448,8 @@ table::make_memtable_list(compaction_group& cg) {
         co_await seal_active_memtable(cg, std::move(permit));
     };
     auto get_schema = [this] { return schema(); };
-    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group);
+    return make_lw_shared<memtable_list>(std::move(seal), std::move(get_schema), _config.dirty_memory_manager, _memtable_shared_data, _stats, _config.memory_compaction_scheduling_group,
+        &get_compaction_manager().get_shared_tombstone_gc_state());
 }
 
 class compaction_group::compaction_group_view : public compaction::compaction_group_view {
@@ -2990,13 +2992,13 @@ table::make_partition_presence_checker(lw_shared_ptr<const sstables::sstable_set
 max_purgeable_fn table::get_max_purgeable_fn_for_cache_underlying_reader() const {
     return [this](const dht::decorated_key& dk, ::is_shadowable is_shadowable) -> max_purgeable {
         auto& sg = storage_group_for_token(dk.token());
-        auto max_purgeable_timestamp = api::max_timestamp;
+        max_purgeable mp;
 
-        sg.for_each_compaction_group([&dk, is_shadowable, &max_purgeable_timestamp] (const compaction_group_ptr& cg) {
-            max_purgeable_timestamp = std::min(cg->memtables()->min_live_timestamp(dk, is_shadowable, cg->max_seen_timestamp()), max_purgeable_timestamp);
+        sg.for_each_compaction_group([&dk, is_shadowable, &mp] (const compaction_group_ptr& cg) {
+            mp.combine(cg->memtables()->get_max_purgeable(dk, is_shadowable, cg->max_seen_timestamp()));
         });
 
-        return { .timestamp = max_purgeable_timestamp };
+        return mp;
     };
 }
 
