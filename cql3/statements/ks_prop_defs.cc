@@ -10,6 +10,7 @@
 
 #include "utils/assert.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "cql3/statements/request_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "locator/token_metadata.hh"
@@ -80,6 +81,32 @@ static std::map<sstring, sstring> prepare_options(
         throw exceptions::configuration_exception("Configuration for at least one datacenter must be present");
     }
 
+    return options;
+}
+
+static std::map<sstring, sstring> fill_default_rf(
+        const sstring& strategy_class,
+        std::map<sstring, sstring> options,
+        const locator::token_metadata& tm) {
+    if (locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) != "org.apache.cassandra.locator.NetworkTopologyStrategy") {
+        return options;
+    }
+
+    size_t num_class_opts = options.contains(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY) ? 1 : 0;
+    size_t num_rf_opts = options.size() - num_class_opts;
+    if (num_rf_opts == 0) {
+        // No replication factor is specified. Set default replication factor.
+        auto dc_racks = tm.get_datacenter_racks_token_owners();
+        if (dc_racks.empty()) {
+            throw request_validations::invalid_request("No data centers found in the cluster, cannot determine replication factor");
+        }
+        for (const auto& [dc, racks_map] : dc_racks) {
+            if (racks_map.empty()) {
+                continue;
+            }
+            options[dc] = std::to_string(racks_map.size());
+        }
+    }
     return options;
 }
 
@@ -215,7 +242,8 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     std::optional<unsigned> default_initial_tablets = enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy"
             ? std::optional<unsigned>(0) : std::nullopt;
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
-    auto options = prepare_options(sc, tm, get_replication_options());
+    auto options = fill_default_rf(sc, get_replication_options(), tm);
+    options = prepare_options(sc, tm, std::move(options));
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
