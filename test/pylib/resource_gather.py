@@ -87,7 +87,7 @@ class ResourceGather(ABC):
                     cwd: Path | None = None,
                     env: dict | None = None) -> subprocess.Popen[str]:
 
-        args = shlex.split(' '.join(args))
+        args = shlex.split(subprocess.list2cmdline(args))
         if env:
             env.update(os.environ)
         else:
