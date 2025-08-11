@@ -86,7 +86,7 @@ class CppTestFacade(ABC):
         resource_gather.make_cgroup()
         os.chdir(TOP_SRC_DIR)
         timeout = TIMEOUT_DEBUG if mode == 'debug' else TIMEOUT
-        p = resource_gather.run_process(args, timeout, stdout_file_path, env)
+        p = resource_gather.run_process(args=args, timeout=timeout, output_file=stdout_file_path, env=env)
 
         metrics = resource_gather.get_test_metrics()
         test_passed = p.returncode == 0
