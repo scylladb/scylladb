@@ -21,6 +21,7 @@ run_first:
   - test_cluster_features
   - test_topology_remove_decom
   - test_mutation_schema_change
+  - test_keyspace_rf
 skip_in_release:
   - test_raft_cluster_features
   - test_cluster_features
