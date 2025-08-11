@@ -1,2 +1,2 @@
 extra_scylla_cmdline_options:
-  - '--reactor-backend linux-aio'
+  - '--reactor-backend=linux-aio'
