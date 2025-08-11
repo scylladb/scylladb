@@ -675,9 +675,9 @@ BOOST_AUTO_TEST_CASE(dead_nodes_cannot_become_voters) {
 
     const auto& voters = voter_calc.distribute_voters(nodes);
 
-    // Assert: Dead nodes are not selected as voters, and only alive nodes are included in the voter set.
+    // Assert: Dead nodes are not selected as voters, and odd number is enforced (2 alive -> 1 voter).
 
-    BOOST_CHECK_EQUAL(voters.size(), 2);
+    BOOST_CHECK_EQUAL(voters.size(), 1);
     BOOST_CHECK(!voters.contains(ids[1]));
 }
 
@@ -1035,11 +1035,77 @@ BOOST_DATA_TEST_CASE(leader_is_retained_as_voter_in_two_dc_asymmetric_setup, boo
     const auto& voters = voter_calc.distribute_voters(nodes);
 
     // Assert: The current leader is retained as a voter.
+    // Note: With 2 nodes, odd number enforcement reduces to 1 voter.
 
-    // TODO (scylladb/scylladb#23266): This should be equal to 1, after we enforce the odd number of voters
-    BOOST_CHECK_GE(voters.size(), 1);
+    BOOST_CHECK_EQUAL(voters.size(), 1);
     BOOST_CHECK(voters.contains(ids[leader_node_idx]));
 }
 
+
+BOOST_AUTO_TEST_CASE(enforces_odd_number_of_voters_for_single_dc) {
+
+    // Arrange: Set an even voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 5;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add nodes to a single datacenter.
+
+    const std::array ids = {
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: Enforces odd number of voters by reducing from 4 to 3.
+
+    BOOST_CHECK_EQUAL(voters.size(), 3);
+}
+
+
+BOOST_AUTO_TEST_CASE(enforces_odd_number_of_voters_for_multiple_dc) {
+
+    // Arrange: Set an even voters limit and create the voter calculator.
+
+    constexpr size_t max_voters = 7;
+
+    const service::group0_voter_calculator voter_calc{max_voters};
+
+    // Act: Add nodes to multiple datacenters.
+
+    const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(),
+            raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
+
+    const service::group0_voter_calculator::nodes_list_t nodes = {
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+    };
+
+    const auto& voters = voter_calc.distribute_voters(nodes);
+
+    // Assert: Enforces odd number of voters by reducing from 6 to 5.
+
+    BOOST_CHECK_EQUAL(voters.size(), 5);
+
+    // Additional checks: each DC should have at least one voter.
+    std::unordered_set<std::string> seen_dcs;
+    for (const auto id : voters) {
+        const auto& node = nodes.at(id);
+        seen_dcs.insert(node.datacenter);
+    }
+
+    BOOST_CHECK_EQUAL(seen_dcs.size(), 3);
+}
 
 BOOST_AUTO_TEST_SUITE_END()
