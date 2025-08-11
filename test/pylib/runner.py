@@ -7,13 +7,13 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
-import re
 import logging
+import pathlib
 import sys
 from argparse import BooleanOptionalAction
+from collections import defaultdict
+from itertools import chain, count, product
 from functools import cache, cached_property
-from pathlib import Path
 from random import randint
 from typing import TYPE_CHECKING
 
@@ -21,23 +21,31 @@ import pytest
 import yaml
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR
-from test.pylib.cpp.item import CppTestFunction
-from test.pylib.util import get_configured_modes, get_modes_to_run
 from test.pylib.suite.base import (
+    SUITE_CONFIG_FILENAME,
     TestSuite,
     get_testpy_test,
     init_testsuite_globals,
     prepare_dirs,
     start_3rd_party_services,
 )
+from test.pylib.util import get_modes_to_run
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
     from collections.abc import Generator
 
-    from test.pylib.cpp.item import CppTestFunction
+    import _pytest.nodes
+    import _pytest.scope
+
     from test.pylib.suite.base import Test
 
+
+TEST_CONFIG_FILENAME = "test_config.yaml"
+
+REPEATED_FILES = pytest.StashKey[set[pathlib.Path]]()
+BUILD_MODE = pytest.StashKey[str]()
+RUN_ID = pytest.StashKey[int]()
 
 logger = logging.getLogger(__name__)
 
@@ -91,43 +99,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
                      help="Path to a log file of a ScyllaDB node (for suites with type: Python)")
 
 
-@pytest.fixture(scope="session")
-def build_mode(request: pytest.FixtureRequest) -> str:
-    """
-    This fixture returns current build mode.
-    This is for running tests through the test.py script, where only one mode is passed to the test
-    """
-    # to avoid issues when there's no provided mode parameter, do it in two steps: get the parameter and if it's not
-    # None, get the first value from the list
-    mode = request.config.getoption("modes")
-    if mode:
-        return mode[0]
-    return "unknown"
-
-@pytest.fixture(scope="function")
-def get_params(request: pytest.FixtureRequest) -> Generator[None]:
-    # this dummy fixture only needed to modify the test name with run id and mode. We don't want to parametrize with
-    # some parameters, so we are returning existing params that function is accepting. This method only needed for
-    # pytest_generate_tests method
-    return request.param
-
-
-def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    if TEST_RUNNER == "runpy":
-        return
-    repeat_count = metafunc.config.getoption("--repeat")
-    modes = get_modes_to_run(metafunc.config)
-
-    all_combinations = [*itertools.product(modes, range(repeat_count))]
-
-    metafunc.fixturenames.append('get_params')
-    metafunc.parametrize(
-        'get_params',
-        range(len(all_combinations)),
-        ids=[f"%{mode}.{run_id + 1}%" for mode, run_id in all_combinations],
-        indirect=True
-    )
-
 @pytest.fixture(autouse=True)
 def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]:
     """Print out a path to a ScyllaDB log.
@@ -142,7 +113,7 @@ def print_scylla_log_filename(request: pytest.FixtureRequest) -> Generator[None]
         logger.info("ScyllaDB log file: %s", scylla_log_filename)
 
 
-def testpy_test_fixture_scope(fixture_name: str, config: pytest.Config) -> str:
+def testpy_test_fixture_scope(fixture_name: str, config: pytest.Config) -> _pytest.scope._ScopeName:
     """Dynamic scope for fixtures which rely on a current test.py suite/test.
 
     test.py runs tests file-by-file as separate pytest sessions, so, `session` scope is effectively close to be the
@@ -156,6 +127,14 @@ def testpy_test_fixture_scope(fixture_name: str, config: pytest.Config) -> str:
 testpy_test_fixture_scope.__test__ = False
 
 
+@pytest.fixture(scope=testpy_test_fixture_scope, autouse=True)
+def build_mode(request: pytest.FixtureRequest) -> str:
+    params_stash = get_params_stash(node=request.node)
+    if params_stash is None:
+        return request.config.build_modes[0]
+    return params_stash[BUILD_MODE]
+
+
 @pytest.fixture(scope=testpy_test_fixture_scope)
 async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test | None:
     """Create an instance of Test class for the current test.py test."""
@@ -165,42 +144,17 @@ async def testpy_test(request: pytest.FixtureRequest, build_mode: str) -> Test |
     return None
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item | CppTestFunction]) -> None:
-    """
-    This is a standard pytest method.
-    This is needed to modify the test names with dev mode and run id to differ them one from another
-    """
-    testpy_run_id = config.getoption('run_id', None)
-
-    def modify_test_name(s: str, testpy_run_id) -> str:
-        """
-        Modify the test name to extract run id from parameterized test name to the end of the name.
-        Convert names like:
-        cluster/test_multidc.py::test_multidc[%dev.1%]
-        cluster/test_multidc.py::test_putget_2dc_with_rf[%release.1%-nodes_list0-1]
-        to:
-        cluster/test_multidc.py::test_multidc.dev.1
-        cluster/test_multidc.py::test_putget_2dc_with_rf[nodes_list0-1].release.1
-        """
-        match = re.search(r'\[%([a-zA-Z_][\w]*)\.(\d+)%(-[^]]+)?]', s)
-        if not match:
-            return s
-
-        mode = match.group(1)
-        run_id = match.group(2)
-        suffix = match.group(3)
-        if suffix:
-            s = re.sub(r'\[%[a-zA-Z_][\w]*\.\d+%(-[^]]+)]', f'[{suffix[1:]}]', s)
-        else:
-            s = re.sub(r'\[%[a-zA-Z_][\w]*\.\d+%]', '', s)
-        return f"{s}.{mode}.{testpy_run_id}" if testpy_run_id else f"{s}.{mode}.{run_id}"
-
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
-        if not isinstance(item, CppTestFunction):
-            # pytest_generate_tests is not triggered for C++ tests, so they have their own logic for test name
-            # modification that handled in CppTestFunction class.
-            item._nodeid = modify_test_name(item._nodeid, testpy_run_id)
-            item.name = modify_test_name(item.name, testpy_run_id)
+        modify_pytest_item(item=item)
+
+    suites_order = defaultdict(count().__next__)  # number suites in order of appearance
+
+    def sort_key(item: pytest.Item) -> tuple[int, bool]:
+        suite = item.stash[TEST_SUITE]
+        return suites_order[suite], suite and item.path.stem not in suite.cfg.get("run_first", [])
+
+    items.sort(key=sort_key)
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
@@ -217,9 +171,17 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 
     # Run stuff just once for the pytest session even running under xdist.
     if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
-        temp_dir = Path(session.config.getoption("--tmpdir")).absolute()
-        prepare_dirs(tempdir_base=temp_dir, modes=session.config.getoption("--mode") or get_configured_modes(), gather_metrics=session.config.getoption("--gather-metrics"), save_log_on_success=session.config.getoption("save_log_on_success"),)
-        start_3rd_party_services(tempdir_base=temp_dir, toxiproxy_byte_limit=session.config.getoption('byte_limit'))
+        temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
+        prepare_dirs(
+            tempdir_base=temp_dir,
+            modes=get_modes_to_run(session.config),
+            gather_metrics=session.config.getoption("--gather-metrics"),
+            save_log_on_success=session.config.getoption("--save-log-on-success"),
+        )
+        start_3rd_party_services(
+            tempdir_base=temp_dir,
+            toxiproxy_byte_limit=session.config.getoption("--byte-limit"),
+        )
 
 
 def pytest_sessionfinish() -> None:
@@ -227,11 +189,52 @@ def pytest_sessionfinish() -> None:
         asyncio.get_event_loop().run_until_complete(TestSuite.artifacts.cleanup_before_exit())
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    config.build_modes = get_modes_to_run(config)
+
+    if testpy_run_id := config.getoption("--run_id"):
+        if config.getoption("--repeat") != 1:
+            raise RuntimeError("Can't use --run_id and --repeat simultaneously.")
+        config.run_ids = (testpy_run_id,)
+    else:
+        config.run_ids = tuple(range(1, config.getoption("--repeat") + 1))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_collect_file(file_path: pathlib.Path,
+                        parent: pytest.Collector) -> Generator[None, list[pytest.Collector], list[pytest.Collector]]:
+    collectors = yield
+
+    if len(collectors) == 1 and file_path not in parent.stash.setdefault(REPEATED_FILES, set()):
+        parent.stash[REPEATED_FILES].add(file_path)
+
+        build_modes = parent.config.build_modes
+        if suite_config := TestSuiteConfig.from_pytest_node(node=collectors[0]):
+            build_modes = (
+                mode for mode in build_modes
+                if not suite_config.is_test_disabled(build_mode=mode, path=file_path)
+            )
+        repeats = list(product(build_modes, parent.config.run_ids))
+
+        if not repeats:
+            return []
+
+        ihook = parent.ihook
+        collectors = list(chain(collectors, chain.from_iterable(
+            ihook.pytest_collect_file(file_path=file_path, parent=parent) for _ in range(1, len(repeats))
+        )))
+        for (build_mode, run_id), collector in zip(repeats, collectors, strict=True):
+            collector.stash[BUILD_MODE] = build_mode
+            collector.stash[RUN_ID] = run_id
+            collector.stash[TEST_SUITE] = suite_config
+
+    return collectors
+
+
 class TestSuiteConfig:
-    def __init__(self, config_file: Path):
+    def __init__(self, config_file: pathlib.Path):
         self.path = config_file.parent
         self.cfg = yaml.safe_load(config_file.read_text(encoding="utf-8"))
-        self.get = self.cfg.get
 
     @cached_property
     def name(self) -> str:
@@ -239,7 +242,7 @@ class TestSuiteConfig:
 
     @cached_property
     def _run_in_specific_mode(self) -> set[str]:
-        return set(itertools.chain.from_iterable(self.cfg.get(f"run_in_{build_mode}", []) for build_mode in ALL_MODES))
+        return set(chain.from_iterable(self.cfg.get(f"run_in_{build_mode}", []) for build_mode in ALL_MODES))
 
     @cache
     def disabled_tests(self, build_mode: str) -> set[str]:
@@ -251,5 +254,45 @@ class TestSuiteConfig:
         result.update(self._run_in_specific_mode - run_in_this_mode)
         return result
 
-    def is_test_disabled(self, build_mode: str, path: Path) -> bool:
+    def is_test_disabled(self, build_mode: str, path: pathlib.Path) -> bool:
         return str(path.relative_to(self.path).with_suffix("")) in self.disabled_tests(build_mode=build_mode)
+
+    @classmethod
+    def from_pytest_node(cls, node: _pytest.nodes.Node) -> TestSuiteConfig | None:
+        for config_file in (node.path / SUITE_CONFIG_FILENAME, node.path / TEST_CONFIG_FILENAME,):
+            if config_file.is_file():
+                suite = cls(config_file=config_file)
+                break
+        else:
+            if node.parent is None:
+                return None
+            suite = node.parent.stash.get(TEST_SUITE, None)
+            if suite is None:
+                suite = cls.from_pytest_node(node=node.parent)
+        if suite:
+            node.stash[TEST_SUITE] = suite
+        return suite
+
+
+TEST_SUITE = pytest.StashKey[TestSuiteConfig | None]()
+
+_STASH_KEYS_TO_COPY = BUILD_MODE, RUN_ID, TEST_SUITE
+
+
+def get_params_stash(node: _pytest.nodes.Node) -> pytest.Stash | None:
+    parent = node.getparent(cls=pytest.File)
+    if parent is None:
+        return None
+    return parent.stash
+
+
+def modify_pytest_item(item: pytest.Item) -> None:
+    params_stash = get_params_stash(node=item)
+
+    for key in _STASH_KEYS_TO_COPY:
+        item.stash[key] = params_stash[key]
+
+    suffix = f".{item.stash[BUILD_MODE]}.{item.stash[RUN_ID]}"
+
+    item._nodeid = f"{item._nodeid}{suffix}"
+    item.name = f"{item.name}{suffix}"
