@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 
 SUITE_CONFIG_FILENAME = "suite.yaml"
+TEST_CONFIG_FILENAME = "test_config.yaml"
 
 output_is_a_tty = sys.stdout.isatty()
 
