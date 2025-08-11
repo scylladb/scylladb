@@ -125,7 +125,7 @@ data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler
 constexpr size_t min_tablets_in_mutation = 1024;
 
 future<>
-tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
+tablet_map_to_mutations(const tablet_map& tablets, const per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
                        api::timestamp_type ts, const gms::feature_service& features, std::function<future<>(mutation)> process_mutation) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
@@ -151,7 +151,7 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
         m.set_static_cell("resize_task_info", tablet_task_info_to_data_value(tablets.resize_task_info()), ts);
     }
     if (features.tablet_repair_scheduler) {
-        m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(tablets.repair_scheduler_config()), ts);
+        m.set_static_cell("repair_scheduler_config", repair_scheduler_config_to_data_value(per_table_map.repair_scheduler_config()), ts);
     }
 
     tablet_id tid = tablets.first_tablet();
@@ -162,6 +162,7 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             co_await coroutine::maybe_yield();
             co_await process_mutation(std::exchange(m, make_mutation()));
         }
+        const auto& per_table_tablet = per_table_map.get_tablet_info(tid);
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
@@ -169,19 +170,19 @@ tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& k
             m.set_clustered_cell(ck, "migration_task_info", tablet_task_info_to_data_value(tablet.migration_task_info), ts);
         }
         if (features.tablet_repair_scheduler) {
-            if (tablet.repair_task_info.is_valid()) {
-                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+            if (per_table_tablet.repair_task_info.is_valid()) {
+                m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(per_table_tablet.repair_task_info), ts);
                 if (features.tablet_incremental_repair) {
-                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info.repair_incremental_mode), ts);
+                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(per_table_tablet.repair_task_info.repair_incremental_mode), ts);
                 }
             }
-            if (tablet.repair_time != db_clock::time_point{}) {
-                m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
+            if (per_table_tablet.repair_time != db_clock::time_point{}) {
+                m.set_clustered_cell(ck, "repair_time", data_value(per_table_tablet.repair_time), ts);
             }
         }
 
         if (features.tablet_incremental_repair) {
-            m.set_clustered_cell(ck, "sstables_repaired_at", data_value(tablet.sstables_repaired_at), ts);
+            m.set_clustered_cell(ck, "sstables_repaired_at", data_value(per_table_tablet.sstables_repaired_at), ts);
         }
 
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
@@ -434,7 +435,7 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         const auto& tablets = tm.get_tablet_map(base_id);
         auto s = db.find_schema(base_id);
-        co_await tablet_map_to_mutations(tablets, base_id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
+        co_await tablet_map_to_mutations(tablets, tm.get_per_table_tablet_map(base_id), base_id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
             muts.emplace_back(co_await freeze_gently(m));
         });
         for (auto id : tables) {
