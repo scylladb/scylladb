@@ -10,6 +10,7 @@
 
 #include "utils/assert.hh"
 #include "cql3/statements/ks_prop_defs.hh"
+#include "cql3/statements/request_validations.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "locator/token_metadata.hh"
@@ -67,6 +68,18 @@ static std::map<sstring, sstring> prepare_options(
 
         for (const auto& dc : tm.get_topology().get_datacenters()) {
             options.emplace(dc, *rf);
+        }
+    } else if (options.empty() && old_options.empty()) {
+        // For default replication factor consider only racks with nodes that are NOT zero-token only nodes,
+        auto dc_racks = tm.get_datacenter_racks_token_owners();
+        if (dc_racks.empty()) {
+            throw request_validations::invalid_request("No data centers found in the cluster, cannot determine replication factor");
+        }
+        for (const auto& [dc, racks_map] : dc_racks) {
+            if (racks_map.empty()) {
+                continue;
+            }
+            options.emplace(dc, std::to_string(racks_map.size()));
         }
     }
 
