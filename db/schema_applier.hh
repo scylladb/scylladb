@@ -146,8 +146,6 @@ struct affected_tables_and_views_per_shard {
 
 struct affected_tables_and_views {
     sharded<affected_tables_and_views_per_shard> tables_and_views;
-
-    std::unique_ptr<replica::tables_metadata_lock_on_all_shards> locks;
     std::unordered_map<table_id, replica::global_table_ptr> table_shards;
 };
 
@@ -183,6 +181,8 @@ class schema_applier {
     affected_keyspaces _affected_keyspaces;
     affected_user_types _affected_user_types;
     affected_tables_and_views _affected_tables_and_views;
+
+    std::unique_ptr<replica::tables_metadata_lock_on_all_shards> _metadata_locks;
 
     functions_change_batch_all_shards _functions_batch; // includes aggregates
 

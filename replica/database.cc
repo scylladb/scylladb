@@ -1217,7 +1217,7 @@ future<global_table_ptr> get_table_on_all_shards(sharded<database>& sharded_db, 
     co_return table_shards;
 }
 
-future<tables_metadata_lock_on_all_shards> database::prepare_tables_metadata_change_on_all_shards(sharded<database>& sharded_db) {
+future<tables_metadata_lock_on_all_shards> database::lock_tables_metadata(sharded<database>& sharded_db) {
     tables_metadata_lock_on_all_shards locks;
     co_await sharded_db.invoke_on_all([&] (auto& db) -> future<> {
         locks.assign_lock(co_await db.get_tables_metadata().hold_write_lock());
@@ -1268,7 +1268,7 @@ future<> database::cleanup_drop_table_on_all_shards(sharded<database>& sharded_d
 
 future<> database::legacy_drop_table_on_all_shards(sharded<database>& sharded_db, sharded<db::system_keyspace>& sys_ks,
         sstring ks_name, sstring cf_name, bool with_snapshot) {
-    auto locks = co_await prepare_tables_metadata_change_on_all_shards(sharded_db);
+    auto locks = co_await lock_tables_metadata(sharded_db);
     auto uuid = sharded_db.local().find_uuid(ks_name, cf_name);
     auto table_shards = co_await prepare_drop_table_on_all_shards(sharded_db, uuid);
     co_await sharded_db.invoke_on_all([&] (database& db) {
