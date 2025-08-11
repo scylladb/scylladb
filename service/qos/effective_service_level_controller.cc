@@ -144,11 +144,7 @@ future<std::vector<cql3::description>> effective_service_level_controller::descr
 future<> effective_service_level_controller::reload_cache() {
     SCYLLA_ASSERT(this_shard_id() == 0);
     const auto _ = seastar::gate::holder{_stop_gate};
-    
-    if (!_sl_controller._auth_service.local_is_initialized()) {
-        // Auth service might be not initialized yet.
-        co_return;
-    }
+
     if (!_sl_controller._sl_data_accessor || !_sl_controller._sl_data_accessor->can_use_effective_service_level_cache()) {
         // Don't populate the effective service level cache until auth is migrated to raft.
         // Otherwise, executing the code that follows would read roles data
