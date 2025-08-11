@@ -59,11 +59,15 @@ future<> tablet_map_to_mutations(const locator::shared_tablet_map&,
                                         const gms::feature_service& features,
                                         std::function<future<>(mutation)> process_mutation);
 
-mutation colocated_tablet_map_to_mutation(table_id,
+future<> colocated_tablet_map_to_mutations(const locator::shared_tablet_map&,
+                                        const locator::per_table_tablet_map&,
+                                        table_id,
                                         const sstring& keyspace_name,
                                         const sstring& table_name,
                                         table_id base_table,
-                                        api::timestamp_type);
+                                        api::timestamp_type,
+                                        const gms::feature_service& features,
+                                        std::function<future<>(mutation)> process_mutation);
 
 mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
 
