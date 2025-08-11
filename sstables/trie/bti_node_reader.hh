@@ -34,7 +34,21 @@ node_traverse_sidemost_result bti_walk_down_rightmost_path(int64_t pos, const_by
 //
 // See comments for concept `node_reader` for a description of the methods.
 struct bti_node_reader {
-    using page_ptr = cached_file::ptr_type;
+    // A copy-constructible wrapper over cached_file::ptr_type.
+    // (Automatically calls share() on copy).
+    struct page_ptr : cached_file::ptr_type {
+        using parent = cached_file::ptr_type;
+        page_ptr() noexcept = default;
+        page_ptr(parent&& x) noexcept : parent(std::move(x)) {}
+        page_ptr(const page_ptr& other) noexcept : parent(other ? other->share() : nullptr) {}
+        page_ptr(page_ptr&&) noexcept = default;
+        page_ptr& operator=(page_ptr&&) noexcept = default;
+        page_ptr& operator=(const page_ptr& other) noexcept {
+            parent::operator=(other ? other->share() : nullptr);
+            return *this;
+        }
+    };
+
     page_ptr _cached_page;
     std::reference_wrapper<cached_file> _file;
 
