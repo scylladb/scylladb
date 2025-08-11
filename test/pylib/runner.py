@@ -84,6 +84,10 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption('--repeat', action="store", default="1", type=int,
                      help="number of times to repeat test execution")
 
+    parser.addoption("--pytest-arg",
+                     help='Additional command line arguments to pass to pytest,'
+                          ' for example ./test.py --pytest-arg="-v -x"')
+
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
                      help="Path to a log file of a ScyllaDB node (for suites with type: Python)")
