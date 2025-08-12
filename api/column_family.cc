@@ -122,9 +122,9 @@ static future<json::json_return_type> set_tables_tombstone_gc(sharded<replica::d
     });
 }
 
-static future<json::json_return_type>  get_cf_stats_count(http_context& ctx, const sstring& name,
+static future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    return map_reduce_cf(ctx, name, int64_t(0), [f](const replica::column_family& cf) {
+    return map_reduce_cf(db, name, int64_t(0), [f](const replica::column_family& cf) {
         return (cf.get_stats().*f).hist.count;
     }, std::plus<int64_t>());
 }
@@ -145,9 +145,9 @@ static future<json::json_return_type> get_cf_stats_sum(sharded<replica::database
 }
 
 
-static future<json::json_return_type>  get_cf_stats_count(http_context& ctx,
+static future<json::json_return_type>  get_cf_stats_count(sharded<replica::database>& db,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    return map_reduce_cf(ctx, int64_t(0), [f](const replica::column_family& cf) {
+    return map_reduce_cf(db, int64_t(0), [f](const replica::column_family& cf) {
         return (cf.get_stats().*f).hist.count;
     }, std::plus<int64_t>());
 }
@@ -513,19 +513,19 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_read.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_count(ctx,req->get_path_param("name") ,&replica::column_family_stats::reads);
+        return get_cf_stats_count(ctx.db, req->get_path_param("name") ,&replica::column_family_stats::reads);
     });
 
     cf::get_all_read.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_count(ctx, &replica::column_family_stats::reads);
+        return get_cf_stats_count(ctx.db, &replica::column_family_stats::reads);
     });
 
     cf::get_write.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_count(ctx, req->get_path_param("name") ,&replica::column_family_stats::writes);
+        return get_cf_stats_count(ctx.db, req->get_path_param("name") ,&replica::column_family_stats::writes);
     });
 
     cf::get_all_write.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_count(ctx, &replica::column_family_stats::writes);
+        return get_cf_stats_count(ctx.db, &replica::column_family_stats::writes);
     });
 
     cf::get_read_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
