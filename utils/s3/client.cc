@@ -199,7 +199,10 @@ future<> client::authorize(http::request& req) {
     req._headers["Authorization"] = seastar::format("AWS4-HMAC-SHA256 Credential={}/{}/{}/s3/aws4_request,SignedHeaders={},Signature={}", _credentials.access_key_id, time_point_st, _cfg->region, signed_headers_list, sig);
 }
 
-future<semaphore_units<>> client::claim_memory(size_t size) {
+future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
+    if (as) {
+        return get_units(_memory, size, *as);
+    }
     return get_units(_memory, size);
 }
 
@@ -806,7 +809,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
         co_await start_upload();
     }
 
-    auto claim = co_await _client->claim_memory(bufs.size());
+    auto claim = co_await _client->claim_memory(bufs.size(), _as);
 
     unsigned part_number = _part_etags.size();
     _part_etags.emplace_back();
@@ -1163,7 +1166,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
                 if (current_range.length() == 0) {
                     s3l.trace("Fiber for object '{}' completed downloading, signals EOS and leaving fiber", _object_name);
-                    _buffers.emplace_back(temporary_buffer<char>(), co_await _client->claim_memory(0));
+                    _buffers.emplace_back(temporary_buffer<char>(), co_await _client->claim_memory(0, _as));
                     _get_cv.signal();
                     _is_finished = true;
                     co_return;
@@ -1201,7 +1204,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 _buffers_size += buff_size;
                                 if (buff_size == 0 && _range.length() == 0) {
                                     s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                    _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
+                                    _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size, _as));
                                     _get_cv.signal();
                                     _is_finished = true;
                                     break;
@@ -1211,7 +1214,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                     break;
                                 }
                                 s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size));
+                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size, _as));
                                 _get_cv.signal();
                                 utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                     // Inject a non-`aws_error` after partial data download to verify proper
@@ -1434,7 +1437,7 @@ class client::do_upload_file : private multipart_upload {
     future<> upload_part(file f, uint64_t offset, uint64_t part_size) {
         // upload a part in a multipart upload, see
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_UploadPart.html
-        auto mem_units = co_await _client->claim_memory(_transmit_size);
+        auto mem_units = co_await _client->claim_memory(_transmit_size, _as);
 
         unsigned part_number = _part_etags.size();
         _part_etags.emplace_back();
@@ -1513,7 +1516,7 @@ class client::do_upload_file : private multipart_upload {
     future<> put_object(file&& f, uint64_t len) {
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html
         s3l.trace("PUT {} ({})", _object_name, _path.native());
-        auto mem_units = co_await _client->claim_memory(_transmit_size);
+        auto mem_units = co_await _client->claim_memory(_transmit_size, _as);
 
         auto req = http::request::make("PUT", _client->_host, _object_name);
         if (_tag) {
