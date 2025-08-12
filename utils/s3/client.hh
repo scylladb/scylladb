@@ -142,7 +142,7 @@ class client : public enable_shared_from_this<client> {
 
     struct private_tag {};
 
-    future<semaphore_units<>> claim_memory(size_t mem);
+    future<semaphore_units<>> claim_memory(size_t mem, seastar::abort_source* as);
 
     future<> update_credentials_and_rearm();
     future<> authorize(http::request&);
