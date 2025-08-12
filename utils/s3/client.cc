@@ -1160,9 +1160,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 if (_range == s3::full_range) {
                     current_range = {0, _max_buffers_size};
                     s3l.trace(
-                        "No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}",
-                              _object_name,
-                              current_range);
+                        "No download range for object '{}' was provided. Setting the download range to `_max_buffers_size` {}", _object_name, current_range);
                 } else if (_is_contiguous_mode) {
                     current_range = _range;
                     s3l.trace("Setting contiguous download mode for '{}', range: {}", _object_name, current_range);
@@ -1190,9 +1188,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
-                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header",
-                                      _object_name,
-                                      _range);
+                            s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header", _object_name, _range);
                         }
                         auto in = std::move(in_);
                         std::exception_ptr ex;
