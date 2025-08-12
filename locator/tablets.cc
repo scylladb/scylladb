@@ -174,8 +174,8 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
     on_internal_error(tablet_logger, format("Invalid tablet transition kind: {}", static_cast<int>(trinfo.transition)));
 }
 
-bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& tinfo) {
-    for (const auto& r : tinfo.replicas) {
+bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info_view& tinfo) {
+    for (const auto& r : tinfo.replicas()) {
         auto* n = topo.find_node(r.host);
         if (!n || n->is_excluded()) {
             return true;

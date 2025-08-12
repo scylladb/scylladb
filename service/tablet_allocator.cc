@@ -1053,7 +1053,7 @@ public:
         return _db.get_config().auto_repair_enabled_default();
     }
 
-    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
+    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info_view& info,
             const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now,
             db_clock::duration& diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
@@ -1065,10 +1065,10 @@ public:
         }
         auto threshold = _db.get_config().auto_repair_threshold_default_in_seconds();
         auto repair_time_threshold = std::chrono::seconds(threshold);
-        auto& last_repair_time = info.repair_time;
+        auto last_repair_time = info.repair_time();
         diff = now - last_repair_time;
         lblogger.trace("Check gid={} diff={} last_repair_time={} repair_time_threshold={}",
-                gid, diff, info.repair_time, repair_time_threshold);
+                gid, diff, info.repair_time(), repair_time_threshold);
         if (diff < repair_time_threshold) {
             co_return false;
         }
@@ -1172,14 +1172,14 @@ public:
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map(table);
+            const auto& tmap = _tm->tablets().get_tablet_map_view(table);
             co_await coroutine::maybe_yield();
             auto config = tmap.get_repair_scheduler_config();
             auto auto_repair_enabled = is_auto_repair_enabled(config);
             auto now = db_clock::now();
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
-            co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
+            co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info_view& info) -> future<> {
                 auto gid = locator::global_tablet_id{table, id};
                 if (auto_repair_enabled) {
                     auto_repair_stats.enabled_nr++;
@@ -1197,8 +1197,7 @@ public:
                 }
 
                 // Skip the tablet that has excluded replica node.
-                auto& tinfo = tmap.get_tablet_info(id);
-                if (tablet_has_excluded_node(topo, tinfo)) {
+                if (tablet_has_excluded_node(topo, info)) {
                     co_return;
                 }
 
@@ -1210,14 +1209,14 @@ public:
                 // Avoid rescheduling a failed tablet repair in a loop
                 // TODO: Allow user to config
                 const auto min_reschedule_time = std::chrono::seconds(5);
-                if (now - info.repair_task_info.sched_time < min_reschedule_time) {
+                if (now - info.repair_task_info().sched_time < min_reschedule_time) {
                     lblogger.debug("Skipped tablet repair for tablet={} which is scheduled too frequently", gid);
                     co_return;
                 }
 
                 db_clock::duration diff;
-                auto is_user_reuqest = info.repair_task_info.is_user_repair_request();
-                if (is_user_reuqest) {
+                auto is_user_request = info.repair_task_info().is_user_repair_request();
+                if (is_user_request) {
                     // This means the user has issued a repair request manually. Select it for repair scheduling.
                 } else {
                     auto auto_repair = co_await needs_auto_repair(gid, info, config, now, diff, auto_repair_stats);
@@ -1227,7 +1226,7 @@ public:
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info, range, last_token, diff, is_user_reuqest});
+                plans.push_back(repair_plan{gid, info.shared, range, last_token, diff, is_user_request});
             });
         }
 
