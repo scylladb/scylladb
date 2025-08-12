@@ -1155,7 +1155,6 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     co_return;
                 }
 
-                auto req = http::request::make("GET", _client->_host, _object_name);
                 range current_range{0};
                 if (_range == s3::full_range) {
                     current_range = {0, _max_buffers_size};
@@ -1176,7 +1175,10 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                     _is_finished = true;
                     co_return;
                 }
+
+                auto req = http::request::make("GET", _client->_host, _object_name);
                 req._headers["Range"] = current_range.to_header_string();
+
                 s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
                 co_await _client->make_request(
                     std::move(req),
