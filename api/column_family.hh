@@ -19,7 +19,7 @@ class system_keyspace;
 
 namespace api {
 
-void set_column_family(http_context& ctx, httpd::routes& r, sharded<db::system_keyspace>& sys_ks);
+void set_column_family(http_context& ctx, httpd::routes& r, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks);
 void unset_column_family(http_context& ctx, httpd::routes& r);
 
 table_info parse_table_info(const sstring& name, const replica::database& db);
