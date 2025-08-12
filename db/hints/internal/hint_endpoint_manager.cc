@@ -109,15 +109,22 @@ future<> hint_endpoint_manager::populate_segments_to_replay() {
 }
 
 void hint_endpoint_manager::start() {
+    manager_logger.debug("hint_endpoint_manager[{}]:start: Starting", end_point_key());
+
     clear_stopped();
     allow_hints();
     _sender.start();
+
+    manager_logger.debug("hint_endpoint_manager[{}]:start: Finished", end_point_key());
 }
 
 future<> hint_endpoint_manager::stop(drain should_drain) noexcept {
-    if(stopped()) {
+    if (stopped()) {
+        manager_logger.warn("hint_endpoint_manager[{}]:stop: Stop had already been called", end_point_key());
         return make_exception_future<>(std::logic_error(format("ep_manager[{}]: stop() is called twice", _key).c_str()));
     }
+
+    manager_logger.debug("hint_endpoint_manager[{}]:stop: Starting", end_point_key());
 
     return seastar::async([this, should_drain] {
         std::exception_ptr eptr;
@@ -143,6 +150,7 @@ future<> hint_endpoint_manager::stop(drain should_drain) noexcept {
         }
 
         set_stopped();
+        manager_logger.debug("hint_endpoint_manager[{}]:stop: Finished", end_point_key());
     });
 }
 
@@ -286,6 +294,8 @@ future<db::commitlog> hint_endpoint_manager::add_store() noexcept {
                 for (auto& [segment_id, seg] : local_segs_vec) {
                     _sender.add_segment(std::move(seg));
                 }
+
+                manager_logger.debug("hint_endpoint_manager[{}]:add_store: Finished", end_point_key());
 
                 co_return l;
             });
