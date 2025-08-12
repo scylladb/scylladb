@@ -65,7 +65,7 @@ future<> hint_endpoint_manager::do_store_hint(schema_ptr s, lw_shared_ptr<const 
         const replay_position rp = rh.release();
         if (_last_written_rp < rp) {
             _last_written_rp = rp;
-            manager_logger.debug("hint_endpoint_manager[{}]:do_store_hint: Updated last written replay position to {}", end_point_key(), rp);
+            manager_logger.trace("hint_endpoint_manager[{}]:do_store_hint: Updated last written replay position to {}", end_point_key(), rp);
         }
 
         ++shard_stats().written;
@@ -194,7 +194,7 @@ future<hints_store_ptr> hint_endpoint_manager::get_or_load() {
 }
 
 future<db::commitlog> hint_endpoint_manager::add_store() noexcept {
-    manager_logger.trace("hint_endpoint_manager[{}]:add_store: Going to add a store: {}", end_point_key(), _hints_dir.native());
+    manager_logger.debug("hint_endpoint_manager[{}]:add_store: Going to add a store: {}", end_point_key(), _hints_dir.native());
 
     return futurize_invoke([this] {
         return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
