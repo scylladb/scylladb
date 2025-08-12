@@ -16,11 +16,12 @@
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
+#include "types/comparable_bytes.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"
 #include "types/types.hh"
-#include "types/comparable_bytes.hh"
+#include "types/vector.hh"
 #include "utils/big_decimal.hh"
 #include "utils/fragment_range.hh"
 #include "utils/multiprecision_int.hh"
@@ -559,6 +560,7 @@ BOOST_AUTO_TEST_CASE(test_encode_decode_component) {
 }
 
 // Generates a vector of vectors of data_value, where each inner vector represents a collection of data_values.
+template<size_t collection_size = 0>
 static auto generate_collection_test_data(const std::function<data_value()>& create_data_value) {
     constexpr size_t test_data_size = 500, max_collection_size = 25;
     std::vector<std::vector<data_value>> test_data;
@@ -566,7 +568,11 @@ static auto generate_collection_test_data(const std::function<data_value()>& cre
     for (size_t i = 0; i < test_data_size; i++) {
         // Generate a single collection and add it to test data
         std::vector<data_value> collection;
-        collection.reserve(tests::random::get_int<size_t>(1, max_collection_size));
+        if constexpr (collection_size == 0) {
+            collection.reserve(tests::random::get_int<size_t>(1, max_collection_size));
+        } else {
+            collection.reserve(collection_size);
+        }
         for (size_t j = 0; j < collection.capacity(); j++) {
             collection.push_back(create_data_value());
         }
@@ -579,10 +585,19 @@ static auto generate_collection_test_data(const std::function<data_value()>& cre
         // include a partial duplicate
         auto test_item = test_data.at(tests::random::get_int<size_t>(test_data_size - 1));
         test_data.emplace_back(test_item.begin(), test_item.begin() + tests::random::get_int<size_t>(1, test_item.size()));
+        if constexpr (collection_size != 0) {
+            // For fixed-size collections, the partial duplicate must be padded with random data to meet the required size.
+            auto& partial_duplicate = test_data.back();
+            while (partial_duplicate.size() < collection_size) {
+                partial_duplicate.push_back(create_data_value());
+            }
+        }
     }
 
-    // Add an empty collection to the test data
-    test_data.push_back({});
+    if constexpr (collection_size == 0) {
+        // Add an empty collection to the test data
+        test_data.push_back({});
+    }
 
     return test_data;
 }
@@ -739,6 +754,24 @@ BOOST_AUTO_TEST_CASE(test_udt) {
 
         byte_comparable_test(std::move(collection_test_data));
     }
+}
+
+BOOST_AUTO_TEST_CASE(test_vector) {
+    auto do_test = [&] (const data_type& underlying_type, std::vector<std::vector<data_value>>&& test_data) {
+        std::vector<data_value> collection_test_data;
+        collection_test_data.reserve(test_data.size());
+        auto collection_type = vector_type_impl::get_instance(underlying_type, test_data.at(0).size());
+        for (const auto& data : test_data) {
+            collection_test_data.emplace_back(make_vector_value(collection_type, data));
+        }
+
+        byte_comparable_test(std::move(collection_test_data));
+    };
+
+    // Test the collection with a data type that has fixed length : UUID (128 bits)
+    do_test(uuid_type, generate_collection_test_data<128>(make_random_data_value_uuid));
+        // Test the collection with a data type that has variable length : bytes
+    do_test(bytes_type, generate_collection_test_data<16>(make_random_data_value_bytes));
 }
 
 // Test Scylla's byte-comparable encoding compatibility with Cassandra's implementation by

@@ -16,8 +16,10 @@
 #include "types/collection.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
 #include "types/types.hh"
+#include "types/vector.hh"
 #include "utils/managed_bytes.hh"
 #include "utils/multiprecision_int.hh"
+#include "vint-serialization.hh"
 
 logging::logger cblogger("comparable_bytes");
 
@@ -1032,6 +1034,44 @@ static void decode_tuple(const tuple_type_impl& type, managed_bytes_view& compar
     }
 }
 
+// Encodes a vector type into byte comparable format.
+// The collection is encoded as a sequence of components, each preceded by NEXT_COMPONENT header.
+// The collection is terminated with a TERMINATOR byte.
+static void encode_vector(const vector_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    const auto& element_type = *type.get_elements_type();
+    auto value_length = element_type.value_length_if_fixed();
+    for (size_t i = 0; i < type.get_dimension(); i++) {
+        encode_component(element_type, read_vector_element(serialized_bytes_view, value_length), out);
+    }
+    write_native_int(out, TERMINATOR);
+}
+
+// Decodes a vector from byte-comparable format into its serialized representation.
+// For vectors with fixed-length elements, each element is decoded directly into the output stream.
+// For vectors with variable-length elements, each element is decoded and prefixed with its size serialized as an unsigned_vint.
+static void decode_vector(const vector_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    const auto& element_type = *type.get_elements_type();
+    if (element_type.value_length_if_fixed()) {
+        // For fixed-length element types, decode each component directly into the output stream, no need to prefix length
+        while (read_simple_native<uint8_t>(comparable_bytes_view) == NEXT_COMPONENT) {
+            from_comparable_bytes(element_type, comparable_bytes_view, out);
+        }
+    } else {
+        // For variable-length element types, decode every component into a temporary buffer, serialize
+        // its size as an unsigned vint, and write both the size and the component to the output stream.
+        bytes_ostream decoded_value;
+        while (read_simple_native<uint8_t>(comparable_bytes_view) == NEXT_COMPONENT) {
+            from_comparable_bytes(element_type, comparable_bytes_view, decoded_value);
+            const auto decoded_size = decoded_value.size();
+            std::array<int8_t, max_vint_length> serialized_decoded_size;
+            unsigned_vint::serialize(decoded_size, serialized_decoded_size.data());
+            out.write(bytes_view(serialized_decoded_size.data(), unsigned_vint::serialized_size(decoded_size)));
+            out.append(decoded_value);
+            decoded_value.clear();
+        }
+    }
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -1120,6 +1160,10 @@ struct to_comparable_bytes_visitor {
     // encode tuples and UDTs
     void operator()(const tuple_type_impl& type) {
         encode_tuple(type, serialized_bytes_view, out);
+    }
+
+    void operator()(const vector_type_impl& type) {
+        encode_vector(type, serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -1234,6 +1278,10 @@ struct from_comparable_bytes_visitor {
     // decode tuples and UDTs
     void operator()(const tuple_type_impl& type) {
         decode_tuple(type, comparable_bytes_view, out);
+    }
+
+    void operator()(const vector_type_impl& type) {
+        decode_vector(type, comparable_bytes_view, out);
     }
 
     // TODO: Handle other types
