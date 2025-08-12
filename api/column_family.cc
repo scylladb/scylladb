@@ -276,8 +276,8 @@ static future<json::json_return_type> sum_sstable(sharded<replica::database>& db
     });
 }
 
-static future<json::json_return_type> map_reduce_cf_time_histogram(http_context& ctx, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
-    return map_reduce_cf_raw(ctx, name, utils::time_estimated_histogram(), f, utils::time_estimated_histogram_merge).then([](const utils::time_estimated_histogram& res) {
+static future<json::json_return_type> map_reduce_cf_time_histogram(sharded<replica::database>& db, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
+    return map_reduce_cf_raw(db, name, utils::time_estimated_histogram(), f, utils::time_estimated_histogram_merge).then([](const utils::time_estimated_histogram& res) {
         return make_ready_future<json::json_return_type>(time_to_json_histogram(res));
     });
 }
@@ -837,19 +837,19 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_cas_prepare.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx.db, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().cas_prepare.histogram();
         });
     });
 
     cf::get_cas_propose.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx.db, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().cas_accept.histogram();
         });
     });
 
     cf::get_cas_commit.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx.db, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().cas_learn.histogram();
         });
     });
@@ -987,13 +987,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_read_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx.db, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().reads.histogram();
         });
     });
 
     cf::get_write_latency_estimated_histogram.set(r, [&ctx](std::unique_ptr<http::request> req) {
-        return map_reduce_cf_time_histogram(ctx, req->get_path_param("name"), [](const replica::column_family& cf) {
+        return map_reduce_cf_time_histogram(ctx.db, req->get_path_param("name"), [](const replica::column_family& cf) {
             return cf.get_stats().writes.histogram();
         });
     });
