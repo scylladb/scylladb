@@ -218,8 +218,8 @@ static future<json::json_return_type> get_cf_rate_and_histogram(sharded<replica:
     });
 }
 
-static future<json::json_return_type> get_cf_unleveled_sstables(http_context& ctx, const sstring& name) {
-    return map_reduce_cf(ctx, name, int64_t(0), [](const replica::column_family& cf) {
+static future<json::json_return_type> get_cf_unleveled_sstables(sharded<replica::database>& db, const sstring& name) {
+    return map_reduce_cf(db, name, int64_t(0), [](const replica::column_family& cf) {
         return cf.get_unleveled_sstables();
     }, std::plus<int64_t>());
 }
@@ -589,7 +589,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_unleveled_sstables.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_unleveled_sstables(ctx, req->get_path_param("name"));
+        return get_cf_unleveled_sstables(ctx.db, req->get_path_param("name"));
     });
 
     cf::get_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
