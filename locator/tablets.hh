@@ -410,7 +410,7 @@ struct tablet_migration_streaming_info {
 
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_transition_info&);
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const tablet_info&, const tablet_migration_info&);
-bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& tinfo);
+bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info_view& tinfo);
 
 // Describes if a given token is located at either left or right side of a tablet's range
 enum tablet_range_side {
