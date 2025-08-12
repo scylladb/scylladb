@@ -238,6 +238,8 @@ void hint_sender::start() {
                 manager_logger.debug("hint_sender[{}]:start: Exception in the loop: {}", _ep_key, std::current_exception());
             }
         }
+
+        manager_logger.debug("hint_sender[{}]:start: Exited the loop", _ep_key);
     });
 }
 
