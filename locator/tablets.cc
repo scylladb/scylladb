@@ -184,16 +184,13 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info_v
     return false;
 }
 
-tablet_info::tablet_info(tablet_replica_set replicas, db_clock::time_point repair_time, tablet_task_info repair_task_info, tablet_task_info migration_task_info, int64_t sstables_repaired_at)
+tablet_info::tablet_info(tablet_replica_set replicas, tablet_task_info migration_task_info)
     : replicas(std::move(replicas))
-    , repair_time(repair_time)
-    , repair_task_info(std::move(repair_task_info))
     , migration_task_info(std::move(migration_task_info))
-    , sstables_repaired_at(sstables_repaired_at)
 {}
 
 tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), db_clock::time_point{}, tablet_task_info{}, tablet_task_info{}, int64_t(0))
+    : tablet_info(std::move(replicas), tablet_task_info{})
 {}
 
 std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet_info(tablet_info_view a, tablet_info_view b) {
@@ -214,7 +211,7 @@ std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at(), b.sstables_repaired_at());
 
     return std::make_pair(
-        shared_tablet_info(a.replicas(), repair_time, *repair_task_info, a.migration_task_info(), sstables_repaired_at),
+        shared_tablet_info(a.replicas(), a.migration_task_info()),
         per_table_tablet_info(repair_time, *repair_task_info, sstables_repaired_at)
     );
 }
@@ -530,7 +527,7 @@ tablet_map::tablet_map(size_t tablet_count)
 }
 
 tablet_map tablet_map::clone() const {
-    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info, _repair_scheduler_config);
+    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info);
 }
 
 future<tablet_map> tablet_map::clone_gently() const {
@@ -548,7 +545,7 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
-    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, _resize_task_info, _repair_scheduler_config);
+    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, _resize_task_info);
 }
 
 void tablet_map::check_tablet_id(tablet_id id) const {
@@ -677,10 +674,6 @@ void tablet_map::set_resize_decision(locator::resize_decision decision) {
 
 void tablet_map::set_resize_task_info(tablet_task_info task_info) {
     _resize_task_info = std::move(task_info);
-}
-
-void tablet_map::set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config) {
-    _repair_scheduler_config = std::move(config);
 }
 
 void tablet_map::clear_tablet_transition_info(tablet_id id) {
@@ -1000,10 +993,6 @@ const locator::resize_decision& tablet_map::resize_decision() const {
 
 const tablet_task_info& tablet_map::resize_task_info() const {
     return _resize_task_info;
-}
-
-const std::optional<locator::repair_scheduler_config> tablet_map::get_repair_scheduler_config() const {
-    return _repair_scheduler_config;
 }
 
 static auto to_resize_type(sstring decision) {

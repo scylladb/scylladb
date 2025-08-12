@@ -213,12 +213,14 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                         tablet_replica {h2, 3},
                         tablet_replica {h3, 1},
                     },
+                    locator::tablet_task_info::make_intranode_migration_request()
+                });
+                per_table_tablet_map per_table_tmap;
+                per_table_tmap.set_tablet(tmap.first_tablet(), per_table_tablet_info(
                     db_clock::now(),
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
-                    locator::tablet_task_info::make_intranode_migration_request(),
-                    0
-                });
-                tm.set_tablet_map(table1, std::move(tmap));
+                    10));
+                tm.set_tablet_map(table1, std::move(tmap), std::move(per_table_tmap));
             }
 
             verify_tablet_metadata_persistence(e, tm, ts);
@@ -231,10 +233,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                     },
-                    {},
-                    {},
-                    locator::tablet_task_info::make_migration_request(),
-                    0
+                    locator::tablet_task_info::make_migration_request()
                 });
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
@@ -247,10 +246,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
                     tablet_replica_set {
                         tablet_replica {h2, 2},
                     },
-                    {},
-                    {},
-                    locator::tablet_task_info::make_migration_request(),
-                    0
+                    locator::tablet_task_info::make_migration_request()
                 });
                 tb = *tmap.next_tablet(tb);
                 tmap.set_tablet(tb, tablet_info {
@@ -494,22 +490,29 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {
             // Add table1
             {
                 tablet_map tmap(1);
+                per_table_tablet_map per_table_tmap;
                 tmap.set_tablet(tmap.first_tablet(), tablet_info {
                     tablet_replica_set {
                         tablet_replica {h1, 0},
                         tablet_replica {h2, 3},
                         tablet_replica {h3, 1},
                     },
+                    locator::tablet_task_info::make_intranode_migration_request()
+                });
+                per_table_tmap.set_tablet(tmap.first_tablet(), per_table_tablet_info(
                     db_clock::now(),
                     locator::tablet_task_info::make_auto_repair_request({}, {"dc1", "dc2"}),
-                    locator::tablet_task_info::make_intranode_migration_request(),
-                    0
-                });
-                tm.set_tablet_map(table1, std::move(tmap));
-            }
+                    10));
+                tm.set_tablet_map(table1, std::move(tmap), std::move(per_table_tmap));
 
-            // Add table2 as a co-located table of table1
-            tm.set_colocated_table(table2, table1).get();
+                // Add table2 as a co-located table of table1
+                per_table_tablet_map per_table_tmap2;
+                per_table_tmap2.set_tablet(tmap.first_tablet(), per_table_tablet_info(
+                    db_clock::now() + std::chrono::seconds(1),
+                    locator::tablet_task_info(),
+                    20));
+                tm.set_colocated_table(table2, table1, std::move(per_table_tmap2)).get();
+            }
 
             const auto& tmap1 = tm.get_tablet_map(table1);
             const auto& tmap2 = tm.get_tablet_map(table2);

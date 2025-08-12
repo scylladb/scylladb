@@ -238,13 +238,10 @@ struct tablet_task_info {
 /// Stores information about a single tablet that is shared for co-located tables.
 struct tablet_info {
     tablet_replica_set replicas;
-    db_clock::time_point repair_time;
-    locator::tablet_task_info repair_task_info;
     locator::tablet_task_info migration_task_info;
-    int64_t sstables_repaired_at;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info, int64_t sstables_repaired_at);
+    tablet_info(tablet_replica_set, tablet_task_info);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
@@ -279,9 +276,9 @@ struct tablet_info_view {
 
     const tablet_replica_set& replicas() const { return shared.replicas; }
     const tablet_task_info& migration_task_info() const { return shared.migration_task_info; }
-    db_clock::time_point repair_time() const { return shared.repair_time; /* TODO per_table */ }
-    const tablet_task_info& repair_task_info() const { return shared.repair_task_info; /* TODO per_table */ }
-    int64_t sstables_repaired_at() const { return shared.sstables_repaired_at; /* TODO per_table */ }
+    db_clock::time_point repair_time() const { return per_table.repair_time; }
+    const tablet_task_info& repair_task_info() const { return per_table.repair_task_info; }
+    int64_t sstables_repaired_at() const { return per_table.sstables_repaired_at; }
 };
 
 // Merges tablet_info b into a, but with following constraints:
@@ -607,17 +604,15 @@ private:
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
-    std::optional<repair_scheduler_config> _repair_scheduler_config;
 
     // Internal constructor, used by clone() and clone_gently().
     tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
-        resize_decision resize_decision, tablet_task_info resize_task_info, std::optional<repair_scheduler_config> repair_scheduler_config)
+        resize_decision resize_decision, tablet_task_info resize_task_info)
         : _tablets(std::move(tablets))
         , _log2_tablets(log2_tablets)
         , _transitions(std::move(transitions))
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
-        , _repair_scheduler_config(std::move(repair_scheduler_config))
     {}
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
@@ -756,13 +751,11 @@ public:
 
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
-    const std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
-    void set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 
@@ -971,7 +964,7 @@ struct tablet_map_view {
     }
 
     std::optional<locator::repair_scheduler_config> get_repair_scheduler_config() const {
-        return shared->get_repair_scheduler_config(); /* TODO per_table */
+        return per_table->get_repair_scheduler_config();
     }
 };
 

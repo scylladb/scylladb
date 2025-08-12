@@ -705,7 +705,7 @@ tablet_id process_one_row(table_id table, shared_tablet_map& map, per_table_tabl
     auto row_per_table_info = process_row_per_table_tablet_info(table, row, map.get_last_token(tid), pending_update_repair_time);
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", row_per_table_info.sstables_repaired_at, table, tid);
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), row_per_table_info.repair_time, row_per_table_info.repair_task_info, migration_task_info, row_per_table_info.sstables_repaired_at});
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), migration_task_info});
     per_table_map.set_tablet(tid, std::move(row_per_table_info));
 
     auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
@@ -810,12 +810,6 @@ struct tablet_metadata_builder {
                 }
                 if (row.has("resize_task_info")) {
                     current_map.set_resize_task_info(deserialize_tablet_task_info(row.get_view("resize_task_info")));
-                }
-
-                // TODO remove
-                if (row.has("repair_scheduler_config")) {
-                    auto config = deserialize_repair_scheduler_config(row.get_view("repair_scheduler_config"));
-                    current_map.set_repair_scheduler_config(std::move(config));
                 }
 
                 set_per_table_info(per_table_map);
