@@ -30,7 +30,7 @@ Launching ScyllaDB on GCP
 
    .. code-block:: console
       
-        gcloud compute instances create <name of new instance> --image <ScyllaDB image name> --image-project < ScyllaDB project name> --local-ssd interface=nvme --zone <GCP zone - optional> --machine-type=<machine type>
+        gcloud compute instances create <name of new instance> --image <ScyllaDB image name> --image-project < ScyllaDB project name> --local-ssd interface=nvme --zone=<GCP zone - optional> --machine-type=<machine type>
    
    For example:
 
