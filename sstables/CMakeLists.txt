@@ -21,6 +21,7 @@ target_sources(sstables
     sstable_version.cc
     storage.cc
     trie/bti_key_translation.cc
+    trie/bti_index_reader.cc
     trie/bti_node_reader.cc
     trie/bti_node_sink.cc
     trie/bti_partition_index_writer.cc

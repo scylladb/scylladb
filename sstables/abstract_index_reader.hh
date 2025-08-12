@@ -57,9 +57,14 @@ public:
 
     // If `key` is a partition key present in the sstable, advances lower bound to `key`.
     // Otherwise advances lower bound to the some PK no greater than `key`.
+    //
     // Returns `true` iff it's possible that `key` is a partition key present in the sstable.
     // (In other words, if it returns `false`, then the key is definitely not present.
     // Otherwise it's unknown if it's present).
+    // 
+    // If the return value is `false`, the reader becomes broken and cannot be used again.
+    // (This method is only used for single-partition reads, so no reason to keep the reader
+    // usable after we know that the entire sstable read is already doomed). 
     //
     // Precondition: pos >= lower bound
     //
