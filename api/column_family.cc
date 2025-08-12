@@ -98,12 +98,12 @@ public:
     }
 };
 
-static future<json::json_return_type> set_tables_autocompaction(http_context& ctx, std::vector<table_info> tables, bool enabled) {
+static future<json::json_return_type> set_tables_autocompaction(sharded<replica::database>& db, std::vector<table_info> tables, bool enabled) {
     apilog.info("set_tables_autocompaction: enabled={} tables={}", enabled, tables);
 
-    return ctx.db.invoke_on(0, [&ctx, tables = std::move(tables), enabled] (replica::database& db) {
+    return db.invoke_on(0, [tables = std::move(tables), enabled] (replica::database& db) {
         auto g = autocompaction_toggle_guard(db);
-        return for_tables_on_all_shards(ctx.db, tables, [enabled] (replica::table& cf) {
+        return for_tables_on_all_shards(db.container(), tables, [enabled] (replica::table& cf) {
             if (enabled) {
                 cf.enable_auto_compaction();
             } else {
@@ -886,25 +886,25 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     cf::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/enable_auto_compaction: name={}", req->get_path_param("name"));
         auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
-        return set_tables_autocompaction(ctx, {std::move(ti)}, true);
+        return set_tables_autocompaction(ctx.db, {std::move(ti)}, true);
     });
 
     cf::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         apilog.info("column_family/disable_auto_compaction: name={}", req->get_path_param("name"));
         auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
-        return set_tables_autocompaction(ctx, {std::move(ti)}, false);
+        return set_tables_autocompaction(ctx.db, {std::move(ti)}, false);
     });
 
     ss::enable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto [keyspace, tables] = parse_table_infos(ctx, *req);
         apilog.info("enable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, std::move(tables), true);
+        return set_tables_autocompaction(ctx.db, std::move(tables), true);
     });
 
     ss::disable_auto_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) {
         auto [keyspace, tables] = parse_table_infos(ctx, *req);
         apilog.info("disable_auto_compaction: keyspace={} tables={}", keyspace, tables);
-        return set_tables_autocompaction(ctx, std::move(tables), false);
+        return set_tables_autocompaction(ctx.db, std::move(tables), false);
     });
 
     cf::get_tombstone_gc.set(r, [&ctx] (const_req req) {
