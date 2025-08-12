@@ -34,7 +34,6 @@
 #include "serialization.hh"
 #include "expressions.hh"
 #include "conditions.hh"
-#include "cql3/util.hh"
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
@@ -2305,16 +2304,6 @@ db::timeout_clock::time_point executor::default_timeout() {
     return db::timeout_clock::now() + std::chrono::milliseconds(s_default_timeout_in_ms);
 }
 
-static future<std::unique_ptr<rjson::value>> get_previous_item(
-        service::storage_proxy& proxy,
-        service::client_state& client_state,
-        schema_ptr schema,
-        const partition_key& pk,
-        const clustering_key& ck,
-        service_permit permit,
-        alternator::stats& global_stats,
-        alternator::stats& per_table_stats);
-
 static lw_shared_ptr<query::read_command> previous_item_read_command(service::storage_proxy& proxy,
         schema_ptr schema,
         const clustering_key& ck,
@@ -2555,6 +2544,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
     }
+
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
@@ -4569,7 +4559,6 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         size_t pos = 0;
         rcu_half_units = 0;
         for (const auto &r : rs.requests) {
-            auto& pk = r.first;
             auto& cks = r.second;
             auto& fut = *fut_it;
             ++fut_it;
