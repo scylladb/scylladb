@@ -65,18 +65,18 @@ future<> hint_endpoint_manager::do_store_hint(schema_ptr s, lw_shared_ptr<const 
         const replay_position rp = rh.release();
         if (_last_written_rp < rp) {
             _last_written_rp = rp;
-            manager_logger.debug("[{}] Updated last written replay position to {}", end_point_key(), rp);
+            manager_logger.debug("hint_endpoint_manager[{}]:do_store_hint: Updated last written replay position to {}", end_point_key(), rp);
         }
 
         ++shard_stats().written;
 
-        manager_logger.trace("Hint to {} was stored", end_point_key());
+        manager_logger.trace("hint_endpoint_manager[{}]:do_store_hint: Hint has been stored", end_point_key());
         tracing::trace(tr_state, "Hint to {} was stored", end_point_key());
     } catch (...) {
         ++shard_stats().errors;
         const auto eptr = std::current_exception();
 
-        manager_logger.debug("store_hint(): got the exception when storing a hint to {}: {}", end_point_key(), eptr);
+        manager_logger.debug("hint_endpoint_manager[{}]:do_store_hint: Exception when storing a hint: {}", end_point_key(), eptr);
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), eptr);
     }
 
@@ -92,7 +92,7 @@ bool hint_endpoint_manager::store_hint(schema_ptr s, lw_shared_ptr<const frozen_
             return do_store_hint(std::move(s), std::move(fm), tr_state);
         });
     } catch (...) {
-        manager_logger.trace("Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
+        manager_logger.trace("hint_endpoint_manager[{}]:store_hint: Failed to store a hint: {}", end_point_key(), std::current_exception());
         tracing::trace(tr_state, "Failed to store a hint to {}: {}", end_point_key(), std::current_exception());
 
         ++shard_stats().dropped;
@@ -139,7 +139,7 @@ future<> hint_endpoint_manager::stop(drain should_drain) noexcept {
         }).handle_exception([&eptr] (auto e) { eptr = std::move(e); }).get();
 
         if (eptr) {
-            manager_logger.error("ep_manager[{}]: exception: {}", _key, eptr);
+            manager_logger.error("hint_endpoint_manager[{}]:stop: Exception occurred: {}", _key, eptr);
         }
 
         set_stopped();
@@ -192,7 +192,7 @@ future<hints_store_ptr> hint_endpoint_manager::get_or_load() {
 }
 
 future<db::commitlog> hint_endpoint_manager::add_store() noexcept {
-    manager_logger.trace("Going to add a store to {}", _hints_dir.c_str());
+    manager_logger.trace("hint_endpoint_manager[{}]:add_store: Going to add a store: {}", end_point_key(), _hints_dir.native());
 
     return futurize_invoke([this] {
         return io_check([name = _hints_dir.c_str()] { return recursive_touch_directory(name); }).then([this] () {
