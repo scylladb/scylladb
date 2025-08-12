@@ -95,11 +95,11 @@ prepared_query_not_found_exception::prepared_query_not_found_exception(bytes id)
     { }
 
 already_exists_exception::already_exists_exception(sstring ks_name_, sstring cf_name_)
-    : already_exists_exception{ks_name_, cf_name_, format("Cannot add already existing table \"{}\" to keyspace \"{}\"", cf_name_, ks_name_)}
+    : already_exists_exception{std::move(ks_name_), std::move(cf_name_), format("Cannot add already existing table \"{}\" to keyspace \"{}\"", cf_name_, ks_name_)}
     { }
 
 already_exists_exception::already_exists_exception(sstring ks_name_)
-    : already_exists_exception{ks_name_, "", format("Cannot add existing keyspace \"{}\"", ks_name_)}
+    : already_exists_exception{std::move(ks_name_), "", format("Cannot add existing keyspace \"{}\"", ks_name_)}
     { }
 
 function_execution_exception::function_execution_exception(sstring func_name_, sstring detail, sstring ks_name_, std::vector<sstring> args_) noexcept
