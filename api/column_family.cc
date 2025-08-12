@@ -129,10 +129,10 @@ static future<json::json_return_type>  get_cf_stats_count(http_context& ctx, con
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type>  get_cf_stats_sum(http_context& ctx, const sstring& name,
+static future<json::json_return_type> get_cf_stats_sum(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = parse_table_info(name, ctx.db.local()).id;
-    return ctx.db.map_reduce0([uuid, f](replica::database& db) {
+    auto uuid = parse_table_info(name, db.local()).id;
+    return db.map_reduce0([uuid, f](replica::database& db) {
         // Histograms information is sample of the actual load
         // so to get an estimation of sum, we multiply the mean
         // with count. The information is gather in nano second,
@@ -537,11 +537,11 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_read_latency.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_sum(ctx,req->get_path_param("name") ,&replica::column_family_stats::reads);
+        return get_cf_stats_sum(ctx.db, req->get_path_param("name") ,&replica::column_family_stats::reads);
     });
 
     cf::get_write_latency.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats_sum(ctx, req->get_path_param("name") ,&replica::column_family_stats::writes);
+        return get_cf_stats_sum(ctx.db, req->get_path_param("name") ,&replica::column_family_stats::writes);
     });
 
     cf::get_all_read_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
