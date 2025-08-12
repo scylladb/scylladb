@@ -204,6 +204,7 @@ schema_ptr system_keyspace::batchlog() {
        );
        builder.set_gc_grace_seconds(0);
        builder.set_memtable_compact_flushed_data(true);
+       builder.set_caching_options(caching_options::get_disabled_caching_options());
        builder.with_hash_version();
        return builder.build(schema_builder::compact_storage::no);
     }();
