@@ -23,6 +23,7 @@ target_sources(sstables
     trie/bti_key_translation.cc
     trie/bti_node_reader.cc
     trie/bti_node_sink.cc
+    trie/bti_row_index_writer.cc
     trie/trie_writer.cc
     writer.cc)
 target_include_directories(sstables
