@@ -259,8 +259,8 @@ static auto count_bytes_on_disk(const replica::column_family& cf, bool total) {
     return bytes_on_disk;
 }
 
-static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstring name, bool total) {
-    return map_reduce_cf_raw(ctx, name, uint64_t(0), [total](replica::column_family& cf) {
+static future<json::json_return_type>  sum_sstable(sharded<replica::database>& db, const sstring name, bool total) {
+    return map_reduce_cf_raw(db, name, uint64_t(0), [total](replica::column_family& cf) {
         return count_bytes_on_disk(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
         return make_ready_future<json::json_return_type>(val);
@@ -268,8 +268,8 @@ static future<json::json_return_type>  sum_sstable(http_context& ctx, const sstr
 }
 
 
-static future<json::json_return_type> sum_sstable(http_context& ctx, bool total) {
-    return map_reduce_cf_raw(ctx, uint64_t(0), [total](replica::column_family& cf) {
+static future<json::json_return_type> sum_sstable(sharded<replica::database>& db, bool total) {
+    return map_reduce_cf_raw(db, uint64_t(0), [total](replica::column_family& cf) {
         return count_bytes_on_disk(cf, total);
     }, std::plus<>()).then([] (uint64_t val) {
         return make_ready_future<json::json_return_type>(val);
@@ -593,19 +593,19 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return sum_sstable(ctx, req->get_path_param("name"), false);
+        return sum_sstable(ctx.db, req->get_path_param("name"), false);
     });
 
     cf::get_all_live_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return sum_sstable(ctx, false);
+        return sum_sstable(ctx.db, false);
     });
 
     cf::get_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return sum_sstable(ctx, req->get_path_param("name"), true);
+        return sum_sstable(ctx.db, req->get_path_param("name"), true);
     });
 
     cf::get_all_total_disk_space_used.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return sum_sstable(ctx, true);
+        return sum_sstable(ctx.db, true);
     });
 
     // FIXME: this refers to partitions, not rows.
