@@ -724,8 +724,7 @@ async def train_repair(executable: PathLike, workdir: PathLike) -> None:
     await bash(fr"rm -rf {workdir}/{addr}/data/ks/*")
     async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
         await asyncio.sleep(5) # FIXME: artificial gossip sleep, get rid of it.
-        repair_id = (await query(["curl", "--silent", "-X", "POST", fr"http://{addr}:10000/storage_service/repair_async/ks"])).decode()
-        await query(["curl", "--silent", fr"http://{addr}:10000/storage_service/repair_status/?id={repair_id}"])
+        await query(["curl", "--silent", "-X", "POST", fr"http://{addr}:10000/storage_service/tablets/repair?ks=ks&await_completion=true"])
     await merge_profraw(workdir)
 
 trainers["repair"] = ("repair_dataset", train_repair)
