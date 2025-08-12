@@ -475,7 +475,7 @@ public:
     named_value<uint16_t> alternator_port;
     named_value<uint16_t> alternator_https_port;
     named_value<sstring> alternator_address;
-    named_value<bool> alternator_enforce_authorization;
+    named_value<tri_mode_restriction> alternator_enforce_authorization;
     named_value<sstring> alternator_write_isolation;
     named_value<uint32_t> alternator_streams_time_window_s;
     named_value<uint32_t> alternator_timeout_in_ms;
