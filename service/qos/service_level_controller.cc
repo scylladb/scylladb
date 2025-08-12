@@ -342,7 +342,9 @@ future<> service_level_controller::update_cache(update_both_cache_levels update_
         co_await update_service_levels_cache(ctx);
     }
 
-    co_await _esl_controller->reload_cache();
+    if (_esl_controller) {
+        co_await _esl_controller->reload_cache();
+    }
 }
 
 void service_level_controller::stop_legacy_update_from_distributed_data() {

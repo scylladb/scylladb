@@ -2276,6 +2276,13 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
 
+            // Reproducer of scylladb/scylladb#24792.
+            auto i24792_reproducer = defer([] {
+                if (utils::get_local_injector().enter("reload_service_level_cache_after_auth_service_is_stopped")) {
+                    sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
+                }
+            });
+
             std::any stop_auth_service;
             // Has to be called after node joined the cluster (join_cluster())
             // with raft leader elected as only then auth version mutation is put
