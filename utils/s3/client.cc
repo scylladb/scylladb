@@ -1101,8 +1101,8 @@ data_sink client::make_upload_jumbo_sink(sstring object_name, std::optional<unsi
 class client::chunked_download_source final : public seastar::data_source_impl {
     struct claimed_buffer {
         temporary_buffer<char> _buffer;
-        semaphore_units<> _claimed_memory;
-        claimed_buffer(temporary_buffer<char>&& buf, semaphore_units<>&& claimed_memory) noexcept
+        std::optional<semaphore_units<>> _claimed_memory;
+        claimed_buffer(temporary_buffer<char>&& buf, std::optional<semaphore_units<>>&& claimed_memory) noexcept
             : _buffer(std::move(buf)), _claimed_memory(std::move(claimed_memory)) {}
     };
     struct content_range {
@@ -1114,6 +1114,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     sstring _object_name;
     seastar::abort_source* _as;
     range _range;
+    static constexpr size_t _socket_buff_size = 128_KiB;
     static constexpr size_t _max_buffers_size = 5_MiB;
     static constexpr double _buffers_low_watermark = 0.5;
     static constexpr double _buffers_high_watermark = 0.9;
@@ -1141,6 +1142,12 @@ class client::chunked_download_source final : public seastar::data_source_impl {
             try {
                 if (_buffers_size >= _max_buffers_size * _buffers_low_watermark) {
                     co_await _bg_fiber_cv.when([this] { return _buffers_size < _max_buffers_size * _buffers_low_watermark; });
+                }
+
+                if (auto units = try_get_units(_client->_memory, _socket_buff_size); !_buffers.empty() && !units) {
+                    co_await _bg_fiber_cv.when([this] {
+                        return _buffers.empty() || try_get_units(_client->_memory, _socket_buff_size);
+                    });
                 }
 
                 if (_is_finished) {
@@ -1197,14 +1204,24 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                 });
                                 auto start = s3_clock::now();
                                 s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
-                                auto buf = co_await in.read();
+                                temporary_buffer<char> buf;
+                                auto units = try_get_units(_client->_memory, _socket_buff_size);
+                                if (_buffers.empty() || units) {
+                                    buf = co_await in.read();
+                                    assert(buf.size() <= _socket_buff_size);
+                                    if (units) {
+                                        units->return_units(_socket_buff_size - buf.size());
+                                    }
+                                } else {
+                                    break;
+                                }
                                 auto buff_size = buf.size();
                                 gc.read_stats.update(buff_size, s3_clock::now() - start);
                                 _range += buff_size;
                                 _buffers_size += buff_size;
                                 if (buff_size == 0 && _range.length() == 0) {
                                     s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                    _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size, _as));
+                                    _buffers.emplace_back(std::move(buf), std::move(units));
                                     _get_cv.signal();
                                     _is_finished = true;
                                     break;
@@ -1214,7 +1231,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                     break;
                                 }
                                 s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
-                                _buffers.emplace_back(std::move(buf), co_await _client->claim_memory(buff_size, _as));
+                                _buffers.emplace_back(std::move(buf), std::move(units));
                                 _get_cv.signal();
                                 utils::get_local_injector().inject("break_s3_inflight_req", [] {
                                     // Inject a non-`aws_error` after partial data download to verify proper
