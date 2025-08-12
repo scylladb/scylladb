@@ -191,10 +191,10 @@ static future<json::json_return_type> get_cf_histogram(sharded<replica::database
     });
 }
 
-static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& ctx, const sstring& name,
+static future<json::json_return_type>  get_cf_rate_and_histogram(sharded<replica::database>& db, const sstring& name,
         utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
-    auto uuid = parse_table_info(name, ctx.db.local()).id;
-    return ctx.db.map_reduce0([f, uuid](const replica::database& p) {
+    auto uuid = parse_table_info(name, db.local()).id;
+    return db.map_reduce0([f, uuid](const replica::database& p) {
         return (p.find_column_family(uuid).get_stats().*f).rate();},
             utils::rate_moving_average_and_histogram(),
             std::plus<utils::rate_moving_average_and_histogram>())
@@ -203,7 +203,7 @@ static future<json::json_return_type>  get_cf_rate_and_histogram(http_context& c
     });
 }
 
-static future<json::json_return_type> get_cf_rate_and_histogram(http_context& ctx, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
+static future<json::json_return_type> get_cf_rate_and_histogram(sharded<replica::database>& db, utils::timed_rate_moving_average_summary_and_histogram replica::column_family_stats::*f) {
     std::function<utils::rate_moving_average_and_histogram(const replica::database&)> fun = [f] (const replica::database& db)  {
         utils::rate_moving_average_and_histogram res;
         db.get_tables_metadata().for_each_table([&] (table_id, lw_shared_ptr<replica::table> table) {
@@ -211,7 +211,7 @@ static future<json::json_return_type> get_cf_rate_and_histogram(http_context& ct
         });
         return res;
     };
-    return ctx.db.map(fun).then([](const std::vector<utils::rate_moving_average_and_histogram> &res) {
+    return db.map(fun).then([](const std::vector<utils::rate_moving_average_and_histogram> &res) {
         std::vector<httpd::utils_json::rate_moving_average_and_histogram> r;
         std::ranges::copy(res | std::views::transform(timer_to_json), std::back_inserter(r));
         return make_ready_future<json::json_return_type>(r);
@@ -533,7 +533,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_read_latency_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_rate_and_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::reads);
+        return get_cf_rate_and_histogram(ctx.db, req->get_path_param("name"), &replica::column_family_stats::reads);
     });
 
     cf::get_read_latency.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -549,7 +549,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_all_read_latency_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_rate_and_histogram(ctx, &replica::column_family_stats::writes);
+        return get_cf_rate_and_histogram(ctx.db, &replica::column_family_stats::writes);
     });
 
     cf::get_write_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -557,7 +557,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_write_latency_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_rate_and_histogram(ctx, req->get_path_param("name"), &replica::column_family_stats::writes);
+        return get_cf_rate_and_histogram(ctx.db, req->get_path_param("name"), &replica::column_family_stats::writes);
     });
 
     cf::get_all_write_latency_histogram_depricated.set(r, [&ctx] (std::unique_ptr<http::request> req) {
@@ -565,7 +565,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::get_all_write_latency_histogram.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_rate_and_histogram(ctx, &replica::column_family_stats::writes);
+        return get_cf_rate_and_histogram(ctx.db, &replica::column_family_stats::writes);
     });
 
     cf::get_pending_compactions.set(r, [&ctx] (std::unique_ptr<http::request> req) {
