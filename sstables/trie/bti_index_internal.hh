@@ -15,6 +15,13 @@
 
 namespace sstables::trie {
 
+// FIXME: we calculate the murmur hash when inserting or reading keys
+// from bloom filters.
+// It's a waste of work to hash the key again.
+// The hash should be passed to BTI writers and readers from above,
+// and then this function should be eliminated.
+std::byte hash_byte_from_key(const schema &s, const partition_key& x);
+
 // Each row index trie in Rows.db is followed by a header containing some partition metadata.
 // The partition's entry in Partitions.db points into that header.
 struct row_index_header {
