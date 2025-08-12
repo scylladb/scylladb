@@ -87,7 +87,7 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
     auto tmptr = _ss.get_token_metadata_ptr();
     auto tables = get_table_ids();
     for (auto table : tables) {
-        auto& tmap = tmptr->tablets().get_tablet_map(table);
+        auto& tmap = tmptr->tablets().get_tablet_map_view(table);
         if (auto task_type = maybe_get_task_type(tmap.resize_task_info(), task_id); task_type.has_value()) {
             co_return tasks::virtual_task_hint{
                 .table_id = table,
@@ -95,20 +95,18 @@ future<std::optional<tasks::virtual_task_hint>> tablet_virtual_task::contains(ta
                 .tablet_id = std::nullopt,
             };
         }
-        std::optional<locator::tablet_id> tid = tmap.first_tablet();
-        for (const locator::tablet_info& info : tmap.tablets()) {
-            auto task_type = maybe_get_task_type(info.repair_task_info, task_id).or_else([&] () {
-                return maybe_get_task_type(info.migration_task_info, task_id);
+        for (const auto& [tid, info] : tmap.tablets()) {
+            auto task_type = maybe_get_task_type(info.repair_task_info(), task_id).or_else([&] () {
+                return maybe_get_task_type(info.migration_task_info(), task_id);
             });
             if (task_type.has_value()) {
                 co_return tasks::virtual_task_hint{
                     .table_id = table,
                     .task_type = task_type.value(),
-                    .tablet_id = tablet_id_provided(task_type.value()) ? std::make_optional(*tid) : std::nullopt,
+                    .tablet_id = tablet_id_provided(task_type.value()) ? std::make_optional(tid) : std::nullopt,
                 };
             }
             co_await coroutine::maybe_yield();
-            tid = tmap.next_tablet(*tid);
         }
     }
 
@@ -149,14 +147,14 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 
     tasks::tmlogger.info("tablet_virtual_task: wait until tablet operation is finished");
     co_await _ss._topology_state_machine.event.wait([&] {
-        auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
+        auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map_view(table);
         if (is_resize_task(task_type)) {    // Resize task.
             return tmap.resize_task_info().tablet_task_id.uuid() != id.uuid();
         } else if (tablet_id_opt.has_value()) {    // Migration task.
-            return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info.tablet_task_id.uuid() != id.uuid();
+            return tmap.get_tablet_info(tablet_id_opt.value()).migration_task_info().tablet_task_id.uuid() != id.uuid();
         } else {    // Repair task.
             return std::all_of(res->tablets.begin(), res->tablets.end(), [&] (const locator::tablet_id& tablet) {
-                return tmap.get_tablet_info(tablet).repair_task_info.tablet_task_id.uuid() != id.uuid();
+                return tmap.get_tablet_info(tablet).repair_task_info().tablet_task_id.uuid() != id.uuid();
             });
         }
     });
@@ -191,7 +189,7 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
     auto tmptr = _ss.get_token_metadata_ptr();
     auto tables = get_table_ids();
     for (auto table : tables) {
-        auto& tmap = tmptr->tablets().get_tablet_map(table);
+        auto& tmap = tmptr->tablets().get_tablet_map_view(table);
         auto schema = _ss._db.local().get_tables_metadata().get_table(table).schema();
         std::unordered_map<tasks::task_id, tasks::task_stats> user_requests;
         std::unordered_map<tasks::task_id, size_t> sched_num_sum;
@@ -199,20 +197,20 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
         if (resize_stats) {
             res.push_back(std::move(resize_stats.value()));
         }
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            auto repair_stats = maybe_make_task_stats(info.repair_task_info, schema);
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& info) {
+            auto repair_stats = maybe_make_task_stats(info.repair_task_info(), schema);
             if (repair_stats) {
-                if (info.repair_task_info.is_user_repair_request()) {
+                if (info.repair_task_info().is_user_repair_request()) {
                     // User requested repair may encompass more that one tablet.
-                    auto task_id = tasks::task_id{info.repair_task_info.tablet_task_id.uuid()};
+                    auto task_id = tasks::task_id{info.repair_task_info().tablet_task_id.uuid()};
                     user_requests[task_id] = std::move(repair_stats.value());
-                    sched_num_sum[task_id] += info.repair_task_info.sched_nr;
+                    sched_num_sum[task_id] += info.repair_task_info().sched_nr;
                 } else {
                     res.push_back(std::move(repair_stats.value()));
                 }
             }
 
-            auto migration_stats = maybe_make_task_stats(info.migration_task_info, schema);
+            auto migration_stats = maybe_make_task_stats(info.migration_task_info(), schema);
             if (migration_stats) {
                 res.push_back(std::move(migration_stats.value()));
             }
@@ -230,6 +228,12 @@ future<std::vector<tasks::task_stats>> tablet_virtual_task::get_stats() {
 }
 
 std::vector<table_id> tablet_virtual_task::get_table_ids() const {
+    // TODO
+    // this function is used in `get_stats` and `contains` to iterate over all tasks that are stored
+    // in some table. It iterates only over base tables because the tasks are shared for each table group, so it's
+    // enough to examine only base tables to find all tasks.
+    // However, now that the repair tasks are going to be per-table, and not shared per table group, we will need
+    // to change it to iterate over all tables in order to find all repair tasks.
     return _ss.get_token_metadata().tablets().all_table_groups() | std::views::transform([] (const auto& table_to_tablets) { return table_to_tablets.first; }) | std::ranges::to<std::vector<table_id>>();
 }
 
@@ -254,7 +258,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     };
     size_t sched_nr = 0;
     auto tmptr = _ss.get_token_metadata_ptr();
-    auto& tmap = tmptr->tablets().get_tablet_map(table);
+    auto& tmap = tmptr->tablets().get_tablet_map_view(table);
     bool repair_task_finished = false;
     bool repair_task_pending = false;
     if (is_repair_task(task_type)) {
@@ -269,8 +273,8 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
                 repair_task_pending = true;
             }
         }
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
-            auto& task_info = info.repair_task_info;
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& info) {
+            auto& task_info = info.repair_task_info();
             if (task_info.tablet_task_id.uuid() == id.uuid()) {
                 update_status(task_info, res.status, sched_nr);
                 res.tablets.push_back(tid);
@@ -281,7 +285,7 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     } else if (is_migration_task(task_type)) {    // Migration task.
         auto tablet_id = hint.get_tablet_id();
         res.pending_replica = tmap.get_tablet_transition_info(tablet_id)->pending_replica;
-        auto& task_info = tmap.get_tablet_info(tablet_id).migration_task_info;
+        auto& task_info = tmap.get_tablet_info(tablet_id).migration_task_info();
         if (task_info.tablet_task_id.uuid() == id.uuid()) {
             update_status(task_info, res.status, sched_nr);
             res.tablets.push_back(tablet_id);
