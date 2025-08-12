@@ -336,7 +336,7 @@ uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<
     return ret;
 }
 
-void set_column_family(http_context& ctx, routes& r, sharded<db::system_keyspace>& sys_ks) {
+void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks) {
     cf::get_column_family_name.set(r, [&ctx] (const_req req){
         std::vector<sstring> res;
         const replica::database::tables_metadata& meta = ctx.db.local().get_tables_metadata();
