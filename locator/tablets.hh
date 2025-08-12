@@ -215,13 +215,10 @@ struct tablet_task_info {
 /// For groups of co-located tables, this information is shared between all tables.
 struct tablet_info {
     tablet_replica_set replicas;
-    db_clock::time_point repair_time;
-    locator::tablet_task_info repair_task_info;
     locator::tablet_task_info migration_task_info;
-    int64_t sstables_repaired_at;
 
     tablet_info() = default;
-    tablet_info(tablet_replica_set, db_clock::time_point, tablet_task_info, tablet_task_info, int64_t sstables_repaired_at);
+    tablet_info(tablet_replica_set, tablet_task_info);
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
@@ -526,17 +523,15 @@ private:
     transitions_map _transitions;
     resize_decision _resize_decision;
     tablet_task_info _resize_task_info;
-    repair_scheduler_config _repair_scheduler_config;
 
     // Internal constructor, used by clone() and clone_gently().
     tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
-        resize_decision resize_decision, tablet_task_info resize_task_info, repair_scheduler_config repair_scheduler_config)
+        resize_decision resize_decision, tablet_task_info resize_task_info)
         : _tablets(std::move(tablets))
         , _log2_tablets(log2_tablets)
         , _transitions(std::move(transitions))
         , _resize_decision(resize_decision)
         , _resize_task_info(std::move(resize_task_info))
-        , _repair_scheduler_config(std::move(repair_scheduler_config))
     {}
 
     /// Returns the largest token owned by tablet_id when the tablet_count is `1 << log2_tablets`.
@@ -675,13 +670,11 @@ public:
 
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
-    const locator::repair_scheduler_config& repair_scheduler_config() const;
 public:
     void set_tablet(tablet_id, tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
-    void set_repair_scheduler_config(locator::repair_scheduler_config config);
     void clear_tablet_transition_info(tablet_id);
     void clear_transitions();
 

@@ -654,7 +654,7 @@ tablet_id process_one_row(table_id table, tablet_map& map, per_table_tablet_map&
     }
 
     tablet_logger.info("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), std::move(migration_task_info)});
     per_table_map.set_tablet(tid, per_table_tablet_info(repair_time, std::move(repair_task_info), sstables_repaired_at));
 
     auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
