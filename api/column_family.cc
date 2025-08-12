@@ -67,9 +67,9 @@ future<json::json_return_type>  get_cf_stats(http_context& ctx,
     }, std::plus<int64_t>());
 }
 
-static future<json::json_return_type> for_tables_on_all_shards(http_context& ctx, std::vector<table_info> tables, std::function<future<>(replica::table&)> set) {
-    return do_with(std::move(tables), [&ctx, set] (const std::vector<table_info>& tables) {
-        return ctx.db.invoke_on_all([&tables, set] (replica::database& db) {
+static future<json::json_return_type> for_tables_on_all_shards(sharded<replica::database>& db, std::vector<table_info> tables, std::function<future<>(replica::table&)> set) {
+    return do_with(std::move(tables), [&db, set] (const std::vector<table_info>& tables) {
+        return db.invoke_on_all([&tables, set] (replica::database& db) {
             return parallel_for_each(tables, [&db, set] (const table_info& table) {
                 replica::table& t = db.find_column_family(table.id);
                 return set(t);
@@ -103,7 +103,7 @@ static future<json::json_return_type> set_tables_autocompaction(http_context& ct
 
     return ctx.db.invoke_on(0, [&ctx, tables = std::move(tables), enabled] (replica::database& db) {
         auto g = autocompaction_toggle_guard(db);
-        return for_tables_on_all_shards(ctx, tables, [enabled] (replica::table& cf) {
+        return for_tables_on_all_shards(ctx.db, tables, [enabled] (replica::table& cf) {
             if (enabled) {
                 cf.enable_auto_compaction();
             } else {
@@ -116,7 +116,7 @@ static future<json::json_return_type> set_tables_autocompaction(http_context& ct
 
 static future<json::json_return_type> set_tables_tombstone_gc(http_context& ctx, std::vector<table_info> tables, bool enabled) {
     apilog.info("set_tables_tombstone_gc: enabled={} tables={}", enabled, tables);
-    return for_tables_on_all_shards(ctx, std::move(tables), [enabled] (replica::table& t) {
+    return for_tables_on_all_shards(ctx.db, std::move(tables), [enabled] (replica::table& t) {
         t.set_tombstone_gc_enabled(enabled);
         return make_ready_future<>();
     });
@@ -1002,7 +1002,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         auto ti = parse_table_info(req->get_path_param("name"), ctx.db.local());
         sstring strategy = req->get_query_param("class_name");
         apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
-        return for_tables_on_all_shards(ctx, {std::move(ti)}, [strategy] (replica::table& cf) {
+        return for_tables_on_all_shards(ctx.db, {std::move(ti)}, [strategy] (replica::table& cf) {
             cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
             return make_ready_future<>();
         });
