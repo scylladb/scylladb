@@ -61,8 +61,6 @@ future<json::json_return_type> map_reduce_cf(http_context& ctx, const sstring& n
     });
 }
 
-future<json::json_return_type> map_reduce_cf_time_histogram(http_context& ctx, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f);
-
 struct map_reduce_column_families_locally {
     std::any init;
     std::function<future<std::unique_ptr<std::any>>(replica::column_family&)> mapper;

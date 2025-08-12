@@ -276,7 +276,7 @@ static future<json::json_return_type> sum_sstable(http_context& ctx, bool total)
     });
 }
 
-future<json::json_return_type> map_reduce_cf_time_histogram(http_context& ctx, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
+static future<json::json_return_type> map_reduce_cf_time_histogram(http_context& ctx, const sstring& name, std::function<utils::time_estimated_histogram(const replica::column_family&)> f) {
     return map_reduce_cf_raw(ctx, name, utils::time_estimated_histogram(), f, utils::time_estimated_histogram_merge).then([](const utils::time_estimated_histogram& res) {
         return make_ready_future<json::json_return_type>(time_to_json_histogram(res));
     });
