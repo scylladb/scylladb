@@ -56,7 +56,7 @@ public:
     static write_isolation get_write_isolation_for_schema(schema_ptr schema);
 
     static write_isolation default_write_isolation;
-public:
+
     static void set_default_write_isolation(std::string_view mode);
 
 protected:
