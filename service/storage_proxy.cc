@@ -3989,7 +3989,8 @@ static host_id_vector_replica_set endpoint_filter(
     }
 
     // strip out dead endpoints and localhost
-    std::unordered_multimap<sstring, locator::host_id> validated;
+    std::unordered_map<sstring, std::unordered_set<locator::host_id>> validated;
+    unsigned nr_validated = 0;
 
     auto is_valid = [&is_alive, my_address] (locator::host_id input) {
         return input != my_address && is_alive(input);
@@ -3998,26 +3999,31 @@ static host_id_vector_replica_set endpoint_filter(
     for (auto& e : endpoints) {
         for (auto& a : e.second) {
             if (is_valid(a)) {
-                validated.emplace(e.first, a);
+                validated[e.first].emplace(a);
+                ++nr_validated;
             }
         }
     }
 
     typedef host_id_vector_replica_set return_type;
 
-    if (validated.size() <= 2) {
-        return validated | std::views::values | std::ranges::to<return_type>();
+    if (nr_validated <= 2) {
+        return validated | std::views::values | std::views::join | std::ranges::to<return_type>();
     }
 
-    if (validated.size() - validated.count(local_rack) >= 2) {
+    unsigned nr_validated_local_rack = 0;
+    if (auto li = validated.find(local_rack); li != validated.end()) {
+        nr_validated_local_rack = li->second.size();
+    }
+    if (nr_validated - nr_validated_local_rack >= 2) {
         // we have enough endpoints in other racks
         validated.erase(local_rack);
     }
 
-    if (validated.bucket_count() == 1) {
+    if (validated.size() == 1) {
         // we have only 1 `other` rack
-        auto res = validated | std::views::values;
-        if (validated.size() > 2) {
+        auto& res = validated.begin()->second;
+        if (res.size() > 2) {
             return
                     res | std::ranges::to<std::vector<locator::host_id>>()
                             | std::views::take(2)
@@ -4032,7 +4038,7 @@ static host_id_vector_replica_set endpoint_filter(
 
     static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
 
-    if (validated.bucket_count() > 2) {
+    if (validated.size() > 2) {
         std::shuffle(racks.begin(), racks.end(), rnd_engine);
         racks.resize(2);
     }
@@ -4041,8 +4047,8 @@ static host_id_vector_replica_set endpoint_filter(
 
     // grab a random member of up to two racks
     for (auto& rack : racks) {
-        auto this_rack = validated.equal_range(rack);
-        auto cpy = std::ranges::subrange(this_rack.first, this_rack.second) | std::views::values | std::ranges::to<std::vector<locator::host_id>>();
+        auto& this_rack = validated.find(rack)->second;
+        auto cpy = this_rack | std::ranges::to<std::vector<locator::host_id>>();
         std::uniform_int_distribution<size_t> rdist(0, cpy.size() - 1);
         result.emplace_back(cpy[rdist(rnd_engine)]);
     }
