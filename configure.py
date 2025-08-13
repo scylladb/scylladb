@@ -1461,7 +1461,6 @@ pure_boost_tests = set([
     'test/boost/serialization_test',
     'test/boost/small_vector_test',
     'test/boost/top_k_test',
-    'test/boost/trie_writer_test',
     'test/boost/vint_serialization_test',
     'test/boost/utf8_test',
     'test/boost/string_format_test',

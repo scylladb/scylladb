@@ -51,4 +51,8 @@ clustering_key generate_clustering_key(schema_ptr s, bool allow_prefix = false, 
 // Double to unsigned long conversion
 int64_t d2t(double d);
 
+
+// generate_all_strings("abc", 2) = {"", "a", "aa", "ab", "ac", "b", "ba", "bb", "bc", "c", "ca", "cb", "cc"}
+std::vector<std::string> generate_all_strings(std::string_view chars_raw, size_t max_len);
+
 } // namespace tests
