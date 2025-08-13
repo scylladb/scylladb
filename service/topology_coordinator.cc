@@ -2331,18 +2331,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         if (_topo_sm._topology.requests.empty()) {
             co_return;
         }
-        auto ts = guard.write_timestamp();
         for (auto& [id, req] : _topo_sm._topology.requests) {
-            topology_mutation_builder builder(ts);
-            topology_request_tracking_mutation_builder rtbuilder(_topo_sm._topology.find(id)->second.request_id);
-            auto node_builder = builder.with_node(id).del("topology_request");
             auto done_msg = fmt::format("Canceled. Dead nodes: {}", dead_nodes);
-            rtbuilder.done(done_msg);
+            _topo_sm.generate_cancel_request_update(muts, _feature_service, guard, id, done_msg);
             switch (req) {
                 case topology_request::replace:
                 [[fallthrough]];
                 case topology_request::join: {
-                    node_builder.set("node_state", node_state::left);
                     reject_join.emplace_back(id);
                     try {
                         co_await wait_for_gossiper(id, _gossiper, _as);
@@ -2359,8 +2354,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 }
                 break;
             }
-            muts.emplace_back(builder.build());
-            muts.emplace_back(rtbuilder.build());
         }
 
         co_await update_topology_state(std::move(guard), std::move(muts), "cancel all topology requests");
