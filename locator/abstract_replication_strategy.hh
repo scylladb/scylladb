@@ -225,19 +225,19 @@ public:
     /// new replica.
     ///
     /// The returned addresses are present in the topology object associated with this instance.
-    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token, bool is_vnode = false) const = 0;
 
     /// Same as above but returns host ids instead of addresses
     virtual host_id_vector_topology_change get_pending_replicas(const token& search_token) const = 0;
 
     /// Same as above but returns host ids instead of addresses
-    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token, bool is_vnode = false) const = 0;
 
     /// Returns replicas for a given token.
     /// During topology change returns replicas which should be targets for writes, excluding the pending replica.
     /// Unlike get_natural_endpoints(), the replica set may include nodes in the left state which were
     /// replaced but not yet rebuilt.
-    virtual host_id_vector_replica_set get_replicas(const token& search_token) const = 0;
+    virtual host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const = 0;
 
     virtual std::optional<tablet_routing_info> check_locality(const token& token) const = 0;
 
@@ -413,10 +413,10 @@ private:
     friend class abstract_replication_strategy;
     friend class effective_replication_map_factory;
 public: // effective_replication_map
-    host_id_vector_replica_set get_natural_replicas(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_replicas(const token& search_token, bool is_vnode = false) const override;
     host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
-    host_id_vector_replica_set get_replicas_for_reading(const token& token) const override;
-    host_id_vector_replica_set get_replicas(const token& search_token) const override;
+    host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
+    host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;
@@ -525,10 +525,10 @@ public:
 
     virtual future<mutable_static_effective_replication_map_ptr> clone_gently(replication_strategy_ptr rs, token_metadata_ptr tmptr) const override;
 
-    host_id_vector_replica_set get_natural_replicas(const token& search_token) const override;
+    host_id_vector_replica_set get_natural_replicas(const token& search_token, bool is_vnode = false) const override;
     host_id_vector_topology_change get_pending_replicas(const token& search_token) const override;
-    host_id_vector_replica_set get_replicas_for_reading(const token& token) const override;
-    host_id_vector_replica_set get_replicas(const token& search_token) const override;
+    host_id_vector_replica_set get_replicas_for_reading(const token& token, bool is_vnode = false) const override;
+    host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override;
     std::optional<tablet_routing_info> check_locality(const token& token) const override;
     bool has_pending_ranges(locator::host_id endpoint) const override;
     std::unique_ptr<token_range_splitter> make_splitter() const override;

@@ -20,6 +20,7 @@ construct_range_to_endpoint_map(
     std::unordered_map<dht::token_range, host_id_vector_replica_set> res;
     res.reserve(ranges.size());
     for (auto r : ranges) {
+        // FIXME: pass is_vnode=true to get_natural_replicas once the ranges reflect vndes
         res[r] = erm->get_natural_replicas(
                 r.end() ? r.end()->value() : dht::maximum_token());
         co_await coroutine::maybe_yield();

@@ -1018,11 +1018,11 @@ public:
 
     virtual ~tablet_effective_replication_map() = default;
 
-    virtual host_id_vector_replica_set get_replicas(const token& search_token) const override {
+    virtual host_id_vector_replica_set get_replicas(const token& search_token, bool is_vnode = false) const override {
         return to_host_set(get_replicas_for_write(search_token));
     }
 
-    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token) const override {
+    virtual host_id_vector_replica_set get_natural_replicas(const token& search_token, bool is_vnode = false) const override {
         return to_host_set(get_replicas_for_write(search_token));
     }
 
@@ -1047,7 +1047,7 @@ public:
         return get_pending_helper(search_token);
     }
 
-    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token) const override {
+    virtual host_id_vector_replica_set get_replicas_for_reading(const token& search_token, bool is_vnode = false) const override {
         return get_for_reading_helper(search_token);
     }
 
