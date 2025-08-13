@@ -80,22 +80,28 @@ class ResourceGather(ABC):
         if self.own_loop:
             self.loop.close()
 
-    def run_process(self, args: list[str], timeout: float, output_file: Path, env: dict = None) -> subprocess.Popen[str]:
+    def run_process(self,
+                    args: list[str],
+                    timeout: float,
+                    output_file: Path,
+                    cwd: Path | None = None,
+                    env: dict | None = None) -> subprocess.Popen[str]:
 
-        args = shlex.split(' '.join(args))
+        args = shlex.split(subprocess.list2cmdline(args))
         if env:
             env.update(os.environ)
         else:
             env = os.environ.copy()
         p = subprocess.Popen(
-            args,
-            stdout=output_file.open('w'),
-            stderr=subprocess.STDOUT,
+            args=args,
             bufsize=1,
-            text=True,
+            stdout=output_file.open(mode="w", encoding="utf-8"),
+            stderr=subprocess.STDOUT,
+            preexec_fn=self.put_process_to_cgroup,
             close_fds=True,
+            cwd=cwd,
             env=env,
-            preexec_fn = self.put_process_to_cgroup
+            text=True,
         )
         try:
             p.communicate(timeout=timeout)
@@ -165,13 +171,18 @@ class ResourceGatherOn(ResourceGather):
                 self._parse_cpu_stat(file, test_metrics)
         return test_metrics
 
-    def run_process(self, args: list[str], timeout: float, output_file: Path, env: dict = None) -> subprocess.Popen[str]:
+    def run_process(self,
+                    args: list[str],
+                    timeout: float,
+                    output_file: Path,
+                    cwd: Path | None = None,
+                    env: dict | None = None) -> subprocess.Popen[str]:
         stop_monitoring = asyncio.Event()
 
         self.test.time_start = time.time()
         test_resource_watcher = self.cgroup_monitor(test_event=stop_monitoring)
         try:
-            p = super().run_process(args, timeout, output_file, env)
+            p = super().run_process(args=args, timeout=timeout, output_file=output_file, cwd=cwd, env=env)
         finally:
             stop_monitoring.set()
             self.test.time_end = time.time()
