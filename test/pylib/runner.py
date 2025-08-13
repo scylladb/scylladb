@@ -35,6 +35,7 @@ from test.pylib.s3_proxy import S3ProxyServer
 from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
+    TEST_CONFIG_FILENAME,
     TestSuite,
     get_testpy_test,
 )
@@ -49,8 +50,6 @@ if TYPE_CHECKING:
 
     from test.pylib.suite.base import Test
 
-
-TEST_CONFIG_FILENAME = "test_config.yaml"
 
 REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
