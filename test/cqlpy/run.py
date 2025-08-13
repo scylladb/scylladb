@@ -227,13 +227,15 @@ import ssl
 # by setting a SCYLLA environment variable:
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
 scylla = None
-def find_scylla():
+def find_scylla(mode:str = None):
     global scylla
     global source_path
     if scylla:
         return scylla
     if os.getenv('SCYLLA'):
         scylla = os.path.abspath(os.getenv('SCYLLA'))
+    elif mode:
+        scylla = os.path.join(source_path, f"build/{mode}/scylla")
     else:
         scyllas = glob.glob(os.path.join(source_path, 'build/*/scylla'))
         if not scyllas:
