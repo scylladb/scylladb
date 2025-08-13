@@ -497,7 +497,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
         candidates_list& rack_list = existing.empty() ? new_racks : existing_racks;
         auto& candidate = rack_list.emplace_back(rack);
         for (const auto& node : nodes) {
-            if (!node.get().is_normal()) {
+            if (!node.get().is_normal() || node.get().is_draining()) {
                 continue;
             }
             const auto& host_id = node.get().host_id();

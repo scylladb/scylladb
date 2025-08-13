@@ -676,6 +676,15 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
     }
 
+    for (auto [node, req] : t.requests) {
+        if (req == topology_request::leave || req == topology_request::remove) {
+            locator::node* n = tmptr->get_topology().find_node(locator::host_id(node.uuid()));
+            if (n) {
+                n->set_draining(true);
+            }
+        }
+    }
+
     auto nodes_to_release = t.left_nodes;
     nodes_to_release.insert(t.ignored_nodes.begin(), t.ignored_nodes.end());
     for (const auto& id: nodes_to_release) {
@@ -833,6 +842,16 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         }
         tablets->set_balancing_enabled(topology.tablet_balancing_enabled);
         tmptr->set_tablets(std::move(*tablets));
+
+        if (_feature_service.parallel_tablet_draining) {
+            for (auto&& [node, req]: topology.requests) {
+                if (req == topology_request::leave || req == topology_request::remove) {
+                    if (tmptr->tablets().has_replica_on(locator::host_id(node.uuid()))) {
+                        topology.paused_requests.emplace(node, req);
+                    }
+                }
+            }
+        }
 
         co_await replicate_to_all_cores(std::move(tmptr));
         co_await notify_nodes_after_sync(std::move(nodes_to_notify));

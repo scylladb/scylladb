@@ -69,6 +69,19 @@ struct load_balancer_dc_stats {
     }
 };
 
+class drain_failure {
+    locator::host_id _node;
+    sstring _reason;
+public:
+    drain_failure(locator::host_id node, sstring reason)
+        : _node(node)
+        , _reason(std::move(reason))
+    { }
+
+    const locator::host_id& node() const { return _node; }
+    const sstring& reason() const { return _reason; }
+};
+
 struct load_balancer_node_stats {
     double load = 0;
 };
@@ -177,17 +190,19 @@ private:
     tablet_repair_plan _repair_plan;
     tablet_rack_list_colocation_plan _rack_list_colocation_plan;
     bool _has_nodes_to_drain = false;
+    std::vector<drain_failure> _drain_failures;
 public:
     /// Returns true iff there are decommissioning nodes which own some tablet replicas.
     bool has_nodes_to_drain() const { return _has_nodes_to_drain; }
 
     const migrations_vector& migrations() const { return _migrations; }
-    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size() && !_rack_list_colocation_plan.size(); }
-    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size(); }
+    bool empty() const { return _migrations.empty() && !_resize_plan.size() && !_repair_plan.size() && !_rack_list_colocation_plan.size() && _drain_failures.empty(); }
+    size_t size() const { return _migrations.size() + _resize_plan.size() + _repair_plan.size() + _rack_list_colocation_plan.size() + _drain_failures.size(); }
     size_t tablet_migration_count() const { return _migrations.size(); }
     size_t resize_decision_count() const { return _resize_plan.size(); }
     size_t tablet_repair_count() const { return _repair_plan.size(); }
     size_t tablet_rack_list_colocation_count() const { return _rack_list_colocation_plan.size(); }
+    const std::vector<drain_failure>& drain_failures() const { return _drain_failures; }
 
     void add(tablet_migration_info info) {
         _migrations.emplace_back(std::move(info));
@@ -199,8 +214,13 @@ public:
         }
     }
 
+    void add(drain_failure failure) {
+        _drain_failures.emplace_back(std::move(failure));
+    }
+
     void merge(migration_plan&& other) {
         std::move(other._migrations.begin(), other._migrations.end(), std::back_inserter(_migrations));
+        std::move(other._drain_failures.begin(), other._drain_failures.end(), std::back_inserter(_drain_failures));
         _has_nodes_to_drain |= other._has_nodes_to_drain;
         _resize_plan.merge(std::move(other._resize_plan));
         _repair_plan.merge(std::move(other._repair_plan));
