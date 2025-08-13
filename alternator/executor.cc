@@ -4559,6 +4559,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (const auto& rs : requests) {
         std::string table = table_name(*rs.schema);
         size_t pos = 0;
+        uint64_t request_size = 0;
         rcu_half_units = 0;
         for (const auto &r : rs.requests) {
             auto& cks = r.second;
@@ -4573,6 +4574,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 for (rjson::value& json : results) {
                     rjson::push_back(response["Responses"][table], std::move(json));
                 }
+                request_size += responses_sizes[responses_sizes_pos][pos];
                 rcu_half_units += rcu_consumed_capacity_counter::get_half_units(responses_sizes[responses_sizes_pos][pos], rs.cl == db::consistency_level::LOCAL_QUORUM);
             } catch(...) {
                 eptr = std::current_exception();
@@ -4602,6 +4604,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         _stats.rcu_half_units_total += rcu_half_units;
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
         per_table_stats->rcu_half_units_total += rcu_half_units;
+        per_table_stats->operation_sizes.batch_get_item_op_size_kib.add(bytes_to_kib_ceil(request_size));
         if (should_add_rcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", table);

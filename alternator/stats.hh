@@ -85,6 +85,12 @@ public:
         // covers the range 0 - 446. Resolves #25143.
         // A size is the retrieved item size.
         utils::estimated_histogram get_item_op_size_kib{30};
+
+        // A size is the sum of the sizes of all items per table. This means
+        // that a single BatchGetItem / BatchWriteItem updates the histogram
+        // for each table that it has items in.
+        // The sizes are the retrieved item sizes grouped per table.
+        utils::estimated_histogram batch_get_item_op_size_kib{30};
     } operation_sizes;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
