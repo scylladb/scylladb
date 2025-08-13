@@ -514,6 +514,64 @@ def test_batch_get_item_size_216kib_split_item_falls_into_appropriate_bucket(tes
         })
     check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
 
+def test_put_item_size_no_items_is_zero(metrics):
+    def do_test():
+        pass
+    check_histogram_metric_increases('PutItem', 'put_item_op_size_kb', metrics, do_test, [(0, '+Inf')])
+
+def test_put_item_many_items_fall_into_appropriate_buckets(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        # 216KiB
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 47 * 1024, 'b': 'b' * 169 * 1024})
+        # 256KiB
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 256 * 1024})
+        # 401KiB
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 401 * 1024})
+    check_histogram_metric_increases('PutItem', 'put_item_op_size_kb', metrics, do_test, [(0, '215.000000'), (2, '258.000000'), (2, '400.000000'), (3, '480.000000'), (3, '+Inf')])
+
+# Verify that only the new item size is counted in the histogram. The WCU is
+# calculated as the maximum of the old and new item sizes, but the histogram
+# should log only the new item size.
+def test_put_item_increases_metrics_for_new_item_size_only(test_table_s, metrics):
+    pk = random_string()
+    points = [[value, {'op': 'PutItem', 'le': le}] for value, le in [(0, '124.000000'), (1, '149.000000'), (1, '+Inf')]]
+
+    test_table_s.put_item(Item={'p': pk, 'a': 'a', 'b': 'b' * 250 * 1024})
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_put_item_op_size_kb_bucket', points):
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 128 * 1024})
+
+def test_delete_item_rbw_disabled_is_zero_for_nonexistent_item(test_table_s, metrics):
+    def do_test():
+        test_table_s.delete_item(Key={'p': random_string()})
+    check_histogram_metric_increases('DeleteItem', 'delete_item_op_size_kb', metrics, do_test, [(0, '+Inf')])
+
+def test_delete_item_rbw_disabled_many_items_fall_into_appropriate_buckets(test_table_s, metrics):
+    pks = [random_string() for _ in range(3)]
+    points = [[0, {'op': 'DeleteItem', 'le': '+Inf'}]]
+
+    test_table_s.put_item(Item={'p': pks[0], 'a': 'a' * 128 * 1024, 'b': 'b' * 250 * 1024})
+    test_table_s.put_item(Item={'p': pks[1], 'a': 'a' * 24 * 1024})
+    test_table_s.put_item(Item={'p': pks[2], 'a': 'a' * 401 * 1024})
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_delete_item_op_size_kb_bucket', points):
+        for pk in pks:
+            test_table_s.delete_item(Key={'p': pk})
+
+def test_delete_item_rbw_enabled_many_items_fall_into_appropriate_buckets(test_table_s, metrics, cql):
+    cql.execute("UPDATE system.config set value = 'true' WHERE name = 'alternator_force_read_before_write'")
+    pks = [random_string() for _ in range(3)]
+    points = [[value, {'op': 'DeleteItem', 'le': le}] for value, le in [(0, '24.000000'), (1, '29.000000'), (1, '372.000000'), (2, '400.000000'), (3, '480.000000'), (3, '+Inf')]]
+
+    # ~378KiB
+    test_table_s.put_item(Item={'p': pks[0], 'a': 'a' * 128 * 1024, 'b': 'b' * 250 * 1024})
+    # ~24KiB
+    test_table_s.put_item(Item={'p': pks[1], 'a': 'a' * 24 * 1024})
+    # ~401KiB
+    test_table_s.put_item(Item={'p': pks[2], 'a': 'a' * 401 * 1024})
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_delete_item_op_size_kb_bucket', points):
+        for pk in pks:
+            test_table_s.delete_item(Key={'p': pk})
+
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 
 # Test that unsupported operations operations increment a counter. Instead

@@ -154,8 +154,12 @@ static void register_metrics_with_optional_table(seastar::metrics::metric_groups
                     [&stats]{ return estimated_histogram_to_metrics(stats.api_operations.batch_get_item_histogram);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("batch_item_count_histogram", seastar::metrics::description("Histogram of the number of items in a batch request"), labels,
                     [&stats]{ return estimated_histogram_to_metrics(stats.api_operations.batch_write_item_histogram);})(op("BatchWriteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_histogram("put_item_op_size_kb", seastar::metrics::description("Histogram of item sizes for items created or replaced by the PutItem operation"), labels,
+                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.put_item_op_size_kb);})(op("PutItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("get_item_op_size_kib", seastar::metrics::description("Histogram of item sizes in GetItem requests"), labels,
                     [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.get_item_op_size_kib);})(op("GetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
+            seastar::metrics::make_histogram("delete_item_op_size_kb", seastar::metrics::description("Histogram of deleted items' sizes"), labels,
+                    [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.delete_item_op_size_kb);})(op("DeleteItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
             seastar::metrics::make_histogram("batch_get_item_op_size_kib", seastar::metrics::description("Histogram of item sizes in BatchGetItem requests"), labels,
                     [&stats]{ return estimated_histogram_to_metrics(stats.operation_sizes.batch_get_item_op_size_kib);})(op("BatchGetItem")).aggregate({seastar::metrics::shard_label}).set_skip_when_empty(),
     });

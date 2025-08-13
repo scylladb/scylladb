@@ -83,9 +83,9 @@ public:
     // the range 0 - 576. The breakpoint at 400KB is there because DynamoDB
     // doesn't support larger items. Resolves #25143.
     struct {
-        // utils::estimated_histogram put_item_op_size_kb{32, {400}};
+        utils::estimated_histogram put_item_op_size_kb{32, {400}};
         utils::estimated_histogram get_item_op_size_kib{32, {400}};
-        // utils::estimated_histogram delete_item_op_size_kb{32, {400}};
+        utils::estimated_histogram delete_item_op_size_kb{32, {400}};
         // utils::estimated_histogram update_item_op_size_kb{32, {400}};
         // utils::estimated_histogram scan_op_size_kb{32, {400}};
         // utils::estimated_histogram batch_write_item_size_kb{32, {400}};
