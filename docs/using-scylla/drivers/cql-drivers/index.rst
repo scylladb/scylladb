@@ -25,6 +25,7 @@ The following ScyllaDB drivers are available:
 * :doc:`C++ Driver </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
 * `CPP-over-Rust Driver <https://github.com/scylladb/cpp-rust-driver>`_
 * :doc:`Rust Driver </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
+* `C# Driver <https://csharp-driver.docs.scylladb.com/>`_
 
 We recommend using ScyllaDB drivers. All ScyllaDB drivers are shard-aware and provide additional 
 benefits over third-party drivers.
@@ -57,7 +58,9 @@ The following table specifies which ScyllaDB drivers include a library for
    * - `CPP-over-Rust Driver <https://github.com/scylladb/cpp-rust-driver>`_
      - |x|
    * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
-     - |v| 
+     - |v|
+   * - `C# Driver <https://csharp-driver.docs.scylladb.com/>`_
+     - |x| 
 
 Support for Tablets
 -------------------------
@@ -95,6 +98,9 @@ The following table specifies which ScyllaDB drivers support
    * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
      - |v| 
      - 0.13.0
+   * - `C# Driver <https://csharp-driver.docs.scylladb.com/>`_
+     - |v|
+     - All versions
 
 Driver Support Policy
 -------------------------------
