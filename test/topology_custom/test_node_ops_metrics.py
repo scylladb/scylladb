@@ -22,7 +22,7 @@ async def test_bootstrap_removenode_metrics(manager):
         metric_name = "scylla_node_ops_finished_percentage"
         shard = 0
         while True:
-            cnt = metrics.get(name=metric_name, labels={'ops': ops}, shard=str(shard))
+            cnt = metrics.get(metric_name, {'ops': ops, 'shard': str(shard)})
             if cnt == None:
                 break
             logger.info(f"Checking {shard=} {cnt=}")
