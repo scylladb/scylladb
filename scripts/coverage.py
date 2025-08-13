@@ -151,6 +151,7 @@ def generate_coverage_report(path="build/coverage/test", name="tests", input_fil
         subprocess.check_call(["llvm-cov", "export", "-format=lcov", f"-instr-profile={profdata_path}"] + [f"-object={exe}" for exe in test_executables], stdout=f)
 
     html_report_path = os.path.join(path, f"{name}")
+    os.makedirs(html_report_path, exist_ok=True)
     html_report_url = os.path.abspath(os.path.join(html_report_path, "index.html"))
 
     maybe_print(f"Generating html report in {html_report_path}")
