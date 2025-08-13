@@ -530,6 +530,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     auto update_topology = [&] (locator::host_id id, const replica_state& rs) {
         tmptr->update_topology(id, locator::endpoint_dc_rack{rs.datacenter, rs.rack},
                                to_topology_node_state(rs.state), rs.shard_count);
+        tmptr->get_topology().find_node(id)->set_draining(rs.draining);
     };
 
     std::vector<future<>> sys_ks_futures;

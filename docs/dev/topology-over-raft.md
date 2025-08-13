@@ -69,34 +69,34 @@ stateDiagram-v2
     normal --> decommissioning: leave
     normal --> removing: remove
     state decommissioning {
+        de_tablet_migration0 : tablet_migration (draining)
+        de_tablet_migration1 : tablet_migration
+        [*] --> de_tablet_migration0
+        de_tablet_migration0 --> [*]: aborted
         de_left_token_ring : left_token_ring
-        de_tablet_draining : tablet_draining 
-        de_tablet_migration : tablet_migration
         de_write_both_read_old: write_both_read_old
         de_write_both_read_new : write_both_read_new
         de_rollback_to_normal : rollback_to_normal
-        [*] --> de_tablet_draining
-        de_tablet_draining --> de_rollback_to_normal: rollback
-        de_rollback_to_normal --> de_tablet_migration
-        de_tablet_draining --> de_write_both_read_old
-        de_tablet_migration --> [*] 
+        de_rollback_to_normal --> de_tablet_migration1
+        de_tablet_migration0 --> de_write_both_read_old
+        de_tablet_migration1 --> [*]
         de_write_both_read_old --> de_write_both_read_new: streaming completed
         de_write_both_read_old --> de_rollback_to_normal: rollback
         de_write_both_read_new --> de_left_token_ring
         de_left_token_ring --> [*]
     }
     state removing {
+        re_tablet_migration0 : tablet_migration (draining)
+        re_tablet_migration1 : tablet_migration
+        [*] --> re_tablet_migration0
+        re_tablet_migration0 --> [*]: aborted
         re_left_token_ring : left_token_ring
-        re_tablet_draining : tablet_draining
-        re_tablet_migration : tablet_migration
         re_write_both_read_old : write_both_read_old
         re_write_both_read_new : write_both_read_new
         re_rollback_to_normal : rollback_to_normal
-        [*] --> re_tablet_draining
-        re_tablet_draining --> re_rollback_to_normal: rollback
-        re_rollback_to_normal --> re_tablet_migration
-        re_tablet_migration --> [*]
-        re_tablet_draining --> re_write_both_read_old
+        re_rollback_to_normal --> re_tablet_migration1
+        re_tablet_migration1 --> [*]
+        re_tablet_migration0 --> re_write_both_read_old
         re_write_both_read_old --> re_write_both_read_new: streaming completed
         re_write_both_read_old --> re_rollback_to_normal: rollback
         re_write_both_read_new --> re_left_token_ring
@@ -181,6 +181,25 @@ are the currently supported global topology operations:
    contain replicas of the table being truncated. It uses [sessions](#Topology guards)
    to make sure that no stale RPCs are executed outside of the scope of the request.
 
+## Tablet draining
+
+Node requests of type `leave` (decommission) and `remove` start by setting `draining=true` for the
+target node and putting topology state machine in the `tablet_migration` transition. Tablet
+scheduler will work to migrate tablets away from those nodes.
+
+The node request is put in the paused state, and will be ignored by topology coordinator's scheduler.
+This allows other topology requests to preempt tablet balancing and execute.
+
+The node's state is still `normal` during tablet draining phase.
+
+When tablet scheduler is done with migrating all tablets away from a draining node,
+the associated request is unpaused, and can be picked by topology coordinator again
+for execution. This time it will enter the `write_both_read_old` transition and proceed
+with the vnode part.
+
+This allows multiple requests to drain tablets in parallel, and other requests to not be blocked
+by long `leave` and `remove` requests.
+
 ## Zero-token nodes
 
 Zero-token nodes (the nodes started with `join_ring=false`) never own tokens or become
@@ -220,12 +239,6 @@ When the topology state machine is not in the tablet_migration track, it is guar
 that there are no tablet transitions in the system.
 
 Tablets are migrated in parallel and independently.
-
-There is a variant of tablet migration track called tablet draining track, which is invoked
-as a step of certain topology operations (e.g. decommission, removenode). Its goal is to readjust tablet replicas
-so that a given topology change can proceed. For example, when decommissioning a node, we
-need to migrate tablet replicas away from the node being decommissioned.
-Tablet draining happens before making changes to vnode-based replication.
 
 ## Node replace with tablets
 
@@ -699,6 +712,8 @@ CREATE TABLE system.topology (
     tokens set<text>,
     tokens_string text,
     topology_request text,
+    request_paused boolean,
+    draining boolean,
     transition_state text static,
     cleanup_status text,
     supported_features set<uuid>,
@@ -733,6 +748,8 @@ Each node has a clustering row in the table where its `host_id` is the clusterin
 - `release_version`    -  the node's `version::current()` (corresponding to a Cassandra version, used by drivers)
 - `node_state`         -  current state of the node (as described earlier)
 - `topology_request`   -  if set contains one of the supported node-specific topology requests
+- `request_paused`     -  set to true when node request should be ignored by the scheduler because it's waiting for the node to be drained of tablet replicas
+- `draining`           -  set to true by `leave` or `remove` requests to indicate to the tablet scheduler that tablets should be migrated away from the node
 - `tokens`             -  if set contains a list of tokens that belongs to the node
 - `replaced_id`        -  if the node replacing or replaced another node here will be the id of that node
 - `rebuild_option`     -  if the node is being rebuild contains datacenter name that is used as a rebuild source

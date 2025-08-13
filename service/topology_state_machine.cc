@@ -289,6 +289,12 @@ void topology_state_machine::generate_cancel_request_update(utils::chunked_vecto
     auto& node_builder = builder.with_node(node)
             .del("topology_request");
 
+    if (features.parallel_tablet_draining) {
+        node_builder
+            .del("request_paused")
+            .del("draining");
+    }
+
     switch (req) {
         case topology_request::replace:
             [[fallthrough]];

@@ -286,6 +286,8 @@ schema_ptr system_keyspace::topology() {
             .with_column("node_state", utf8_type)
             .with_column("release_version", utf8_type)
             .with_column("topology_request", utf8_type)
+            .with_column("request_paused", boolean_type)
+            .with_column("draining", boolean_type)
             .with_column("replaced_id", uuid_type)
             .with_column("rebuild_option", utf8_type)
             .with_column("num_tokens", int32_type)
@@ -3196,6 +3198,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
         sstring cleanup_status = row.get_as<sstring>("cleanup_status");
         utils::UUID request_id = row.get_as<utils::UUID>("request_id");
 
+        bool draining = row.get_opt<bool>("draining").value_or(false);
+        bool request_paused = row.get_opt<bool>("request_paused").value_or(false);
+
         service::node_state nstate = service::node_state_from_string(row.get_as<sstring>("node_state"));
 
         std::optional<service::ring_slice> ring_slice;
@@ -3248,6 +3253,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
 
         if (row.has("topology_request")) {
             auto req = service::topology_request_from_string(row.get_as<sstring>("topology_request"));
+            if (request_paused) {
+                ret.paused_requests.emplace(host_id, req);
+            }
             ret.requests.emplace(host_id, req);
             switch(req) {
             case service::topology_request::replace:
@@ -3317,7 +3325,7 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
             map->emplace(host_id, service::replica_state{
                 nstate, std::move(datacenter), std::move(rack), std::move(release_version),
                 ring_slice, shard_count, ignore_msb, std::move(supported_features),
-                service::cleanup_status_from_string(cleanup_status), request_id});
+                service::cleanup_status_from_string(cleanup_status), request_id, draining, request_paused});
         }
     }
 

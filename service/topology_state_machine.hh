@@ -94,6 +94,8 @@ struct replica_state {
     std::set<sstring> supported_features;
     cleanup_status cleanup;
     utils::UUID request_id; // id of the current request for the node or the last one if no current one exists
+    bool draining;
+    bool request_paused;
 };
 
 struct topology_features {
@@ -111,7 +113,7 @@ struct topology {
     enum class transition_state: uint16_t {
         join_group0,
         commit_cdc_generation,
-        tablet_draining,
+        tablet_draining, // deprecated, not set after feature_service::parallel_tablet_draining is enabled.
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
@@ -153,6 +155,9 @@ struct topology {
 
     // Pending topology requests
     std::unordered_map<raft::server_id, topology_request> requests;
+
+    // Paused topology requests
+    std::unordered_map<raft::server_id, topology_request> paused_requests;
 
     // Holds parameters for a request per node and valid during entire
     // operation until the node becomes normal
