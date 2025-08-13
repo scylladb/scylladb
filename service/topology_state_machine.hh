@@ -20,6 +20,7 @@
 #include "utils/UUID.hh"
 #include "service/session.hh"
 #include "mutation/canonical_mutation.hh"
+#include "gms/feature_service.hh"
 
 namespace db {
     class system_keyspace;
@@ -242,6 +243,15 @@ struct topology_state_machine {
 
     future<> await_not_busy();
     future<sstring> wait_for_request_completion(db::system_keyspace& sys_ks, utils::UUID id, bool require_entry);
+
+    // Generates mutations that cancel a topology request which is active on the given node.
+    // If no request is found, or it cannot be canceled at this stage, no mutations are generated.
+    // In case it's topology_request::join/replace, you must also call respond_to_joining_node().
+    void generate_cancel_request_update(utils::chunked_vector<canonical_mutation>& muts,
+                                        gms::feature_service& features,
+                                        const group0_guard& guard,
+                                        raft::server_id node,
+                                        sstring reason);
 };
 
 // Raft leader uses this command to drive bootstrap process on other nodes
