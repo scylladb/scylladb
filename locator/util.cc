@@ -20,9 +20,7 @@ construct_range_to_endpoint_map(
     std::unordered_map<dht::token_range, host_id_vector_replica_set> res;
     res.reserve(ranges.size());
     for (auto r : ranges) {
-        // FIXME: pass is_vnode=true to get_natural_replicas once the ranges reflect vndes
-        res[r] = erm->get_natural_replicas(
-                r.end() ? r.end()->value() : dht::maximum_token());
+        res[r] = erm->get_natural_replicas(r.start()->value(), true);
         co_await coroutine::maybe_yield();
     }
     co_return res;
@@ -36,14 +34,14 @@ get_all_ranges(const utils::chunked_vector<token>& sorted_tokens) {
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
     ranges.reserve(size);
-    ranges.push_back(dht::token_range::make_ending_with(interval_bound<token>(sorted_tokens[0], true)));
-    co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
-        dht::token_range r(wrapping_interval<token>::bound(sorted_tokens[i - 1], false), wrapping_interval<token>::bound(sorted_tokens[i], true));
+        dht::token_range r(wrapping_interval<token>::bound(sorted_tokens[i - 1], true), wrapping_interval<token>::bound(sorted_tokens[i], false));
         ranges.push_back(r);
         co_await coroutine::maybe_yield();
     }
-    ranges.push_back(dht::token_range::make_starting_with(interval_bound<token>(sorted_tokens[size-1], false)));
+    // Add the wrapping range
+    ranges.emplace_back(wrapping_interval<token>::bound(sorted_tokens[size - 1], true), wrapping_interval<token>::bound(sorted_tokens[0], false));
+    co_await coroutine::maybe_yield();
 
     co_return ranges;
 }
