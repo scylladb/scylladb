@@ -1320,6 +1320,10 @@ future<stop_iteration> compaction_task_executor::maybe_retry(std::exception_ptr 
         if (throw_on_abort) {
             throw;
         }
+    } catch (sstables::scrub_skip_sstable_exception& e) {
+        switch_state(state::done);
+        cmlog.info("{}: {}: skipping", *this, e.what());
+        _cm._stats.errors++;
     } catch (storage_io_error& e) {
         cmlog.error("{}: failed due to storage io error: {}: stopping", *this, e.what());
         _cm._stats.errors++;
