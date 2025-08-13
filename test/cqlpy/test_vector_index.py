@@ -297,3 +297,26 @@ def test_try_enable_vector_search_with_cdc_disabled(scylla_only, cql, test_keysp
         # Allow creating the vector index when CDC is enabled again.
         assert alter_cdc(cql, table, {'enabled': True})
         assert create_index(cql, test_keyspace, table, "v")
+
+
+# This test reproduces VECTOR-179.
+# It performs a vector search with tracing enabled. An exception is expected
+# because the vector store node is not configured. However, due to the bug,
+# Scylla crashes instead of returning an error.
+@pytest.mark.parametrize(
+    "test_keyspace",
+    [
+        pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]),
+        "vnodes",
+    ],
+    indirect=True,
+)
+def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, scylla_only):
+    schema = "p int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="Vector Store is disabled"):
+            cql.execute(
+                f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
+                trace=True,
+            )
