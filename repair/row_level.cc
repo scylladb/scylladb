@@ -1161,20 +1161,8 @@ private:
         }
         auto& tinfo = tmap.get_tablet_info(id);
         auto sstables_repaired_at = tinfo.sstables_repaired_at;
-        std::vector<compaction_manager::compaction_reenabler> repair_compaction_reenablers;
-        auto views = co_await table.get_compaction_group_views_for_repair(_range);
-        for (auto view : views) {
-            auto cre =  co_await _db.local().get_compaction_manager().await_and_disable_compaction(*view);
-            rlogger.info("Disabled compaction for range={} session_id={} for incremental repair",
-                    _range, _frozen_topology_guard);
-            repair_compaction_reenablers.push_back(std::move(cre));
-
-            // This lock prevents the unrepaired compaction started by major compaction to run in parallel with repair.
-            // The unrepaired compaction started by minor compaction does not need to take the lock since it ignores
-            // sstables being repaired, so it can run in parallel with repair.
-            auto lock_holder = co_await _db.local().get_compaction_manager().get_incremental_repair_write_lock(*view, "row_level_repair");
-            rlogger.info("Got unrepaired compaction and repair lock for range={} session_id={} for incremental repair",
-                    _range, _frozen_topology_guard);
+        auto reenablers_and_holders = co_await table.get_compaction_reenablers_and_lock_holders_for_repair(_db.local(), _frozen_topology_guard, _range);
+        for (auto& lock_holder : reenablers_and_holders.lock_holders) {
             _rs._repair_compaction_locks[_frozen_topology_guard].push_back(std::move(lock_holder));
         }
         auto sstables = co_await table.take_storage_snapshot(_range);
@@ -1200,7 +1188,7 @@ private:
         // sstables particiating the repair have been marked as
         // being_repaired which will be ignored by the new unrepaired
         // compaction.
-        repair_compaction_reenablers.clear();
+        reenablers_and_holders.cres.clear();
         rlogger.info("Re-enabled compaction for range={} for incremental repair", _range);
     }
 

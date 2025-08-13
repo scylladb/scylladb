@@ -2048,6 +2048,25 @@ future<std::vector<compaction::compaction_group_view*>> table::get_compaction_gr
     co_return ret;
 }
 
+future<compaction_reenablers_and_lock_holders> table::get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
+        const service::frozen_topology_guard& guard, dht::token_range range) {
+    auto ret = compaction_reenablers_and_lock_holders();
+    auto views = co_await get_compaction_group_views_for_repair(range);
+    for (auto view : views) {
+        auto cre = co_await db.get_compaction_manager().await_and_disable_compaction(*view);
+        tlogger.info("Disabled compaction for range={} session_id={} for incremental repair", range, guard);
+        ret.cres.push_back(std::make_unique<compaction_reenabler>(std::move(cre)));
+
+        // This lock prevents the unrepaired compaction started by major compaction to run in parallel with repair.
+        // The unrepaired compaction started by minor compaction does not need to take the lock since it ignores
+        // sstables being repaired, so it can run in parallel with repair.
+        auto lock_holder = co_await db.get_compaction_manager().get_incremental_repair_write_lock(*view, "row_level_repair");
+        tlogger.info("Got unrepaired compaction and repair lock for range={} session_id={} for incremental repair", range, guard);
+        ret.lock_holders.push_back(std::move(lock_holder));
+    }
+    co_return ret;
+}
+
 future<> table::clear_being_repaired_for_range(dht::token_range range) {
     auto sgs = storage_groups_for_token_range(range);
     for (auto& sg : sgs) {
