@@ -464,6 +464,56 @@ def test_get_item_size_256kb_split_item_falls_into_appropriate_bucket(test_table
         test_table_s.get_item(Key={'p': pk})
     check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
 
+def test_batch_get_item_size_no_items_increases_zero_interval(test_table_s, metrics):
+    def do_test():
+        # Request a non-existent key via BatchGetItem so the returned item size is 0 KiB
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {
+                'Keys': [{'p': random_string()}],
+                'ConsistentRead': True,
+            }
+        })
+    check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(1, '1.000000'), (1, '+Inf')])
+
+def test_batch_get_item_size_256kib_item_falls_into_appropriate_bucket(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        # 256KiB item
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 256 * 1024})
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {
+                'Keys': [{'p': pk}],
+                'ConsistentRead': True,
+            }
+        })
+    check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
+
+def test_batch_get_item_size_401kib_item_falls_into_appropriate_bucket(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        # 256KiB item
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 401 * 1024})
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {
+                'Keys': [{'p': pk}],
+                'ConsistentRead': True,
+            }
+        })
+    check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(0, '400.000000'), (1, '480.000000'), (1, '+Inf')])
+
+def test_batch_get_item_size_216kib_split_item_falls_into_appropriate_bucket(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        # 256KiB item
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 47 * 1024, 'b': 'b' * 169 * 1024})
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {
+                'Keys': [{'p': pk}],
+                'ConsistentRead': True,
+            }
+        })
+    check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
+
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 
 # Test that unsupported operations operations increment a counter. Instead

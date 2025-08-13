@@ -89,7 +89,7 @@ public:
         // utils::estimated_histogram update_item_op_size_kb{32, {400}};
         // utils::estimated_histogram scan_op_size_kb{32, {400}};
         // utils::estimated_histogram batch_write_item_size_kb{32, {400}};
-        // utils::estimated_histogram batch_get_item_size_kb{32, {400}};
+        utils::estimated_histogram batch_get_item_op_size_kib{32, {400}};
         // utils::estimated_histogram query_size_kb{32, {400}};
         // Czy to też:
         // utils::estimated_histogram list_streams_size_kb{32, {400}};
@@ -124,6 +124,10 @@ struct table_stats {
     seastar::metrics::metric_groups _metrics;
     lw_shared_ptr<stats> _stats;
 };
+
 void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats);
+inline uint64_t to_kib_bucket(uint64_t bytes) {
+    return (bytes + 1023) / 1024;
+}
 
 }
