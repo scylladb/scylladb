@@ -287,7 +287,9 @@ class TestCQLAudit(AuditTester):
         with the node as tie breaker.
         """
         consistency_level = ConsistencyLevel.QUORUM if len(self.cluster.nodelist()) > 1 else ConsistencyLevel.ONE
-        return self.helper.get_audit_log_list(session, consistency_level)
+        log_list = self.helper.get_audit_log_list(session, consistency_level)
+        logger.debug(f"get_audit_log_list: {log_list}")
+        return log_list
 
     # This assert is added just in order to still fail the test if the order of columns is changed, this is an implied assumption
     def assert_audit_row_fields(self, row):
@@ -456,7 +458,7 @@ class TestCQLAudit(AuditTester):
         assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
 
         new_rows = rows_after[len(rows_before) :]
-        assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: {rows_after}"
+        assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: rows_after={rows_after}, set_of_rows_after={set_of_rows_after}, set_of_rows_before={set_of_rows_before}"
 
         if merge_duplicate_rows:
             new_rows = self.deduplicate_audit_entries(new_rows)
