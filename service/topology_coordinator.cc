@@ -292,6 +292,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
         }
 
         std::optional<std::pair<raft::server_id, topology_request>> next_req;
+        bool at_least_one_can_proceed = false;
 
         for (auto& req : topo.requests) {
             auto enough_live_nodes = [&] {
@@ -309,13 +310,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                 return true;
             };
             if (enough_live_nodes()) {
-                if (!next_req || next_req->second > req.second) {
-                    next_req = req;
+                at_least_one_can_proceed = true;
+                if (!topo.paused_requests.contains(req.first)) {
+                    if (!next_req || next_req->second > req.second) {
+                        next_req = req;
+                    }
                 }
             }
         }
 
         if (!next_req) {
+            if (at_least_one_can_proceed) {
+                return std::move(guard);
+            }
             // We did not find a request that has enough live node to proceed
             // Cancel all requests to let admin know that no operation can succeed
             rtlogger.warn("topology coordinator: cancel request queue because no request can proceed. Dead nodes: {}", dead_nodes);
@@ -1403,9 +1410,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
     future<> generate_migration_updates(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const migration_plan& plan) {
         if (plan.resize_plan().finalize_resize.empty() || plan.has_nodes_to_drain()) {
             // schedule tablet migration only if there are no pending resize finalisations or if the node is draining.
-            for (const tablet_migration_info& mig : plan.migrations()) {
-                co_await coroutine::maybe_yield();
-                generate_migration_update(out, guard, mig);
+
+            // Do not schedule migrations if there are drain failures because the plan is invalid.
+            // Load allocation will change after drain is lifted.
+            if (!plan.drain_failures().empty()) {
+                for (auto&& drain_fail : plan.drain_failures()) {
+                    co_await coroutine::maybe_yield();
+                    auto server_id = raft::server_id(drain_fail.node().uuid());
+                    _topo_sm.generate_cancel_request_update(out, _feature_service, guard, server_id, drain_fail.reason());
+                }
+            } else {
+                for (const tablet_migration_info& mig: plan.migrations()) {
+                    co_await coroutine::maybe_yield();
+                    generate_migration_update(out, guard, mig);
+                }
             }
 
             if (auto request_to_resume = plan.rack_list_colocation_plan().request_to_resume(); request_to_resume) {
@@ -2705,6 +2723,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                     break;
                 }
 
+                if (node.rs->state == node_state::decommissioning || node.rs->state == node_state::removing) {
+                    // Tablets should have been drained earlier, in tablet_draining transition state
+                    // or in tablet migration transition state when request was in paused state.
+                    if (get_token_metadata_ptr()->tablets().has_replica_on(locator::host_id(node.id.uuid()))) {
+                        rtlogger.error("node {} still has tablets in stage write_both_read_old", node.id);
+                        _rollback = "Node still has tablets in stage write_both_read_old";
+                        break;
+                    }
+                }
+
                 if (_group0.is_member(node.id, true)) {
                     // If we remove a node, we make it a non-voter early to improve availability in some situations.
                     // There is no downside to it because the removed node is already considered dead by us.
@@ -3240,8 +3268,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                         // start decommission and put tokens of decommissioning nodes into write_both_read_old state
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
-                        builder.set_transition_state(topology::transition_state::tablet_draining)
+                        auto session = session_id(node.guard.new_group0_state_id());
+                        builder.set_transition_state(_feature_service.parallel_tablet_draining
+                                    ? topology::transition_state::write_both_read_old
+                                    : topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
+                               .set_session(session)
                                .with_node(node.id)
                                .set("node_state", node_state::decommissioning)
                                .del("topology_request");
@@ -3264,8 +3296,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber
                             break;
                         }
 
-                        builder.set_transition_state(topology::transition_state::tablet_draining)
+                        auto session = session_id(node.guard.new_group0_state_id());
+                        builder.set_transition_state(_feature_service.parallel_tablet_draining
+                                    ? topology::transition_state::write_both_read_old
+                                    : topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
+                               .set_session(session)
                                .with_node(node.id)
                                .set("node_state", node_state::removing)
                                .del("topology_request");

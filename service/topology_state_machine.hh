@@ -118,7 +118,7 @@ struct topology {
     enum class transition_state: uint16_t {
         join_group0,
         commit_cdc_generation,
-        tablet_draining,
+        tablet_draining, // deprecated, not set after feature_service::parallel_tablet_draining is enabled.
         write_both_read_old,
         write_both_read_new,
         tablet_migration,
@@ -160,6 +160,11 @@ struct topology {
 
     // Pending topology requests
     std::unordered_map<raft::server_id, topology_request> requests;
+
+    // Paused topology requests.
+    // Those are pending requests which are ignored by the scheduler
+    // because they are waiting for the node to be drained of tablet replicas first.
+    std::unordered_map<raft::server_id, topology_request> paused_requests;
 
     // Holds parameters for a request per node and valid during entire
     // operation until the node becomes normal
@@ -226,6 +231,7 @@ struct topology {
     // Returns false iff we can safely start a new topology change.
     bool is_busy() const;
 
+    std::optional<topology_request> get_request(raft::server_id) const;
     std::optional<request_param> get_request_param(raft::server_id) const;
     static raft::server_id parse_replaced_node(const std::optional<request_param>&);
 

@@ -1581,12 +1581,14 @@ static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metad
 }
 
 static bool is_normal_token_owner(const token_metadata& tm, locator::host_id host) {
-    return tm.is_normal_token_owner(host) && !tm.is_leaving(host);
+    auto& node = tm.get_topology().get_node(host);
+    return tm.is_normal_token_owner(host) && !tm.is_leaving(host) && !node.is_draining();
 }
 
 static bool is_transitioning_token_owner(const token_metadata& tm, locator::host_id host) {
+    auto& node = tm.get_topology().get_node(host);
     return tm.get_topology().get_node(host).is_bootstrapping() ||
-        (tm.is_normal_token_owner(host) && tm.is_leaving(host));
+        (tm.is_normal_token_owner(host) && (tm.is_leaving(host) || node.is_draining()));
 }
 
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
@@ -1649,7 +1651,7 @@ rack_list get_allowed_racks(const locator::token_metadata& tm, const sstring& dc
     auto normal_nodes = [&] (const sstring& rack) {
         int count = 0;
         for (auto n : topo.get_datacenter_rack_nodes().at(dc).at(rack)) {
-            count += int(n.get().is_normal());
+            count += int(n.get().is_normal() && !n.get().is_draining());
         }
         return count;
     };

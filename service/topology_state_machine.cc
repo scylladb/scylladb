@@ -62,6 +62,14 @@ std::optional<request_param> topology::get_request_param(raft::server_id id) con
     return std::nullopt;
 };
 
+std::optional<topology_request> topology::get_request(raft::server_id id) const {
+    auto it = requests.find(id);
+    if (it != requests.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+};
+
 std::set<sstring> calculate_not_yet_enabled_features(const std::set<sstring>& enabled_features, const auto& supported_features) {
     std::set<sstring> to_enable;
     bool first = true;

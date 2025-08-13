@@ -628,6 +628,14 @@ class load_balancer {
         uint64_t tablet_count = 0;
         std::optional<disk_usage> dusage; // Invariant: bool(dusage) || drained.
         bool drained = false;
+        bool excluded = false;
+
+        // Engaged if and only if drained == true.
+        // Determines whether the action is to migrate (leave request) or rebuild (remove request).
+        // Looking at is_excluded() is not sufficient because a node may be marked as excluded during decommission,
+        // and we don't want to silently upgrade it to a remove operation, which accepts a replica loss.
+        std::optional<topology_request> req;
+
         const locator::node* node; // never nullptr
 
         // The average shard load on this node.
@@ -1089,6 +1097,7 @@ public:
         load.id = host;
         load.node = node;
         load.shard_count = node->get_shard_count();
+        load.excluded = node->is_excluded();
         if (!load.shard_count) {
             throw std::runtime_error(format("Shard count of {} not found in topology", host));
         }
@@ -1702,7 +1711,7 @@ public:
         std::unordered_map<endpoint_dc_rack, unsigned> shards_per_rack;
         std::unordered_map<sstring, std::unordered_set<sstring>> racks_per_dc;
         _tm->for_each_token_owner([&] (const node& n) {
-            if (n.is_normal()) {
+            if (n.is_normal() && !n.is_draining()) {
                 shards_per_dc[n.dc_rack().dc] += n.get_shard_count();
                 shards_per_rack[n.dc_rack()] += n.get_shard_count();
                 racks_per_dc[n.dc_rack().dc].insert(n.dc_rack().rack);
@@ -3246,8 +3255,11 @@ public:
                     if (src_node_info.drained && skip.viable_targets.empty()) {
                         auto tablet = tablets.tablets().front();
                         auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
-                        throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
-                                                        tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
+                        auto reason = fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
+                                    tablet, src, nodes_to_drain, nodes_by_load_dst, replicas);
+                        lblogger.warn("{}", reason);
+                        plan.add(drain_failure(src_node_info.id, reason));
+                        return;
                     }
                     lblogger.debug("Adding replica {} of candidate {} to skipped list with the viable targets {}", src, candidate, skip.viable_targets);
                     src_node_info.skipped_candidates.emplace_back(src, tablets, std::move(skip.viable_targets));
@@ -3257,6 +3269,9 @@ public:
                 if (skip) {
                     for (auto&& [skip_info, tablets] : *skip) {
                         process_skip_info(tablets, skip_info);
+                    }
+                    if (!plan.drain_failures().empty()) {
+                        break;
                     }
                     continue;
                 }
@@ -3269,8 +3284,14 @@ public:
                 _stats.for_dc(_dc).migrations_from_skiplist++;
             }
 
+            if (src_node_info.req && *src_node_info.req == topology_request::leave && src_node_info.excluded) {
+                plan.add(drain_failure(src_node_info.id, "Node was marked as excluded"));
+                break;
+            }
+
             tablet_transition_kind kind = (src_node_info.state() == locator::node::state::being_removed
-                                           || src_node_info.state() == locator::node::state::left)
+                                           || src_node_info.state() == locator::node::state::left
+                                           || (src_node_info.req && *src_node_info.req == topology_request::remove))
                        ? locator::choose_rebuild_transition_kind(_db.features()) : tablet_transition_kind::migration;
             auto mig = get_migration_info(source_tablets, kind, src, dst);
             auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
@@ -3415,15 +3436,26 @@ public:
             if (!node_filter(node)) {
                 return;
             }
-            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
-                              || node.get_state() == locator::node::state::being_removed;
-            if (node.get_state() == locator::node::state::normal || is_drained) {
-                if (is_drained) {
-                    ensure_node(nodes, node.host_id());
-                    lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc);
-                    nodes_to_drain.emplace(node.host_id());
-                    nodes[node.host_id()].drained = true;
-                } else if (node.is_excluded()) {
+
+            auto drain_node = [&] (topology_request req) {
+                lblogger.info("Will drain node {} ({}) from DC {} due to {} request", node.host_id(), node.get_state(), dc, req);
+                ensure_node(nodes, node.host_id());
+                nodes_to_drain.emplace(node.host_id());
+                auto& n = nodes[node.host_id()];
+                n.req = req;
+                n.drained = true;
+            };
+
+            auto req = _topology ? _topology->get_request(raft::server_id(node.host_id().uuid())) : std::nullopt;
+
+            if (node.get_state() == locator::node::state::being_decommissioned) {
+                drain_node(topology_request::leave);
+            } else if (node.get_state() == locator::node::state::being_removed) {
+                drain_node(topology_request::remove);
+            } else if (req && (*req == topology_request::leave || *req == topology_request::remove)) {
+                drain_node(*req);
+            } else if (node.get_state() == locator::node::state::normal) {
+                if (node.is_excluded()) {
                     // Excluded nodes should not be chosen as targets for migration.
                     lblogger.debug("Ignoring excluded node {}: state={}", node.host_id(), node.get_state());
                 } else {
@@ -3549,9 +3581,9 @@ public:
             return !load.drained;
         });
         if (!has_dest_nodes) {
-            if (!nodes_to_drain.empty()) {
-                throw std::runtime_error(format("There are nodes with tablets to drain but no candidate nodes in DC {}."
-                                                " Consider adding new nodes or reducing replication factor.", dc));
+            for (auto host : nodes_to_drain) {
+                plan.add(drain_failure(host, format("No candidate nodes in DC {} to drain {}."
+                                                    " Consider adding new nodes or reducing replication factor.", dc, host)));
             }
             lblogger.debug("No candidate nodes");
             _stats.for_dc(dc).stop_no_candidates++;
