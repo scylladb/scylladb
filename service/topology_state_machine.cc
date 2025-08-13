@@ -279,6 +279,55 @@ future<sstring> topology_state_machine::wait_for_request_completion(db::system_k
     co_return sstring();
 }
 
+void topology_state_machine::generate_cancel_request_update(utils::chunked_vector<canonical_mutation>& muts,
+                                                            gms::feature_service& features,
+                                                            const group0_guard& guard,
+                                                            raft::server_id node,
+                                                            sstring reason) {
+    auto* server_rs = _topology.find(node);
+    if (!server_rs) {
+        return;
+    }
+
+    auto request_id = server_rs->second.request_id;
+    if (!request_id) {
+        return;
+    }
+
+    auto i = _topology.requests.find(node);
+    if (i == _topology.requests.end()) {
+        // Request is not pending, and not cancelable at this stage.
+        return;
+    }
+    auto req = i->second;
+
+    tsmlogger.info("Will cancel {} request {} for node {}: {}", req, request_id, node, reason);
+
+    topology_mutation_builder builder(guard.write_timestamp());
+    auto& node_builder = builder.with_node(node)
+            .del("topology_request");
+
+    switch (req) {
+        case topology_request::replace:
+            [[fallthrough]];
+        case topology_request::join:
+            node_builder.set("node_state", node_state::left);
+            break;
+        case topology_request::leave:
+            [[fallthrough]];
+        case topology_request::rebuild:
+            [[fallthrough]];
+        case topology_request::remove:
+            break;
+    }
+
+    muts.emplace_back(builder.build());
+
+    topology_request_tracking_mutation_builder rtbuilder(request_id);
+    rtbuilder.done(std::move(reason));
+    muts.emplace_back(rtbuilder.build());
+}
+
 }
 
 auto fmt::formatter<service::cleanup_status>::format(service::cleanup_status status,
