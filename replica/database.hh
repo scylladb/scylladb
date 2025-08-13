@@ -78,6 +78,8 @@ class locked_cell;
 class mutation;
 
 class compaction_manager;
+class compaction_reenabler;
+
 class frozen_mutation;
 class reconcilable_result;
 

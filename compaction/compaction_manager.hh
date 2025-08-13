@@ -34,6 +34,7 @@
 #include "sstables/exceptions.hh"
 #include "tombstone_gc.hh"
 #include "utils/pluggable.hh"
+#include "compaction/compaction_reenabler.hh"
 
 namespace db {
 class compaction_history_entry;
@@ -366,27 +367,6 @@ public:
     // parameter job is a function that will carry the operation
     future<> run_custom_job(compaction::compaction_group_view& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, tasks::task_info info, throw_if_stopping do_throw_if_stopping);
 
-    class compaction_reenabler {
-        compaction_manager& _cm;
-        compaction::compaction_group_view* _table;
-        compaction::compaction_state& _compaction_state;
-        gate::holder _holder;
-
-    public:
-        compaction_reenabler(compaction_manager&, compaction::compaction_group_view&);
-        compaction_reenabler(compaction_reenabler&&) noexcept;
-
-        ~compaction_reenabler();
-
-        compaction::compaction_group_view* compacting_table() const noexcept {
-            return _table;
-        }
-
-        const compaction::compaction_state& compaction_state() const noexcept {
-            return _compaction_state;
-        }
-    };
-
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
     future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::compaction_group_view& t);
@@ -438,7 +418,7 @@ public:
 
     future<> await_ongoing_compactions(compaction_group_view* t);
 
-    compaction_manager::compaction_reenabler stop_and_disable_compaction_no_wait(compaction_group_view& t, sstring reason);
+    compaction_reenabler stop_and_disable_compaction_no_wait(compaction_group_view& t, sstring reason);
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -484,6 +464,7 @@ public:
     friend class compaction::rewrite_sstables_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;
+    friend compaction_reenabler;
 };
 
 namespace compaction {

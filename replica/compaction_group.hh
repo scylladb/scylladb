@@ -56,7 +56,7 @@ class compaction_group {
     // together.
     class compaction_group_view;
     // This is held throughout group lifetime, in order to have compaction disabled on non-compacting views.
-    std::vector<compaction_manager::compaction_reenabler> _compaction_disabler_for_views;
+    std::vector<compaction_reenabler> _compaction_disabler_for_views;
     // Logical compaction group representing the unrepaired sstables.
     std::unique_ptr<compaction_group_view> _unrepaired_view;
     // Logical compaction group representing the repairing sstables. Compaction disabled altogether on it.
