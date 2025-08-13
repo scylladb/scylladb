@@ -3569,6 +3569,9 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
     } catch (topology_coordinator::term_changed_error&) {
         // Term changed. We may no longer be a leader
         rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
+    } catch (seastar::rpc::remote_verb_error&) {
+        rtlogger.warn("topology change coordinator fiber got rpc::remote_verb_error {}", std::current_exception());
+        return true;
     } catch (...) {
         rtlogger.error("topology change coordinator fiber got error {}", std::current_exception());
         return true;
