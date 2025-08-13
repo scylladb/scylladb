@@ -1174,7 +1174,9 @@ indexed_table_select_statement::do_execute(query_processor& qp,
                              service::query_state& state,
                              const query_options& options) const
 {
-    tracing::add_table_name(state.get_trace_state(), _view_schema->ks_name(), _view_schema->cf_name());
+    if (_view_schema) {
+        tracing::add_table_name(state.get_trace_state(), _view_schema->ks_name(), _view_schema->cf_name());
+    }
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
 
     auto cl = options.get_consistency();
