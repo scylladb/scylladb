@@ -2664,7 +2664,7 @@ struct database::table_truncate_state {
     // This RP mark accounts for all data (includes memtable) generated until truncated_at.
     db::replay_position low_mark;
     db_clock::time_point truncated_at;
-    std::vector<compaction_manager::compaction_reenabler> cres;
+    std::vector<compaction_reenabler> cres;
     bool did_flush;
 };
 

@@ -722,7 +722,7 @@ future<> compaction_manager::update_static_shares(float static_shares) {
     return _compaction_controller.update_static_shares(static_shares);
 }
 
-compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
+compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
     : _cm(cm)
     , _table(&t)
     , _compaction_state(cm.get_compaction_state(_table))
@@ -733,14 +733,14 @@ compaction_manager::compaction_reenabler::compaction_reenabler(compaction_manage
             t, _compaction_state.compaction_disabled_counter);
 }
 
-compaction_manager::compaction_reenabler::compaction_reenabler(compaction_reenabler&& o) noexcept
+compaction_reenabler::compaction_reenabler(compaction_reenabler&& o) noexcept
     : _cm(o._cm)
     , _table(std::exchange(o._table, nullptr))
     , _compaction_state(o._compaction_state)
     , _holder(std::move(o._holder))
 {}
 
-compaction_manager::compaction_reenabler::~compaction_reenabler() {
+compaction_reenabler::~compaction_reenabler() {
     // submit compaction request if we're the last holder of the gate which is still opened.
     if (_table && --_compaction_state.compaction_disabled_counter == 0 && !_compaction_state.gate.is_closed()) {
         cmlog.debug("Reenabling compaction for {}", *_table);
@@ -799,7 +799,7 @@ compaction_manager::get_incremental_repair_write_lock(compaction::compaction_gro
     co_return ret;
 }
 
-future<compaction_manager::compaction_reenabler>
+future<compaction_reenabler>
 compaction_manager::await_and_disable_compaction(compaction_group_view& t) {
     compaction_reenabler cre(*this, t);
     co_await await_ongoing_compactions(&t);
@@ -807,7 +807,7 @@ compaction_manager::await_and_disable_compaction(compaction_group_view& t) {
 }
 
 
-compaction_manager::compaction_reenabler
+compaction_reenabler
 compaction_manager::stop_and_disable_compaction_no_wait(compaction_group_view& t, sstring reason) {
     compaction_reenabler cre(*this, t);
     try {
@@ -818,7 +818,7 @@ compaction_manager::stop_and_disable_compaction_no_wait(compaction_group_view& t
     return cre;
 }
 
-future<compaction_manager::compaction_reenabler>
+future<compaction_reenabler>
 compaction_manager::stop_and_disable_compaction(sstring reason, compaction_group_view& t) {
     compaction_reenabler cre(*this, t);
     co_await stop_ongoing_compactions(std::move(reason), &t);
@@ -2316,7 +2316,7 @@ void compaction_manager::add(compaction_group_view& t) {
     }
 }
 
-compaction_manager::compaction_reenabler compaction_manager::add_with_compaction_disabled(compaction_group_view& view) {
+compaction_reenabler compaction_manager::add_with_compaction_disabled(compaction_group_view& view) {
     add(view);
     return compaction_reenabler(*this, view);
 }

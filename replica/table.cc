@@ -782,7 +782,7 @@ class tablet_storage_group_manager final : public storage_group_manager {
     future<> _merge_completion_fiber;
     condition_variable _merge_completion_event;
     // Holds compaction reenabler which disables compaction temporarily during tablet merge
-    std::vector<compaction_manager::compaction_reenabler> _compaction_reenablers_for_merging;
+    std::vector<compaction_reenabler> _compaction_reenablers_for_merging;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -2544,7 +2544,7 @@ class compaction_group::compaction_group_view : public compaction::compaction_gr
     table& _t;
     compaction_group& _cg;
     // When engaged, compaction is disabled altogether on this view.
-    std::optional<compaction_manager::compaction_reenabler> _compaction_reenabler;
+    std::optional<compaction_reenabler> _compaction_reenabler;
 private:
     bool belongs_to_this_view(const sstables::shared_sstable& sst) const {
         return &_cg.view_for_sstable(sst) == this;
