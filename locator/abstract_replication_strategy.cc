@@ -476,6 +476,10 @@ host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(cons
         ? (is_vnode ? tok : _tmptr->first_token(tok))
         : default_replication_map_key;
     const auto it = _replication_map.find(key_token);
+    if (it == _replication_map.end()) {
+        on_internal_error(rslogger, format("Token {} not found in replication map: natural_endpoints_depend_on_token={} token={} vnode_token={}",
+                key_token, _rs->natural_endpoints_depend_on_token(), tok, _tmptr->first_token(tok)));
+    }
     return it->second;
 }
 
