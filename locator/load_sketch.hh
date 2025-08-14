@@ -136,7 +136,7 @@ public:
             }
         } else {
             for (const auto& [table, tmap] : _tm->tablets().all_tables_ungrouped()) {
-                co_await populate_table(*tmap, host, only_dc);
+                co_await populate_table(tmap, host, only_dc);
             }
         }
 
