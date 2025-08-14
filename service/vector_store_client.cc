@@ -37,7 +37,6 @@ using duration = lowres_clock::duration;
 using embedding = service::vector_store_client::embedding;
 using limit = service::vector_store_client::limit;
 using host_name = service::vector_store_client::host_name;
-using http_client = http::experimental::client;
 using http_path = sstring;
 using inet_address = seastar::net::inet_address;
 using json_content = sstring;
@@ -73,11 +72,17 @@ auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     return port;
 }
 
-auto parse_service_uri(std::string_view uri) -> std::optional<std::tuple<host_name, port_number>> {
+struct host_port {
+    host_name host;
+    port_number port;
+};
+
+auto parse_service_uri(std::string_view uri) -> std::optional<host_port> {
     constexpr auto URI_REGEX = R"(^http:\/\/([a-z0-9._-]+):([0-9]+)$)";
     auto const uri_regex = std::regex(URI_REGEX);
     auto uri_match = std::smatch{};
     auto uri_txt = std::string(uri);
+
     if (!std::regex_match(uri_txt, uri_match, uri_regex) || uri_match.size() != 3) {
         return {};
     }
@@ -206,16 +211,69 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
     return std::move(keys);
 }
 
+class http_client {
+
+    host_port _host_port;
+    inet_address _addr;
+
+    http::experimental::client impl;
+
+public:
+    http_client(host_port host_port_, inet_address addr)
+        : _host_port(std::move(host_port_))
+        , _addr(std::move(addr))
+        , impl(socket_address(addr, _host_port.port)) {
+    }
+
+    bool connects_to(inet_address const& a, port_number p) const {
+        return _addr == a && _host_port.port == p;
+    }
+
+    seastar::future<> make_request(
+            operation_type method, http_path path, std::optional<json_content> content, http::experimental::client::reply_handler&& handle, abort_source* as) {
+        auto req = http::request::make(method, _host_port.host, std::move(path));
+        if (content) {
+            req.write_body("json", std::move(*content));
+        }
+        return impl.make_request(std::move(req), std::move(handle), std::nullopt, as);
+    }
+
+    seastar::future<> close() {
+        return impl.close();
+    }
+
+    const inet_address& addr() const {
+        return _addr;
+    }
+};
+
+bool should_vector_store_service_be_disabled(std::string_view const& uri) {
+    return uri.empty();
+}
+
+auto get_host_port(std::string_view uri) -> std::optional<host_port> {
+    if (should_vector_store_service_be_disabled(uri)) {
+        vslogger.info("Vector Store service URI is empty, disabling Vector Store service");
+        return std::nullopt;
+    }
+    auto parsed = parse_service_uri(uri);
+    if (!parsed) {
+        throw configuration_exception(format("Invalid Vector Store service URI: {}", uri));
+    }
+    vslogger.info("Vector Store service URI is set to '{}'", uri);
+    return *parsed;
+}
+
 } // namespace
 
 namespace service {
 
 struct vector_store_client::impl {
+
+    utils::observer<sstring> uri_observer;
     lw_shared_ptr<http_client> current_client;
     std::vector<lw_shared_ptr<http_client>> old_clients;
-    host_name host;
-    port_number port{};
-    inet_address addr;
+    std::optional<host_port> _host_port;
     time_point last_dns_refresh;
     gate tasks_gate;
     condition_variable refresh_cv;
@@ -227,9 +285,17 @@ struct vector_store_client::impl {
     std::function<future<std::optional<inet_address>>(sstring const&)> dns_resolver;
     sequential_producer<lw_shared_ptr<http_client>> client_producer;
 
-    impl(host_name host_, port_number port_)
-        : host(std::move(host_))
-        , port(port_)
+    impl(utils::config_file::named_value<sstring> cfg)
+        : uri_observer(cfg.observe([this](std::string_view uri) {
+            try {
+                _host_port = get_host_port(uri);
+                trigger_dns_refresh();
+            } catch (const configuration_exception& e) {
+                vslogger.error("Failed to parse Vector Store service URI: {}", e.what());
+                _host_port = std::nullopt;
+            }
+        }))
+        , _host_port(get_host_port(cfg()))
         , dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
             auto addr = co_await coroutine::as_future(net::dns::resolve_name(host));
             if (addr.failed()) {
@@ -248,25 +314,47 @@ struct vector_store_client::impl {
         }) {
     }
 
+    auto is_disabled() const -> bool {
+        return !bool{_host_port};
+    }
+
+    auto host() const -> std::expected<host_name, disabled> {
+        if (is_disabled()) {
+            return std::unexpected{disabled{}};
+        }
+        return _host_port->host;
+    }
+
+    auto port() const -> std::expected<port_number, disabled> {
+        if (is_disabled()) {
+            return std::unexpected{disabled{}};
+        }
+        return _host_port->port;
+    }
+
     /// Refresh the http client with a new address resolved from the DNS name.
     /// If the DNS resolution fails, the current client is set to nullptr.
     /// If the address is the same as the current one, do nothing.
     /// Old clients are saved for later cleanup in a specific task.
     auto refresh_addr() -> future<> {
+        if (is_disabled()) {
+            current_client = nullptr;
+            co_return;
+        }
+        auto [host, port] = *_host_port;
         auto new_addr = co_await dns_resolver(host);
         if (!new_addr) {
             current_client = nullptr;
             co_return;
         }
 
-        // Check if the new address is the same as the current one
-        if (current_client && *new_addr == addr) {
+        // Check if the new address and port is the same as the current one
+        if (current_client && current_client->connects_to(*new_addr, port)) {
             co_return;
         }
 
-        addr = *new_addr;
         old_clients.emplace_back(current_client);
-        current_client = make_lw_shared<http_client>(socket_address(addr, port));
+        current_client = make_lw_shared<http_client>(*_host_port, std::move(*new_addr));
     }
 
     /// A task for refreshing the vector store http client.
@@ -351,17 +439,15 @@ struct vector_store_client::impl {
         });
     }
 
-    struct get_client_response {
-        lw_shared_ptr<http_client> client; ///< The http client.
-        host_name host;                    ///< The host name for the vector-store service.
-    };
-
-    using get_client_error = std::variant<aborted, addr_unavailable>;
+    using get_client_error = std::variant<aborted, addr_unavailable, disabled>;
 
     /// Get the current http client or wait for a new one to be available.
-    auto get_client(abort_source& as) -> future<std::expected<get_client_response, get_client_error>> {
+    auto get_client(abort_source& as) -> future<std::expected<lw_shared_ptr<http_client>, get_client_error>> {
+        if (is_disabled()) {
+            co_return std::unexpected{disabled{}};
+        }
         if (current_client) {
-            co_return get_client_response{.client = current_client, .host = host};
+            co_return current_client;
         }
 
         auto current_client = co_await coroutine::as_future(client_producer(as));
@@ -377,7 +463,7 @@ struct vector_store_client::impl {
         if (!client) {
             co_return std::unexpected{addr_unavailable{}};
         }
-        co_return get_client_response{.client = client, .host = host};
+        co_return client;
     }
 
     struct make_request_response {
@@ -385,35 +471,29 @@ struct vector_store_client::impl {
         std::vector<temporary_buffer<char>> content; ///< The content of the response.
     };
 
-    using make_request_error = std::variant<aborted, addr_unavailable, service_unavailable>;
+    using make_request_error = std::variant<aborted, addr_unavailable, service_unavailable, disabled>;
 
     auto make_request(operation_type method, http_path path, std::optional<json_content> content, abort_source& as)
             -> future<std::expected<make_request_response, make_request_error>> {
         auto resp = make_request_response{.status = http::reply::status_type::ok, .content = std::vector<temporary_buffer<char>>()};
 
         for (auto retries = 0; retries < HTTP_REQUEST_RETRIES; ++retries) {
-            auto client_host = co_await get_client(as);
-            if (!client_host) {
+            auto client = co_await get_client(as);
+            if (!client) {
                 co_return std::unexpected{std::visit(
                         [](auto&& err) {
                             return make_request_error{err};
                         },
-                        client_host.error())};
-            }
-            auto [client, host] = *std::move(client_host);
-
-            auto req = http::request::make(method, host, path);
-            if (content) {
-                req.write_body("json", *content);
+                        client.error())};
             }
 
-            auto result = co_await coroutine::as_future(client->make_request(
-                    std::move(req),
+            auto result = co_await coroutine::as_future(client.value()->make_request(
+                    method, std::move(path), std::move(content),
                     [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
                         resp.status = reply._status;
                         resp.content = co_await util::read_entire_stream(body);
                     },
-                    std::nullopt, &as));
+                    &as));
             if (result.failed()) {
                 auto err = result.get_exception();
                 if (as.abort_requested()) {
@@ -434,30 +514,13 @@ struct vector_store_client::impl {
     }
 };
 
-vector_store_client::vector_store_client(config const& cfg) {
-    auto config_uri = cfg.vector_store_uri();
-    if (config_uri.empty()) {
-        vslogger.info("Vector Store service URI is not configured.");
-        return;
-    }
-
-    auto parsed_uri = parse_service_uri(config_uri);
-    if (!parsed_uri) {
-        throw configuration_exception(format("Invalid Vector Store service URI: {}", config_uri));
-    }
-
-    auto [host, port] = *parsed_uri;
-    _impl = std::make_unique<impl>(std::move(host), port);
-    vslogger.info("Vector Store service uri = {}:{}.", _impl->host, _impl->port);
+vector_store_client::vector_store_client(config const& cfg)
+    : _impl(std::make_unique<impl>(cfg.vector_store_uri)) {
 }
 
 vector_store_client::~vector_store_client() = default;
 
 void vector_store_client::start_background_tasks() {
-    if (is_disabled()) {
-        return;
-    }
-
     /// start the background task to refresh the service address
     (void)try_with_gate(_impl->tasks_gate, [this] {
         return _impl->refresh_addr_task();
@@ -467,27 +530,21 @@ void vector_store_client::start_background_tasks() {
 }
 
 auto vector_store_client::stop() -> future<> {
-    if (is_disabled()) {
-        co_return;
-    }
-
     _impl->abort_refresh.request_abort();
     _impl->refresh_cv.signal();
     co_await _impl->tasks_gate.close();
 }
 
+auto vector_store_client::is_disabled() const -> bool {
+    return _impl->is_disabled();
+}
+
 auto vector_store_client::host() const -> std::expected<host_name, disabled> {
-    if (is_disabled()) {
-        return std::unexpected{disabled{}};
-    }
-    return {_impl->host};
+    return _impl->host();
 }
 
 auto vector_store_client::port() const -> std::expected<port_number, disabled> {
-    if (is_disabled()) {
-        return std::unexpected{disabled{}};
-    }
-    return {_impl->port};
+    return _impl->port();
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
@@ -523,50 +580,31 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set dns_refresh_interval on a disabled vector store client");
-    }
     vsc._impl->dns_refresh_interval = interval;
 }
 
 void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set wait_for_client_timeout on a disabled vector store client");
-    }
     vsc._impl->wait_for_client_timeout = timeout;
 }
 
 void vector_store_client_tester::set_http_request_retries(vector_store_client& vsc, unsigned retries) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set http_request_retries on a disabled vector store client");
-    }
     vsc._impl->http_request_retries = retries;
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot set dns_resolver on a disabled vector store client");
-    }
     vsc._impl->dns_resolver = std::move(resolver);
 }
 
 void vector_store_client_tester::trigger_dns_resolver(vector_store_client& vsc) {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot trigger a dns resolver on a disabled vector store client");
-    }
     vsc._impl->trigger_dns_refresh();
 }
 
 auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::optional<inet_address>> {
-    if (vsc.is_disabled()) {
-        on_internal_error(vslogger, "Cannot check hostname resolving on a disabled vector store client");
-    }
-    auto client_host = co_await vsc._impl->get_client(as);
-    if (!client_host) {
+    auto client = co_await vsc._impl->get_client(as);
+    if (!client) {
         co_return std::nullopt;
     }
-    co_return vsc._impl->addr;
+    co_return client.value()->addr();
 }
 
 } // namespace service
-
