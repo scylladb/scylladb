@@ -232,6 +232,7 @@ struct tablet_task_info {
 };
 
 /// Stores information about a single tablet.
+/// For groups of co-located tables, this information is shared between all tables.
 struct tablet_info {
     tablet_replica_set replicas;
     db_clock::time_point repair_time;
@@ -244,6 +245,18 @@ struct tablet_info {
     tablet_info(tablet_replica_set);
 
     bool operator==(const tablet_info&) const = default;
+};
+
+// Stores per-table information about a single tablet.
+struct per_table_tablet_info {
+    db_clock::time_point repair_time;
+    locator::tablet_task_info repair_task_info;
+    int64_t sstables_repaired_at;
+
+    per_table_tablet_info() = default;
+    per_table_tablet_info(db_clock::time_point, tablet_task_info, int64_t sstables_repaired_at);
+
+    bool operator==(const per_table_tablet_info&) const = default;
 };
 
 // Merges tablet_info b into a, but with following constraints:
@@ -539,6 +552,8 @@ public:
 ///    tablet_info& info = tmap.get_tablet_info(id);
 ///
 /// A tablet_id obtained from an instance of tablet_map is valid for that instance only.
+///
+/// For groups of co-located tables, this map is shared between all tables.
 class tablet_map {
 public:
     using tablet_container = utils::chunked_vector<tablet_info>;
@@ -718,6 +733,51 @@ public:
     friend fmt::formatter<tablet_map>;
 private:
     void check_tablet_id(tablet_id) const;
+};
+
+/// Stores information about tablets of a single table, which is not shared for co-located tables.
+class per_table_tablet_map {
+
+    using tablet_container = std::unordered_map<tablet_id, per_table_tablet_info>;
+
+    // Internal constructor, used by clone() and clone_gently().
+    per_table_tablet_map(tablet_container tablets, repair_scheduler_config repair_scheduler_config)
+        : _tablets(std::move(tablets)), _repair_scheduler_config(repair_scheduler_config)
+    {}
+
+public:
+
+    tablet_container _tablets;
+    repair_scheduler_config _repair_scheduler_config;
+
+    per_table_tablet_map() = default;
+
+    per_table_tablet_map(per_table_tablet_map&&) = default;
+    per_table_tablet_map(const per_table_tablet_map&) = delete;
+
+    per_table_tablet_map& operator=(per_table_tablet_map&&) = default;
+    per_table_tablet_map& operator=(const per_table_tablet_map&) = delete;
+
+    per_table_tablet_map clone() const;
+    future<per_table_tablet_map> clone_gently() const;
+
+    const per_table_tablet_info& get_tablet_info(tablet_id) const;
+
+    const tablet_container& tablets() const {
+        return _tablets;
+    }
+
+    const locator::repair_scheduler_config& repair_scheduler_config() const;
+    void set_repair_scheduler_config(locator::repair_scheduler_config config);
+
+    size_t external_memory_usage() const;
+
+    bool operator==(const per_table_tablet_map&) const = default;
+
+    void set_tablet(tablet_id, per_table_tablet_info);
+
+    future<> clear_gently();
+    friend fmt::formatter<tablet_map>;
 };
 
 using table_group_set = utils::small_vector<table_id, 2>;
@@ -929,6 +989,11 @@ struct fmt::formatter<locator::range_based_tablet_id> : fmt::formatter<string_vi
 template <>
 struct fmt::formatter<locator::tablet_map> : fmt::formatter<string_view> {
     auto format(const locator::tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::per_table_tablet_map> : fmt::formatter<string_view> {
+    auto format(const locator::per_table_tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
