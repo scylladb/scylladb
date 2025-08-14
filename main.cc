@@ -2292,6 +2292,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             // update the service level cache after the SL data accessor and auth service are initialized.
             if (sl_controller.local().is_v2()) {
                 sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
+                sl_controller.local().create_driver_service_level(group0_client, sys_ks.local()).get();
             }
 
             sl_controller.invoke_on_all([&lifecycle_notifier] (qos::service_level_controller& controller) {
