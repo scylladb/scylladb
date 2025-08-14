@@ -239,3 +239,53 @@ def test_rename_column_of_fake_cdc_log_table(cql, test_keyspace, scylla_only):
         cql.execute(f"ALTER TABLE {test_keyspace}.{fake_cdc_log_table_name} RENAME p TO q")
     finally:
         cql.execute(f"DROP TABLE IF EXISTS {test_keyspace}.{fake_cdc_log_table_name}")
+
+# Reproducer of scylladb/scylladb#25187.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_desc_log_table_tombstone_gc_present(cql, test_keyspace, scylla_only):
+    def get_log_alter_stmt(log_table_name: str):
+        descs_it = cql.execute(f"DESCRIBE KEYSPACE {test_keyspace} WITH INTERNALS")
+        [log_desc] = filter(lambda desc: desc.name == log_table_name, descs_it)
+        assert hasattr(log_desc, "create_statement")
+        return log_desc.create_statement
+
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+        _, table_name = table.split(".")
+        cdc_log_table = f"{table_name}_scylla_cdc_log"
+
+        old_log_stmt = get_log_alter_stmt(cdc_log_table)
+        cql.execute(old_log_stmt)
+        new_log_stmt = get_log_alter_stmt(cdc_log_table)
+
+        assert old_log_stmt == new_log_stmt
+
+# Verify that the `tombstone_gc` property is preserved after re-attaching the CDC log table.
+# The relevant scenario is when the user detaches, alters, and reattaches it.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_tombstone_gc_after_reattaching_log_table(cql, test_keyspace, scylla_only):
+    def get_log_alter_stmt(log_table_name: str):
+        descs_it = cql.execute(f"DESCRIBE KEYSPACE {test_keyspace} WITH INTERNALS")
+        [log_desc] = filter(lambda desc: desc.name == log_table_name, descs_it)
+        assert hasattr(log_desc, "create_statement")
+        return log_desc.create_statement
+
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+        _, table_name = table.split(".")
+        cdc_log_table = f"{table_name}_scylla_cdc_log"
+
+        def do_test(tombstone_gc: str):
+            tombstone_gc_property = f"tombstone_gc = {{{tombstone_gc}}}"
+            # Detach the log table.
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': false}}")
+            cql.execute(f"ALTER TABLE {test_keyspace}.{cdc_log_table} WITH {tombstone_gc_property}")
+            # Re-attach the log table.
+            cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true}}")
+            log_stmt = get_log_alter_stmt(cdc_log_table)
+            assert tombstone_gc_property in log_stmt
+
+        do_test("'mode': 'timeout', 'propagation_delay_in_seconds': '1234'")
+        do_test("'mode': 'immediate', 'propagation_delay_in_seconds': '4321'")

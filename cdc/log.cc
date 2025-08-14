@@ -27,6 +27,7 @@
 #include "schema/schema_builder.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
+#include "tombstone_gc_extension.hh"
 #include "types/tuple.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/untyped_result_set.hh"
@@ -57,7 +58,7 @@ using namespace std::chrono_literals;
 logging::logger cdc_log("cdc");
 
 namespace cdc {
-static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
+static schema_ptr create_log_schema(const schema&, const data_dictionary::database&, std::optional<table_id> = {}, schema_ptr = nullptr);
 }
 
 static constexpr auto cdc_group_name = "cdc";
@@ -167,7 +168,7 @@ public:
             ensure_that_table_uses_vnodes(ksm, schema);
 
             // in seastar thread
-            auto log_schema = create_log_schema(schema);
+            auto log_schema = create_log_schema(schema, db.as_data_dictionary());
 
             auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
 
@@ -205,7 +206,8 @@ public:
             ensure_that_table_has_no_counter_columns(new_schema);
             ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
 
-            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
+            std::optional<table_id> maybe_id = log_schema ? std::make_optional(log_schema->id()) : std::nullopt;
+            auto new_log_schema = create_log_schema(new_schema, db.as_data_dictionary(), std::move(maybe_id), log_schema);
 
             auto log_mut = log_schema 
                 ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
@@ -496,7 +498,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
     return to_bytes(cdc_deleted_elements_column_prefix) + column_name;
 }
 
-static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uuid, schema_ptr old) {
+static schema_ptr create_log_schema(const schema& s, const data_dictionary::database& db, std::optional<table_id> uuid, schema_ptr old) {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
@@ -581,6 +583,61 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
 
     if (uuid) {
         b.set_uuid(*uuid);
+    }
+
+    // Normally, when we create a table, MV, etc., we apply `cf_prop_defs` to the schema builder
+    // via the function `cf_prop_defs::apply_to_builder`. Unfortunately, this doesn't happen here,
+    // and so we might miss some of the properties that would normally be set to some value,
+    // even if the default one.
+    //
+    // One particular example of that phenomenon is `tombstone_gc`. For better or worse, it's not
+    // a "standalone property" of a table, but rather part of `extensions`.
+    // [Somewhat related issue: scylladb/scylladb#9722]
+    //
+    // That may and did cause trouble. When this if-else block didn't exist, what could happen was this:
+    //
+    // 1. A CDC log table is created.
+    // 2. The table does NOT have any value of `tombstone_gc` set.
+    // 3. The user edits the table via `ALTER TABLE`. That statement treats the log table
+    //    just like any other one (at least as far as the relevant portion of the logic
+    //    is concerned). Among other things, it uses `cf_prop_defs::apply_to_builder`,
+    //    and as a result, the `tombstone_gc` property is set to some value:
+    //    * the default one if the user doesn't specify it in the statement,
+    //    * a custom one if they do.
+    //
+    // Why is that a problem?
+    //
+    // First of all, it's confusing. When we perform a schema backup and a table uses CDC,
+    // we include an ALTER statement for its corresponding CDC log table (for more context,
+    // see issue scylladb/scylladb#18467 or commit f12edbdd95874145a7bad9526d01ef3ac90f4fb3).
+    //
+    // There are two consequences for the user here:
+    // 1. If the log table had NOT been altered ever since it was created, the statement will
+    //    miss the `tombstone_gc` property as if it couldn't be set for it all. That's confusing!
+    // 2. If the log table HAD in fact been altered after its creation, the statement will
+    //    include the `tombstone_gc` property. That's even more confusing (why was it not present
+    //    the first time, but it is now?).
+    //
+    // The `tombstone_gc` property should always be set to avoid confusion and problematic edge cases
+    // in tests and to simply be consistent with how other schema entities work.
+    //
+    // The solution we employ is that we always use the same extensions as the detached log table.
+    // That should be a reasonable step even for other extensions.
+    //
+    // For more context, see issue: scylladb/scylladb#25187.
+    bool set_default_tombstone_gc = true;
+    if (old) {
+        b.set_extensions(old->extensions());
+        // We might've already set the `tombstone_gc` property in the instruction above,
+        // and it might be a custom one. Let's not use the default value in that case.
+        if (old->extensions().contains(tombstone_gc_extension::NAME)) {
+            set_default_tombstone_gc = false;
+        }
+    }
+
+    if (set_default_tombstone_gc) {
+        auto ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstonesonte_gc_mode(db, s.ks_name()));
+        b.add_extension(tombstone_gc_extension::NAME, std::move(ext));
     }
 
     /**
