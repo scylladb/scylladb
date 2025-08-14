@@ -504,6 +504,28 @@ class ScyllaRESTAPIClient:
             params={"probability": probability},
         )
 
+class ScyllaMetricsLine:
+    def __init__(self, name: str, labels: dict, value: float):
+        self.name = name
+        self.labels = labels
+        self.value = value
+
+    @staticmethod
+    def from_string(line: str):
+        labels_start = line.find('{')
+        labels_finish = line.find('}')
+        if labels_start == -1 or labels_finish == -1:
+            return None
+        name = line[:labels_start].strip()
+        label_str = line[labels_start + 1:labels_finish]
+        if not label_str.strip():
+            labels = {}
+        else:
+            items = [kv.split('=') for kv in label_str.split(',') if kv]
+            labels = {k.strip(): v.strip().strip('"') for k, v in items}
+        value = float(line[labels_finish + 2:])
+        return ScyllaMetricsLine(name, labels, value)
+
 class ScyllaMetrics:
     def __init__(self, lines: list[str]):
         self.lines: list[str] = lines
@@ -514,36 +536,29 @@ class ScyllaMetrics:
         """
         return [l for l in self.lines if l.startswith(prefix)]
 
-    def get(self, name: str, labels = None, shard: str ='total'):
-        """Get the metric value by name. Allows to specify additional labels filter, e.g.
-           metrics.get('scylla_transport_cql_errors_total', {'type': 'protocol_error'}).
-           If shard is not set, returns the sum of metric values across all shards,
-           otherwise returns the metric value from the specified shard.
-        """
-        result = None
-        for l in self.lines:
-            if not l.startswith(name):
-                continue
-            labels_start = l.find('{')
-            labels_finish = l.find('}')
-            if labels_start == -1 or labels_finish == -1:
-                raise ValueError(f'invalid metric format [{l}]')
-            def match_kv(kv):
-                key, val = kv.split('=')
-                val = val.strip('"')
-                return shard == 'total' or val == shard if key == 'shard' \
-                    else labels is None or labels.get(key, None) == val
-            match = all(match_kv(kv) for kv in l[labels_start + 1:labels_finish].split(','))
-            if match:
-                value = float(l[labels_finish + 2:])
-                if result is None:
-                    result = value
-                else:
-                    result += value
-                if shard != 'total':
-                    break
-        return result
+    def _labels_match(self, metric_labels: dict, filter_labels: dict):
+        return all(metric_labels.get(k) == str(v) for k, v in filter_labels.items())
 
+    def get(self, name: str, labels = {}):
+        """Get the metric value by name, optionally filtering by labels.
+
+        The name parameter is used to filter metrics by prefix - all metrics whose
+        names start with the given string will be considered. The labels parameter
+        is a dictionary of key-value pairs used to further filter the metrics.
+
+        Example:
+            metrics.get('scylla_transport_cql_errors_total',
+                       {'type': 'protocol_error', 'shard': '0'})
+
+        Returns the sum of all matching metric values, or None if no matches found.
+        """
+        values = [
+            parsed_line.value
+            for l in self.lines_by_prefix(name)
+            if (parsed_line := ScyllaMetricsLine.from_string(l)) is not None
+            and self._labels_match(parsed_line.labels, labels)
+        ]
+        return sum(values) if values else None
 
 class ScyllaMetricsClient:
     """Async Scylla Metrics API client"""
