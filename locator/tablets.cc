@@ -747,12 +747,60 @@ future<> per_table_tablet_map::clear_gently() {
     return utils::clear_gently(_tablets);
 }
 
+future<tablet_map_view> tablet_map_view::clone_gently() const {
+    auto shared_clone = co_await shared->clone_gently();
+    auto per_table_clone = co_await per_table->clone_gently();
+
+    co_return tablet_map_view(
+            make_lw_shared<const shared_tablet_map>(std::move(shared_clone)),
+            make_lw_shared<const per_table_tablet_map>(std::move(per_table_clone)));
+}
+
+tablet_info_view tablet_map_view::get_tablet_info(tablet_id id) const {
+    const auto& shared_info = shared->get_tablet_info(id);
+    const auto& per_table_info = per_table->get_tablet_info(id);
+    return tablet_info_view(shared_info, per_table_info);
+}
+
+future<> tablet_map_view::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, tablet_info_view)> func) const {
+    for (auto tid : tablet_ids()) {
+        co_await func(tid, get_tablet_info(tid));
+    }
+}
+
+future<> tablet_map_view::for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc_view, std::optional<tablet_desc_view>)> func) const {
+    auto make_desc = [this] (tablet_id tid) {
+        return tablet_desc_view {tid, get_tablet_info(tid), get_tablet_transition_info(tid) };
+    };
+    auto first_tablet = shared->first_tablet();
+    if (shared->tablets().size() == 1) {
+        co_return co_await func(make_desc(first_tablet), std::nullopt);
+    }
+    for (std::optional<tablet_id> tid = first_tablet; tid; tid = shared->next_tablet(*tid)) {
+        auto tid1 = tid;
+        auto tid2 = tid = shared->next_tablet(*tid);
+        if (!tid2) {
+            // Cannot happen with power-of-two invariant.
+            throw std::logic_error(format("Cannot retrieve sibling tablet with tablet count {}", tablet_count()));
+        }
+        co_await func(make_desc(*tid1), make_desc(*tid2));
+    }
+}
+
+size_t tablet_map_view::external_memory_usage() const {
+    return shared->external_memory_usage() + per_table->external_memory_usage();
+}
+
 const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id id) const {
     auto i = _transitions.find(id);
     if (i == _transitions.end()) {
         return nullptr;
     }
     return &i->second;
+}
+
+bool tablet_map_view::operator==(const tablet_map_view&) const {
+    return *shared == *shared && *per_table == *per_table;
 }
 
 // The names are persisted in system tables so should not be changed.
@@ -1782,6 +1830,12 @@ auto fmt::formatter<locator::per_table_tablet_map>::format(const locator::per_ta
         first = false;
     }
     return fmt::format_to(out, "}}");
+}
+
+auto fmt::formatter<locator::tablet_map_view>::format(const locator::tablet_map_view& r, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    // just use the formatter of r.shared
+    return fmt::formatter<locator::tablet_map>().format(*r.shared, ctx);
 }
 
 auto fmt::formatter<locator::tablet_metadata>::format(const locator::tablet_metadata& tm, fmt::format_context& ctx) const
