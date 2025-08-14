@@ -519,6 +519,45 @@ def test_delete_item_many_items_fall_into_appropriate_buckets(test_table_s, metr
         for pk in pks:
             test_table_s.delete_item(Key={'p': pk})
 
+# The item does not exist, so only the new item size is counted in the histogram.
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_update_item_single_pk_item(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
+    def do_test():
+        test_table_s.update_item(Key={'p': random_string()})
+    check_histogram_metric_increases('UpdateItem', 'update_item_op_size_kib', metrics, do_test, [(1, '1.000000'), (1, '+Inf')])
+
+def test_update_item_many_items_fall_into_appropriate_buckets(test_table_s, metrics, cql):
+    set_rbw_enabled(True, cql)
+    pk = random_string()
+    test_table_s.put_item(Item={'p': pk, 'a': 'a'})
+
+    def do_test():
+        # Update 1: item becomes ~216KiB
+        test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET b = :b, c = :c", ExpressionAttributeValues={':b': 'b' * 47 * KB, ':c': 'c' * 169 * KB})
+        # Update 2: item becomes ~250KiB, 34KiB + 216KiB = 250KiB logged
+        test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET a = :a", ExpressionAttributeValues={':a': 'a' * 34 * KB})
+        # Update 3: item becomes ~550KiB, 250KiB + 300KiB = 550KiB logged
+        test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET a = :a", ExpressionAttributeValues={':a': 'a' * 300 * KB})
+    check_histogram_metric_increases('UpdateItem', 'update_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (2, '258.000000'), (2, '446.000000'), (3, '+Inf')])
+
+# Verify that only the new item size is counted in the histogram if RBW is
+# disabled, and both sizes if it is enabled. The WCU is calculated as the
+# maximum of the old and new item sizes.
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_update_item_increases_metrics_for_new_item_size_only(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
+    if rbw_enabled:
+        points = [(0, '29.000000'), (1, '35.000000'), (1, '+Inf')]
+    else:
+        points = [(0, '20.000000'), (1, '24.000000'), (1, '+Inf')]
+
+    pk = random_string()
+    test_table_s.put_item(Item={'p': pk, 'a': 'a' * 10 * KB })
+    def do_test():
+        test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET a = :a", ExpressionAttributeValues={':a': 'a' * 22 * KB})
+    check_histogram_metric_increases('UpdateItem', 'update_item_op_size_kib', metrics, do_test, points)
+
 @pytest.mark.parametrize("rbw_enabled", [True, False])
 def test_batch_get_item_size_no_items_increases_zero_interval(test_table_s, metrics, cql, rbw_enabled):
     set_rbw_enabled(rbw_enabled, cql)
@@ -563,6 +602,33 @@ def test_batch_get_item_size_many_split_items_fall_into_appropriate_bucket(test_
             }
         })
     check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(0, '20.000000'), (1, '24.000000'), (1, '+Inf')])
+
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_batch_write_item_size_no_items_is_zero(metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
+    check_histogram_metric_increases('BatchWriteItem', 'batch_write_item_op_size_kib', metrics, lambda: None, [(0, '+Inf')])
+
+def test_batch_write_item_many_putitems_falls_into_appropriate_bucket(test_table_s, metrics, cql):
+    set_rbw_enabled(True, cql)
+    def do_test():
+        # 442KiB
+        items = [
+            {'PutRequest': {'Item': {'p': random_string(), 'a': 'a' * 47 * KB, 'b': 'b' * 169 * KB}}},
+            {'PutRequest': {'Item': {'p': random_string(), 'a': 'a' * 80 * KB}}},
+            {'PutRequest': {'Item': {'p': random_string(), 'a': 'a' * 146 * KB}}}
+        ]
+        test_table_s.meta.client.batch_write_item(RequestItems={test_table_s.name: items})
+    check_histogram_metric_increases('BatchWriteItem', 'batch_write_item_op_size_kib', metrics, do_test, [(0, '372.000000'), (1, '446.000000'), (1, '+Inf')])
+
+def test_batch_write_item_increases_metrics_for_bigger_item_only(test_table_s, metrics, cql):
+    set_rbw_enabled(True, cql)
+    pk = random_string()
+    probes = [[value, {'op': 'BatchWriteItem', 'le': le}] for value, le in [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')]]
+    test_table_s.put_item(Item={'p': pk, 'a': 'a', 'b': 'b' * 250 * KB})
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_batch_write_item_op_size_kib_bucket', probes):
+        test_table_s.meta.client.batch_write_item(RequestItems={
+            test_table_s.name: [{'PutRequest': {'Item': {'p': pk, 'a': 'a' * 128 * KB}}}]
+        })
 
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 

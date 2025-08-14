@@ -89,12 +89,16 @@ public:
         utils::estimated_histogram put_item_op_size_kb{30};
         // A size is the deleted item size.
         utils::estimated_histogram delete_item_op_size_kb{30};
+        // A size is the existing item size plus the estimated size of the update.
+        utils::estimated_histogram update_item_op_size_kb{30};
 
         // A size is the sum of the sizes of all items per table. This means
         // that a single BatchGetItem / BatchWriteItem updates the histogram
         // for each table that it has items in.
         // The sizes are the retrieved item sizes grouped per table.
         utils::estimated_histogram batch_get_item_op_size_kib{30};
+        // The sizes are the the written item sizes grouped per table.
+        utils::estimated_histogram batch_write_item_op_size_kb{30};
     } operation_sizes;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
