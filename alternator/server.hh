@@ -28,7 +28,11 @@ namespace alternator {
 using chunked_content = rjson::chunked_content;
 
 class server : public peering_sharded_service<server> {
-    static constexpr size_t content_length_limit = 16*MB;
+    // The maximum size of a request body that Alternator will accept,
+    // in bytes. This is a safety measure to prevent Alternator from
+    // running out of memory when a client sends a very large request.
+    // DynamoDB also has the same limit set to 16 MB.
+    static constexpr size_t request_content_length_limit = 16*MB;
     using alternator_callback = std::function<future<executor::request_return_type>(executor&, executor::client_state&,
             tracing::trace_state_ptr, service_permit, rjson::value, std::unique_ptr<http::request>)>;
     using alternator_callbacks_map = std::unordered_map<std::string_view, alternator_callback>;
