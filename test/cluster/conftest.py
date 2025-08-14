@@ -100,7 +100,8 @@ class CustomConnection(Cluster.connection_class):
 
 
 # cluster_con helper: set up client object for communicating with the CQL API.
-def cluster_con(hosts: list[IPAddress | EndPoint], port: int, use_ssl: bool, auth_provider=None, load_balancing_policy=RoundRobinPolicy()):
+def cluster_con(hosts: list[IPAddress | EndPoint], port: int = 9042, use_ssl: bool = False, auth_provider=None,
+                load_balancing_policy=RoundRobinPolicy()):
     """Create a CQL Cluster connection object according to configuration.
        It does not .connect() yet."""
     assert len(hosts) > 0, "python driver connection needs at least one host to connect to"

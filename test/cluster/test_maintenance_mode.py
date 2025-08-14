@@ -30,7 +30,7 @@ async def test_maintenance_mode(manager: ManagerClient):
     server_a, server_b = await manager.server_add(), await manager.server_add()
     socket_endpoint = UnixSocketEndPoint(await manager.server_get_maintenance_socket_path(server_a.server_id))
 
-    cluster = cluster_con([server_b.ip_addr], 9042, False)
+    cluster = cluster_con([server_b.ip_addr])
     cql = cluster.connect()
 
     async with new_test_keyspace(manager, "WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1}") as ks:
@@ -69,7 +69,7 @@ async def test_maintenance_mode(manager: ManagerClient):
         # Check that the regular CQL port is not available
         assert socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect_ex((server_a.ip_addr, 9042)) != 0
 
-        maintenance_cluster = cluster_con([socket_endpoint], 9042, False,
+        maintenance_cluster = cluster_con([socket_endpoint],
                                         load_balancing_policy=WhiteListRoundRobinPolicy([socket_endpoint]))
         maintenance_cql = maintenance_cluster.connect()
 

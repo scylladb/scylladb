@@ -18,7 +18,7 @@ async def create_server_and_cqls(manager, cqls_num):
     server = await manager.server_add()
 
     def create_cluster_connection():
-        return cluster_con([server.ip_addr], 9042, False,
+        return cluster_con([server.ip_addr],
             load_balancing_policy=WhiteListRoundRobinPolicy([server.ip_addr])).connect()
 
     return tuple(create_cluster_connection() for _ in range(cqls_num))

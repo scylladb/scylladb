@@ -37,9 +37,9 @@ async def test_topology_recovery_basic(request, build_mode: str, manager: Manage
     # The zero-token node requires a different cql session not to be ignored by the driver because of empty tokens in
     # the system.peers table.
     # We need one cql session for both token-owning nodes to continue the write workload during the rolling restart.
-    cql_normal = cluster_con([servers[0].ip_addr, servers[2].ip_addr], 9042, False, load_balancing_policy=
+    cql_normal = cluster_con([servers[0].ip_addr, servers[2].ip_addr], load_balancing_policy=
                              WhiteListRoundRobinPolicy([servers[0].ip_addr, servers[2].ip_addr])).connect()
-    cql_zero_token = cluster_con([servers[1].ip_addr], 9042, False, load_balancing_policy=
+    cql_zero_token = cluster_con([servers[1].ip_addr], load_balancing_policy=
                                  WhiteListRoundRobinPolicy([servers[1].ip_addr])).connect()
     # In the whole test, cqls[i] and hosts[i] correspond to servers[i].
     cqls = [cql_normal, cql_zero_token, cql_normal]
@@ -90,9 +90,9 @@ async def test_topology_recovery_basic(request, build_mode: str, manager: Manage
         nonlocal cqls
         cql_normal.shutdown()
         cql_zero_token.shutdown()
-        cql_normal = cluster_con([servers[0].ip_addr, servers[2].ip_addr], 9042, False, load_balancing_policy=
+        cql_normal = cluster_con([servers[0].ip_addr, servers[2].ip_addr], load_balancing_policy=
                                  WhiteListRoundRobinPolicy([servers[0].ip_addr, servers[2].ip_addr])).connect()
-        cql_zero_token = cluster_con([servers[1].ip_addr], 9042, False, load_balancing_policy=
+        cql_zero_token = cluster_con([servers[1].ip_addr], load_balancing_policy=
                                      WhiteListRoundRobinPolicy([servers[1].ip_addr])).connect()
         cqls = [cql_normal, cql_zero_token, cql_normal]
 
@@ -153,7 +153,7 @@ async def test_topology_recovery_basic(request, build_mode: str, manager: Manage
 
     logging.info("Booting new node")
     servers += [await manager.server_add(config=normal_cfg)]
-    cqls += [cluster_con([servers[3].ip_addr], 9042, False,
+    cqls += [cluster_con([servers[3].ip_addr],
                          load_balancing_policy=WhiteListRoundRobinPolicy([servers[3].ip_addr])).connect()]
     hosts += [cqls[3].hosts[0]]
     await asyncio.gather(*(wait_for_cql(cql, h, time.time() + 60) for cql, h in zip(cqls, hosts)))

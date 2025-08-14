@@ -40,9 +40,9 @@ async def test_zero_token_nodes_multidc_basic(manager: ManagerClient, zero_token
         servers.append(await manager.server_add(config=normal_cfg, property_file=property_file_dc2))
 
     logging.info('Creating connections to dc1 and dc2')
-    dc1_cql = cluster_con([servers[0].ip_addr], 9042, False,
+    dc1_cql = cluster_con([servers[0].ip_addr],
                           load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
-    dc2_cql = cluster_con([servers[2].ip_addr], 9042, False,
+    dc2_cql = cluster_con([servers[2].ip_addr],
                           load_balancing_policy=WhiteListRoundRobinPolicy([servers[2].ip_addr])).connect()
 
     ks_names = list[str]()
