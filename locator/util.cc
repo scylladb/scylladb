@@ -20,8 +20,7 @@ construct_range_to_endpoint_map(
     std::unordered_map<dht::token_range, host_id_vector_replica_set> res;
     res.reserve(ranges.size());
     for (auto r : ranges) {
-        res[r] = erm->get_natural_replicas(
-                r.end() ? r.end()->value() : dht::maximum_token());
+        res[r] = erm->get_natural_replicas(r.start()->value(), true);
         co_await coroutine::maybe_yield();
     }
     co_return res;
@@ -35,14 +34,14 @@ get_all_ranges(const utils::chunked_vector<token>& sorted_tokens) {
     int size = sorted_tokens.size();
     dht::token_range_vector ranges;
     ranges.reserve(size);
-    ranges.push_back(dht::token_range::make_ending_with(interval_bound<token>(sorted_tokens[0], true)));
-    co_await coroutine::maybe_yield();
     for (int i = 1; i < size; ++i) {
-        dht::token_range r(wrapping_interval<token>::bound(sorted_tokens[i - 1], false), wrapping_interval<token>::bound(sorted_tokens[i], true));
+        dht::token_range r(wrapping_interval<token>::bound(sorted_tokens[i - 1], true), wrapping_interval<token>::bound(sorted_tokens[i], false));
         ranges.push_back(r);
         co_await coroutine::maybe_yield();
     }
-    ranges.push_back(dht::token_range::make_starting_with(interval_bound<token>(sorted_tokens[size-1], false)));
+    // Add the wrapping range
+    ranges.emplace_back(wrapping_interval<token>::bound(sorted_tokens[size - 1], true), wrapping_interval<token>::bound(sorted_tokens[0], false));
+    co_await coroutine::maybe_yield();
 
     co_return ranges;
 }
@@ -99,6 +98,7 @@ get_range_to_address_map(locator::effective_replication_map_ptr erm) {
 future<utils::chunked_vector<dht::token_range_endpoints>>
 describe_ring(const replica::database& db, const gms::gossiper& gossiper, const sstring& keyspace, bool include_only_local_dc) {
     utils::chunked_vector<dht::token_range_endpoints> ranges;
+    std::unordered_map<host_id, describe_ring_endpoint_info> host_infos;
 
     auto erm = db.find_keyspace(keyspace).get_static_effective_replication_map();
     std::unordered_map<dht::token_range, host_id_vector_replica_set> range_to_address_map = co_await (
@@ -106,11 +106,10 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
                     ? get_range_to_address_map_in_local_dc(erm)
                     : get_range_to_address_map(erm)
     );
+    ranges.reserve(range_to_address_map.size());
     auto tmptr = erm->get_token_metadata_ptr();
-    for (auto entry : range_to_address_map) {
-        const auto& topology = tmptr->get_topology();
-        auto range = entry.first;
-        auto addresses = entry.second;
+    const auto& topology = tmptr->get_topology();
+    for (const auto& [range, addresses] : range_to_address_map) {
         dht::token_range_endpoints tr;
         if (range.start()) {
             tr._start_token = range.start()->value().to_sstring();
@@ -118,16 +117,19 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
         if (range.end()) {
             tr._end_token = range.end()->value().to_sstring();
         }
+        tr._endpoints.reserve(addresses.size());
+        tr._rpc_endpoints.reserve(addresses.size());
+        tr._endpoint_details.reserve(addresses.size());
         for (auto endpoint : addresses) {
-            dht::endpoint_details details;
-            details._host = gossiper.get_address_map().get(endpoint);
-            details._datacenter = topology.get_datacenter(endpoint);
-            details._rack = topology.get_rack(endpoint);
-            tr._rpc_endpoints.push_back(gossiper.get_rpc_address(endpoint));
-            tr._endpoints.push_back(fmt::to_string(details._host));
-            tr._endpoint_details.push_back(details);
+            auto it = host_infos.find(endpoint);
+            if (it == host_infos.end()) {
+                it = host_infos.emplace(endpoint, get_describe_ring_endpoint_info(endpoint, topology, gossiper)).first;
+            }
+            tr._rpc_endpoints.emplace_back(it->second.rpc_addr);
+            tr._endpoints.emplace_back(fmt::to_string(it->second.details._host));
+            tr._endpoint_details.emplace_back(it->second.details);
         }
-        ranges.push_back(tr);
+        ranges.push_back(std::move(tr));
         co_await coroutine::maybe_yield();
     }
     // Convert to wrapping ranges
@@ -147,6 +149,18 @@ describe_ring(const replica::database& db, const gms::gossiper& gossiper, const 
         ranges.erase(right_inf);
     }
     co_return ranges;
+}
+
+describe_ring_endpoint_info get_describe_ring_endpoint_info(host_id endpoint, const topology& topology, const gms::gossiper& gossiper) {
+    auto& loc = topology.get_node(endpoint).dc_rack();
+    return describe_ring_endpoint_info{
+        .details = dht::endpoint_details{
+            ._host = gossiper.get_address_map().get(endpoint),
+            ._datacenter = loc.dc,
+            ._rack = loc.rack,
+        },
+        .rpc_addr = gossiper.get_rpc_address(endpoint)
+    };
 }
 
 }

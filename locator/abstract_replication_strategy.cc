@@ -101,10 +101,10 @@ host_id_vector_topology_change vnode_effective_replication_map::get_pending_repl
     return *pending_endpoints | std::ranges::to<host_id_vector_topology_change>();
 }
 
-host_id_vector_replica_set vnode_effective_replication_map::get_replicas_for_reading(const token& token) const {
+host_id_vector_replica_set vnode_effective_replication_map::get_replicas_for_reading(const token& token, bool is_vnode) const {
     const auto* endpoints = find_token(_read_endpoints, token);
     if (endpoints == nullptr) {
-        return get_natural_replicas(token);
+        return get_natural_replicas(token, is_vnode);
     }
     return *endpoints | std::ranges::to<host_id_vector_replica_set>();
 }
@@ -476,15 +476,19 @@ host_id_vector_replica_set vnode_effective_replication_map::do_get_replicas(cons
         ? (is_vnode ? tok : _tmptr->first_token(tok))
         : default_replication_map_key;
     const auto it = _replication_map.find(key_token);
+    if (it == _replication_map.end()) {
+        on_internal_error(rslogger, format("Token {} not found in replication map: natural_endpoints_depend_on_token={} token={} vnode_token={}",
+                key_token, _rs->natural_endpoints_depend_on_token(), tok, _tmptr->first_token(tok)));
+    }
     return it->second;
 }
 
-host_id_vector_replica_set vnode_effective_replication_map::get_replicas(const token& tok) const {
-    return do_get_replicas(tok, false);
+host_id_vector_replica_set vnode_effective_replication_map::get_replicas(const token& tok, bool is_vnode) const {
+    return do_get_replicas(tok, is_vnode);
 }
 
-host_id_vector_replica_set vnode_effective_replication_map::get_natural_replicas(const token& search_token) const {
-    return get_replicas(search_token);
+host_id_vector_replica_set vnode_effective_replication_map::get_natural_replicas(const token& search_token, bool is_vnode) const {
+    return get_replicas(search_token, is_vnode);
 }
 
 stop_iteration vnode_effective_replication_map::for_each_natural_endpoint_until(const token& vnode_tok, const noncopyable_function<stop_iteration(const host_id&)>& func) const {

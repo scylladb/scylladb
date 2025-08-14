@@ -45,7 +45,7 @@ future<mutable_static_effective_replication_map_ptr> local_effective_replication
     return make_ready_future<mutable_static_effective_replication_map_ptr>(make_local_effective_replication_map_ptr(std::move(rs), std::move(tmptr)));
 }
 
-host_id_vector_replica_set local_effective_replication_map::get_natural_replicas(const token&) const {
+host_id_vector_replica_set local_effective_replication_map::get_natural_replicas(const token&, bool is_vnode) const {
     return _replica_set;
 }
 
@@ -53,11 +53,11 @@ host_id_vector_topology_change local_effective_replication_map::get_pending_repl
     return host_id_vector_topology_change{};
 }
 
-host_id_vector_replica_set local_effective_replication_map::get_replicas_for_reading(const token& token) const {
+host_id_vector_replica_set local_effective_replication_map::get_replicas_for_reading(const token& token, bool is_vnode) const {
     return _replica_set;
 }
 
-host_id_vector_replica_set local_effective_replication_map::get_replicas(const token&) const {
+host_id_vector_replica_set local_effective_replication_map::get_replicas(const token&, bool is_vnode) const {
     return _replica_set;
 }
 

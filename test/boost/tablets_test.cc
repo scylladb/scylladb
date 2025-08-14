@@ -94,16 +94,20 @@ cql_test_config tablet_cql_test_config(db::tablets_mode_t::mode enable_tablets =
 }
 
 static
-future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "") {
+future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "", std::map<sstring, sstring> tablet_options = {}) {
     auto id = table_id(utils::UUID_gen::get_time_UUID());
     co_await e.create_table([&] (std::string_view ks_name) {
         if (!test_ks_name.empty()) {
             ks_name = test_ks_name;
         }
-        return *schema_builder(ks_name, id.to_sstring(), id)
+        auto builder = schema_builder(ks_name, id.to_sstring(), id)
                 .with_column("p1", utf8_type, column_kind::partition_key)
-                .with_column("r1", int32_type)
-                .build();
+                .with_column("r1", int32_type);
+        if (!tablet_options.empty()) {
+            builder.set_tablet_options(std::move(tablet_options));
+        }
+
+        return *builder.build();
     });
     co_return id;
 }
@@ -4251,4 +4255,45 @@ SEASTAR_TEST_CASE(test_recognition_of_deprecated_name_for_resize_transition) {
     BOOST_REQUIRE_EQUAL(service::transition_state_from_string("tablet resize finalization"), transition_state::tablet_resize_finalization);
     return make_ready_future<>();
 }
+
+SEASTAR_THREAD_TEST_CASE(test_tablets_describe_ring) {
+    auto cfg = tablet_cql_test_config(db::tablets_mode_t::mode::enforced);
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto& db = e.local_db();
+        auto& ss = e.get_storage_service().local();
+        auto& gossiper = ss.gossiper();
+        auto& am = gossiper.get_mutable_address_map();
+
+        size_t num_racks = 3;
+        size_t nodes_per_rack = 10;
+        size_t shards_per_node = 8;
+        std::vector<endpoint_dc_rack> racks;
+        auto min_tablet_count = 10240;
+
+        auto& cfg = e.db_config();
+        cfg.tablets_per_shard_goal(2 * min_tablet_count / (nodes_per_rack * shards_per_node));
+
+        racks.push_back(topo.rack());
+        for (size_t i = 1; i < num_racks; ++i) {
+            racks.push_back(topo.start_new_rack());
+        }
+
+        for (size_t i = 0; i < num_racks; ++i) {
+            for (size_t j = 0; j < nodes_per_rack; ++j) {
+                auto id = topo.add_node(node_state::normal, shards_per_node, racks[i]);
+                auto addr = topo.host_addresses().at(id);
+                am.add_or_update_entry(id, addr);
+            }
+        }
+
+        auto ks = add_keyspace(e, {{topo.dc(), num_racks}}, num_racks * nodes_per_rack);
+        auto table = add_table(e, ks, std::map<sstring, sstring>({{"min_tablet_count", std::to_string(min_tablet_count)}})).get();
+        auto s = db.find_schema(table);
+        auto ring = ss.describe_ring_for_table(s->ks_name(), s->cf_name()).get();
+        BOOST_REQUIRE_GE(ring.size(), min_tablet_count);
+    }, cfg).get();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -324,6 +324,7 @@ static future<std::vector<std::pair<dht::token_range, locator::host_id>>> get_se
     auto prev_tok = sorted_tokens.back();
     for (const auto& tok : sorted_tokens) {
         co_await coroutine::maybe_yield();
+        // FIXME: pass is_vnode=true to get_natural_replicas since the token is in tm.sorted_tokens()
         host_id_vector_replica_set eps = erm->get_natural_replicas(tok);
         if (eps.size() <= 1 || eps[1] != ep) {
             prev_tok = tok;
