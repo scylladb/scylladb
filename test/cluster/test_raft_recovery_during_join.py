@@ -119,7 +119,7 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
 
     logging.info(f'Unsetting the recovery_leader config option on {live_servers}')
     for srv in live_servers:
-        await manager.server_update_config(srv.server_id, 'recovery_leader', '')
+        await manager.server_remove_config_option(srv.server_id, 'recovery_leader')
 
     cql = await reconnect_driver(manager)
     hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
