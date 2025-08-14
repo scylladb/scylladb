@@ -28,6 +28,11 @@ enum class bound_kind_m : uint8_t {
     excl_start = 7,
 };
 
+struct clustering_info {
+    clustering_key_prefix clustering;
+    bound_kind_m kind;
+};
+
 inline bool is_bound_kind(bound_kind_m kind) {
     switch (kind) {
     case bound_kind_m::incl_start:

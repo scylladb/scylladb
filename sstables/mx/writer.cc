@@ -557,10 +557,6 @@ private:
 
     tombstone _current_tombstone;
 
-    struct clustering_info {
-        clustering_key_prefix clustering;
-        bound_kind_m kind;
-    };
     struct pi_block {
         clustering_info first;
         clustering_info last;
@@ -836,7 +832,7 @@ writer::~writer() {
     close_writer(_data_writer);
 }
 
-void writer::maybe_set_pi_first_clustering(const writer::clustering_info& info) {
+void writer::maybe_set_pi_first_clustering(const clustering_info& info) {
     uint64_t pos = _data_writer->offset();
     if (!_pi_write_m.first_clustering) {
         _pi_write_m.first_clustering = info;
