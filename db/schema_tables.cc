@@ -26,7 +26,7 @@
 #include <ranges>
 #include <seastar/coroutine/all.hh>
 #include "utils/log.hh"
-#include "frozen_schema.hh"
+#include "schema/frozen_schema.hh"
 #include "schema/schema_registry.hh"
 #include "mutation_query.hh"
 #include "system_keyspace.hh"
