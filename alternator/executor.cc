@@ -16,6 +16,7 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "mutation/tombstone.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -1498,10 +1499,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     // any table.
     std::vector<schema_builder> view_builders;
     std::unordered_set<std::string> index_names;
-    // Remember the attributes used for LSI keys. Since LSI must be created
-    // with the table, we make these attributes real schema columns, and need
-    // to remember this below if the same attributes are used as GSI keys.
-    std::unordered_set<std::string> lsi_range_keys;
 
     const rjson::value* lsi = rjson::find(request, "LocalSecondaryIndexes");
     if (lsi) {
@@ -1538,15 +1535,12 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             unused_attribute_definitions.erase(view_range_key);
             if (view_range_key == hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
-              }
-            if (view_range_key != range_key) {
-                add_column(builder, view_range_key, *attribute_definitions, column_kind::regular_column);
             }
-            add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key);
+            add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, view_range_key != range_key);
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
             // key(s).
-            if  (!range_key.empty() && view_range_key != range_key) {
+            if (!range_key.empty() && view_range_key != range_key) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
             }
             view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
@@ -1559,7 +1553,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
             view_builders.emplace_back(std::move(view_builder));
-            lsi_range_keys.emplace(view_range_key);
         }
     }
 
@@ -1586,19 +1579,14 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             auto [view_hash_key, view_range_key] = parse_key_schema(g, "GlobalSecondaryIndexes");
 
             // If an attribute is already a real column in the base table
-            // (i.e., a key attribute) or we already made it a real column
-            // as an LSI key above, we can use it directly as a view key.
+            // (i.e., a key attribute) we can use it directly as a view key.
             // Otherwise, we need to add it as a "computed column", which
             // extracts and deserializes the attribute from the ":attrs" map.
-            bool view_hash_key_real_column =
-                partial_schema->get_column_definition(to_bytes(view_hash_key)) ||
-                lsi_range_keys.contains(view_hash_key);
+            bool view_hash_key_real_column = partial_schema->get_column_definition(to_bytes(view_hash_key));
             add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
             unused_attribute_definitions.erase(view_hash_key);
             if (!view_range_key.empty()) {
-                bool view_range_key_real_column =
-                    partial_schema->get_column_definition(to_bytes(view_range_key)) ||
-                    lsi_range_keys.contains(view_range_key);
+                bool view_range_key_real_column = partial_schema->get_column_definition(to_bytes(view_range_key));
                 add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
                 if (!partial_schema->get_column_definition(to_bytes(view_range_key)) &&
                     !partial_schema->get_column_definition(to_bytes(view_hash_key))) {
@@ -2256,8 +2244,8 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
         _length_in_bytes += column_name.size();
         if (!cdef) {
-            // This attribute may be a key column of one of the GSI, in which
-            // case there are some limitations on the value
+            // This attribute may be a key column of one of the GSI or LSI, in
+            // which case there are some limitations on the value
             validate_value_if_gsi_key(key_attributes, column_name, it->value);
             bytes value = serialize_item(it->value);
             if (value.size()) {
@@ -2266,14 +2254,8 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
             }
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
         } else if (!cdef->is_primary_key()) {
-            // Fixed-type regular column can be used for LSI key
-            bytes value = get_key_from_typed_value(it->value, *cdef);
-            _cells->push_back({std::move(column_name),
-                    value});
-            if (value.size()) {
-                // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                _length_in_bytes += value.size() - 1;
-            }
+            // Alternator doesn't use regular columns other than :attrs.
+            SCYLLA_ASSERT(cdef->name_as_text() == executor::ATTRS_COLUMN_NAME);
         }
     }
     if (_pk.representation().size() > 2) {
@@ -2313,24 +2295,28 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, std::move(c.value)));
         }
     }
+    auto attrs = attrs_column(*schema);
     if (!attrs_collector.empty()) {
         auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
-        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        row.cells().apply(attrs, std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
     // PutItem is supposed to completely replace the old item, so we need to
-    // also have a tombstone removing old cells. We can't use the timestamp
-    // ts, because when data and tombstone tie on timestamp, the tombstone
-    // wins. So we need to use ts-1. Note that we use this trick also in
-    // Scylla proper, to implement the operation to replace an entire
-    // collection ("UPDATE .. SET x = ..") - see
-    // cql3::update_parameters::make_tombstone_just_before().
-    if (use_partition_tombstone) {
-        m.partition().apply(tombstone(ts-1, gc_clock::now()));
-    } else {
-        row.apply(tombstone(ts-1, gc_clock::now()));
-    }
+    // also have a tombstone removing old cells. Important points:
+    // 1) We use a cell tombstone instead of a row, or partition, tombstone,
+    //    because the latter trigger a REMOVE CDC row, in addition to a
+    //    MODIFY/INSERT row. This resolves #6930.
+    // 2) We can't use the timestamp ts, because when data and tombstone tie on
+    //    timestamp, the tombstone wins. So we need to use ts-1. Note that we
+    //    use this trick also in Scylla proper, to implement the operation to
+    //    replace an entire collection ("UPDATE .. SET x = ..") - see
+    //    cql3::update_parameters::make_tombstone_just_before().
+    // 3) Alternator's schema is dynamic, therefore we store data in a map
+    //    in column :attrs. So, Alternator tables only have columns for pk, ck,
+    //    and :attrs. Since we're replacing a row, invalidating only :attrs is
+    //    enough.
+    row.cells().apply(attrs, collection_mutation_description{tombstone{ts - 1, gc_clock::now()}}.serialize(*attrs.type));
     return m;
 }
 
