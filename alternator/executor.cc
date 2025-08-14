@@ -4296,10 +4296,8 @@ future<executor::request_return_type> executor::update_item(client_state& client
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
-    if (op->old_item_size().has_value()) {
-        // Update item logs the sum of the existing item size and the estimated size of the updated fields.
-        _stats.operation_sizes.update_item_op_size_kb.add(to_kib_bucket(op->old_item_size().value() + op->estimated_item_size()));
-    }
+    // Update item logs the sum of the existing item size and the estimated size of the updated fields.
+    per_table_stats->operation_sizes.update_item_op_size_kb.add(to_kib_bucket(op->old_item_size().value_or(0) + op->estimated_item_size()));
     per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
