@@ -300,6 +300,13 @@ no_such_tablet_map::no_such_tablet_map(const table_id& id)
 {
 }
 
+// Estimates the external memory usage of std::unordered_map<>.
+// Does not include external memory usage of elements.
+template <typename K, typename V>
+static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map) {
+    return map.bucket_count() * sizeof(void*) + map.size() * (sizeof(std::pair<const K, V>) + 8);
+}
+
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
         return *_tablets.at(id);
@@ -679,7 +686,64 @@ bool tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
     return false;
 }
 
+per_table_tablet_map per_table_tablet_map::clone() const {
+    return per_table_tablet_map(_tablets, _repair_scheduler_config);
+}
+
+future<per_table_tablet_map> per_table_tablet_map::clone_gently() const {
+    tablet_container tablets;
+    tablets.reserve(_tablets.size());
+    for (const auto& t : _tablets) {
+        tablets.emplace(t);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return per_table_tablet_map(std::move(tablets), _repair_scheduler_config);
+}
+
+size_t per_table_tablet_map::external_memory_usage() const {
+    return estimate_external_memory_usage(_tablets);
+}
+
 future<> tablet_map::clear_gently() {
+    return utils::clear_gently(_tablets);
+}
+
+per_table_tablet_info::per_table_tablet_info(db_clock::time_point repair_time, tablet_task_info repair_task_info, int64_t sstables_repaired_at)
+    : repair_time(repair_time)
+    , repair_task_info(std::move(repair_task_info))
+    , sstables_repaired_at(sstables_repaired_at)
+{}
+
+const per_table_tablet_info& per_table_tablet_map::get_tablet_info(tablet_id tid) const {
+    static const per_table_tablet_info default_info{};
+
+    auto it = _tablets.find(tid);
+    if (it != _tablets.end()) {
+        return it->second;
+    }
+    return default_info;
+}
+
+void per_table_tablet_map::set_tablet(tablet_id tid, per_table_tablet_info info) {
+    if (info != per_table_tablet_info{}) {
+        _tablets[tid] = std::move(info);
+    }
+}
+
+void per_table_tablet_map::clear_tablet(tablet_id tid) {
+    _tablets.erase(tid);
+}
+
+void per_table_tablet_map::set_repair_scheduler_config(std::optional<locator::repair_scheduler_config> config) {
+    _repair_scheduler_config = std::move(config);
+}
+
+std::optional<locator::repair_scheduler_config> per_table_tablet_map::get_repair_scheduler_config() const {
+    return _repair_scheduler_config;
+}
+
+future<> per_table_tablet_map::clear_gently() {
     return utils::clear_gently(_tablets);
 }
 
@@ -1118,13 +1182,6 @@ std::optional<tablet_range_splitter::range_split_result> tablet_range_splitter::
     }
 
     return {};
-}
-
-// Estimates the external memory usage of std::unordered_map<>.
-// Does not include external memory usage of elements.
-template <typename K, typename V>
-static size_t estimate_external_memory_usage(const std::unordered_map<K, V>& map) {
-    return map.bucket_count() * sizeof(void*) + map.size() * (sizeof(std::pair<const K, V>) + 8);
 }
 
 size_t tablet_metadata::external_memory_usage() const {
@@ -1701,6 +1758,28 @@ auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, f
         }
         first = false;
         tid = *r.next_tablet(tid);
+    }
+    return fmt::format_to(out, "}}");
+}
+
+auto fmt::formatter<locator::per_table_tablet_map>::format(const locator::per_table_tablet_map& r, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    auto out = ctx.out();
+    if (r._tablets.empty()) {
+        return fmt::format_to(out, "{{}}");
+    }
+    out = fmt::format_to(out, "{{");
+    bool first = true;
+    for (auto& [tid, tablet] : r._tablets) {
+        if (!first) {
+            out = fmt::format_to(out, ",");
+        }
+        out = fmt::format_to(out, "\n    [{}]: repair_time={}, repair_task_info={}, sstables_repaired_at={}",
+                           tid,
+                           std::chrono::duration_cast<std::chrono::seconds>(tablet.repair_time.time_since_epoch()).count(),
+                           tablet.repair_task_info,
+                           tablet.sstables_repaired_at);
+        first = false;
     }
     return fmt::format_to(out, "}}");
 }
