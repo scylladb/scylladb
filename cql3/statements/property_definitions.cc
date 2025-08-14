@@ -155,6 +155,10 @@ long property_definitions::to_long(sstring key, std::optional<sstring> value, lo
     }
 }
 
+void property_definitions::remove_property(const sstring& name) const {
+    _properties.erase(name);
+}
+
 void property_definitions::remove_from_map_if_exists(const sstring& name, const sstring& key) const
 {
     auto it = _properties.find(name);

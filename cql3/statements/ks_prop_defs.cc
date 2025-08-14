@@ -195,6 +195,15 @@ std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
 
+void ks_prop_defs::set_default_replication_strategy_class_option() {
+    auto options = get_replication_options();
+    if (!options.contains(REPLICATION_STRATEGY_CLASS_KEY)) {
+        options[REPLICATION_STRATEGY_CLASS_KEY] = DEFAULT_REPLICATION_STRATEGY_CLASS;
+        remove_property(KW_REPLICATION);
+        add_property(KW_REPLICATION, std::move(options));
+    }
+}
+
 bool ks_prop_defs::get_durable_writes() const {
     return get_boolean(KW_DURABLE_WRITES, true);
 }
