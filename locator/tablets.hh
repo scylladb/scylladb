@@ -259,6 +259,22 @@ struct per_table_tablet_info {
     bool operator==(const per_table_tablet_info&) const = default;
 };
 
+// A unified view of tablet info that combines both the shared tablet_info and the per-table info.
+struct tablet_info_view {
+    const tablet_info& shared;
+    const per_table_tablet_info& per_table;
+
+    tablet_info_view(const tablet_info& tinfo, const per_table_tablet_info& per_table_info)
+        : shared(tinfo), per_table(per_table_info) {}
+
+    const tablet_replica_set& replicas() const { return shared.replicas; }
+    const tablet_task_info& migration_task_info() const { return shared.migration_task_info; }
+    db_clock::time_point repair_time() const { return per_table.repair_time; }
+    const tablet_task_info& repair_task_info() const { return per_table.repair_task_info; }
+    int64_t sstables_repaired_at() const { return per_table.sstables_repaired_at; }
+
+};
+
 // Merges tablet_info b into a, but with following constraints:
 //  - they cannot have active repair task, since each task has a different id
 //  - their replicas must be all co-located.
@@ -532,6 +548,12 @@ struct tablet_desc {
     const tablet_transition_info* transition; // null if there's no transition.
 };
 
+struct tablet_desc_view {
+    tablet_id tid;
+    const tablet_info_view info;
+    const tablet_transition_info* transition; // null if there's no transition.
+};
+
 class no_such_tablet_map : public std::runtime_error {
 public:
     no_such_tablet_map(const table_id& id);
@@ -731,6 +753,7 @@ public:
     // The tablet map is not usable after this call and should be destroyed.
     future<> clear_gently();
     friend fmt::formatter<tablet_map>;
+    friend class tablet_map_view;
 private:
     void check_tablet_id(tablet_id) const;
 };
@@ -778,6 +801,148 @@ public:
 
     future<> clear_gently();
     friend fmt::formatter<tablet_map>;
+    friend class tablet_map_view;
+};
+
+using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
+using per_table_tablet_map_ptr = foreign_ptr<lw_shared_ptr<const per_table_tablet_map>>;
+
+// A unified view of a table's tablet map, combining both the shared tablet_map and the per-table map.
+struct tablet_map_view {
+    tablet_map_ptr shared;
+    per_table_tablet_map_ptr per_table;
+
+    tablet_map_view(tablet_map_ptr shared, per_table_tablet_map_ptr per_table)
+        : shared(std::move(shared)), per_table(std::move(per_table)) {}
+
+    future<tablet_map_view> clone_gently() const;
+
+    tablet_id get_tablet_id(token t) const {
+        return shared->get_tablet_id(t);
+    }
+
+    std::pair<tablet_id, tablet_range_side> get_tablet_id_and_range_side(token t) const {
+        return shared->get_tablet_id_and_range_side(t);
+    }
+
+    tablet_info_view get_tablet_info(tablet_id id) const;
+
+    tablet_info_view get_tablet_info(token t) const {
+        return get_tablet_info(get_tablet_id(t));
+    }
+
+    const tablet_transition_info* get_tablet_transition_info(tablet_id id) const {
+        return shared->get_tablet_transition_info(id);
+    }
+
+    dht::token get_first_token(tablet_id id) const {
+        return shared->get_first_token(id);
+    }
+
+    dht::token get_last_token(tablet_id id) const {
+        return shared->get_last_token(id);
+    }
+
+    dht::token_range get_token_range(tablet_id id) const {
+        return shared->get_token_range(id);
+    }
+
+    tablet_replica get_primary_replica(tablet_id id, const locator::topology& topo) const {
+        return shared->get_primary_replica(id, topo);
+    }
+
+    tablet_replica get_secondary_replica(tablet_id id) const {
+        return shared->get_secondary_replica(id);
+    }
+
+    std::optional<tablet_replica> maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
+        return shared->maybe_get_selected_replica(id, topo, tablet_task_info);
+    }
+
+    future<utils::chunked_vector<token>> get_sorted_tokens() const {
+        return shared->get_sorted_tokens();
+    }
+
+    /// Returns the id of the first tablet.
+    tablet_id first_tablet() const {
+        return shared->first_tablet();
+    }
+
+    /// Returns the id of the last tablet.
+    tablet_id last_tablet() const {
+        return shared->last_tablet();
+    }
+
+    std::optional<tablet_id> next_tablet(tablet_id t) const {
+        return shared->next_tablet(t);
+    }
+
+    std::optional<std::pair<tablet_id, tablet_id>> sibling_tablets(tablet_id t) const {
+        return shared->sibling_tablets(t);
+    }
+
+    bool has_replica(tablet_id tid, tablet_replica r) const {
+        return shared->has_replica(tid, r);
+    }
+
+    auto tablets() const {
+        return shared->tablet_ids() | std::views::transform([this] (auto&& id) {
+            return std::make_pair(id, get_tablet_info(id));
+        });
+    }
+
+    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, tablet_info_view)> func) const;
+
+    future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc_view, std::optional<tablet_desc_view>)> func) const;
+
+    const auto& transitions() const {
+        return shared->transitions();
+    }
+
+    bool has_transitions() const {
+        return shared->has_transitions();
+    }
+
+    auto tablet_ids() const {
+        return shared->tablet_ids();
+    }
+
+    size_t tablet_count() const {
+        return shared->tablet_count();
+    }
+
+    size_t external_memory_usage() const;
+
+    bool operator==(const tablet_map_view&) const;
+
+    bool needs_split() const {
+        return shared->needs_split();
+    }
+
+    bool needs_merge() const {
+        return shared->needs_merge();
+    }
+
+    dht::token_range get_token_range_after_split(const token& t) const noexcept {
+        return shared->get_token_range_after_split(t);
+    }
+
+    const locator::resize_decision& resize_decision() const {
+        return shared->resize_decision();
+    }
+
+    const tablet_task_info& resize_task_info() const {
+        return shared->resize_task_info();
+    }
+
+    const locator::repair_scheduler_config& repair_scheduler_config() const {
+        return per_table->repair_scheduler_config();
+    }
+
+    db_clock::time_point get_repair_time(tablet_id id) const {
+        return per_table->get_tablet_info(id).repair_time;
+    }
+
 };
 
 using table_group_set = utils::small_vector<table_id, 2>;
@@ -994,6 +1159,11 @@ struct fmt::formatter<locator::tablet_map> : fmt::formatter<string_view> {
 template <>
 struct fmt::formatter<locator::per_table_tablet_map> : fmt::formatter<string_view> {
     auto format(const locator::per_table_tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_map_view> : fmt::formatter<string_view> {
+    auto format(const locator::tablet_map_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>
