@@ -8,6 +8,7 @@ from cassandra.auth import PlainTextAuthProvider
 from cassandra.cluster import Cluster, NoHostAvailable
 from cassandra import Unauthorized
 from cassandra.connection import UnixSocketEndPoint
+from test.topology.conftest import cluster_con
 from test.pylib.manager_client import ManagerClient
 
 import pytest
@@ -34,7 +35,8 @@ async def test_maintenance_socket(manager: ManagerClient):
     else:
         pytest.fail("Client should not be able to connect if auth provider is not specified")
 
-    cluster = Cluster([server.ip_addr], auth_provider=PlainTextAuthProvider(username="cassandra", password="cassandra"))
+    cluster = cluster_con([server.ip_addr], 9042, False,
+                          PlainTextAuthProvider(username="cassandra", password="cassandra"))
     session = cluster.connect()
 
     session.execute("CREATE ROLE john WITH PASSWORD = 'password' AND LOGIN = true;")
@@ -44,7 +46,8 @@ async def test_maintenance_socket(manager: ManagerClient):
     session.execute("CREATE TABLE ks2.t1 (pk int PRIMARY KEY, val int);")
     session.execute("GRANT SELECT ON ks1.t1 TO john;")
 
-    cluster = Cluster([server.ip_addr], auth_provider=PlainTextAuthProvider(username="john", password="password"))
+    cluster = cluster_con([server.ip_addr], 9042, False,
+                          PlainTextAuthProvider(username="john", password="password"))
     session = cluster.connect()
     try:
         session.execute("SELECT * FROM ks2.t1")
@@ -53,7 +56,7 @@ async def test_maintenance_socket(manager: ManagerClient):
     else:
         pytest.fail("User 'john' has no permissions to access ks2.t1")
 
-    maintenance_cluster = Cluster([UnixSocketEndPoint(socket)])
+    maintenance_cluster = cluster_con([UnixSocketEndPoint(socket)], 9042, False)
     maintenance_session = maintenance_cluster.connect()
 
     # check that the maintenance session has superuser permissions
