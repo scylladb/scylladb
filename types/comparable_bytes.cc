@@ -855,6 +855,10 @@ static void unescape_zeros(managed_bytes_view& comparable_bytes_view, bytes_ostr
     }
 }
 
+// Functions are defined later in the file as they depend on to_comparable_bytes_visitor and from_comparable_bytes_visitor.
+static void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out);
+static void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -939,9 +943,13 @@ struct to_comparable_bytes_visitor {
     }
 };
 
+void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    visit(type, to_comparable_bytes_visitor{serialized_bytes_view, out});
+}
+
 comparable_bytes::comparable_bytes(const abstract_type& type, managed_bytes_view serialized_bytes_view) {
     bytes_ostream encoded_bytes_ostream;
-    visit(type, to_comparable_bytes_visitor{serialized_bytes_view, encoded_bytes_ostream});
+    to_comparable_bytes(type, serialized_bytes_view, encoded_bytes_ostream);
     _encoded_bytes = std::move(encoded_bytes_ostream).to_managed_bytes();
 }
 
@@ -1035,6 +1043,10 @@ struct from_comparable_bytes_visitor {
     }
 };
 
+void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    visit(type, from_comparable_bytes_visitor{comparable_bytes_view, out});
+}
+
 managed_bytes_opt comparable_bytes::to_serialized_bytes(const abstract_type& type) const {
     if (_encoded_bytes.empty()) {
         return managed_bytes_opt();
@@ -1042,7 +1054,7 @@ managed_bytes_opt comparable_bytes::to_serialized_bytes(const abstract_type& typ
 
     managed_bytes_view comparable_bytes_view(_encoded_bytes);
     bytes_ostream serialized_bytes_ostream;
-    visit(type, from_comparable_bytes_visitor{comparable_bytes_view, serialized_bytes_ostream});
+    from_comparable_bytes(type, comparable_bytes_view, serialized_bytes_ostream);
     return std::move(serialized_bytes_ostream).to_managed_bytes();
 }
 
