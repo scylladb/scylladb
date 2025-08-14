@@ -20,6 +20,7 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
+#include "index/vector_index.hh"
 #include "service/client_state.hh"
 #include "types/types.hh"
 #include "cql3/query_processor.hh"
@@ -254,7 +255,7 @@ description index(const data_dictionary::database& db, const sstring& ks, const 
     return (**idx).describe(replica::make_schema_describe_helper(*idx, db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
 }
 
-// `base_name` should be a table with enabled cdc
+// `base_name` should be a table with enabled cdc or a vector index
 std::optional<description> describe_cdc_log_table(const data_dictionary::database& db, const sstring& ks, const sstring& base_name) {
     auto table = db.try_find_table(ks, cdc::log_name(base_name));
     if (!table) {
@@ -297,7 +298,8 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
 
         fmt::format_to(os.to_iter(),
                 "/* Do NOT execute this statement! It's only for informational purposes.\n"
-                "   A CDC log table is created automatically when the base is created.\n"
+                "   A CDC log table is created automatically when creating the base with CDC\n"
+                "   enabled option or creating the vector index on the base table's vector column.\n"
                 "\n{}\n"
                 "*/",
                 *table_desc.create_statement);
@@ -324,7 +326,7 @@ future<std::vector<description>> table(const data_dictionary::database& db, cons
         co_await coroutine::maybe_yield();
     }
 
-    if (schema->cdc_options().enabled()) {
+    if (cdc::cdc_enabled(*schema)) {
         auto cdc_log_alter = describe_cdc_log_table(db, ks, name);
         if (cdc_log_alter) {
             result.push_back(std::move(*cdc_log_alter));
