@@ -18,9 +18,9 @@
 
 using namespace std::chrono_literals;
 
-namespace utils {
-
 seastar::logger dsmlog("disk_space_monitor");
+
+namespace utils {
 
 disk_space_monitor::disk_space_monitor(abort_source& as, std::filesystem::path data_dir, config cfg)
     : _as_sub(as.subscribe([this] () noexcept {
@@ -30,6 +30,29 @@ disk_space_monitor::disk_space_monitor(abort_source& as, std::filesystem::path d
     , _signal_barrier("disk_space_monitor::signal_barrier")
     , _data_dir(std::move(data_dir))
     , _cfg(std::move(cfg))
+    , _threshold_subscription(listen([this](const disk_space_monitor& dsm) -> future<> {
+        const float current_disk_utilization = dsm.disk_utilization();
+        if (current_disk_utilization < 0.0f) {
+            co_return;
+        }
+
+        dsmlog.debug("current disk utilization={}", current_disk_utilization);
+
+        for (auto& sub : _subscriptions) {
+            auto threshold_reached = above_threshold(current_disk_utilization > std::clamp(sub._threshold(), 0.0f, 1.0f));
+
+            const bool crossed_threshold = (sub._threshold_reached != threshold_reached);
+            const bool constant_update = !sub._trigger_options.only_crossing_threshold;
+
+            sub._threshold_reached = threshold_reached;
+            if (constant_update || crossed_threshold) {
+                if ((threshold_reached == above_threshold::yes && sub._trigger_options.when_above_threshold) ||
+                    (threshold_reached == above_threshold::no && sub._trigger_options.when_below_threshold)) {
+                    co_await sub(std::move(threshold_reached));
+                }
+            }
+        }
+    }))
 {
     _space_source = [this] {
         return engine().file_system_space(_data_dir.native());
@@ -70,6 +93,12 @@ disk_space_monitor::signal_connection_type disk_space_monitor::listen(signal_cal
         auto op = _signal_barrier.start();
         co_await callback(*this);
     });
+}
+
+auto disk_space_monitor::subscribe(updateable_value<float> threshold, subscription_callback_type cb, subscription_trigger_options opt) -> subscription {
+    auto sub = subscription(*this, threshold, std::move(cb), std::move(opt));
+    trigger_poll();
+    return sub;
 }
 
 future<> disk_space_monitor::poll() {

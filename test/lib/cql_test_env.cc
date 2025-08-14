@@ -514,6 +514,8 @@ private:
             if (!cfg->view_update_reader_concurrency_semaphore_kill_limit_multiplier.is_set()) {
                 cfg->view_update_reader_concurrency_semaphore_kill_limit_multiplier.set(std::numeric_limits<uint32_t>::max());
             }
+            cfg->critical_disk_utilization_level.set(1.0f);
+
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
             if (!cfg->data_file_directories.is_set()) {

@@ -36,6 +36,9 @@ public:
     using signal_connection_type = boost::signals2::scoped_connection;
     using space_source_fn = std::function<future<std::filesystem::space_info>()>;
 
+    using above_threshold = bool_class<struct above_threshold_tag>;
+    using subscription_callback_type = noncopyable_function<future<> (above_threshold)>;
+
     struct config {
         scheduling_group sched_group;
         updateable_value<int> normal_polling_interval;
@@ -43,6 +46,61 @@ public:
         // Use high_polling_interval above this threshold
         updateable_value<float> polling_interval_threshold;
         updateable_value<uint64_t> capacity_override; // 0 means no override.
+    };
+
+    struct subscription_trigger_options {
+        // If set to true, the subscription will be triggered only when the threshold is crossed
+        // (both ways). Otherwise, it will be triggered constantly.
+        bool only_crossing_threshold { true };
+        bool when_above_threshold { true };
+        bool when_below_threshold { true };
+    };
+    // Required as a workaround to define default options in a method due to a bug in both GCC and clang
+    //
+    // void subscribe(subscription_trigger_options opt = {});  // does not compile
+    // void subscribe(subscription_trigger_options opt = default_options()); // OK
+    static subscription_trigger_options default_options() { return {}; }
+
+    class subscription : public bi::list_base_hook<bi::link_mode<bi::auto_unlink>> {
+        friend class disk_space_monitor;
+
+        updateable_value<float> _threshold;
+        subscription_callback_type _callback;
+        above_threshold _threshold_reached = above_threshold::no;
+        subscription_trigger_options _trigger_options;
+    public:
+        subscription() = default;
+
+        explicit subscription(disk_space_monitor& monitor, updateable_value<float> threshold, subscription_callback_type cb, subscription_trigger_options opt)
+            : _threshold(std::move(threshold))
+            , _callback(std::move(cb))
+            , _trigger_options(std::move(opt)) {
+            monitor._subscriptions.push_back(*this);
+        }
+
+        subscription(subscription&& other) noexcept
+            : _threshold(other._threshold)
+            , _callback(std::move(other._callback)) {
+            subscription_list_type::node_algorithms::swap_nodes(other.this_ptr(), this_ptr());
+        }
+
+        subscription& operator=(subscription&& other) noexcept
+        {
+            if (this == &other) {
+                return *this;
+            }
+            unlink();
+
+            _threshold = other._threshold;
+            _callback = std::move(other._callback);
+
+            subscription_list_type::node_algorithms::swap_nodes(other.this_ptr(), this_ptr());
+            return *this;
+        }
+
+        future<> operator()(above_threshold threshold_reached) {
+            return _callback(std::move(threshold_reached));
+        }
     };
 
 private:
@@ -57,6 +115,11 @@ private:
     config _cfg;
     space_source_fn _space_source;
     std::any _capacity_observer;
+
+    using subscription_list_type = bi::list<subscription, bi::constant_time_size<false>>;
+    subscription_list_type _subscriptions;
+    signal_connection_type _threshold_subscription;
+    subscription _out_of_space_subscription;
 
 public:
     disk_space_monitor(abort_source& as, std::filesystem::path data_dir, config cfg);
@@ -79,6 +142,12 @@ public:
     }
 
     signal_connection_type listen(signal_callback_type callback);
+
+    // Threshold is in range [0.0, 1.0], where 1.0 means 100% disk utilization.
+    [[nodiscard]] subscription subscribe(updateable_value<float> threshold, subscription_callback_type cb, subscription_trigger_options opt = default_options());
+    [[nodiscard]] subscription subscribe(float threshold, subscription_callback_type cb, subscription_trigger_options opt = default_options()) {
+        return subscribe(updateable_value<float>(threshold), std::move(cb), std::move(opt));
+    }
 
     // Registers a new space source function and returns an object that
     // restores the previous one when it goes out of scope.
