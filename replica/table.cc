@@ -1102,7 +1102,7 @@ future<compaction::compaction_type_options::split> tablet_storage_group_manager:
 
     co_return compaction::compaction_type_options::split([tablet_map_ptr = make_lw_shared(std::move(tablet_map_ptr))] (dht::token t) {
         // Classifies the input stream into either left or right side.
-        auto [_, side] = (*tablet_map_ptr)->get_tablet_id_and_range_side(t);
+        auto [_, side] = tablet_map_ptr->get_tablet_id_and_range_side(t);
         return mutation_writer::token_group_id(side);
     });
 }

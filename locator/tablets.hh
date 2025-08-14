@@ -993,8 +993,7 @@ public:
     // using shared pointers. We should change that and use a foreign_ptr<> to
     // hold immutable tablet_metadata which lives on shard 0 only.
     // See storage_service::replicate_to_all_cores().
-    using tablet_map_ptr = foreign_ptr<lw_shared_ptr<const tablet_map>>;
-    using table_to_tablet_map = std::unordered_map<table_id, tablet_map_ptr>;
+    using table_to_tablet_map = std::unordered_map<table_id, tablet_map_view>;
     using table_group_map = std::unordered_map<table_id, table_group_set>;
 private:
     table_to_tablet_map _tablets;
@@ -1013,7 +1012,8 @@ public:
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
     // Gets shared ownership of tablet map
-    future<tablet_map_ptr> get_tablet_map_ptr(table_id id) const;
+    future<tablet_map_view> get_tablet_map_ptr(table_id id) const;
+    const tablet_map_view& get_tablet_map_view(table_id id) const;
     bool has_tablet_map(table_id id) const;
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
@@ -1040,14 +1040,14 @@ public:
     tablet_metadata& operator=(tablet_metadata&&) = default;
 
     void set_balancing_enabled(bool value) { _balancing_enabled = value; }
-    void set_tablet_map(table_id, tablet_map);
-    future<> set_colocated_table(table_id id, table_id base_id);
+    void set_tablet_map(table_id, shared_tablet_map, per_table_tablet_map = per_table_tablet_map());
+    future<> set_colocated_table(table_id id, table_id base_id, per_table_tablet_map = per_table_tablet_map());
     void drop_tablet_map(table_id);
 
     // Allow mutating a tablet_map
     // Uses the copy-modify-swap idiom.
     // If func throws, no changes are done to the tablet map.
-    future<> mutate_tablet_map_async(table_id, noncopyable_function<future<>(tablet_map&)> func);
+    future<> mutate_tablet_map_async(table_id, noncopyable_function<future<>(shared_tablet_map&, per_table_tablet_map&)> func);
 
     future<> clear_gently();
 public:
