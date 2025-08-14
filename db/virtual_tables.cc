@@ -1241,14 +1241,14 @@ public:
         auto set_type = set_type_impl::get_instance(uuid_type, false);
         for (auto&& [table, tmap] : tm->tablets().all_tables_ungrouped()) {
             mutation m(schema(), make_partition_key(table));
-            co_await tmap->for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
-                auto trange = tmap->get_token_range(tid);
+            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& tinfo) -> future<> {
+                auto trange = tmap.get_token_range(tid);
                 int64_t last_token = trange.end()->value().raw();
                 auto& r = m.partition().clustered_row(*schema(), clustering_key::from_single_value(*schema(), data_value(last_token).serialize_nonnull()));
                 const range_based_tablet_id rb_tid {table, trange};
                 std::unordered_map<host_id, uint64_t> replica_sizes;
                 std::unordered_set<host_id> missing_replicas;
-                for (auto& replica : tinfo.replicas) {
+                for (auto& replica : tinfo.replicas()) {
                     auto tablet_size_opt = stats->get_tablet_size(replica.host, rb_tid);
                     if (tablet_size_opt) {
                         replica_sizes[replica.host] = *tablet_size_opt;

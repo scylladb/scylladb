@@ -840,7 +840,7 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
             if (table_hint.tokens.empty()) {
                 co_await do_update_tablet_metadata_partition(qp, tm, table_hint, builder);
             } else {
-                co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap) -> future<> {
+                co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (shared_tablet_map& tmap, per_table_tablet_map& per_table_tmap) -> future<> {
                     co_await do_update_tablet_metadata_rows(db, qp, tmap, table_hint);
                 });
             }
