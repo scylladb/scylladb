@@ -616,7 +616,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     });
     auto files = std::list<stream_blob_info>();
 
-    sstables::sstable_generation_generator sst_gen;
+    auto& sst_gen = table.get_sstable_generation_generator();
 
     for (auto& sst_snapshot : sstables) {
         auto& sst = sst_snapshot.sst;
@@ -624,7 +624,7 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
         auto sst_state = sst->state();
 
         auto sources = create_stream_sources(sst_snapshot);
-        auto newgen = fmt::to_string(sst_gen(sstables::uuid_identifiers::yes));
+        auto newgen = fmt::to_string(sst_gen());
 
         for (auto&& s : sources) {
             auto oldname = s->component_basename();

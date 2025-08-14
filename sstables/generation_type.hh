@@ -120,36 +120,10 @@ Target generations_from_values(std::initializer_list<generation_type::int_t> val
     }) | std::ranges::to<Target>();
 }
 
-using uuid_identifiers = bool_class<struct uuid_identifiers_tag>;
 class sstable_generation_generator {
-    // We still want to do our best to keep the generation numbers shard-friendly.
-    // Each destination shard will manage its own generation counter.
-    //
-    // operator() is called by multiple shards in parallel when performing reshard,
-    // so we have to use atomic<> here.
-    using int_t = sstables::generation_type::int_t;
-    int_t _last_generation;
-    static int_t base_generation(int_t highest_generation) {
-        // get the base generation so we can increment it by smp::count without
-        // conflicting with other shards
-        return highest_generation - highest_generation % seastar::smp::count + seastar::this_shard_id();
-    }
 public:
-    explicit sstable_generation_generator(int64_t last_generation = 0)
-        : _last_generation(base_generation(last_generation)) {}
-    void update_known_generation(int64_t generation) {
-        if (generation > _last_generation) {
-            _last_generation = generation;
-        }
-    }
-    generation_type operator()(uuid_identifiers use_uuid = uuid_identifiers::no) {
-        if (use_uuid) {
-            return generation_type(utils::UUID_gen::get_time_UUID());
-        }
-        // each shard has its own "namespace" so we increment the generation id
-        // by smp::count to avoid name confliction of sstables
-        _last_generation += seastar::smp::count;
-        return generation_type(_last_generation);
+    generation_type operator()() {
+        return generation_type(utils::UUID_gen::get_time_UUID());
     }
     /// returns a hint indicating if an sstable belongs to a shard. The definitive
     /// way to determine that is overlapping its partition-ranges with the shard's

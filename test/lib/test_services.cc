@@ -224,7 +224,7 @@ struct test_env::impl {
     impl(const impl&) = delete;
 
     sstables::generation_type new_generation() noexcept {
-        return gen(uuid_identifiers::yes);
+        return gen();
     }
 };
 
@@ -253,7 +253,6 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)
     , storage(std::move(cfg.storage))
 {
-    feature_service.uuid_sstable_identifiers.enable();
 }
 
 test_env::test_env(test_env_config cfg, sstable_compressor_factory& scf, sstables::storage_manager* sstm, tmpdir* tmp)

@@ -506,8 +506,7 @@ private:
     // TODO: find a better name for this semaphore.
     seastar::named_semaphore _sstable_set_mutation_sem = {1, named_semaphore_exception_factory{"sstable set mutation"}};
     mutable row_cache _cache; // Cache covers only sstables.
-    // Initialized when the table is populated via update_sstables_known_generation.
-    std::optional<sstables::sstable_generation_generator> _sstable_generation_generator;
+    sstables::sstable_generation_generator _sstable_generation_generator;
 
     db::replay_position _highest_rp;
     // Tracks the highest replay position flushed to a sstable
@@ -718,10 +717,6 @@ private:
     // Caller must keep m alive.
     future<> update_cache(compaction_group& cg, lw_shared_ptr<memtable> m, std::vector<sstables::shared_sstable> ssts);
     struct merge_comparator;
-
-    // update the sstable generation, making sure (in calculate_generation_for_new_table)
-    // that new new sstables don't overwrite this one.
-    void update_sstables_known_generation(sstables::generation_type generation);
 
     sstables::generation_type calculate_generation_for_new_table();
 private:
@@ -1238,6 +1233,10 @@ public:
 
     const sstables::sstables_manager& get_sstables_manager() const noexcept {
         return _sstables_manager;
+    }
+
+    sstables::sstable_generation_generator& get_sstable_generation_generator() {
+        return _sstable_generation_generator;
     }
 
     reader_concurrency_semaphore& streaming_read_concurrency_semaphore() {

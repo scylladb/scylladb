@@ -75,20 +75,8 @@ table_holder::table_holder(table& t)
     , _table_ptr(t.shared_from_this())
 { }
 
-void table::update_sstables_known_generation(sstables::generation_type generation) {
-    auto gen = generation ? generation.as_int() : 0;
-    if (_sstable_generation_generator) {
-        _sstable_generation_generator->update_known_generation(gen);
-    } else {
-        _sstable_generation_generator.emplace(gen);
-    }
-    tlogger.debug("{}.{} updated highest known generation to {}", schema()->ks_name(), schema()->cf_name(), gen);
-}
-
 sstables::generation_type table::calculate_generation_for_new_table() {
-    SCYLLA_ASSERT(_sstable_generation_generator);
-    auto ret = std::invoke(*_sstable_generation_generator,
-                           sstables::uuid_identifiers{_sstables_manager.uuid_sstable_identifiers()});
+    auto ret = _sstable_generation_generator();
     tlogger.debug("{}.{} new sstable generation {}", schema()->ks_name(), schema()->cf_name(), ret);
     return ret;
 }
@@ -3432,7 +3420,6 @@ void table::mark_ready_for_writes(db::commitlog* cl) {
     if (!_readonly) {
         on_internal_error(dblog, ::format("table {}.{} is already writable", _schema->ks_name(), _schema->cf_name()));
     }
-    update_sstables_known_generation(sstables::generation_from_value(0));
     if (_config.enable_commitlog) {
         _commitlog = cl;
     }
