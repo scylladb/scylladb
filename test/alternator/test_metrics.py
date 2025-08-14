@@ -91,6 +91,9 @@ def get_metric(metrics, name, requested_labels=None, the_metrics=None):
         total += float(val)
     return total
 
+def set_rbw_enabled(enabled, cql):
+    cql.execute(f"UPDATE system.config set value = '{'true' if enabled else 'false'}' WHERE name = 'alternator_force_read_before_write'")
+
 # context manager for checking that a certain piece of code increases each
 # of the specified metrics. Helps reduce the amount of code duplication
 # below.
@@ -109,8 +112,12 @@ def check_increases_metric_exact(metrics, metric_name, value_and_labels):
     saved_metric = [get_metric(metrics, metric_name, vl[1], the_metrics) for vl in value_and_labels]
     yield
     the_metrics = get_metrics(metrics)
-    for idx, m in enumerate(saved_metric):
-        assert get_metric(metrics, metric_name, value_and_labels[idx][1], the_metrics) - m == value_and_labels[idx][0], f'metric {metric_name} did not increase at expected value {m}'
+    # print(the_metrics)
+    for idx, base_value in enumerate(saved_metric):
+        value_and_label = value_and_labels[idx]
+        expected_increase = value_and_label[0]
+        actual_increase = get_metric(metrics, metric_name, value_and_labels[idx][1], the_metrics) - base_value
+        assert actual_increase == expected_increase, f'metric {metric_name} did not increase from base value {base_value} by {expected_increase}, but by {actual_increase} for {value_and_label}'
 
 @contextmanager
 def check_increases_operation(metrics, operation_names, metric_name = 'scylla_alternator_operation', expected_value=None):
@@ -445,22 +452,32 @@ def check_histogram_metric_increases(op, histogram_name, metrics, do_test, probe
     with check_increases_metric_exact(metrics, metric_bucket, points):
         do_test()
 
-def test_get_item_size_no_items_increases_zero_interval(test_table_s, metrics):
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_get_item_size_no_items_increases_zero_interval(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
     def do_test():
         test_table_s.get_item(Key={'p': random_string()})
     check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(1, '1.000000'), (1, '+Inf')])
 
-def test_get_item_size_256kb_item_falls_into_appropriate_bucket(test_table_s, metrics):
+def test_get_item_falls_into_appropriate_bucket(test_table_s, metrics):
     def do_test():
         pk = random_string()
+<<<<<<< HEAD
         test_table_s.put_item(Item={'p': pk, 'a': 'a' * 256 * 1024})
+=======
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 8 * 1024})
+>>>>>>> bacf5685ba (update item, tests, variable names changed)
         test_table_s.get_item(Key={'p': pk})
-    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
+    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '7.000000'), (1, '8.000000'), (1, '+Inf')])
 
 def test_get_item_size_256kb_split_item_falls_into_appropriate_bucket(test_table_s, metrics):
     def do_test():
         pk = random_string()
+<<<<<<< HEAD
         test_table_s.put_item(Item={'p': pk, 'a': 'a' * 128 * 1024, 'b': 'b' * 128 * 1024})
+=======
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 7 * 1024, 'b': 'b' * 10 * 1024})
+>>>>>>> bacf5685ba (update item, tests, variable names changed)
         test_table_s.get_item(Key={'p': pk})
     check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
 
@@ -475,7 +492,9 @@ def test_batch_get_item_size_no_items_increases_zero_interval(test_table_s, metr
         })
     check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(1, '1.000000'), (1, '+Inf')])
 
-def test_batch_get_item_size_256kib_item_falls_into_appropriate_bucket(test_table_s, metrics):
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_batch_get_item_size_256kib_item_falls_into_appropriate_bucket(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
     def do_test():
         pk = random_string()
         # 256KiB item
@@ -488,10 +507,11 @@ def test_batch_get_item_size_256kib_item_falls_into_appropriate_bucket(test_tabl
         })
     check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
 
-def test_batch_get_item_size_401kib_item_falls_into_appropriate_bucket(test_table_s, metrics):
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_batch_get_item_size_401kib_item_falls_into_appropriate_bucket(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
     def do_test():
         pk = random_string()
-        # 256KiB item
         test_table_s.put_item(Item={'p': pk, 'a': 'a' * 401 * 1024})
         test_table_s.meta.client.batch_get_item(RequestItems={
             test_table_s.name: {
@@ -501,10 +521,11 @@ def test_batch_get_item_size_401kib_item_falls_into_appropriate_bucket(test_tabl
         })
     check_histogram_metric_increases('BatchGetItem', 'batch_get_item_op_size_kib', metrics, do_test, [(0, '400.000000'), (1, '480.000000'), (1, '+Inf')])
 
-def test_batch_get_item_size_216kib_split_item_falls_into_appropriate_bucket(test_table_s, metrics):
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_batch_get_item_size_216kib_split_item_falls_into_appropriate_bucket(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
     def do_test():
         pk = random_string()
-        # 256KiB item
         test_table_s.put_item(Item={'p': pk, 'a': 'a' * 47 * 1024, 'b': 'b' * 169 * 1024})
         test_table_s.meta.client.batch_get_item(RequestItems={
             test_table_s.name: {

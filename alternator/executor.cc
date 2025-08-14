@@ -2400,7 +2400,7 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
             _consumed_capacity._total_bytes = item_length;
         }
         if (previous_item) {
-            _item_length.emplace(item_length);
+            _old_item_size.emplace(item_length);
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
         }
     }
@@ -2525,7 +2525,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats).then([this, &proxy, &wcu_total, trace_state, permit = std::move(permit)] (item_with_length&& previous_item) mutable {
                 wcu_total += previous_item.length;
-                _item_length.emplace(previous_item.length);
+                _old_item_size.emplace(previous_item.length);
                 std::optional<mutation> m = apply(std::move(previous_item.item), api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
@@ -2808,8 +2808,8 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     per_table_stats->api_operations.delete_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
-    if (op->item_length().has_value()) {
-        per_table_stats->operation_sizes.delete_item_op_size_kb.add(to_kib_bucket(*op->item_length()));
+    if (op->old_item_size().has_value()) {
+        per_table_stats->operation_sizes.delete_item_op_size_kb.add(to_kib_bucket(*op->old_item_size()));
     }
     per_table_stats->wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
@@ -3099,9 +3099,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // or, if we performed a read-before-write, on the larger of the operation size
     // and the previous item's size.
     for (const auto& w : per_table_wcu) {
+        uint64_t items_size = 0;
         total_wcu = 0;
         // The following loop goes over all items from the same table
         while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
+            items_size += mutation_builders[pos].second.length_in_bytes();
             size_t wcu = wcu_consumed_capacity_counter::get_units((mutation_builders[pos].second.length_in_bytes())? mutation_builders[pos].second.length_in_bytes() : 1);
             total_wcu += wcu;
             if (mutation_builders[pos].second.is_put_item()) {
@@ -3118,6 +3120,9 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             rjson::add(entry, "TableName", rjson::from_string(w.second->cf_name()));
             rjson::add(entry, "CapacityUnits", total_wcu);
             rjson::push_back(consumed_capacity, std::move(entry));
+        }
+        if (items_size > 0) {
+            w.first->operation_sizes.batch_write_item_op_size_kb.add(to_kib_bucket(items_size));
         }
     }
     _stats.wcu_total[stats::PUT_ITEM] += wcu_put_units;
@@ -3646,10 +3651,13 @@ public:
 
     parsed::condition_expression _condition_expression;
 
+    uint64_t _estimated_item_size;
+
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
     virtual ~update_item_operation() = default;
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override;
     bool needs_read_before_write() const;
+    uint64_t estimated_item_size() const { return _estimated_item_size; };
 };
 
 update_item_operation::update_item_operation(service::storage_proxy& proxy, rjson::value&& update_info)
@@ -3724,21 +3732,24 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
         throw api_error::validation(
                 format("UpdateItem does not allow both old-style AttributeUpdates and new-style ConditionExpression to be given together"));
     }
+    uint64_t estimated_size = 0;
     if (_pk.representation().size() > 2) {
         // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
-        _consumed_capacity._total_bytes += _pk.representation().size() - 2;
+        estimated_size += _pk.representation().size() - 2;
     }
     if (_ck.representation().size() > 2) {
         // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
-        _consumed_capacity._total_bytes += _ck.representation().size() - 2;
+        estimated_size += _ck.representation().size() - 2;
     }
     if (expression_attribute_names) {
-        _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_names);
+        estimated_size += estimate_value_size(*expression_attribute_names);
     }
     if (expression_attribute_values) {
-        _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_values);
+        estimated_size += estimate_value_size(*expression_attribute_values);
     }
 
+    _estimated_item_size = estimated_size;
+    _consumed_capacity._total_bytes += estimated_size;
     _key_attributes = si_key_attributes(proxy.data_dictionary().find_table(
         _schema->ks_name(), _schema->cf_name()));
 }
@@ -4285,6 +4296,10 @@ future<executor::request_return_type> executor::update_item(client_state& client
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    if (op->old_item_size().has_value()) {
+        // Update item logs the sum of the existing item size and the estimated size of the updated fields.
+        _stats.operation_sizes.update_item_op_size_kb.add(to_kib_bucket(op->old_item_size().value() + op->estimated_item_size()));
+    }
     per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);

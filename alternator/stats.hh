@@ -79,21 +79,25 @@ public:
         utils::estimated_histogram batch_get_item_histogram{22}; // a histogram that covers the range 1 - 100
         utils::estimated_histogram batch_write_item_histogram{22}; // a histogram that covers the range 1 - 100
     } api_operations;
-    // Item size statistics collected per-table per-node. Each histogram covers
-    // the range 0 - 576. The breakpoint at 400KB is there because DynamoDB
-    // doesn't support larger items. Resolves #25143.
     struct {
+        // Item size statistics collected per-table per-node. Each histogram
+        // covers the range 0 - 576. The breakpoint at 400KB is there because
+        // DynamoDB doesn't support larger items. Resolves #25143.
+        // A size is the new item size.
         utils::estimated_histogram put_item_op_size_kb{32, {400}};
+        // A size is the retrieved item size.
         utils::estimated_histogram get_item_op_size_kib{32, {400}};
+        // A size is the deleted item size.
         utils::estimated_histogram delete_item_op_size_kb{32, {400}};
-        // utils::estimated_histogram update_item_op_size_kb{32, {400}};
-        // utils::estimated_histogram scan_op_size_kb{32, {400}};
-        // utils::estimated_histogram batch_write_item_size_kb{32, {400}};
+        // A size is the existing item size plus the estimated size of the update.
+        utils::estimated_histogram update_item_op_size_kb{32, {400}};
+        // A size is the sum of the sizes of all items per table. This means
+        // that a single BatchGetItem / BatchWriteItem updates the histogram
+        // for each table that it has items in.
+        // The sizes are the the retrieved item sizes grouped per table.
         utils::estimated_histogram batch_get_item_op_size_kib{32, {400}};
-        // utils::estimated_histogram query_size_kb{32, {400}};
-        // Czy to też:
-        // utils::estimated_histogram list_streams_size_kb{32, {400}};
-        // utils::estimated_histogram get_records_size_kb{32, {400}};
+        // The sizes are the the written item sizes grouped per table.
+        utils::estimated_histogram batch_write_item_op_size_kb{32, {400}};
     } operation_sizes;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
