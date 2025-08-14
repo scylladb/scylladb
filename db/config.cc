@@ -1206,6 +1206,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "\n"
         "* priority_string: GnuTLS priority string controlling TLS algorithms used/allowed.\n"
         "* enable_session_tickets: (Default: false) Enables or disables TLS1.3 session tickets.")
+    , alternator_force_read_before_write(this, "alternator_force_read_before_write", liveness::LiveUpdate, value_status::Used, false, "Forces Alternator to perform Read Before Write. Used for better DynamoDB compatibility in WCU calculation")
     , ssl_storage_port(this, "ssl_storage_port", value_status::Used, 7001,
         "The SSL port for encrypted communication. Unused unless enabled in encryption_options.")
     , enable_in_memory_data_store(this, "enable_in_memory_data_store", value_status::Used, false, "Enable in memory mode (system tables are always persisted).")
