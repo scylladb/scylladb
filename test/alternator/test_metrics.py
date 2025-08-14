@@ -91,6 +91,9 @@ def get_metric(metrics, name, requested_labels=None, the_metrics=None):
         total += float(val)
     return total
 
+def set_rbw_enabled(enabled, cql):
+    cql.execute(f"UPDATE system.config set value = '{'true' if enabled else 'false'}' WHERE name = 'alternator_force_read_before_write'")
+
 # context manager for checking that a certain piece of code increases each
 # of the specified metrics. Helps reduce the amount of code duplication
 # below.
@@ -109,8 +112,11 @@ def check_increases_metric_exact(metrics, metric_name, value_and_labels):
     saved_metric = [get_metric(metrics, metric_name, vl[1], the_metrics) for vl in value_and_labels]
     yield
     the_metrics = get_metrics(metrics)
-    for idx, m in enumerate(saved_metric):
-        assert get_metric(metrics, metric_name, value_and_labels[idx][1], the_metrics) - m == value_and_labels[idx][0], f'metric {metric_name} did not increase at expected value {m}'
+    for idx, base_value in enumerate(saved_metric):
+        value_and_label = value_and_labels[idx]
+        expected_increase = value_and_labels[idx][0]
+        actual_increase = get_metric(metrics, metric_name, value_and_labels[idx][1], the_metrics) - base_value
+        assert actual_increase == expected_increase, f'metric {metric_name} did not increase from base value {base_value} by {expected_increase}, but by {actual_increase} for {value_and_label}'
 
 @contextmanager
 def check_increases_operation(metrics, operation_names, metric_name = 'scylla_alternator_operation', expected_value=None):
@@ -433,6 +439,37 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
         it = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
         with check_sets_latency(metrics, ['GetRecords']):
             dynamodbstreams.get_records(ShardIterator=it)
+
+###### Test metrics that are item size histograms of DynamoDB API operations which modify data:
+
+# Tests for histogram metrics <op>_op_size_kib.
+
+def check_histogram_metric_increases(op, name, metrics, do_test, probes):
+    points = [[value, {'op': op, 'le': le}] for value, le in probes]
+    metric_bucket = f'scylla_alternator_table_{name}_bucket'
+    with check_increases_metric_exact(metrics, metric_bucket, points):
+        do_test()
+
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_get_item_size_no_items_increases_zero_interval(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
+    def do_test():
+        test_table_s.get_item(Key={'p': random_string()})
+    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(1, '1.000000'), (1, '+Inf')])
+
+def test_get_item_size_falls_into_appropriate_bucket(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 8 * KB})
+        test_table_s.get_item(Key={'p': pk})
+    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '8.000000'), (1, '10.000000'), (1, '+Inf')])
+
+def test_get_item_size_split_item_falls_into_appropriate_bucket(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 7 * KB, 'b': 'b' * 10 * KB})
+        test_table_s.get_item(Key={'p': pk})
+    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '17.000000'), (1, '20.000000'), (1, '+Inf')])
 
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 

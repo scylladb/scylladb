@@ -4311,12 +4311,14 @@ static rjson::value describe_item(schema_ptr schema,
         const query::result& query_result,
         const std::optional<attrs_to_get>& attrs_to_get,
         consumed_capacity_counter& consumed_capacity,
-        uint64_t& metric) {
-    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &consumed_capacity._total_bytes);
+        uint64_t& metric,
+        uint64_t& item_size_in_bytes) {
+    std::optional<rjson::value> opt_item = executor::describe_single_item(std::move(schema), slice, selection, std::move(query_result), attrs_to_get, &item_size_in_bytes);
     rjson::value item_descr = rjson::empty_object();
     if (opt_item) {
         rjson::add(item_descr, "Item", std::move(*opt_item));
     }
+    consumed_capacity._total_bytes += item_size_in_bytes;
     consumed_capacity.add_consumed_capacity_to_response_if_needed(item_descr);
     metric += consumed_capacity.get_half_units();
     return item_descr;
@@ -4371,9 +4373,11 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     per_table_stats->api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     _stats.api_operations.get_item_latency.mark(std::chrono::steady_clock::now() - start_time);
     uint64_t rcu_half_units = 0;
-    rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
-    per_table_stats->rcu_half_units_total += rcu_half_units;
+    uint64_t item_length = 0;
+    rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units, item_length);
     _stats.rcu_half_units_total += rcu_half_units;
+    per_table_stats->rcu_half_units_total += rcu_half_units;
+    per_table_stats->operation_sizes.get_item_op_size_kib.add(bytes_to_kib_ceil(item_length));
     co_return rjson::print(std::move(res));
 }
 
