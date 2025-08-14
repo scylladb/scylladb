@@ -434,6 +434,36 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
         with check_sets_latency(metrics, ['GetRecords']):
             dynamodbstreams.get_records(ShardIterator=it)
 
+###### Test metrics that are item size histograms of DynamoDB API operations which modify data:
+
+# Tests for histogram metrics <op>_op_size_kb.
+
+def check_histogram_metric_increases(op, histogram_name, metrics, do_test, probes, table = True):
+    points = [[value, {'op': op, 'le': le}] for value, le in probes]
+    metric_base = f'scylla_alternator_{'table_' if table else ''}{histogram_name}'
+    metric_bucket = f'{metric_base}_bucket'
+    with check_increases_metric_exact(metrics, metric_bucket, points):
+        do_test()
+
+def test_get_item_size_no_items_increases_zero_interval(test_table_s, metrics):
+    def do_test():
+        test_table_s.get_item(Key={'p': random_string()})
+    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(1, '1.000000'), (1, '+Inf')])
+
+def test_get_item_size_256kb_item_falls_into_appropriate_bucket(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 256 * 1024})
+        test_table_s.get_item(Key={'p': pk})
+    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
+
+def test_get_item_size_256kb_split_item_falls_into_appropriate_bucket(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 128 * 1024, 'b': 'b' * 128 * 1024})
+        test_table_s.get_item(Key={'p': pk})
+    check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '215.000000'), (1, '258.000000'), (1, '+Inf')])
+
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 
 # Test that unsupported operations operations increment a counter. Instead
