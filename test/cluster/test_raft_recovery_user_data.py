@@ -122,7 +122,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # replica, 1 pending replica, CL=LOCAL_QUORUM requires 2 normal replicas). So, we can start sending writes to dc2
     # only after increasing RF to 3, which we do - see finish_writes_dc2.
     dc1_cql = cluster_con(
-            [srv.ip_addr for srv in live_servers], 9042, False,
+            [srv.ip_addr for srv in live_servers],
             load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers])).connect()
     finish_writes_dc1 = await start_writes(dc1_cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=3, ks_name=ks_name)
 
@@ -194,7 +194,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
     dc2_cql = cluster_con(
-            [srv.ip_addr for srv in new_servers], 9042, False,
+            [srv.ip_addr for srv in new_servers],
             load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in new_servers])).connect()
     finish_writes_dc2 = await start_writes(dc2_cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=3, ks_name=ks_name)
 

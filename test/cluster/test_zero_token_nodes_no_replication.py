@@ -29,9 +29,9 @@ async def test_zero_token_nodes_no_replication(manager: ManagerClient):
     await manager.server_add(property_file={"dc": "dc1", "rack": "r3"})
 
     logging.info(f'Initiating connections to {server_a} and {server_b}')
-    cql_a = cluster_con([server_a.ip_addr], 9042, False,
+    cql_a = cluster_con([server_a.ip_addr],
                         load_balancing_policy=WhiteListRoundRobinPolicy([server_a.ip_addr])).connect()
-    cql_b = cluster_con([server_b.ip_addr], 9042, False,
+    cql_b = cluster_con([server_b.ip_addr],
                         load_balancing_policy=WhiteListRoundRobinPolicy([server_b.ip_addr])).connect()
 
     logging.info('Creating tables for each replication strategy and tablets combination')

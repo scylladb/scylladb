@@ -41,7 +41,7 @@ async def test_no_removed_node_event_on_ip_change(manager: ManagerClient, caplog
     # is goes to the first node, so that we get the TOPOLOGY_CHANGE notifications
     # about the second.
     test_cluster: Cluster
-    with cluster_con([servers[0].ip_addr, s1_old_ip, s1_new_ip], manager.port, manager.use_ssl,
+    with cluster_con([servers[0].ip_addr, s1_old_ip, s1_new_ip],
                      load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])) as test_cluster:
         logger.info("connecting driver")
         test_cql: Session
