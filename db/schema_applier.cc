@@ -921,8 +921,9 @@ void schema_applier::commit_tables_and_views() {
     }
 
     for (auto& schema : views.created) {
+        // add the schema without marking it synced. we will mark it synced after the view is created on all shards.
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local(), false);
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
@@ -978,6 +979,7 @@ future<> schema_applier::commit() {
     // with a new e_r_m instance.
     SCYLLA_ASSERT(this_shard_id() == 0);
     commit_on_shard(sharded_db.local());
+    co_await utils::get_local_injector().inject("schema_applier_delay_between_commit_on_shards", std::chrono::seconds(1));
     co_await sharded_db.invoke_on_others([this] (replica::database& db) {
         commit_on_shard(db);
     });
@@ -1016,6 +1018,7 @@ future<> schema_applier::finalize_tables_and_views() {
         }
         for (auto& created_view : views.created) {
             co_await db.make_column_family_directory(created_view);
+            created_view->registry_entry()->mark_synced();
         }
     });
 
