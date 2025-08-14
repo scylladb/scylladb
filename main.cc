@@ -137,6 +137,7 @@ using namespace std::chrono_literals;
 namespace bpo = boost::program_options;
 
 logging::logger diaglog("diagnostics");
+extern seastar::logger dsmlog;
 
 // Must live in a seastar::thread
 class stop_signal {
@@ -1171,6 +1172,15 @@ sharded<locator::shared_token_metadata> token_metadata;
             disk_space_monitor_shard0->start().get();
             auto stop_dsm = defer_verbose_shutdown("disk space monitor", [&disk_space_monitor_shard0] {
                 disk_space_monitor_shard0->stop().get();
+            });
+            auto out_of_space_subscription = disk_space_monitor_shard0->subscribe(cfg->critical_disk_utilization_level, [&threhsold = cfg->critical_disk_utilization_level, &dsm = *disk_space_monitor_shard0] (auto threshold_reached) {
+                static constexpr auto msg_template = "{} the critical disk utilization level ({:.1f}%). Current disk utilization {:.1f}%";
+                if (threshold_reached) {
+                    dsmlog.warn(msg_template, "Reached", threhsold() * 100, dsm.disk_utilization() * 100);
+                } else {
+                    dsmlog.info(msg_template, "Dropped below", threhsold() * 100, dsm.disk_utilization() * 100);
+                }
+                return make_ready_future<>();
             });
 
             checkpoint(stop_signal, "starting compaction_manager");
