@@ -13,6 +13,7 @@
 #include "utils/assert.hh"
 #include <cmath>
 #include <algorithm>
+#include <utility>
 #include <vector>
 #include <chrono>
 #include <fmt/ostream.h>
@@ -383,9 +384,29 @@ struct estimated_histogram {
         : bucket_offsets(std::move(bucket_offsets)), buckets(std::move(buckets))
     { }
 
-    estimated_histogram(int bucket_count = 90) {
+    /*!
+     * \brief Constructs a new estimated histogram with logarithmically-spaced buckets.
+     *
+     * This constructor initializes a histogram where bucket offsets are generated with
+     * an exponential growth (each offset is approximately 1.2 times the previous one).
+     *
+     * \param bucket_count The target number of buckets to generate for the histogram.
+     * Must be a positive value. Defaults to 90.
+     * \param explicit_offsets A vector of specific values that are guaranteed to be used
+     * as bucket offsets. When the default geometric sequence generates an offset that
+     * surpasses one of these values, the offset is "snapped" to this explicit value
+     * instead. The vector must be sorted in ascending order, contain no duplicates,
+     * and all elements must be greater than 1.
+     * Defaults to an empty vector.
+     */
+    estimated_histogram(int bucket_count = 90, std::vector<int64_t> explicit_offsets = {}) {
+        SCYLLA_ASSERT(bucket_count > 0);
+        SCYLLA_ASSERT(std::is_sorted(explicit_offsets.begin(), explicit_offsets.end()));
+        // No duplicates
+        SCYLLA_ASSERT(std::adjacent_find(explicit_offsets.begin(), explicit_offsets.end(), std::cmp_equal<uint64_t, uint64_t>) == explicit_offsets.end());
+        SCYLLA_ASSERT(explicit_offsets.empty() || explicit_offsets.front() > 1);
 
-        new_offsets(bucket_count);
+        new_offsets(bucket_count, explicit_offsets);
         buckets.resize(bucket_offsets.size() + 1, 0);
     }
 
@@ -420,17 +441,22 @@ struct estimated_histogram {
 
 
 private:
-    void new_offsets(int size) {
+    void new_offsets(int size, std::vector<int64_t> explicit_offsets = {}) {
         bucket_offsets.resize(size);
         if (size == 0) {
             return;
         }
+        auto eo_it = explicit_offsets.begin();
         int64_t last = 1;
         bucket_offsets[0] = last;
         for (int i = 1; i < size; i++) {
             int64_t next = round(last * 1.2);
             if (next == last) {
                 next++;
+            }
+            if (eo_it != explicit_offsets.end() && next >= *eo_it) {
+                next = *eo_it;
+                eo_it++;
             }
             bucket_offsets[i] = next;
             last = next;
