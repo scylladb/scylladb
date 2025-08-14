@@ -108,6 +108,107 @@ async def test_lwt(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
+async def test_lwt_during_migration(manager: ManagerClient):
+    # Scenario:
+    # 1. A cluster with three nodes, a table with one tablet and RF=2
+    # 2. Run the tablet migration and suspend it during streaming
+    # 3. Run an LWT and verify it succeeds
+    # 4. Resume the migration, perform a Paxos read, and check the stored values
+    # 5. Do the same for the intranode migration
+
+    logger.info("Bootstrap a cluster with three nodes")
+    cmdline = [
+        '--logger-log-level', 'paxos=trace',
+        '--smp', '2'
+    ]
+    servers = await manager.servers_add(3, cmdline=cmdline, property_file=[
+        {'dc': 'my_dc', 'rack': 'r1'},
+        {'dc': 'my_dc', 'rack': 'r2'},
+        {'dc': 'my_dc', 'rack': 'r1'}
+    ])
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await asyncio.gather(*[manager.get_host_id(s.server_id) for s in servers])
+
+    logger.info("Disable tablet balancing")
+    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        logger.info("Create a table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Detect a node that doesn't contain a tablet replica")
+        tablets = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        assert len(tablets) == 1
+        tablet = tablets[0]
+        assert len(tablet.replicas) == 2
+        [r1, r2] = tablet.replicas
+        target_host_id = next((h for h in host_ids if h not in {r1[0], r2[0]}), None)
+        assert target_host_id is not None
+        target_server = next((s for s, h in zip(servers, host_ids) if h == target_host_id), None)
+        assert target_server is not None
+
+        logger.info(f"Enable 'migration_streaming_wait' injection on {target_server.ip_addr}")
+        await manager.api.enable_injection(target_server.ip_addr, 'migration_streaming_wait', True)
+
+        logger.info(f"Start migration from {r1[0]} to {target_host_id}")
+        migration_task = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, "test",
+                                                                     *r1,
+                                                                     target_host_id, 0, tablet.last_token))
+
+        logger.info("Open log")
+        log = await manager.server_open_log(target_server.server_id)
+        logger.info(f"Wait for 'migration_streaming_wait: start' injection on {target_server.ip_addr}")
+        await log.wait_for('migration_streaming_wait: start')
+
+        logger.info("Run an LWT while migration is in-progress")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS")
+
+        logger.info("Trigger 'migration_streaming_wait'")
+        await manager.api.message_injection(target_server.ip_addr, "migration_streaming_wait")
+
+        logger.info("Wait for migration to finish")
+        await migration_task
+
+        logger.info("Run paxos SELECT")
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1;",
+                                   consistency_level=ConsistencyLevel.SERIAL))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 1
+
+        logger.info(f"Enable 'intranode_migration_streaming_wait' injection on {target_server.ip_addr}")
+        await manager.api.enable_injection(target_server.ip_addr, 'intranode_migration_streaming_wait', True)
+
+        logger.info(f"Start intranode migration from on {target_host_id} from shard 0 to shard 1")
+        ingranode_migration_task = asyncio.create_task(
+            manager.api.move_tablet(servers[0].ip_addr, ks, "test",
+                                    target_host_id, 0,
+                                    target_host_id, 1, tablet.last_token))
+
+        logger.info(f"Wait for 'intranode_migration_streaming: waiting' injection on {target_server.ip_addr}")
+        await log.wait_for('intranode_migration_streaming: waiting')
+
+        logger.info("Run another LWT while ingranode migration is in-progress")
+        await cql.run_async(f"UPDATE {ks}.test SET c = 2 WHERE pk = 1 IF c = 1")
+
+        logger.info("Trigger 'migration_streaming_wait'")
+        await manager.api.message_injection(target_server.ip_addr, "intranode_migration_streaming_wait")
+
+        logger.info("Wait for intranode migration to finish")
+        await ingranode_migration_task
+
+        logger.info("Run paxos SELECT")
+        rows = await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test WHERE pk = 1;",
+                                   consistency_level=ConsistencyLevel.SERIAL))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row.pk == 1
+        assert row.c == 2
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient):
     # Scenario:
     # 1. Cells c1 and c2 of some partition are not set.
