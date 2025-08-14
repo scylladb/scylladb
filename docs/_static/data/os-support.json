@@ -2,7 +2,7 @@
     "Linux Distributions": {
       "Ubuntu": ["22.04", "24.04"],
       "Debian": ["11"],
-      "Rocky / CentOS / RHEL": ["8", "9"],
+      "Rocky / CentOS / RHEL": ["8", "9", "10"],
       "Amazon Linux": ["2023"]
     },
     "ScyllaDB Versions": [
@@ -11,7 +11,7 @@
         "supported_OS": {
           "Ubuntu": ["22.04", "24.04"],
           "Debian": ["11"],
-          "Rocky / CentOS / RHEL": ["8", "9"],
+          "Rocky / CentOS / RHEL": ["8", "9", "10"],
           "Amazon Linux": ["2023"]
         }
       },
