@@ -252,42 +252,41 @@ private:
     }
 
     bool can_purge_tombstone(const tombstone& t, is_shadowable is_shadowable, const gc_clock::time_point deletion_time) {
-        bool purgeable = false;
-        auto timestamp_source = max_purgeable::timestamp_source::none;
+        max_purgeable::can_purge_result purge_res { };
 
         if (_tombstone_gc_state.cheap_to_get_gc_before(_schema)) {
             // if retrieval of grace period is cheap, can_gc() will only be
             // called for tombstones that are older than grace period, in
             // order to avoid unnecessary bloom filter checks when calculating
             // max purgeable timestamp.
-            purgeable = satisfy_grace_period(deletion_time);
-            if (purgeable) {
-                std::tie(purgeable, timestamp_source) = can_gc(t, is_shadowable);
+            purge_res.can_purge = satisfy_grace_period(deletion_time);
+            if (purge_res.can_purge) {
+                purge_res = can_gc(t, is_shadowable);
             }
         } else {
-            std::tie(purgeable, timestamp_source) = can_gc(t, is_shadowable);
-            if (purgeable) {
-                purgeable = satisfy_grace_period(deletion_time);
+            purge_res = can_gc(t, is_shadowable);
+            if (purge_res.can_purge) {
+                purge_res.can_purge = satisfy_grace_period(deletion_time);
             }
         }
 
         if constexpr (sstable_compaction()) {
             if (!_tombstone_stats || !t) {
-                return purgeable;
+                return purge_res.can_purge;
             }
 
             ++_tombstone_stats->attempts;
-            if (!purgeable) {
+            if (!purge_res.can_purge) {
                 static int64_t tombstone_purge_stats::*stats_table[] = {
                     &tombstone_purge_stats::failures_other,
                     &tombstone_purge_stats::failures_due_to_overlapping_with_memtable,
                     &tombstone_purge_stats::failures_due_to_overlapping_with_uncompacting_sstable
                 };
-                ++(_tombstone_stats->*stats_table[static_cast<int>(timestamp_source)]);
+                ++(_tombstone_stats->*stats_table[static_cast<int>(purge_res.timestamp_source)]);
             }
         }
 
-        return purgeable;
+        return purge_res.can_purge;
     }
 
     bool can_purge_tombstone(const tombstone& t) {
@@ -312,20 +311,20 @@ private:
         }
     }
 
-    std::pair<bool,max_purgeable::timestamp_source> can_gc(tombstone t, is_shadowable is_shadowable) {
+    max_purgeable::can_purge_result can_gc(tombstone t, is_shadowable is_shadowable) {
         if (!sstable_compaction()) {
-            return std::make_pair(true, max_purgeable::timestamp_source::none);
+            return { };
         }
         if (!t) {
-            return std::make_pair(false, max_purgeable::timestamp_source::none);
+            return { .can_purge = false };
         }
         auto& max_purgeable = is_shadowable ? _max_purgeable_shadowable : _max_purgeable_regular;
         if (!max_purgeable) {
             max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
         }
-        auto ret = t.timestamp < max_purgeable.timestamp;
-        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, max_purgeable.timestamp, ret);
-        return std::make_pair(ret, max_purgeable.source);
+        auto ret = max_purgeable.can_purge(t);
+        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: can_purge={}, timestamp_source={}", t, is_shadowable, max_purgeable, ret.can_purge, ret.timestamp_source);
+        return ret;
     };
 
 public:
@@ -354,7 +353,7 @@ public:
         : _schema(s)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
-        , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable).first; })
+        , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable).can_purge; })
         , _slice(s.full_slice())
         , _tombstone_gc_state(gc_state)
         , _last_pos(position_in_partition::for_partition_end())
