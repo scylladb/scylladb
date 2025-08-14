@@ -649,6 +649,10 @@ wasms = set([
 
 apps = set([
     'scylla',
+])
+
+# apps that only need to be build with C++, no additional libraries
+cpp_apps = set([
     'patchelf',
 ])
 
@@ -662,7 +666,7 @@ other = set([
     'iotune',
 ])
 
-all_artifacts = apps | tests | other | wasms
+all_artifacts = apps | cpp_apps | tests | other | wasms
 
 arg_parser = argparse.ArgumentParser('Configure scylla', add_help=False, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 arg_parser.add_argument('--out', dest='buildfile', action='store', default='build.ninja',
@@ -2440,6 +2444,17 @@ def write_build_file(f,
             if has_rust:
                 parent_mode = modes[mode].get('parent_mode', mode)
                 objs.append(f'$builddir/{parent_mode}/rust-{parent_mode}/librust_combined.a')
+            if binary in cpp_apps:
+                # binary only needs the C++ standard library, no additional
+                # libraries
+                f.write('build $builddir/{}/{}: {}.{} {}\n'.format(mode, binary, regular_link_rule, mode, str.join(' ', objs)))
+                f.write('   libs =\n')
+                f.write(f'build $builddir/{mode}/{binary}.stripped: strip $builddir/{mode}/{binary}\n')
+                f.write(f'build $builddir/{mode}/{binary}.debug: phony $builddir/{mode}/{binary}.stripped\n')
+                for src in srcs:
+                    obj = '$builddir/' + mode + '/' + src.replace('.cc', '.o')
+                    compiles[obj] = src
+                continue
 
             do_lto = modes[mode]['has_lto'] and binary in lto_binaries
             seastar_dep = f'$builddir/{mode}/seastar/libseastar.{seastar_lib_ext}'
