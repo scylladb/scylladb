@@ -61,7 +61,11 @@ unavailable_exception::unavailable_exception(db::consistency_level cl, int32_t r
     {}
 
 read_write_timeout_exception::read_write_timeout_exception(exception_code code, const sstring& ks, const sstring& cf, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
-    : request_timeout_exception{code, prepare_message("Operation timed out for {}.{} - received only {} responses from {} CL={}.", ks, cf, received, block_for, consistency)}
+    : read_write_timeout_exception{code, prepare_message("Operation timed out for {}.{} - received only {} responses from {} CL={}.", ks, cf, received, block_for, consistency), consistency, received, block_for}
+    { }
+
+read_write_timeout_exception::read_write_timeout_exception(exception_code code, sstring message, db::consistency_level consistency, int32_t received, int32_t block_for) noexcept
+    : request_timeout_exception{code, std::move(message)}
     , consistency{consistency}
     , received{received}
     , block_for{block_for}
@@ -91,11 +95,11 @@ prepared_query_not_found_exception::prepared_query_not_found_exception(bytes id)
     { }
 
 already_exists_exception::already_exists_exception(sstring ks_name_, sstring cf_name_)
-    : already_exists_exception{ks_name_, cf_name_, format("Cannot add already existing table \"{}\" to keyspace \"{}\"", cf_name_, ks_name_)}
+    : already_exists_exception{std::move(ks_name_), std::move(cf_name_), format("Cannot add already existing table \"{}\" to keyspace \"{}\"", cf_name_, ks_name_)}
     { }
 
 already_exists_exception::already_exists_exception(sstring ks_name_)
-    : already_exists_exception{ks_name_, "", format("Cannot add existing keyspace \"{}\"", ks_name_)}
+    : already_exists_exception{std::move(ks_name_), "", format("Cannot add existing keyspace \"{}\"", ks_name_)}
     { }
 
 function_execution_exception::function_execution_exception(sstring func_name_, sstring detail, sstring ks_name_, std::vector<sstring> args_) noexcept
