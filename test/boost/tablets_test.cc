@@ -262,7 +262,7 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             verify_tablet_metadata_persistence(e, tm, ts);
 
             // Increase RF of table2
-            tm.mutate_tablet_map_async(table2, [&] (tablet_map& tmap) {
+            tm.mutate_tablet_map_async(table2, [&] (shared_tablet_map& tmap, per_table_tablet_map&) {
                 auto tb = tmap.first_tablet();
                 tb = *tmap.next_tablet(tb);
 
@@ -1567,7 +1567,7 @@ SEASTAR_THREAD_TEST_CASE(test_token_ownership_splitting) {
 static
 future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-        co_await tm.tablets().mutate_tablet_map_async(table_id, [&] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(table_id, [&] (shared_tablet_map& tmap, per_table_tablet_map&) {
             resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
             tmap.set_resize_decision(resize_decision);
             return make_ready_future();
@@ -1613,7 +1613,7 @@ future<> handle_resize_finalize(cql_test_env& e, group0_guard& guard, const migr
 static
 future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (shared_tablet_map& tmap, per_table_tablet_map&) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             testlog.trace("Replacing tablet {} replica from {} to {}", mig.tablet.tablet, mig.src, mig.dst);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
@@ -1628,7 +1628,7 @@ future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
 static
 future<> apply_plan_as_in_progress(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (tablet_map& tmap) {
+        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&] (shared_tablet_map& tmap, per_table_tablet_map&) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             tmap.set_tablet_transition_info(mig.tablet.tablet, migration_to_transition_info(tinfo, mig));
             return make_ready_future();
@@ -1641,10 +1641,10 @@ static
 size_t get_tablet_count(const tablet_metadata& tm) {
     size_t count = 0;
     for (const auto& [table, tmap] : tm.all_tables_ungrouped()) {
-        count += std::accumulate(tmap->tablets().begin(), tmap->tablets().end(), size_t(0),
-             [] (size_t accumulator, const locator::tablet_info& info) {
-                 return accumulator + info.replicas.size();
-             });
+        count += std::ranges::fold_left(tmap.tablets(), size_t(0),
+            [] (size_t accumulator, const auto& p) {
+                return accumulator + p.second.replicas().size();
+            });
     }
     return count;
 }
@@ -1682,9 +1682,9 @@ void do_rebalance_tablets(cql_test_env& e,
         if (auto_split && load_stats) {
             auto& tm = *stm.get();
             for (const auto& [table, tmap]: tm.tablets().all_tables_ungrouped()) {
-                if (std::holds_alternative<resize_decision::split>(tmap->resize_decision().way)) {
-                    testlog.debug("set_split_ready_seq_number({}, {})", table, tmap->resize_decision().sequence_number);
-                    load_stats->set_split_ready_seq_number(table, tmap->resize_decision().sequence_number);
+                if (std::holds_alternative<resize_decision::split>(tmap.resize_decision().way)) {
+                    testlog.debug("set_split_ready_seq_number({}, {})", table, tmap.resize_decision().sequence_number);
+                    load_stats->set_split_ready_seq_number(table, tmap.resize_decision().sequence_number);
                 }
             }
         }
@@ -1749,7 +1749,7 @@ static
 void execute_transitions(shared_token_metadata& stm) {
     stm.mutate_token_metadata([&] (token_metadata& tm) -> future<> {
         for (auto&& [table, tables] : tm.tablets().all_table_groups()) {
-            co_await tm.tablets().mutate_tablet_map_async(table, [&] (tablet_map& tmap) {
+            co_await tm.tablets().mutate_tablet_map_async(table, [&] (shared_tablet_map& tmap, per_table_tablet_map&) {
                 for (auto&& [tablet, trinfo]: tmap.transitions()) {
                     auto ti = tmap.get_tablet_info(tablet);
                     ti.replicas = trinfo.next;
@@ -1964,7 +1964,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
 
         // Mark the tablets for merge to create a co-location plan.
         mutate_tablets(e, [&] (tablet_metadata& tmeta) {
-            return tmeta.mutate_tablet_map_async(table1, [] (tablet_map& tmap) {
+            return tmeta.mutate_tablet_map_async(table1, [] (shared_tablet_map& tmap, per_table_tablet_map&) {
                 locator::resize_decision decision;
                 decision.way = locator::resize_decision::merge{};
                 decision.sequence_number = tmap.resize_decision().sequence_number + 1;
@@ -1994,7 +1994,7 @@ SEASTAR_THREAD_TEST_CASE(test_no_conflicting_internode_and_intra_merge_colocatio
 void check_no_rack_overload(const token_metadata& tm) {
     auto& topo = tm.get_topology();
     for (const auto& [table, tmap_p] : tm.tablets().all_tables_ungrouped()) {
-        const tablet_map& tmap = *tmap_p;
+        const tablet_map& tmap = *tmap_p.shared;
         tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
             std::unordered_map<sstring, std::unordered_set<sstring>> racks_by_dc;
             auto replicas = tinfo.replicas;
@@ -3232,13 +3232,13 @@ SEASTAR_THREAD_TEST_CASE(test_skiplist_is_ignored_when_draining) {
 static
 void check_tablet_invariants(const tablet_metadata& tmeta) {
     for (const auto& [table, tmap] : tmeta.all_tables_ungrouped()) {
-        tmap->for_each_tablet([&](auto tid, const tablet_info& tinfo) -> future<> {
+        tmap.for_each_tablet([&](auto tid, const tablet_info_view& tinfo) -> future<> {
             std::unordered_set<host_id> hosts;
             // Uniqueness of hosts
-            for (const auto& replica: tinfo.replicas) {
+            for (const auto& replica: tinfo.replicas()) {
                 auto ret = hosts.insert(replica.host).second;
                 if (!ret) {
-                    testlog.error("Failed tablet invariant check for tablet {}: {}", tid, tinfo.replicas);
+                    testlog.error("Failed tablet invariant check for tablet {}: {}", tid, tinfo.replicas());
                 }
                 BOOST_REQUIRE(ret);
             }
