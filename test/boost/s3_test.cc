@@ -798,6 +798,66 @@ SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_with_delays_proxy) {
     test_chunked_download_data_source(make_proxy_client, 20_MiB);
 }
 
+void do_test_chunked_download_data_source_memory(const client_maker_function& client_maker, size_t object_size) {
+    const sstring base_name(fmt::format("test_object-{}", ::getpid()));
+
+    tmpdir tmp;
+    const auto file_path = tmp.path() / base_name;
+
+    file f = open_file_dma(file_path.native(), open_flags::create | open_flags::wo).get();
+    auto output = make_file_output_stream(std::move(f)).get();
+
+    for (size_t bytes_written = 0; bytes_written < object_size;) {
+        auto rnd = tests::random::get_bytes(std::min(object_size - bytes_written, 1024ul));
+        output.write(reinterpret_cast<char*>(rnd.data()), rnd.size()).get();
+        bytes_written += rnd.size();
+    }
+    output.close().get();
+
+    testlog.info("Make client\n");
+    semaphore mem(1_MiB);
+    auto cln = client_maker(mem);
+    auto close_client = deferred_close(*cln);
+    const auto object_name = fmt::format("/{}/{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), base_name);
+    auto delete_object = deferred_delete_object(cln, object_name);
+    cln->upload_file(file_path, object_name).get();
+
+    testlog.info("Test client memory exhaust");
+    std::vector<input_stream<char>> clients;
+    for (auto _ : {1, 2, 3}) {
+        clients.emplace_back(cln->make_chunked_download_source(object_name, s3::full_range));
+    }
+    testlog.info("Wait to exhaust client memory.");
+    // Allow the background fiber time to fill the buffer queue.
+    // This may introduce some unpredictability in the queue's contents,
+    // but that's intentional—we want to verify the client's ability to handle such conditions.
+    seastar::sleep(100ms).get();
+    std::mt19937_64 rand_gen(std::random_device{}());
+    std::uniform_int_distribution<std::size_t> dist(0, clients.size() - 1);
+    while (true) {
+        auto idx = dist(rand_gen);
+        // Introduce additional randomness: read from input streams in a non-deterministic order,
+        // and sleep briefly between reads to give the background fiber time to potentially stall while filling the queue.
+        seastar::sleep(std::chrono::microseconds(50 * (idx + 1))).get();
+        auto buf = clients[idx].read().get();
+        testlog.info("Got {} bytes from client {}", buf.size(), idx);
+        if (buf.empty()) {
+            clients[idx].close().get();
+            clients.erase(clients.begin() + idx);
+
+            // Recalculate distribution range. May overflow if last client was removed - this is acceptable for the test.
+            dist = std::uniform_int_distribution<std::size_t>(0, clients.size() - 1);
+        }
+        if (clients.empty()) {
+            break;
+        }
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_chunked_download_data_source_memory) {
+    do_test_chunked_download_data_source_memory(make_minio_client, 20_MiB);
+}
+
 void test_object_copy(const client_maker_function& client_maker, size_t chunk_size, size_t chunks) {
     const sstring name(fmt::format("/{}/testobject-{}", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
     const sstring name_copy(fmt::format("/{}/testobject-{}-copy", tests::getenv_safe("S3_BUCKET_FOR_TEST"), ::getpid()));
