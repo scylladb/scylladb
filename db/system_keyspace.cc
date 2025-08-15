@@ -97,6 +97,9 @@ namespace {
             system_keyspace::COMMITLOG_CLEANUPS,
             system_keyspace::SERVICE_LEVELS_V2,
             system_keyspace::VIEW_BUILD_STATUS_V2,
+            system_keyspace::CDC_STREAMS_STATE,
+            system_keyspace::CDC_STREAMS_HISTORY,
+            system_keyspace::CDC_PENDING_STREAMS,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -121,6 +124,9 @@ namespace {
                 system_keyspace::TABLETS,
                 system_keyspace::SERVICE_LEVELS_V2,
                 system_keyspace::VIEW_BUILD_STATUS_V2,
+                system_keyspace::CDC_STREAMS_STATE,
+                system_keyspace::CDC_STREAMS_HISTORY,
+                system_keyspace::CDC_PENDING_STREAMS,
                 // auth tables
                 system_keyspace::ROLES,
                 system_keyspace::ROLE_MEMBERS,
@@ -335,6 +341,48 @@ schema_ptr system_keyspace::cdc_generations_v3() {
              * range when the generation was first created. Together with the set of streams above it fully
              * describes the mapping for this particular range. */
             .with_column("ignore_msb", byte_type)
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::cdc_streams_state() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_STREAMS_STATE);
+        return schema_builder(NAME, CDC_STREAMS_STATE, {id})
+            .with_column("table_id", uuid_type, column_kind::partition_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
+            .with_column("timestamp", timestamp_type, column_kind::static_column)
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::cdc_streams_history() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_STREAMS_HISTORY);
+        return schema_builder(NAME, CDC_STREAMS_HISTORY, {id})
+            .with_column("table_id", uuid_type, column_kind::partition_key)
+            .with_column("timestamp", timestamp_type, column_kind::clustering_key)
+            .with_column("stream_kind", byte_type, column_kind::clustering_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
+            .with_hash_version()
+            .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::cdc_pending_streams() {
+    thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, CDC_PENDING_STREAMS);
+        return schema_builder(NAME, CDC_PENDING_STREAMS, {id})
+            .with_column("table_id", uuid_type, column_kind::partition_key)
+            .with_column("range_end", long_type, column_kind::clustering_key)
+            .with_column("stream_id", bytes_type)
             .with_hash_version()
             .build();
     }();
@@ -2312,6 +2360,70 @@ future<bool> system_keyspace::cdc_is_rewritten() {
     });
 }
 
+future<cdc::base_streams_state> system_keyspace::read_cdc_streams_state(std::optional<table_id> table) {
+    sstring query = table ? format("SELECT table_id, timestamp, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_STREAMS_STATE, *table)
+                          : format("SELECT table_id, timestamp, stream_id FROM {}.{}", NAME, CDC_STREAMS_STATE);
+
+    cdc::base_streams_state st;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto tid = table_id(row.get_as<utils::UUID>("table_id"));
+        auto ts = row.get_as<db_clock::time_point>("timestamp");
+        auto stream_id = cdc::stream_id(row.get_as<bytes>("stream_id"));
+
+        auto& t = st[tid];
+        t.ts = ts;
+        t.streams.push_back(std::move(stream_id));
+
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+    co_return std::move(st);
+}
+
+future<cdc::streams_history> system_keyspace::read_cdc_streams_history(std::optional<table_id> table) {
+    sstring query = table ? format("SELECT table_id, timestamp, stream_kind, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_STREAMS_HISTORY, *table)
+                          : format("SELECT table_id, timestamp, stream_kind, stream_id FROM {}.{}", NAME, CDC_STREAMS_HISTORY);
+
+    cdc::streams_history st;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto tid = table_id(row.get_as<utils::UUID>("table_id"));
+        auto ts = row.get_as<db_clock::time_point>("timestamp");
+        auto stream_kind = cdc::read_stream_kind(row.get_as<int8_t>("stream_kind"));
+        auto stream_id = cdc::stream_id(row.get_as<bytes>("stream_id"));
+
+        if (!(st[tid].size() > 0 && st[tid].back().first == ts)) {
+            st[tid].push_back(std::make_pair(ts, cdc::cdc_stream_diff()));
+        }
+
+        if (stream_kind == cdc::stream_kind::closed) {
+            st[tid].back().second.closed_streams.push_back(std::move(stream_id));
+        } else if (stream_kind == cdc::stream_kind::opened) {
+            st[tid].back().second.opened_streams.push_back(std::move(stream_id));
+        } else {
+            throw std::runtime_error(fmt::format("unexpected CDC stream kind {} in {}.{} for table {}",
+                    std::to_underlying(stream_kind), NAME, CDC_STREAMS_HISTORY, table));
+        }
+
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+    co_return std::move(st);
+}
+
+future<cdc::pending_streams> system_keyspace::read_cdc_pending_streams(std::optional<table_id> table) {
+    sstring query = table ? format("SELECT table_id, stream_id FROM {}.{} WHERE table_id = {}", NAME, CDC_PENDING_STREAMS, *table)
+                          : format("SELECT table_id, stream_id FROM {}.{}", NAME, CDC_PENDING_STREAMS);
+
+    cdc::pending_streams st;
+    co_await _qp.query_internal(query, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+        auto tid = table_id(row.get_as<utils::UUID>("table_id"));
+        auto stream_id = cdc::stream_id(row.get_as<bytes>("stream_id"));
+
+        st[tid].push_back(std::move(stream_id));
+
+        return make_ready_future<stop_iteration>(stop_iteration::no);
+    });
+    co_return std::move(st);
+}
+
 bool system_keyspace::bootstrap_needed() const {
     return get_bootstrap_state() == bootstrap_state::NEEDS_BOOTSTRAP;
 }
@@ -2372,7 +2484,8 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::commitlog_cleanups(),
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
-                    topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
+                    topology(), cdc_generations_v3(), cdc_streams_state(), cdc_streams_history(), cdc_pending_streams(),
+                    topology_requests(), service_levels_v2(), view_build_status_v2(),
                     dicts(),
     });
 
