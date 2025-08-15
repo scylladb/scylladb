@@ -49,6 +49,12 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     # Workaround for flakiness from https://github.com/scylladb/scylladb/issues/23565.
     hints_cfg = {'hinted_handoff_enabled': False}
+    # start_writes() will write the same record in a loop, so the written data ends up in the same tablet.
+    # The nodes have 2 shards each and size-based load balancing emits intranode migrations to move empty tablets away
+    # from the shard containing the tablet with data. These migrations create problems with group 0 state changing, and
+    # node 0 being the incorrect recovery leader (see below). Forcing capacity based balancing makes the balancer
+    # assume all tablets have the same size, and so it will not detect an imbalance, and will not emit migrations.
+    force_capacity_based_lb_cfg = {'force_capacity_based_balancing': True}
     # Decrease failure_detector_timeout_in_ms from the default 20 s to speed up some graceful shutdowns in the test.
     # Shutting down the CQL server can hang for failure_detector_timeout_in_ms in the presence of dead nodes and
     # CQL requests.
@@ -56,7 +62,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         'endpoint_snitch': 'GossipingPropertyFileSnitch',
         'tablets_mode_for_new_keyspaces': 'enabled',
         'failure_detector_timeout_in_ms': 2000,
-    } | rf_rack_cfg | hints_cfg
+    } | rf_rack_cfg | hints_cfg | force_capacity_based_lb_cfg
 
     property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
     property_file_dc2 = {'dc': 'dc2', 'rack': 'rack2'}
