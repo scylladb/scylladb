@@ -932,15 +932,15 @@ static auto ensure_alive(Coro&& coro) {
     };
 }
 
-// {{{ ip_address_updater
+// {{{ raft_system_peers_updater
 
-class storage_service::ip_address_updater: public gms::i_endpoint_state_change_subscriber {
+class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_change_subscriber {
     gms::gossip_address_map& _address_map;
     storage_service& _ss;
 
     future<>
     on_endpoint_change(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id, const char* ev) {
-        rslog.debug("ip_address_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
+        rslog.debug("raft_system_peers_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
 
         // If id maps to different ip in peers table it needs to be updated which is done by sync_raft_topology_nodes below
         std::optional<gms::inet_address> prev_ip = co_await _ss.get_ip_from_peers_table(id);
@@ -956,7 +956,7 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
 
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
         if (_ss.raft_topology_change_enabled()) {
-            rslog.debug("ip_address_updater::on_endpoint_change({}), host_id {}, "
+            rslog.debug("raft_system_peers_updater::on_endpoint_change({}), host_id {}, "
                         "ip changed from [{}] to [{}], "
                         "waiting for group 0 read/apply mutex before reloading Raft topology state...",
                 ev, id, prev_ip, endpoint);
@@ -979,7 +979,7 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
     }
 
 public:
-    ip_address_updater(gms::gossip_address_map& address_map, storage_service& ss)
+    raft_system_peers_updater(gms::gossip_address_map& address_map, storage_service& ss)
         : _address_map(address_map)
         , _ss(ss)
     {}
@@ -1000,7 +1000,7 @@ public:
     }
 };
 
-// }}} ip_address_updater
+// }}} raft_system_peers_updater
 
 future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::holder group0_holder, sharded<service::storage_proxy>& proxy) noexcept {
     while (!_group0_as.abort_requested()) {
@@ -2892,14 +2892,14 @@ void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
 }
 
-future<> storage_service::init_address_map(gms::gossip_address_map& address_map) {
-    _ip_address_updater = make_shared<ip_address_updater>(address_map, *this);
-    _gossiper.register_(_ip_address_updater);
+future<> storage_service::init_system_peers_updater(gms::gossip_address_map& address_map) {
+    _raft_system_peers_updater = make_shared<raft_system_peers_updater>(address_map, *this);
+    _gossiper.register_(_raft_system_peers_updater);
     co_return;
 }
 
-future<> storage_service::uninit_address_map() {
-    return _gossiper.unregister_(_ip_address_updater);
+future<> storage_service::uninit_system_peers_updater() {
+    return _gossiper.unregister_(_raft_system_peers_updater);
 }
 
 bool storage_service::is_topology_coordinator_enabled() const {

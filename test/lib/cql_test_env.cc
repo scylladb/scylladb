@@ -1050,10 +1050,11 @@ private:
 
             _ss.local().set_group0(group0_service);
 
-            // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            _ss.local().init_address_map(_gossip_address_map.local()).get();
+            // Initialize the component responsible for keeping the system.peers table up to date.
+            // It merges data from the raft-managed topology state and from the gossiper.
+            _ss.local().init_system_peers_updater(_gossip_address_map.local()).get();
             auto cancel_address_map_subscription = defer_verbose_shutdown("storage service address map subscription", [this] {
-                _ss.local().uninit_address_map().get();
+                _ss.local().uninit_system_peers_updater().get();
             });
 
             auto stop_group0_usage_in_storage_service = defer_verbose_shutdown("group 0 usage in storage service", [this] {

@@ -430,9 +430,9 @@ public:
 
     void set_group0(service::raft_group0&);
 
-    future<> init_address_map(gms::gossip_address_map& address_map);
+    future<> init_system_peers_updater(gms::gossip_address_map& address_map);
+    future<> uninit_system_peers_updater();
 
-    future<> uninit_address_map();
     bool is_topology_coordinator_enabled() const;
 
     future<> drain_on_shutdown();
@@ -898,12 +898,13 @@ private:
         raft::term_t term{0};
         uint64_t last_index{0};
     } _raft_topology_cmd_handler_state;
-    class ip_address_updater;
+
+    class raft_system_peers_updater;
     // Represents a subscription to gossiper on_change events,
     // updating the raft data structures that depend on
     // IP addresses (token_metadata.topology, erm-s),
     // as well as the system.peers table.
-    shared_ptr<ip_address_updater> _ip_address_updater;
+    shared_ptr<raft_system_peers_updater> _raft_system_peers_updater;
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const locator::host_id_or_endpoint_list& hoeps) const;
 
