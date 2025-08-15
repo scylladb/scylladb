@@ -20,10 +20,8 @@ async def test_initial_token(manager: ManagerClient) -> None:
     cfg2 = {'initial_token': f"{tokens[2]}, {tokens[3]}"}
     s1 = await manager.server_add(config=cfg1)
     s2 = await manager.server_add(config=cfg2)
-    cql1 = cluster_con([s1.ip_addr], 9042, False,
-                        load_balancing_policy=WhiteListRoundRobinPolicy([s1.ip_addr])).connect()
-    cql2 = cluster_con([s2.ip_addr], 9042, False,
-                        load_balancing_policy=WhiteListRoundRobinPolicy([s2.ip_addr])).connect()
+    cql1 = cluster_con([s1.ip_addr], load_balancing_policy=WhiteListRoundRobinPolicy([s1.ip_addr])).connect()
+    cql2 = cluster_con([s2.ip_addr], load_balancing_policy=WhiteListRoundRobinPolicy([s2.ip_addr])).connect()
     res1 = cql1.execute("SELECT tokens From system.local").one()
     res2 = cql2.execute("SELECT tokens From system.local").one()
     assert all([i in res1.tokens for i in tokens[:2]]) and all([i in res2.tokens for i in tokens[-2:]])

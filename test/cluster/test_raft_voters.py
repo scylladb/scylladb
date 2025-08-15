@@ -83,7 +83,7 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
     logging.info('Creating connections to all DCs')
     dc_cqls = []
     for servers in dc_servers:
-        dc_cqls.append(cluster_con([servers[0].ip_addr], 9042, False,
+        dc_cqls.append(cluster_con([servers[0].ip_addr],
                                    load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect())
 
     assert len(dc_cqls) == len(dc_servers)

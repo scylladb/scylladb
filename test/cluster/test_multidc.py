@@ -128,9 +128,9 @@ async def test_query_dc_with_rf_0_does_not_crash_db(request: pytest.FixtureReque
             property_file={"dc": f"dc{i}", "rack": "myrack"},
         ))
 
-    dc1_connection = cluster_con([servers[0].ip_addr], 9042, False,
+    dc1_connection = cluster_con([servers[0].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
-    dc2_connection = cluster_con([servers[1].ip_addr], 9042, False,
+    dc2_connection = cluster_con([servers[1].ip_addr],
                                  load_balancing_policy=WhiteListRoundRobinPolicy([servers[1].ip_addr])).connect()
 
     random_tables = RandomTables(request.node.name, manager, ks, 1, dc_replication)

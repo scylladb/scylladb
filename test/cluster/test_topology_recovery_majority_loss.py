@@ -36,7 +36,7 @@ async def test_topology_recovery_after_majority_loss(request, manager: ManagerCl
         # In order to get the Host instance of a zero-token node, connect to it directly.
         # We cannot use the ManagerClient's session because it is connected to non-zero-token
         # nodes and, in that case, the zero-token nodes are ignored.
-        zero_token_node_session = cluster_con([server.ip_addr], 9042, False, load_balancing_policy=
+        zero_token_node_session = cluster_con([server.ip_addr], load_balancing_policy=
                                           WhiteListRoundRobinPolicy([server.ip_addr])).connect()
         return zero_token_node_session.hosts[0]
 
