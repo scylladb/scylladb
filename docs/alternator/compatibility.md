@@ -109,6 +109,18 @@ to do what, configure the following in ScyllaDB's configuration:
     alternator_enforce_authorization: true
 ```
 
+Note: switching `alternator_enforce_authorization` from `false` to `true`
+before the client application has the proper secret keys and permission
+tables set up will cause the application's requests to immediately fail.
+Therefore, we recommend to begin by setting `alternator_enforce_authorization`
+to `warn`. This setting will continue to allow all requests without
+authentication or authorization failures - but will _count_ would-be
+authentication and authorization errors in the two metrics:
+    * `scylla_alternator_authentication_failures`
+    * `scylla_alternator_authorization_failures`
+When you see both metrics are not increasing, you can be sure the application
+is properly set up and `alternator_enforce_authorization` can be set to `true`.
+
 Alternator implements the same [signature protocol](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html)
 as DynamoDB and the rest of AWS. Clients use, as usual, an access key ID and
 a secret access key to prove their identity and the authenticity of their
