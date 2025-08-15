@@ -2154,10 +2154,11 @@ sharded<locator::shared_token_metadata> token_metadata;
             // Set up group0 service earlier since it is needed by group0 setup just below
             ss.local().set_group0(group0_service);
 
-            // Load address_map from system.peers and subscribe to gossiper events to keep it updated.
-            ss.local().init_address_map(gossip_address_map.local()).get();
-            auto cancel_address_map_subscription = defer_verbose_shutdown("storage service uninit address map", [&ss] {
-                ss.local().uninit_address_map().get();
+            // Initialize the component responsible for keeping the system.peers table up to date.
+            // It merges data from the raft-managed topology state and from the gossiper.
+            ss.local().init_system_peers_updater().get();
+            auto uninit_system_peers_updater = defer_verbose_shutdown("storage service uninit system.peers updater", [&ss] {
+                ss.local().uninit_system_peers_updater().get();
             });
 
             // Need to make sure storage service stopped using group0 before running group0_service.abort()
