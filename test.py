@@ -25,7 +25,6 @@ import logging
 import multiprocessing
 import os
 import pathlib
-import re
 import resource
 import signal
 import subprocess
@@ -41,6 +40,7 @@ from scripts import coverage
 from test import ALL_MODES, TOP_SRC_DIR, path_to, TEST_DIR
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
+    SUITE_CONFIG_FILENAME,
     Test,
     TestSuite,
     init_testsuite_globals,
@@ -50,7 +50,7 @@ from test.pylib.suite.base import (
     start_3rd_party_services,
 )
 from test.pylib.resource_gather import run_resource_watcher
-from test.pylib.util import LogPrefixAdapter, get_configured_modes, ninja
+from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
 if TYPE_CHECKING:
     from typing import List
@@ -285,7 +285,7 @@ def parse_cmd_line() -> argparse.Namespace:
 async def find_tests(options: argparse.Namespace) -> None:
 
     for f in glob.glob(os.path.join("test", "*")):
-        if os.path.isdir(f) and os.path.isfile(os.path.join(f, "suite.yaml")):
+        if os.path.isdir(f) and os.path.isfile(os.path.join(f, SUITE_CONFIG_FILENAME)):
             for mode in options.modes:
                 suite = TestSuite.opt_create(f, options, mode)
                 await suite.add_test_list()

@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 
 SUITE_CONFIG_FILENAME = "suite.yaml"
+TEST_CONFIG_FILENAME = "test_config.yaml"
 
 output_is_a_tty = sys.stdout.isatty()
 
@@ -159,7 +160,7 @@ class TestSuite(ABC):
 
     @staticmethod
     def load_cfg(path: str) -> dict:
-        with open(os.path.join(path, "suite.yaml"), "r") as cfg_file:
+        with open(os.path.join(path, SUITE_CONFIG_FILENAME), "r") as cfg_file:
             cfg = yaml.safe_load(cfg_file.read())
             if not isinstance(cfg, dict):
                 raise RuntimeError("Failed to load tests in {}: suite.yaml is empty".format(path))
