@@ -8,6 +8,7 @@
 
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/rwlock.hh>
 
 #include "database_fwd.hh"
 #include "compaction/compaction_descriptor.hh"
@@ -38,7 +39,7 @@ enum class repair_sstable_classification {
     repaired,
 };
 
-using repair_classifier_func = std::function<repair_sstable_classification(const sstables::shared_sstable&)>;
+using repair_classifier_func = std::function<repair_sstable_classification(const sstables::shared_sstable&, int64_t sstables_repaired_at)>;
 
 // Compaction group is a set of SSTables which are eligible to be compacted together.
 // By this definition, we can say:
@@ -55,7 +56,7 @@ class compaction_group {
     // together.
     class compaction_group_view;
     // This is held throughout group lifetime, in order to have compaction disabled on non-compacting views.
-    std::vector<compaction_manager::compaction_reenabler> _compaction_disabler_for_views;
+    std::vector<compaction_reenabler> _compaction_disabler_for_views;
     // Logical compaction group representing the unrepaired sstables.
     std::unique_ptr<compaction_group_view> _unrepaired_view;
     // Logical compaction group representing the repairing sstables. Compaction disabled altogether on it.
@@ -165,6 +166,10 @@ public:
     bool tombstone_gc_enabled() const noexcept {
         return _tombstone_gc_enabled;
     }
+
+    int64_t get_sstables_repaired_at() const noexcept;
+
+    future<> update_repaired_at_for_merge();
 
     void set_compaction_strategy_state(compaction::compaction_strategy_state compaction_strategy_state) noexcept;
 

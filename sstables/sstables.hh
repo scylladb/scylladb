@@ -44,6 +44,7 @@
 #include "tracing/trace_state.hh"
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
+#include "service/session.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -1074,6 +1075,13 @@ public:
     future<lw_shared_ptr<checksum>> read_checksum();
 
     friend in_memory_config_type;
+
+    service::session_id being_repaired;
+public:
+    void mark_as_being_repaired(const service::session_id& id);
+    // This function must run inside a seastar thread since it calls
+    // rewrite_statistics which must run inside a seastar thread.
+    int64_t update_repaired_at(int64_t repaired_at);
 };
 
 // Validate checksums

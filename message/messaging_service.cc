@@ -704,6 +704,8 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::REPAIR_GET_FULL_ROW_HASHES_WITH_RPC_STREAM:
     case messaging_verb::REPAIR_UPDATE_SYSTEM_TABLE:
     case messaging_verb::REPAIR_FLUSH_HINTS_BATCHLOG:
+    case messaging_verb::REPAIR_UPDATE_COMPACTION_CTRL:
+    case messaging_verb::REPAIR_UPDATE_REPAIRED_AT_FOR_MERGE:
     case messaging_verb::NODE_OPS_CMD:
     case messaging_verb::HINT_MUTATION:
     case messaging_verb::TABLET_STREAM_FILES:
