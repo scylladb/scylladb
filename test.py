@@ -177,6 +177,14 @@ def parse_cmd_line() -> argparse.Namespace:
                         choices=["CRITICAL", "ERROR", "WARNING", "INFO",
                                  "DEBUG"],
                         dest="log_level")
+    parser.add_argument('-k', metavar="EXPRESSION", action="store",
+                        help=f"Supported only for tests in {[str(d) for d in PYTEST_RUNNER_DIRECTORIES]} "
+                        "directories. Only run tests which match the given substring expression. An expression is a Python evaluable expression where all names are "
+                        "substring-matched against test names and their parent classes. Example: -k 'test_method or test_other' matches all test functions and "
+                        "classes whose name contains 'test_method' or 'test_other', while -k 'not test_method' matches those that don't contain 'test_method' "
+                        "in their names. -k 'not test_method and not test_other' will eliminate the matches. Additionally keywords are matched to classes and "
+                        "functions containing extra names in their 'extra_keyword_matches' set, as well as functions which have names assigned directly to "
+                        "them. The matching is case-insensitive.")
     parser.add_argument('--markers', action='store', metavar='MARKEXPR',
                         help="Only run tests that match the given mark expression. The syntax is the same "
                              "as in pytest, for example: --markers 'mark1 and not mark2'. The parameter "
@@ -223,6 +231,9 @@ def parse_cmd_line() -> argparse.Namespace:
                              help="Random number generator seed to be used by boost tests")
 
     args = parser.parse_args()
+
+    if args.skip_patterns and args.k:
+        parser.error(palette.fail('arguments --skip and -k are mutually exclusive, please use only one of them'))
 
     if not args.jobs:
         if not args.cpus:
@@ -290,7 +301,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     report_dir =  temp_dir / 'report'
     junit_output_file = report_dir / f'pytest_cpp_{host_id}.xml'
     files_to_run = []
-    test_names = []
     for name in options.name:
         file_name = name
         if '::' in name:
@@ -302,16 +312,12 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if not files_to_run:
         logging.info(f'No boost found. Skipping pytest execution for boost tests.')
         return 0, []
-    expression = ' or '.join(test_names)
-    if options.skip_patterns:
-        expression += f'{"and not ".join(options.skip_patterns)}'
-    modes = ' '.join(f'--mode={mode}' for mode in options.modes)
     args = [
         'pytest',
         "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
-        modes,
+        *[f'--mode={mode}' for mode in options.modes],
     ]
     if options.list_tests:
         args.extend(['--collect-only', '--quiet'])
@@ -339,17 +345,17 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.append(f'--timeout={options.timeout}')
     if options.session_timeout:
         args.append(f'--session-timeout={options.session_timeout}')
-    if len(expression) > 1:
-        args.extend(['-k', expression])
+    if options.skip_patterns:
+        args.append(f'-k={" and ".join([f"not {pattern}" for pattern in options.skip_patterns])}')
+    if options.k:
+        args.append(f'-k={options.k}')
     if not options.save_log_on_success:
         args.append('--allure-no-capture')
     else:
         args.append('--save-log-on-success')
     if options.markers:
-        args.append(f'-m="{options.markers}"')
+        args.append(f'-m={options.markers}')
     args.extend(files_to_run)
-
-    args = shlex.split(' '.join(args))
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
     try:
         # Read output from pytest and print it to the console
