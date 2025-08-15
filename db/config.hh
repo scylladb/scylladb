@@ -495,13 +495,6 @@ public:
 
     named_value<bool> abort_on_ebadf;
 
-    named_value<uint16_t> redis_port;
-    named_value<uint16_t> redis_ssl_port;
-    named_value<sstring> redis_read_consistency_level;
-    named_value<sstring> redis_write_consistency_level;
-    named_value<uint16_t> redis_database_count;
-    named_value<string_map> redis_keyspace_replication_strategy_options;
-
     named_value<bool> sanitizer_report_backtrace;
     named_value<bool> flush_schema_tables_after_modification;
 

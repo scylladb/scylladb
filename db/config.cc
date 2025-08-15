@@ -1078,7 +1078,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , start_rpc(this, "start_rpc", value_status::Unused, false,
         "Starts the Thrift RPC server")
     , rpc_keepalive(this, "rpc_keepalive", value_status::Used, true,
-        "Enable or disable keepalive on client connections (CQL native, Redis and the maintenance socket).")
+        "Enable or disable keepalive on client connections (CQL native and the maintenance socket).")
     , cache_hit_rate_read_balancing(this, "cache_hit_rate_read_balancing", value_status::Used, true,
         "This boolean controls whether the replicas for read query will be chosen based on cache hit ratio.")
     /**
@@ -1396,21 +1396,6 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "Allow writing to system tables using the .scylla.alternator.system prefix")
     , vector_store_uri(this, "vector_store_uri", liveness::LiveUpdate, value_status::Used, "", "The URI of the vector store to use for vector search. If not set, vector search is disabled.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
-    , redis_port(this, "redis_port", value_status::Used, 0, "Port on which the REDIS transport listens for clients.")
-    , redis_ssl_port(this, "redis_ssl_port", value_status::Used, 0, "Port on which the REDIS TLS native transport listens for clients.")
-    , redis_read_consistency_level(this, "redis_read_consistency_level", value_status::Used, "LOCAL_QUORUM", "Consistency level for read operations for redis.")
-    , redis_write_consistency_level(this, "redis_write_consistency_level", value_status::Used, "LOCAL_QUORUM", "Consistency level for write operations for redis.")
-    , redis_database_count(this, "redis_database_count", value_status::Used, 16, "Database count for the redis. You can use the default settings (16).")
-    , redis_keyspace_replication_strategy_options(this, "redis_keyspace_replication_strategy", value_status::Used, {}, 
-        "Set the replication strategy for the redis keyspace. The setting is used by the first node in the boot phase when the keyspace is not exists to create keyspace for redis.\n"
-        "The replication strategy determines how many copies of the data are kept in a given data center. This setting impacts consistency, availability and request speed.\n"
-        "Two strategies are available: SimpleStrategy and NetworkTopologyStrategy.\n"
-        "\n"
-        "* class: (Default: SimpleStrategy ). Set the replication strategy for redis keyspace.\n"
-        "* 'replication_factor': N, (Default: 'replication_factor':1) IFF the class is SimpleStrategy, assign the same replication factor to the entire cluster.\n"
-        "* 'datacenter_name': N [,...], (Default: 'dc1:1') IFF the class is NetworkTopologyStrategy, assign replication factors to each data center in a comma separated list.\n"
-        "\n"
-        "Related information: About replication strategy.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
             "In debug mode, report log-structured allocator sanitizer violations with a backtrace. Slow.")
     , flush_schema_tables_after_modification(this, "flush_schema_tables_after_modification", liveness::LiveUpdate, value_status::Used, true,
