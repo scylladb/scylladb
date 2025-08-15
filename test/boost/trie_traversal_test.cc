@@ -7,6 +7,7 @@
  */
 
 #include "test/lib/log.hh"
+#include "test/lib/key_utils.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
@@ -17,29 +18,6 @@
 namespace trie = sstables::trie;
 
 using trie::const_bytes;
-
-// generate_all_strings("abc", 2) = {"", "a", "aa", "ab", "ac", "b", "ba", "bb", "bc", "c", "ca", "cb", "cc"}
-std::vector<std::string> generate_all_strings(std::string_view chars_raw, size_t max_len) {
-    std::string chars(chars_raw);
-    std::ranges::sort(chars);
-    std::ranges::unique(chars);
-
-    std::vector<std::string> all_strings;
-    all_strings.push_back("");
-    size_t prev_old_n = 0;
-    for (size_t i = 0; i < max_len; ++i) {
-        size_t old_n = all_strings.size();
-        for (size_t k = prev_old_n; k < old_n; ++k) {
-            for (auto c : chars) {
-                all_strings.push_back(all_strings[k]);
-                all_strings.back().push_back(c);
-            }
-        }
-        prev_old_n = old_n;
-    }
-    std::ranges::sort(all_strings);
-    return all_strings;
-}
 
 // generate_all_subsets(4, 2) = {{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}}
 std::vector<std::vector<size_t>> generate_all_subsets(size_t n, size_t k) {
@@ -428,7 +406,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
     size_t max_input_length = 3;
     size_t max_set_size = 3;
     const char chars[] = "bdf";
-    auto all_strings = generate_all_strings(chars, max_input_length);
+    auto all_strings = tests::generate_all_strings(chars, max_input_length);
     auto all_strings_views = std::vector<const_bytes>();
     for (const auto& x : all_strings) {
         all_strings_views.push_back(string_as_bytes(x));

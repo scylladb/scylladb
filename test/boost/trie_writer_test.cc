@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 #include <numeric>
 #include "test/lib/log.hh"
+#include "test/lib/key_utils.hh"
 #include "utils/bit_cast.hh"
 #include "sstables/trie/trie_writer.hh"
 
@@ -23,29 +24,6 @@ inline const_bytes string_as_bytes(std::string_view sv) {
 
 inline std::string_view bytes_as_string(const_bytes sv) {
     return {reinterpret_cast<const char*>(sv.data()), sv.size()};
-}
-
-// generate_all_strings("ab", 2) = {"", "a", "b", "aa", "ba", "ab", "bb"}
-std::vector<std::string> generate_all_strings(std::string_view chars_raw, size_t max_len) {
-    std::string chars(chars_raw);
-    std::ranges::sort(chars);
-    chars.erase(std::ranges::unique(chars).begin(), chars.end());
-
-    std::vector<std::string> all_strings;
-    all_strings.push_back("");
-    size_t prev_old_n = 0;
-    for (size_t i = 0; i < max_len; ++i) {
-        size_t old_n = all_strings.size();
-        for (size_t k = prev_old_n; k < old_n; ++k) {
-            for (auto c : chars) {
-                all_strings.push_back(all_strings[k]);
-                all_strings.back().push_back(c);
-            }
-        }
-        prev_old_n = old_n;
-    }
-    std::ranges::sort(all_strings);
-    return all_strings;
 }
 
 // generate_all_subsets(4, 2) = {{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}}
@@ -249,7 +227,7 @@ BOOST_AUTO_TEST_CASE(test_exhaustive) {
     size_t max_page_size = 3;
     size_t max_start_pos = 1;
     const char chars[] = "abc";
-    auto all_strings = generate_all_strings(chars, max_input_length);
+    auto all_strings = tests::generate_all_strings(chars, max_input_length);
     size_t case_counter = 0;
     testlog.info("test_exhaustive: start");
     for (size_t set_size = 0; set_size <= max_set_size; ++set_size) {
