@@ -430,7 +430,7 @@ public:
 
     void set_group0(service::raft_group0&);
 
-    future<> init_system_peers_updater(gms::gossip_address_map& address_map);
+    future<> init_system_peers_updater();
     future<> uninit_system_peers_updater();
 
     bool is_topology_coordinator_enabled() const;

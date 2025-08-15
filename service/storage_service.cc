@@ -935,7 +935,6 @@ static auto ensure_alive(Coro&& coro) {
 // {{{ raft_system_peers_updater
 
 class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_change_subscriber {
-    gms::gossip_address_map& _address_map;
     storage_service& _ss;
 
     future<>
@@ -947,7 +946,7 @@ class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_c
         if (prev_ip == endpoint) {
             co_return;
         }
-        if (_address_map.find(id) != endpoint) {
+        if (_ss._address_map.find(id) != endpoint) {
             // Address map refused to update IP for the host_id,
             // this means prev_ip has higher generation than endpoint.
             // Do not update address.
@@ -979,9 +978,8 @@ class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_c
     }
 
 public:
-    raft_system_peers_updater(gms::gossip_address_map& address_map, storage_service& ss)
-        : _address_map(address_map)
-        , _ss(ss)
+    raft_system_peers_updater(storage_service& ss)
+        : _ss(ss)
     {}
 
     virtual future<>
@@ -2892,8 +2890,8 @@ void storage_service::set_group0(raft_group0& group0) {
     _group0 = &group0;
 }
 
-future<> storage_service::init_system_peers_updater(gms::gossip_address_map& address_map) {
-    _raft_system_peers_updater = make_shared<raft_system_peers_updater>(address_map, *this);
+future<> storage_service::init_system_peers_updater() {
+    _raft_system_peers_updater = make_shared<raft_system_peers_updater>(*this);
     _gossiper.register_(_raft_system_peers_updater);
     co_return;
 }

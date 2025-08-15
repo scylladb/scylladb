@@ -2156,7 +2156,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             // Initialize the component responsible for keeping the system.peers table up to date.
             // It merges data from the raft-managed topology state and from the gossiper.
-            ss.local().init_system_peers_updater(gossip_address_map.local()).get();
+            ss.local().init_system_peers_updater().get();
             auto uninit_system_peers_updater = defer_verbose_shutdown("storage service uninit system.peers updater", [&ss] {
                 ss.local().uninit_system_peers_updater().get();
             });

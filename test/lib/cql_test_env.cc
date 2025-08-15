@@ -1052,7 +1052,7 @@ private:
 
             // Initialize the component responsible for keeping the system.peers table up to date.
             // It merges data from the raft-managed topology state and from the gossiper.
-            _ss.local().init_system_peers_updater(_gossip_address_map.local()).get();
+            _ss.local().init_system_peers_updater().get();
             auto cancel_address_map_subscription = defer_verbose_shutdown("storage service address map subscription", [this] {
                 _ss.local().uninit_system_peers_updater().get();
             });
