@@ -12,13 +12,15 @@ import re
 import logging
 import sys
 from argparse import BooleanOptionalAction
+from functools import cache, cached_property
 from pathlib import Path
 from random import randint
 from typing import TYPE_CHECKING
 
 import pytest
+import yaml
 
-from test import ALL_MODES, TEST_RUNNER, TOP_SRC_DIR
+from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR
 from test.pylib.cpp.item import CppTestFunction
 from test.pylib.util import get_configured_modes, get_modes_to_run
 from test.pylib.suite.base import (
@@ -223,3 +225,31 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 def pytest_sessionfinish() -> None:
     if getattr(TestSuite, "artifacts", None) is not None:
         asyncio.get_event_loop().run_until_complete(TestSuite.artifacts.cleanup_before_exit())
+
+
+class TestSuiteConfig:
+    def __init__(self, config_file: Path):
+        self.path = config_file.parent
+        self.cfg = yaml.safe_load(config_file.read_text(encoding="utf-8"))
+        self.get = self.cfg.get
+
+    @cached_property
+    def name(self) -> str:
+        return self.path.name
+
+    @cached_property
+    def _run_in_specific_mode(self) -> set[str]:
+        return set(itertools.chain.from_iterable(self.cfg.get(f"run_in_{build_mode}", []) for build_mode in ALL_MODES))
+
+    @cache
+    def disabled_tests(self, build_mode: str) -> set[str]:
+        result = set(self.cfg.get("disable", []))
+        result.update(self.cfg.get(f"skip_in_{build_mode}", []))
+        if build_mode in DEBUG_MODES:
+            result.update(self.cfg.get("skip_in_debug_modes", []))
+        run_in_this_mode = set(self.cfg.get(f"run_in_{build_mode}", []))
+        result.update(self._run_in_specific_mode - run_in_this_mode)
+        return result
+
+    def is_test_disabled(self, build_mode: str, path: Path) -> bool:
+        return str(path.relative_to(self.path).with_suffix("")) in self.disabled_tests(build_mode=build_mode)

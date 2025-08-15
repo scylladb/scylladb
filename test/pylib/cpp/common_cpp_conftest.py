@@ -5,14 +5,13 @@
 #
 import os
 from copy import copy
-from pathlib import Path, PosixPath
+from pathlib import PosixPath
 
-import yaml
 from pytest import Collector
 
-from test import ALL_MODES, DEBUG_MODES
 from test.pylib.cpp.facade import CppTestFacade
 from test.pylib.cpp.item import CppFile, coverage
+from test.pylib.runner import TestSuiteConfig
 from test.pylib.util import get_modes_to_run
 
 
@@ -39,53 +38,6 @@ ASAN_OPTIONS = [
 ]
 
 
-def get_disabled_tests(config: dict, modes: list[str]) -> dict[str, set[str]]:
-    """
-    Get the dict with disabled tests.
-    Pytest spawns one process, so all modes should be handled there instead one by one as test.py does.
-    """
-    disabled_tests = {}
-    for mode in modes:
-        # Skip tests disabled in suite.yaml
-        disabled_tests_for_mode = set(config.get('disable', []))
-        # Skip tests disabled in the specific mode.
-        disabled_tests_for_mode.update(config.get('skip_in_' + mode, []))
-        # If this mode is one of the debug modes, and there are
-        # tests disabled in a debug mode, add these tests to the skip list.
-        if mode in DEBUG_MODES:
-            disabled_tests_for_mode.update(config.get('skip_in_debug_modes', []))
-        # If a test is listed in run_in_<mode>, it should only be enabled in
-        # this mode. Tests not listed in any run_in_<mode> directive should
-        # run in all modes. Inverting this, we should disable all tests
-        # that are listed explicitly in some run_in_<m> where m != mode
-        #  This, of course, may create ambiguity with skip_* settings,
-        # since the priority of the two is undefined, but oh well.
-        run_in_m = set(config.get('run_in_' + mode, []))
-        for a in ALL_MODES:
-            if a == mode:
-                continue
-            skip_in_m = set(config.get('run_in_' + a, []))
-            disabled_tests_for_mode.update(skip_in_m - run_in_m)
-        disabled_tests[mode] = disabled_tests_for_mode
-    return disabled_tests
-
-
-def read_suite_config(directory: Path) -> dict[str, str]:
-    """
-    Helper method that returns the configuration from the test_config.yaml file.
-    It can be that there's no test_config.yaml that means there are no additional parameters for Scylla itself or no
-    filtering on what modes tests should be executed or skipped
-    """
-    config = directory / TEST_CONFIG
-    if config.exists() and config.stat().st_size:
-        cfg = yaml.safe_load(config.read_text(encoding='utf-8'))
-        if not isinstance(cfg, dict):
-            raise ValueError(f"Invalid {TEST_CONFIG} format in {directory}. Expected a dictionary, got {type(cfg)}")
-        return cfg
-    else:
-        return {}
-
-
 def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade) -> object:
     """
     Collect c++ test based on the .cc files. C++ test binaries are located in different directory, so the method will take care
@@ -99,9 +51,9 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     pytest_config = parent.config
     repeat = pytest_config.getoption('repeat')
     modes = get_modes_to_run(parent.session.config)
-    suite_config = read_suite_config(file_path.parent)
+    suite_config = TestSuiteConfig(config_file=file_path.parent / TEST_CONFIG)
     no_parallel_cases = suite_config.get('no_parallel_cases', [])
-    disabled_tests = get_disabled_tests(suite_config, modes)
+    disabled_tests = {mode: suite_config.disabled_tests(mode) for mode in modes}
     args = copy(DEFAULT_ARGS)
     custom_args_config = suite_config.get('custom_args', {})
     extra_scylla_cmdline_options = suite_config.get('extra_scylla_cmdline_options', [])
