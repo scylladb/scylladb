@@ -7,8 +7,9 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, Column, IntType, CounterType
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
 from cassandra import WriteFailure, ConsistencyLevel
-from test.pylib.internal_types import ServerInfo
+from test.pylib.internal_types import ServerInfo, HostID
 from test.pylib.rest_client import ScyllaMetrics
+from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
 from test.cluster.conftest import skip_mode
@@ -353,3 +354,110 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
         row = rows[0]
         assert row.pk == 1
         assert row.c == 2
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_fenced_out_on_tablet_migration_while_handling_paxos_verb(manager: ManagerClient):
+    """
+    This test verifies that the fencing token is checked on replicas
+    after the local Paxos state is updated. This ensures that if we failed
+    to drain an LWT request during topology changes the replicas
+    where paxos verbs got stuck won't contributed to the target CLs.
+    
+    Scenario:
+    1. Set up a three-node cluster:
+       - n1 (rack1) is the topology coordinator.
+       - The table has a single tablet with RF=2, and replicas on n2 (rack2) and n3 (rack1).
+       - n3 will act as an LWT coordinator that fails `barrier_and_drain`.
+       - A test tablet migration will proceed, incrementing both `version` and `fence_version`
+         on all nodes, including n2. This will cause accept on n2 to be fenced out when
+         it eventually gets unstuck.
+    2. Inject `paxos_accept_proposal_wait` on n2 — we need to suspend the accept on n2.
+    3. Run an LWT on n3 and wait until it hits the injection on n2.
+    4. Inject `raft_topology_barrier_and_drain_fail_before` on n2 to simulate
+       an intermittent network failure. This causes `barrier_and_drain` to fail,
+       but `global_token_metadata_barrier` still succeeds because
+       `raft_topology_cmd::command::barrier` delivers the new `fence_version`
+       to all replicas, including n2.
+       Note: `global_token_metadata_barrier` is called multiple times during tablet migration.
+       Since `stale_versions_in_use` on replicas waits for *all* previous versions of
+       `token_metadata` to be dropped, we must use `enable_injection(one_shot=False)` so that
+       all `barrier_and_drain` calls on n2 fail.
+    5. Migrate the tablet replica from n3 to n1. The migration must succeed
+       even with an unfinished LWT holding an old `erm` version, because the
+       LWT coordinator on n3 was fenced out.
+    6. Release the `paxos_accept_proposal_wait` injection. The LWT must fail
+       with a "stale topology exception" because the topology version from the
+       request is older than the current `fence_version`.
+    """
+    cmdline = [
+        '--logger-log-level', 'paxos=trace',
+        '--smp', '1'
+    ]
+
+    logger.info("Bootstrapping the cluster")
+    servers = await manager.servers_add(3,
+                                        cmdline=cmdline,
+                                        property_file=[
+                                            {'dc': 'my_dc', 'rack': 'rack1'},
+                                            {'dc': 'my_dc', 'rack': 'rack2'},
+                                            {'dc': 'my_dc', 'rack': 'rack1'}
+                                        ])
+
+    (cql, hosts) = await manager.get_ready_cql(servers)
+    host_ids = await asyncio.gather(*[manager.get_host_id(s.server_id) for s in servers])
+
+    logger.info("Disable tablet balancing")
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    logger.info("Create a test keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
+        logger.info("Create test table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        logger.info("Ensure that the tablet replicas are located on n2,n3")
+        [tablet] = await get_all_tablet_replicas(manager, servers[0], ks, 'test')
+        [r1, r2] = tablet.replicas
+        if host_ids[0] in {r1[0], r2[0]}:
+            # the only possibility is r1=n1 && r2=n2, because otherwise two
+            # replicas would be on the same rack
+            await manager.api.move_tablet(servers[0].ip_addr, ks, "test",
+                                          host_ids[0], 0,
+                                          host_ids[2], 0,
+                                          tablet.last_token)
+
+        logger.info(f"Injecting 'paxos_accept_proposal_wait' into {servers[1]}")
+        await manager.api.enable_injection(servers[1].ip_addr, 'paxos_accept_proposal_wait', one_shot=True)
+
+        logger.info(f"Start an LWT on {servers[2]}")
+        insert_lwt = cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1) IF NOT EXISTS", host=hosts[2])
+
+        logger.info(f"Open log on {servers[1]}")
+        s2_log = await manager.server_open_log(servers[1].server_id)
+        logger.info("Wait for 'paxos_accept_proposal_wait: waiting for message'")
+        await s2_log.wait_for('paxos_accept_proposal_wait: waiting for message')
+
+        logger.info(f"Injecting 'raft_topology_barrier_and_drain_fail_before' into {servers[2]}")
+        await manager.api.enable_injection(servers[2].ip_addr,
+                                           'raft_topology_barrier_and_drain_fail_before',
+                                           one_shot=False)
+
+        logger.info(f"Migrate the tablet replica from {servers[2]} to {servers[1]}")
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "test", host_ids[2], 0,
+                                      host_ids[0], 0, tablet.last_token)
+
+        async def fenced_out_requests():
+            metrics = await manager.metrics.query(servers[1].ip_addr)
+            metric_name = 'scylla_storage_proxy_replica_fenced_out_requests'
+            return metrics.get(metric_name) or 0
+
+        assert await fenced_out_requests() == 0
+
+        logger.info(f"Release 'paxos_accept_proposal_wait' on {servers[1]}")
+        await manager.api.message_injection(servers[1].ip_addr, "paxos_accept_proposal_wait")
+
+        with pytest.raises(WriteFailure, match="stale topology exception"):
+            await insert_lwt
+
+        assert await fenced_out_requests() == 1
