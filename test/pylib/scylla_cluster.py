@@ -76,7 +76,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
     # reason, so we increase the timeouts according to each mode's needs. The client
     # should avoid timing out its requests before the server times out - for this reason
     # we increase the CQL driver's client-side timeout in conftest.py.
-    request_timeout_in_ms = 180000 if mode in {'debug', 'sanitize'} else 30000
+    request_timeout_in_ms = 90000 if mode in {'debug', 'sanitize'} else 30000
 
     return {
         'cluster_name': cluster_name,
@@ -117,6 +117,7 @@ def make_scylla_conf(mode: str, workdir: pathlib.Path, host_addr: str, seed_addr
         'truncate_request_timeout_in_ms': request_timeout_in_ms,
         'write_request_timeout_in_ms': request_timeout_in_ms,
         'request_timeout_in_ms': request_timeout_in_ms,
+        'request_timeout_on_shutdown_in_seconds': int(request_timeout_in_ms/1000),
         'user_defined_function_time_limit_ms': 1000,
 
         'strict_allow_filtering': True,
