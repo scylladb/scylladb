@@ -36,3 +36,4 @@ compile_commands.json
 clang_build
 .idea/
 nuke
+rust/target
