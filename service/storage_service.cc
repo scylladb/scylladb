@@ -173,6 +173,20 @@ void check_raft_rpc_scheduling_group(const replica::database& db, const gms::fea
     }
 }
 
+// Moves the coroutine lambda onto the heap and extends its
+// lifetime until the resulting future is completed.
+// This allows to use captures in coroutine lambda after co_await-s.
+// Without this helper the coroutine lambda is destroyed immediately after
+// the caller (e.g. 'then' function implementation) has invoked it and got the future,
+// so referencing the captures after co_await would be use-after-free.
+template <typename Coro>
+static auto ensure_alive(Coro&& coro) {
+    return [coro_ptr = std::make_unique<Coro>(std::move(coro))]<typename ...Args>(Args&&... args) mutable {
+        auto& coro = *coro_ptr;
+        return coro(std::forward<Args>(args)...).finally([coro_ptr = std::move(coro_ptr)] {});
+    };
+}
+
 } // namespace
 
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
@@ -439,6 +453,75 @@ future<storage_service::host_id_to_ip_map_t> storage_service::get_host_id_to_ip_
     }
     co_return map;
 };
+
+
+// {{{ raft_system_peers_updater
+
+class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_change_subscriber {
+    storage_service& _ss;
+
+    future<>
+    on_endpoint_change(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id, const char* ev) {
+        rslog.debug("raft_system_peers_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
+
+        // If id maps to different ip in peers table it needs to be updated which is done by sync_raft_topology_nodes below
+        std::optional<gms::inet_address> prev_ip = co_await _ss.get_ip_from_peers_table(id);
+        if (prev_ip == endpoint) {
+            co_return;
+        }
+        if (_ss._address_map.find(id) != endpoint) {
+            // Address map refused to update IP for the host_id,
+            // this means prev_ip has higher generation than endpoint.
+            // Do not update address.
+            co_return;
+        }
+
+        // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
+        if (_ss.raft_topology_change_enabled()) {
+            rslog.debug("raft_system_peers_updater::on_endpoint_change({}), host_id {}, "
+                        "ip changed from [{}] to [{}], "
+                        "waiting for group 0 read/apply mutex before reloading Raft topology state...",
+                ev, id, prev_ip, endpoint);
+
+            // We're in a gossiper event handler, so gossiper is currently holding a lock
+            // for the endpoint parameter of on_endpoint_change.
+            // The topology_state_load function can also try to acquire gossiper locks.
+            // If we call sync_raft_topology_nodes here directly, a gossiper lock and
+            // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
+            // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
+            (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
+                auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
+                co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
+                // Set notify_join to true since here we detected address change and drivers have to be notified
+                nodes_to_notify_after_sync nodes_to_notify;
+                co_await _ss.raft_topology_update_ip(id, endpoint, co_await _ss.get_host_id_to_ip_map(), &nodes_to_notify);
+                co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
+            }));
+        }
+    }
+
+public:
+    raft_system_peers_updater(storage_service& ss)
+        : _ss(ss)
+    {}
+
+    virtual future<>
+    on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_join");
+    }
+
+    virtual future<>
+    on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_alive");
+    }
+
+    virtual future<>
+    on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
+    }
+};
+
+// }}} raft_system_peers_updater
 
 
 future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync* nodes_to_notify) {
@@ -917,88 +1000,6 @@ future<> storage_service::compression_dictionary_updated_callback(std::string_vi
     assert(this_shard_id() == 0);
     return _compression_dictionary_updated_callback(name);
 }
-
-// Moves the coroutine lambda onto the heap and extends its
-// lifetime until the resulting future is completed.
-// This allows to use captures in coroutine lambda after co_await-s.
-// Without this helper the coroutine lambda is destroyed immediately after
-// the caller (e.g. 'then' function implementation) has invoked it and got the future,
-// so referencing the captures after co_await would be use-after-free.
-template <typename Coro>
-static auto ensure_alive(Coro&& coro) {
-    return [coro_ptr = std::make_unique<Coro>(std::move(coro))]<typename ...Args>(Args&&... args) mutable {
-        auto& coro = *coro_ptr;
-        return coro(std::forward<Args>(args)...).finally([coro_ptr = std::move(coro_ptr)] {});
-    };
-}
-
-// {{{ raft_system_peers_updater
-
-class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_change_subscriber {
-    storage_service& _ss;
-
-    future<>
-    on_endpoint_change(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id, const char* ev) {
-        rslog.debug("raft_system_peers_updater::on_endpoint_change({}) {} {}", ev, endpoint, id);
-
-        // If id maps to different ip in peers table it needs to be updated which is done by sync_raft_topology_nodes below
-        std::optional<gms::inet_address> prev_ip = co_await _ss.get_ip_from_peers_table(id);
-        if (prev_ip == endpoint) {
-            co_return;
-        }
-        if (_ss._address_map.find(id) != endpoint) {
-            // Address map refused to update IP for the host_id,
-            // this means prev_ip has higher generation than endpoint.
-            // Do not update address.
-            co_return;
-        }
-
-        // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
-        if (_ss.raft_topology_change_enabled()) {
-            rslog.debug("raft_system_peers_updater::on_endpoint_change({}), host_id {}, "
-                        "ip changed from [{}] to [{}], "
-                        "waiting for group 0 read/apply mutex before reloading Raft topology state...",
-                ev, id, prev_ip, endpoint);
-
-            // We're in a gossiper event handler, so gossiper is currently holding a lock
-            // for the endpoint parameter of on_endpoint_change.
-            // The topology_state_load function can also try to acquire gossiper locks.
-            // If we call sync_raft_topology_nodes here directly, a gossiper lock and
-            // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
-            // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
-            (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
-                auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
-                co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
-                // Set notify_join to true since here we detected address change and drivers have to be notified
-                nodes_to_notify_after_sync nodes_to_notify;
-                co_await _ss.raft_topology_update_ip(id, endpoint, co_await _ss.get_host_id_to_ip_map(), &nodes_to_notify);
-                co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
-            }));
-        }
-    }
-
-public:
-    raft_system_peers_updater(storage_service& ss)
-        : _ss(ss)
-    {}
-
-    virtual future<>
-    on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
-        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_join");
-    }
-
-    virtual future<>
-    on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
-        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_alive");
-    }
-
-    virtual future<>
-    on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
-        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
-    }
-};
-
-// }}} raft_system_peers_updater
 
 future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::holder group0_holder, sharded<service::storage_proxy>& proxy) noexcept {
     while (!_group0_as.abort_requested()) {
