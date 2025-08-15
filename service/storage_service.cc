@@ -597,6 +597,36 @@ public:
             break;
         }
     }
+
+    future<nodes_to_notify_after_sync> update(std::unordered_set<raft::server_id> prev_normal) {
+        const auto& t = _ss._topology_state_machine._topology;
+
+        std::vector<future<>> sys_ks_futures;
+        sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
+
+        const auto id_to_ip_map = co_await _ss.get_host_id_to_ip_map();
+
+        nodes_to_notify_after_sync nodes_to_notify;
+
+        for (const auto& id: t.left_nodes) {
+            locator::host_id host_id{id.uuid()};
+            auto ip = _ss._address_map.find(host_id);
+            if (ip) {
+                update_node(host_id, *ip, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
+            }
+        }
+        for (const auto& [id, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
+            locator::host_id host_id{id.uuid()};
+            auto ip = _ss._address_map.find(host_id);
+            if (ip) {
+                update_node(host_id, *ip, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
+            }
+        }
+
+        co_await when_all_succeed(std::move(sys_ks_futures));
+
+        co_return nodes_to_notify;
+    }
 };
 
 // }}} raft_system_peers_updater
@@ -604,9 +634,7 @@ public:
 
 // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
 // gossiper) to align it with the other raft topology nodes.
-future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal) {
-    nodes_to_notify_after_sync nodes_to_notify;
-
+future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr) {
     rtlogger.trace("Start sync_raft_topology_nodes");
 
     const auto& t = _topology_state_machine._topology;
@@ -616,9 +644,9 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
                                to_topology_node_state(rs.state), rs.shard_count);
     };
 
-    std::vector<future<>> sys_ks_futures;
+    auto process_left_node = [&] (raft::server_id id) -> future<> {
+        locator::host_id host_id{id.uuid()};
 
-    auto process_left_node = [&] (raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip) -> future<> {
         if (t.left_nodes_rs.find(id) != t.left_nodes_rs.end()) {
             update_topology(host_id, t.left_nodes_rs.at(id));
         }
@@ -627,13 +655,14 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         co_await _messaging.local().ban_host(host_id);
     };
 
-    auto process_normal_node = [&] (raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip, const replica_state& rs) -> future<> {
-        rtlogger.trace("loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
-                      id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count, rs.cleanup);
+    auto process_normal_node = [&] (raft::server_id id, const replica_state& rs) -> future<> {
+        locator::host_id host_id{id.uuid()};
+        rtlogger.trace("loading topology: raft id={} node state={} dc={} rack={} tokens state={} tokens={} shards={}",
+                      id, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate, rs.ring.value().tokens, rs.shard_count, rs.cleanup);
         // Save tokens, not needed for raft topology management, but needed by legacy
         // Also ip -> id mapping is needed for address map recreation on reboot
         if (is_me(host_id)) {
-            sys_ks_futures.push_back(_sys_ks.local().update_tokens(rs.ring.value().tokens));
+            co_await _sys_ks.local().update_tokens(rs.ring.value().tokens);
             co_await _gossiper.add_local_application_state(
                 std::pair(gms::application_state::TOKENS, gms::versioned_value::tokens(rs.ring.value().tokens)),
                 std::pair(gms::application_state::CDC_GENERATION_ID, gms::versioned_value::cdc_generation_id(_topology_state_machine._topology.committed_cdc_generations.back())),
@@ -644,9 +673,10 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
     };
 
-    auto process_transition_node = [&](raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip, const replica_state& rs) -> future<> {
-        rtlogger.trace("loading topology: raft id={} ip={} node state={} dc={} rack={} tokens state={} tokens={}",
-                      id, ip, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
+    auto process_transition_node = [&](raft::server_id id, const replica_state& rs) -> future<> {
+        locator::host_id host_id{id.uuid()};
+        rtlogger.trace("loading topology: raft id={} node state={} dc={} rack={} tokens state={} tokens={}",
+                      id, rs.state, rs.datacenter, rs.rack, _topology_state_machine._topology.tstate,
                       seastar::value_of([&] () -> sstring {
                           return rs.ring ? ::format("{}", rs.ring->tokens) : sstring("null");
                       }));
@@ -663,7 +693,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
                     co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
                 } else {
                     tmptr->add_bootstrap_tokens(rs.ring.value().tokens, host_id);
-                    co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}/{}", id, ip));
+                    co_await update_topology_change_info(tmptr, ::format("bootstrapping node {}", id));
                 }
             }
             break;
@@ -676,62 +706,43 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         case node_state::removing:
             if (_topology_state_machine._topology.tstate == topology::transition_state::rollback_to_normal) {
                 // no need for double writes anymore since op failed
-                co_await process_normal_node(id, host_id, ip, rs);
+                co_await process_normal_node(id, rs);
                 break;
             }
             update_topology(host_id, rs);
             co_await tmptr->update_normal_tokens(rs.ring.value().tokens, host_id);
             tmptr->add_leaving_endpoint(host_id);
-            co_await update_topology_change_info(tmptr, ::format("{} {}/{}", rs.state, id, ip));
+            co_await update_topology_change_info(tmptr, ::format("{} {}", rs.state, id));
             break;
         case node_state::replacing: {
             SCYLLA_ASSERT(_topology_state_machine._topology.req_param.contains(id));
             auto replaced_id = std::get<replace_param>(_topology_state_machine._topology.req_param[id]).replaced_id;
-            auto existing_ip = _address_map.find(locator::host_id{replaced_id.uuid()});
             const auto replaced_host_id = locator::host_id(replaced_id.uuid());
             tmptr->update_topology(replaced_host_id, std::nullopt, locator::node::state::being_replaced);
             tmptr->add_replacing_endpoint(replaced_host_id, host_id);
             if (rs.ring.has_value()) {
                 update_topology(host_id, rs);
-                co_await update_topology_change_info(tmptr, ::format("replacing {}/{} by {}/{}", replaced_id, existing_ip.value_or(gms::inet_address{}), id, ip));
+                co_await update_topology_change_info(tmptr, ::format("replacing {} by {}", replaced_id, id));
             }
         }
             break;
         case node_state::rebuilding:
             // Rebuilding node is normal
-            co_await process_normal_node(id, host_id, ip, rs);
+            co_await process_normal_node(id, rs);
             break;
         default:
             on_fatal_internal_error(rtlogger, ::format("Unexpected state {} for node {}", rs.state, id));
         }
     };
 
-    sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
-
-    auto id_to_ip_map = co_await get_host_id_to_ip_map();
     for (const auto& id: t.left_nodes) {
-        locator::host_id host_id{id.uuid()};
-        auto ip = _address_map.find(host_id);
-        co_await process_left_node(id, host_id, ip);
-        if (ip) {
-            _raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
-        }
+        co_await process_left_node(id);
     }
     for (const auto& [id, rs]: t.normal_nodes) {
-        locator::host_id host_id{id.uuid()};
-        auto ip = _address_map.find(host_id);
-        co_await process_normal_node(id, host_id, ip, rs);
-        if (ip) {
-            _raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
-        }
+        co_await process_normal_node(id, rs);
     }
     for (const auto& [id, rs]: t.transition_nodes) {
-        locator::host_id host_id{id.uuid()};
-        auto ip = _address_map.find(host_id);
-        co_await process_transition_node(id, host_id, ip, rs);
-        if (ip) {
-            _raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
-        }
+        co_await process_transition_node(id, rs);
     }
     for (auto id : t.get_excluded_nodes()) {
         locator::node* n = tmptr->get_topology().find_node(locator::host_id(id.uuid()));
@@ -740,11 +751,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         }
     }
 
-    co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
-
     rtlogger.trace("End sync_raft_topology_nodes");
-
-    co_return nodes_to_notify;
 }
 
 future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify) {
@@ -861,7 +868,8 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         }, _topology_state_machine._topology.tstate);
         tmptr->set_read_new(read_new);
 
-        auto nodes_to_notify = co_await sync_raft_topology_nodes(tmptr, std::move(prev_normal));
+        co_await sync_raft_topology_nodes(tmptr);
+        auto nodes_to_notify = co_await _raft_system_peers_updater->update(std::move(prev_normal));
 
         std::optional<locator::tablet_metadata> tablets;
         if (hint.tablets_hint) {
