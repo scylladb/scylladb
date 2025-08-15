@@ -15,20 +15,15 @@
 #include "schema_fwd.hh"
 #include "frozen_schema.hh"
 #include "replica/database_fwd.hh"
-#include "db/view/base_info.hh"
+
 namespace db {
 class schema_ctxt;
 }
 
 class schema_registry;
 
-struct view_schema_and_base_info {
-    frozen_schema schema;
-    std::optional<db::view::base_dependent_view_info> base_info;
-};
-
-using async_schema_loader = std::function<future<view_schema_and_base_info>(table_schema_version)>;
-using schema_loader = std::function<view_schema_and_base_info(table_schema_version)>;
+using async_schema_loader = std::function<future<extended_frozen_schema>(table_schema_version)>;
+using schema_loader = std::function<extended_frozen_schema(table_schema_version)>;
 
 class schema_version_not_found : public std::runtime_error {
 public:
@@ -65,8 +60,7 @@ class schema_registry_entry : public enable_lw_shared_from_this<schema_registry_
     async_schema_loader _loader; // valid when state == LOADING
     shared_promise<schema_ptr> _schema_promise; // valid when state == LOADING
 
-    std::optional<frozen_schema> _frozen_schema; // engaged when state == LOADED
-    std::optional<db::view::base_dependent_view_info> _base_info;// engaged when state == LOADED for view schemas
+    std::optional<extended_frozen_schema> _extended_frozen_schema; // engaged when state == LOADED
 
     // valid when state == LOADED
     // This is != nullptr when there is an alive schema_ptr associated with this entry.
@@ -84,7 +78,7 @@ public:
     schema_registry_entry(schema_registry_entry&&) = delete;
     schema_registry_entry(const schema_registry_entry&) = delete;
     ~schema_registry_entry();
-    schema_ptr load(view_schema_and_base_info);
+    schema_ptr load(extended_frozen_schema);
     schema_ptr load(schema_ptr);
     future<schema_ptr> start_loading(async_schema_loader);
     schema_ptr get_schema(); // call only when state >= LOADED
@@ -94,6 +88,8 @@ public:
     future<> maybe_sync(std::function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
+    // Can be called from other shards
+    extended_frozen_schema extended_frozen() const;
     // Can be called from other shards
     frozen_schema frozen() const;
     // Can be called from other shards
@@ -160,7 +156,7 @@ public:
     // The schema instance pointed to by the argument will be attached to the registry
     // entry and will keep it alive.
     // If the schema refers to a view, it must have base_info set.
-    schema_ptr learn(const schema_ptr&);
+    schema_ptr learn(schema_ptr);
 
     // Removes all entries from the registry. This in turn removes all dependencies
     // on the Seastar reactor.
@@ -177,7 +173,6 @@ schema_registry& local_schema_registry();
 // chain will last.
 class global_schema_ptr {
     schema_ptr _ptr;
-    std::optional<db::view::base_dependent_view_info> _base_info;
     unsigned _cpu_of_origin;
 public:
     // Note: the schema_ptr must come from the current shard and can't be nullptr.
