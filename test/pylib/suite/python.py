@@ -179,6 +179,8 @@ class PythonTest(Test):
         self.args.append(f"--alluredir={self.allure_dir}")
         if not options.save_log_on_success:
             self.args.append("--allure-no-capture")
+        else:
+            self.args.append('--save-log-on-success')
         if options.markers:
             self.args.append(f"-m={options.markers}")
 

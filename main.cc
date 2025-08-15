@@ -138,6 +138,7 @@ using namespace std::chrono_literals;
 namespace bpo = boost::program_options;
 
 logging::logger diaglog("diagnostics");
+extern seastar::logger dsmlog;
 
 // Must live in a seastar::thread
 class stop_signal {
@@ -1173,6 +1174,15 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_dsm = defer_verbose_shutdown("disk space monitor", [&disk_space_monitor_shard0] {
                 disk_space_monitor_shard0->stop().get();
             });
+            auto out_of_space_subscription = disk_space_monitor_shard0->subscribe(cfg->critical_disk_utilization_level, [&threhsold = cfg->critical_disk_utilization_level, &dsm = *disk_space_monitor_shard0] (auto threshold_reached) {
+                static constexpr auto msg_template = "{} the critical disk utilization level ({:.1f}%). Current disk utilization {:.1f}%";
+                if (threshold_reached) {
+                    dsmlog.warn(msg_template, "Reached", threhsold() * 100, dsm.disk_utilization() * 100);
+                } else {
+                    dsmlog.info(msg_template, "Dropped below", threhsold() * 100, dsm.disk_utilization() * 100);
+                }
+                return make_ready_future<>();
+            });
 
             checkpoint(stop_signal, "starting compaction_manager");
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
@@ -1187,7 +1197,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
             });
-            cm.start(std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager)).get();
+            cm.start(std::ref(*cfg), std::move(get_cm_cfg), std::ref(stop_signal.as_sharded_abort_source()), std::ref(task_manager), only_on_shard0(&*disk_space_monitor_shard0)).get();
             auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
                cm.stop().get();
             });
@@ -1250,6 +1260,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             debug::the_database = &db;
             db.start(std::ref(*cfg), dbcfg, std::ref(mm_notifier), std::ref(feature_service), std::ref(token_metadata),
                     std::ref(cm), std::ref(sstm), std::ref(langman), std::ref(sst_dir_semaphore), std::ref(sstable_compressor_factory),
+                    only_on_shard0(&*disk_space_monitor_shard0),
                     std::ref(stop_signal.as_sharded_abort_source()), utils::cross_shard_barrier()).get();
             auto stop_database_and_sstables = defer_verbose_shutdown("database", [&db] {
                 // #293 - do not stop anything - not even db (for real)
@@ -1753,7 +1764,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair, only_on_shard0(&*disk_space_monitor_shard0)).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
