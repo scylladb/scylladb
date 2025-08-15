@@ -53,7 +53,7 @@ protected:
     server& _server;
     utils::scoped_item_list<std::reference_wrapper<connection>>::handle _connections_list_entry;
 
-    connected_socket _fd;
+    mutable connected_socket _fd;
     input_stream<char> _read_buf;
     output_stream<char> _write_buf;
     future<> _ready_to_respond = make_ready_future<>();
@@ -144,10 +144,10 @@ public:
         std::function<server&()> get_shard_instance = {}
         );
 
-    future<> do_accepts(int which, bool keepalive, socket_address server_addr);
+    future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
 
 protected:
-    virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) = 0;
+    virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units, bool is_tls) = 0;
 
     future<> for_each_gently(noncopyable_function<void(connection&)>);
 };

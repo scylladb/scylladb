@@ -42,7 +42,7 @@ redis_server::redis_server(seastar::sharded<redis::query_processor>& qp, auth::s
 }
 
 shared_ptr<generic_server::connection>
-redis_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
+redis_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units, bool is_tls) {
     return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
 }
 
