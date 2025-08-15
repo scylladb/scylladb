@@ -98,7 +98,7 @@ will leave the recovery mode and remove the obsolete internal Raft data.
   :doc:`nodetool status </operating-scylla/nodetool-commands/status>`. If there is a node
   that is joining or leaving, it cannot be recovered. You must permanently stop it. After
   performing the recovery procedure, use
-  :doc:`nodetool status </operating-scylla/nodetool-commands/status>` ony any other node.
+  :doc:`nodetool status </operating-scylla/nodetool-commands/status>` on any other node.
   If the stopped node appears in the output, it means that other nodes still consider it
   a member of the cluster, and you should remove it with the
   :doc:`node removal procedure </operating-scylla/procedures/cluster-management/remove-node/>`.
