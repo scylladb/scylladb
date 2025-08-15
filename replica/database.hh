@@ -2036,7 +2036,6 @@ public:
     virtual future<> on_after_service_level_remove(qos::service_level_info sl_info) override;
     /** This callback is going to be called just before the service level is changed **/
     virtual future<> on_before_service_level_change(qos::service_level_options slo_before, qos::service_level_options slo_after, qos::service_level_info sl_info) override;
-    virtual future<> on_effective_service_levels_cache_reloaded() override;
 
     // Verify that the existing keyspaces are all RF-rack-valid.
     //

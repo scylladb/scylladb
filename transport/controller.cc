@@ -334,6 +334,7 @@ future<> controller::subscribe_server(sharded<cql_server>& server) {
         _lifecycle_notifier.local().register_subscriber(server.get_lifecycle_listener());
         if (!_used_by_maintenance_socket) {
             _sl_controller.local().register_subscriber(server.get_qos_configuration_listener());
+            _sl_controller.local().get_effective_service_level_controller()->register_subscriber(server.get_effective_service_level_event_subscriber());
         }
         co_return;
     });

@@ -42,6 +42,7 @@
 #include "service/load_meter.hh"
 #include "service/vector_store_client.hh"
 #include "service/view_update_backlog_broker.hh"
+#include "service/qos/effective_service_level_controller.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
 #include "db/system_keyspace.hh"
@@ -743,6 +744,7 @@ sharded<locator::shared_token_metadata> token_metadata;
     sharded<gms::gossiper> gossiper;
     sharded<locator::snitch_ptr> snitch;
     sharded<service::vector_store_client> vector_store_client;
+    sharded<qos::effective_service_level_controller> esl_controller;
 
     // This worker wasn't designed to be used from multiple threads.
     // If you are attempting to do that, make sure you know what you are doing.
@@ -785,7 +787,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker,
-                &hashing_worker, &vector_store_client] {
+                &hashing_worker, &vector_store_client, &esl_controller] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -2274,6 +2276,13 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
 
+            // Reproducer of scylladb/scylladb#24792.
+            auto i24792_reproducer = defer([] {
+                if (utils::get_local_injector().enter("reload_service_level_cache_after_auth_service_is_stopped")) {
+                    sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
+                }
+            });
+
             std::any stop_auth_service;
             // Has to be called after node joined the cluster (join_cluster())
             // with raft leader elected as only then auth version mutation is put
@@ -2287,6 +2296,14 @@ sharded<locator::shared_token_metadata> token_metadata;
             api::set_server_authorization_cache(ctx, auth_service).get();
             auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
                 api::unset_server_authorization_cache(ctx).get();
+            });
+
+            // Precondition: `auth::service` must have already started.
+            // Bonus: it's good to initialize this service BEFORE we reload the cache
+            //        to be up-to-date from the very start.
+            esl_controller.start(std::ref(sl_controller), std::ref(auth_service)).get();
+            auto stop_effective_service_level_controller = defer_verbose_shutdown("effective service level controller", [&esl_controller] {
+                return esl_controller.stop().get();
             });
 
             // update the service level cache after the SL data accessor and auth service are initialized.

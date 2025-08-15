@@ -64,6 +64,8 @@ struct service_level {
 
 using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
 
+class effective_service_level_controller;
+
 /**
  *  The service_level_controller class is an implementation of the service level
  *  controller design.
@@ -123,6 +125,8 @@ public:
     using service_level_distributed_data_accessor_ptr = ::shared_ptr<service_level_distributed_data_accessor>;
 
 private:
+    friend class effective_service_level_controller;
+
     struct global_controller_data {
         service_levels_info  static_configurations{};
         std::deque<scheduling_group> deleted_scheduling_groups{};
@@ -150,8 +154,14 @@ private:
 
     // service level name -> service_level object
     std::map<sstring, service_level> _service_levels_db;
-    // role name -> effective service_level_options 
-    std::map<sstring, service_level_options> _effective_service_levels_db;
+
+    // Pointer to the corresponding `effective_service_level_controller`
+    // for this `service_level_controller`.
+    //
+    // Invariant: The pointer is non-NULL if and only if it points to a valid and working
+    //            `effective_service_level_controller` instance that can be used freely.
+    effective_service_level_controller* _esl_controller;
+
     // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
     std::set<sstring> _effectively_dropped_sls;
     std::pair<const sstring*, service_level*> _sl_lookup[max_scheduling_groups()];
@@ -167,6 +177,7 @@ private:
 public:
     service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config,
             scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain = false);
+    ~service_level_controller() noexcept;
 
     /**
      * this function must be called *once* from any shard before any other functions are called.
@@ -182,6 +193,31 @@ public:
      * stored in scylla_local table.
      */
     future<> reload_distributed_data_accessor(cql3::query_processor&, service::raft_group0_client&, db::system_keyspace&, db::system_distributed_keyspace&);
+
+    /**
+     * Precondition: this object does NOT have `_esl_controller` set to a non-NULL value.
+     */
+    void register_effective_service_level_controller(effective_service_level_controller&) noexcept;
+    /**
+     * Precondition: this object DOES have `_esl_controller` set to a pointer pointing to
+                     a valid instance of `effective_service_level_controller`.
+     */
+    void unregister_effective_service_level_controller() noexcept;
+
+    /**
+     * Returns a pointer to the corresponding `effective_service_level_controller` for this
+     * `service_level_controller`.
+     *
+     * There is no precondition for this function. HOWEVER, note that the returned pointer may be:
+     * - a `nullptr`: when the `effective_service_level_controller` can no longer serve (e.g. because
+     *   it doesn't live anymore)
+     * - invalid: if you decide to assign it to a local variable and only use it later on.
+     *   That should be generally avoided to avoid a situation when the `effective_service_level_controller`
+     *   has been de-initialized.
+     */
+    effective_service_level_controller* get_effective_service_level_controller() noexcept {
+        return _esl_controller;
+    }
 
     /**
      *  Adds a service level configuration if it doesn't exists, and updates
@@ -209,28 +245,6 @@ public:
     future<> stop();
 
     void abort_group0_operations();
-
-    /**
-     * this is an executor of a function with arguments under a service level
-     * that corresponds to a given user.
-     * @param usr - the user for determining the service level
-     * @param func - the function to be executed
-     * @return a future that is resolved when the function's operation is resolved
-     * (if it returns a future). or a ready future containing the returned value
-     * from the function/
-     */
-    template <typename Func, typename Ret = std::invoke_result_t<Func>>
-    requires std::invocable<Func>
-    futurize_t<Ret> with_user_service_level(const std::optional<auth::authenticated_user>& usr, Func&& func) {
-        if (usr && usr->name) {
-            return find_effective_service_level(*usr->name).then([this, func = std::move(func)] (std::optional<service_level_options> opts) mutable {
-                auto& service_level_name = (opts && opts->shares_name) ? *opts->shares_name : default_service_level_name;
-                return with_service_level(service_level_name, std::move(func));
-            });
-        } else {
-            return with_service_level(default_service_level_name, std::move(func));
-        }
-    }
 
     /**
      * this is an executor of a function with arguments under a specific
@@ -261,12 +275,6 @@ public:
      * get_scheduling_group("default")
      */
     scheduling_group get_scheduling_group(sstring service_level_name);
-    /**
-     * Get the scheduling group of a specific user
-     * @param user - the user for determining the service level
-     * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
-     */
-    future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
     /**
      * @return the name of the currently active service level if such exists or an empty
      * optional if no active service level.
@@ -302,15 +310,6 @@ public:
     future<> update_service_levels_cache(qos::query_context ctx = qos::query_context::unspecified);
 
     /**
-     * Updates effective service levels cache.
-     * The method uses service levels cache (_service_levels_db)
-     * and data from auth tables.
-     * Must be executed on shard 0.
-     * @return a future that is resolved when the update is done
-     */
-    future<> update_effective_service_levels_cache();
-
-    /**
      * Service levels cache consists of two levels: service levels cache and effective service levels cache
      * The second one is dependent on the first one.
      *
@@ -324,19 +323,6 @@ public:
     future<> drop_distributed_service_level(sstring name, bool if_exists, service::group0_batch& mc);
     future<service_levels_info> get_distributed_service_levels(qos::query_context ctx);
     future<service_levels_info> get_distributed_service_level(sstring service_level_name);
-
-    /**
-     * Returns the service level options **in effect** for a user having the given
-     * collection of roles.
-     * @param roles - the collection of roles to consider
-     * @return the effective service level options - they may in particular be a combination
-     *         of options from multiple service levels
-     */
-    future<std::optional<service_level_options>> find_effective_service_level(const sstring& role_name);
-
-    // Synchronous equivalent of `find_effective_service_level`. 
-    // The method uses only effective service level cache, so it requires service levels in v2.
-    std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name);
 
     /**
      * Gets the service level data by name.
@@ -406,7 +392,6 @@ private:
     future<> notify_service_level_added(sstring name, service_level sl_data);
     future<> notify_service_level_updated(sstring name, service_level_options slo);
     future<> notify_service_level_removed(sstring name);
-    future<> notify_effective_service_levels_cache_reloaded();
 
     enum class  set_service_level_op_type {
         add_if_not_exists,
@@ -421,7 +406,6 @@ private:
     future<> set_distributed_service_level(sstring name, service_level_options slo, set_service_level_op_type op_type, service::group0_batch& mc);
 
     future<std::vector<cql3::description>> describe_created_service_levels() const;
-    future<std::vector<cql3::description>> describe_attached_service_levels();
 
 public:
 

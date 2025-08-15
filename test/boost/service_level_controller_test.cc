@@ -68,10 +68,6 @@ struct qos_configuration_change_suscriber_simple : public qos_configuration_chan
         ops.push_back(change_op{sl_info.name, slo_before, slo_after});
         return make_ready_future<>();
     }
-
-    virtual future<> on_effective_service_levels_cache_reloaded() override {
-        return make_ready_future<>();
-    }
 };
 
 template <> struct fmt::formatter<add_op> : fmt::formatter<string_view> {

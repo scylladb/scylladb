@@ -53,6 +53,7 @@
 #include "message/messaging_service.hh"
 #include "gms/gossiper.hh"
 #include "gms/feature_service.hh"
+#include "service/qos/effective_service_level_controller.hh"
 #include "service/qos/service_level_controller.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
@@ -173,6 +174,7 @@ private:
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
     sharded<service::vector_store_client> _vector_store_client;
+    sharded<qos::effective_service_level_controller> _esl_controller;
     db::config* _db_config;
 
     service::raft_group0_client* _group0_client;
@@ -1109,6 +1111,12 @@ private:
                 // double execution of the shutdown method, which causes waiting for 
                 // an invalid future if we're unlucky.
                 _auth_service.stop().get();
+            });
+
+            // Precondition: `auth::service` must have already started.
+            _esl_controller.start(std::ref(_sl_controller), std::ref(_auth_service)).get();
+            auto stop_effective_service_level_controller = defer_verbose_shutdown("effective service level controller", [this] {
+                return _esl_controller.stop().get();
             });
 
             db::batchlog_manager_config bmcfg;
