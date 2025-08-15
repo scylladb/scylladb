@@ -24,7 +24,7 @@ static logger test_logger("test_server");
 
 class test_server : public server {
 public:
-    test_server(const utils::updateable_value_source<uint32_t>& c) : server("test_server", test_logger, config{utils::updateable_value<uint32_t>(c)}) {};
+    test_server(const utils::updateable_value_source<uint32_t>& c) : server("test_server", test_logger, config{.uninitialized_connections_semaphore_cpu_concurrency = utils::updateable_value<uint32_t>(c),.shutdown_timeout_in_seconds=  utils::updateable_value<uint32_t>(30)}) {};
 protected:
     [[noreturn]] shared_ptr<connection> make_connection(socket_address, connected_socket&&, socket_address, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override {
         SCYLLA_ASSERT(false);
