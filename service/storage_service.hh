@@ -1022,7 +1022,6 @@ private:
 
     using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
     future<host_id_to_ip_map_t> get_host_id_to_ip_map();
-    future<> raft_topology_update_ip(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& map, nodes_to_notify_after_sync* nodes_to_notify);
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
     // Optional target_node can be provided to restrict the synchronization to the specified node.
