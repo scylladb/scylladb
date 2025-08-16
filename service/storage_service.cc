@@ -493,12 +493,6 @@ private:
             co_return;
         }
 
-        // If id maps to different ip in peers table it needs to be updated which is done by sync_raft_topology_nodes below
-        std::optional<gms::inet_address> prev_ip = co_await _ss.get_ip_from_peers_table(id);
-        if (prev_ip == endpoint) {
-            co_return;
-        }
-
         if (const auto current = _ss._address_map.find(id); current != endpoint) {
             rslog.debug("raft_system_peers_updater::on_endpoint_change({}/{}) current {} != {}, skip update",
                 id, ev, current, endpoint);
