@@ -1937,7 +1937,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             }).get();
 
             checkpoint(stop_signal, "starting column family API");
-            api::set_server_column_family(ctx, sys_ks).get();
+            api::set_server_column_family(ctx, db, sys_ks).get();
             auto stop_cf_api = defer_verbose_shutdown("column family API", [&ctx] {
                 api::unset_server_column_family(ctx).get();
             });

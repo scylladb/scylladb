@@ -198,7 +198,7 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     return r;
 }
 
-seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, bool legacy_request) {
     return q.scatter().then([&q, legacy_request] {
         return sleep(q.duration()).then([&q, legacy_request] {
             return q.gather(q.capacity()).then([&q, legacy_request] (auto topk_results) {
@@ -618,8 +618,8 @@ rest_toppartitions_generic(http_context& ctx, std::unique_ptr<http::request> req
         apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
             !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.value, list_size.value, capacity.value);
 
-        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
-            return run_toppartitions_query(q, ctx);
+        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [] (db::toppartitions_query& q) {
+            return run_toppartitions_query(q);
         });
 }
 
