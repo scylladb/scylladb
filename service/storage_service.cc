@@ -528,14 +528,21 @@ public:
         const auto& t = _ss._topology_state_machine._topology;
         raft::server_id raft_id{id.uuid()};
 
-        auto node = t.find(raft_id);
-
-        if (!node) {
+        if (t.left_nodes.contains(raft_id)) {
+            // Emit 'left' events at the same time we remove the node from the
+            // gossiper and from  the peers table. Next time this function is called
+            // the node will no longer have an IP, ensuring the event is emitted only once.
+            sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(ip));
+            sys_ks_futures.push_back(_ss._gossiper.force_remove_endpoint(id, gms::null_permit_id));
+            nodes_to_notify.left.push_back({ip, id});
             return;
         }
 
+        auto node = t.find(raft_id);
+        if (!node) {
+            return;
+        }
         const auto& rs = node->second;
-
         switch (rs.state) {
             case node_state::normal: {
                 if (_ss.is_me(id)) {
@@ -612,13 +619,6 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
     std::vector<future<>> sys_ks_futures;
 
     auto process_left_node = [&] (raft::server_id id, locator::host_id host_id, std::optional<gms::inet_address> ip) -> future<> {
-        if (ip) {
-            sys_ks_futures.push_back(_sys_ks.local().remove_endpoint(*ip));
-
-            co_await _gossiper.force_remove_endpoint(host_id, gms::null_permit_id);
-            nodes_to_notify.left.push_back({*ip, host_id});
-        }
-
         if (t.left_nodes_rs.find(id) != t.left_nodes_rs.end()) {
             update_topology(host_id, t.left_nodes_rs.at(id));
         }
