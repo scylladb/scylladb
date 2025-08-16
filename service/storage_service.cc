@@ -458,6 +458,25 @@ future<storage_service::host_id_to_ip_map_t> storage_service::get_host_id_to_ip_
 // {{{ raft_system_peers_updater
 
 class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_change_subscriber {
+public:
+    struct update_state {
+        const std::unordered_set<raft::server_id>* prev_normal;
+        host_id_to_ip_map_t host_id_to_ip_map;
+        using node_events = std::vector<std::pair<gms::inet_address, locator::host_id>>;
+        node_events left;
+        node_events joined;
+        std::vector<future<>> sys_ks_futures;
+
+        std::optional<gms::inet_address> get_old_ip(locator::host_id id) {
+            const auto it = host_id_to_ip_map.find(id);
+            if (it == host_id_to_ip_map.end()) {
+                return std::nullopt;
+            }
+            return it->second;
+        }
+    };
+
+private:
     storage_service& _ss;
 
     future<>
@@ -496,43 +515,6 @@ class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_c
                 co_await notify_nodes(std::move(update_state));
             }));
         }
-    }
-
-public:
-    struct update_state {
-        const std::unordered_set<raft::server_id>* prev_normal;
-        host_id_to_ip_map_t host_id_to_ip_map;
-        using node_events = std::vector<std::pair<gms::inet_address, locator::host_id>>;
-        node_events left;
-        node_events joined;
-        std::vector<future<>> sys_ks_futures;
-
-        std::optional<gms::inet_address> get_old_ip(locator::host_id id) {
-            const auto it = host_id_to_ip_map.find(id);
-            if (it == host_id_to_ip_map.end()) {
-                return std::nullopt;
-            }
-            return it->second;
-        }
-    };
-
-    raft_system_peers_updater(storage_service& ss)
-        : _ss(ss)
-    {}
-
-    virtual future<>
-    on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
-        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_join");
-    }
-
-    virtual future<>
-    on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
-        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_alive");
-    }
-
-    virtual future<>
-    on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
-        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
     }
 
     void update_node(raft::server_id raft_id, update_state& state) {
@@ -631,6 +613,26 @@ public:
             default:
             break;
         }
+    }
+
+public:
+    raft_system_peers_updater(storage_service& ss)
+        : _ss(ss)
+    {}
+
+    virtual future<>
+    on_join(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_join");
+    }
+
+    virtual future<>
+    on_alive(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_alive");
+    }
+
+    virtual future<>
+    on_restart(gms::inet_address endpoint, locator::host_id id, gms::endpoint_state_ptr ep_state, gms::permit_id permit_id) override {
+        return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
     }
 
     future<update_state> update(const std::unordered_set<raft::server_id>* prev_normal, std::optional<raft::server_id> target) {
