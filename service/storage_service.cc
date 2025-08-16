@@ -492,12 +492,7 @@ class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_c
             (void)futurize_invoke(ensure_alive([this, id, h = _ss._async_gate.hold()]() -> future<> {
                 auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
-                // Set notify_join to true since here we detected address change and drivers have to be notified
-                nodes_to_notify_after_sync nodes_to_notify;
-                std::vector<future<>> sys_ks_futures;
-                sys_ks_futures.reserve(1);
-                update_node(id, co_await _ss.get_host_id_to_ip_map(), nodes_to_notify, sys_ks_futures, nullptr);
-                co_await when_all_succeed(std::move(sys_ks_futures));
+                auto nodes_to_notify = co_await update(nullptr, raft::server_id{id.uuid()});
                 co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
         }
@@ -615,27 +610,30 @@ public:
         }
     }
 
-    future<nodes_to_notify_after_sync> update(std::unordered_set<raft::server_id> prev_normal) {
+    future<nodes_to_notify_after_sync> update(const std::unordered_set<raft::server_id>* prev_normal, std::optional<raft::server_id> target) {
         const auto& t = _ss._topology_state_machine._topology;
 
         std::vector<future<>> sys_ks_futures;
-        sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
-
+        nodes_to_notify_after_sync nodes_to_notify;
         const auto id_to_ip_map = co_await _ss.get_host_id_to_ip_map();
 
-        nodes_to_notify_after_sync nodes_to_notify;
-
-        for (const auto& id: t.left_nodes) {
-            locator::host_id host_id{id.uuid()};
-            update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
-        }
-        for (const auto& [id, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
-            locator::host_id host_id{id.uuid()};
-            update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
+        if (target) {
+            locator::host_id host_id{target->uuid()};
+            sys_ks_futures.reserve(1);
+            update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, prev_normal);
+        } else {
+            sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
+            for (const auto& id: t.left_nodes) {
+                locator::host_id host_id{id.uuid()};
+                update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, prev_normal);
+            }
+            for (const auto& [id, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
+                locator::host_id host_id{id.uuid()};
+                update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, prev_normal);
+            }
         }
 
         co_await when_all_succeed(std::move(sys_ks_futures));
-
         co_return nodes_to_notify;
     }
 };
@@ -895,7 +893,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         tmptr->set_tablets(std::move(*tablets));
 
         co_await replicate_to_all_cores(std::move(tmptr));
-        co_await notify_nodes_after_sync(std::move(nodes_to_notify));
+        co_await notify_nodes_after_sync(&nodes_to_notify, std::nullopt);
         rtlogger.debug("topology_state_load: token metadata replication to all cores finished");
     }
 
