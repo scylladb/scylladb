@@ -524,6 +524,9 @@ public:
     }
 
     void update_node(locator::host_id id, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync& nodes_to_notify, std::vector<future<>>& sys_ks_futures, const std::unordered_set<raft::server_id>* prev_normal) {
+        if (_ss.is_me(id)) {
+            return;
+        }
         const auto new_ip = _ss._address_map.find(id);
         if (!new_ip) {
             return;
@@ -549,16 +552,14 @@ public:
         const auto& rs = node->second;
         switch (rs.state) {
             case node_state::normal: {
-                if (_ss.is_me(id)) {
-                    return;
-                }
-                // In replace-with-same-ip scenario the replaced node IP will be the same
-                // as ours, we shouldn't put it into system.peers.
+                // TODO: should we do something similar for rebuilding, decommissioning, removing, ...?
+                // Now we don't update system.peers in those states.
 
-                // Some state that is used to fill in 'peers' table is still propagated over gossiper.
-                // Populate the table with the state from the gossiper here since storage_service::on_change()
-                // (which is called each time gossiper state changes) may have skipped it because the tokens
-                // for the node were not in the 'normal' state yet
+                // We need to be cautious about what we write to system.peers, as it's easy to confuse drivers.
+                // Here, we merge the group0-managed state with the gossiper-managed state.
+                // We update the system.peers record only if the gossiper provides its part of the data,
+                // ensuring that drivers see a consistent view combining both sources.
+
                 auto info = _ss.get_gossiper_peer_info_for_update(id);
                 if (info) {
                     // And then amend with the info from raft
@@ -587,15 +588,27 @@ public:
             }
             break;
             case node_state::bootstrapping:
-                if (!_ss.is_me(*new_ip)) {
-                    utils::get_local_injector().inject("crash-before-bootstrapping-node-added", [] {
-                        rtlogger.error("crash-before-bootstrapping-node-added hit, killing the node");
-                        _exit(1);
-                    });
+                // TODO: should we do something similar for replacing?
 
-                    // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
-                    sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, {}));
-                }
+                utils::get_local_injector().inject("crash-before-bootstrapping-node-added", [] {
+                    rtlogger.error("crash-before-bootstrapping-node-added hit, killing the node");
+                    _exit(1);
+                });
+
+                // Persist the host_id <-> IP mapping in the local system.peers table as soon as a node
+                // reaches the bootstrapping state. Nodes in this state may receive write traffic, so the
+                // mapping must survive restarts, even if the gossiper state is lost. On restart, the 
+                // gossiper state is reinitialized from this table.
+                //
+                // More specifically, when the current node transitions to a Raft topology state where another 
+                // node is bootstrapping, we must reliably store that node’s IP <-> host_id mapping. 
+                // This ensures that if the current node is later restarted and acts as a write coordinator, 
+                // it can resolve the bootstrapping node’s host_id to IP in order to route writes correctly.
+                //
+                // In this case, we store only the IP <-> host_id mapping (leaving other columns empty) 
+                // to signal to drivers that the node is not yet ready to serve reads. Drivers skip 
+                // such 'incomplete' system.peers rows.
+                sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, {}));
             break;
             default:
             break;
