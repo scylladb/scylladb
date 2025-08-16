@@ -489,15 +489,14 @@ class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_c
             // If we call sync_raft_topology_nodes here directly, a gossiper lock and
             // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
             // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
-            (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
+            (void)futurize_invoke(ensure_alive([this, id, h = _ss._async_gate.hold()]() -> future<> {
                 auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
                 // Set notify_join to true since here we detected address change and drivers have to be notified
                 nodes_to_notify_after_sync nodes_to_notify;
                 std::vector<future<>> sys_ks_futures;
                 sys_ks_futures.reserve(1);
-                update_node(id, endpoint, co_await _ss.get_host_id_to_ip_map(),
-                    nodes_to_notify, sys_ks_futures, nullptr);
+                update_node(id, co_await _ss.get_host_id_to_ip_map(), nodes_to_notify, sys_ks_futures, nullptr);
                 co_await when_all_succeed(std::move(sys_ks_futures));
                 co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
@@ -524,7 +523,12 @@ public:
         return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
     }
 
-    void update_node(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync& nodes_to_notify, std::vector<future<>>& sys_ks_futures, const std::unordered_set<raft::server_id>* prev_normal) {
+    void update_node(locator::host_id id, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync& nodes_to_notify, std::vector<future<>>& sys_ks_futures, const std::unordered_set<raft::server_id>* prev_normal) {
+        const auto new_ip = _ss._address_map.find(id);
+        if (!new_ip) {
+            return;
+        }
+
         const auto& t = _ss._topology_state_machine._topology;
         raft::server_id raft_id{id.uuid()};
 
@@ -532,9 +536,9 @@ public:
             // Emit 'left' events at the same time we remove the node from the
             // gossiper and from  the peers table. Next time this function is called
             // the node will no longer have an IP, ensuring the event is emitted only once.
-            sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(ip));
+            sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(*new_ip));
             sys_ks_futures.push_back(_ss._gossiper.force_remove_endpoint(id, gms::null_permit_id));
-            nodes_to_notify.left.push_back({ip, id});
+            nodes_to_notify.left.push_back({*new_ip, id});
             return;
         }
 
@@ -563,15 +567,15 @@ public:
                     info->rack = rs.rack;
                     info->release_version = rs.release_version;
                     info->supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
-                    sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(ip, id, *info));
+                    sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, *info));
                 }
 
                 auto it = host_id_to_ip_map.find(id);
-                if (it == host_id_to_ip_map.end() || it->second != ip || (prev_normal && !prev_normal->contains(raft_id))) {
-                    nodes_to_notify.joined.emplace_back(ip, id);
+                if (it == host_id_to_ip_map.end() || it->second != *new_ip || (prev_normal && !prev_normal->contains(raft_id))) {
+                    nodes_to_notify.joined.emplace_back(*new_ip, id);
                 }
 
-                if (const auto it = host_id_to_ip_map.find(id); it != host_id_to_ip_map.end() && it->second != ip) {
+                if (const auto it = host_id_to_ip_map.find(id); it != host_id_to_ip_map.end() && it->second != *new_ip) {
                     utils::get_local_injector().inject("crash-before-prev-ip-removed", [] {
                         slogger.info("crash-before-prev-ip-removed hit, killing the node");
                         _exit(1);
@@ -583,14 +587,14 @@ public:
             }
             break;
             case node_state::bootstrapping:
-                if (!_ss.is_me(ip)) {
+                if (!_ss.is_me(*new_ip)) {
                     utils::get_local_injector().inject("crash-before-bootstrapping-node-added", [] {
                         rtlogger.error("crash-before-bootstrapping-node-added hit, killing the node");
                         _exit(1);
                     });
 
                     // Save ip -> id mapping in peers table because we need it on restart, but do not save tokens until owned
-                    sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(ip, id, {}));
+                    sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, {}));
                 }
             break;
             default:
@@ -610,17 +614,11 @@ public:
 
         for (const auto& id: t.left_nodes) {
             locator::host_id host_id{id.uuid()};
-            auto ip = _ss._address_map.find(host_id);
-            if (ip) {
-                update_node(host_id, *ip, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
-            }
+            update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
         }
         for (const auto& [id, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
             locator::host_id host_id{id.uuid()};
-            auto ip = _ss._address_map.find(host_id);
-            if (ip) {
-                update_node(host_id, *ip, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
-            }
+            update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, &prev_normal);
         }
 
         co_await when_all_succeed(std::move(sys_ks_futures));
