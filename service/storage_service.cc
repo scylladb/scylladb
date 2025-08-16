@@ -527,17 +527,19 @@ public:
         return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
     }
 
-    void update_node(locator::host_id id, update_state& state) {
+    void update_node(raft::server_id raft_id, update_state& state) {
+        locator::host_id id{raft_id.uuid()};
+
         if (_ss.is_me(id)) {
             return;
         }
+
         const auto new_ip = _ss._address_map.find(id);
         if (!new_ip) {
             return;
         }
 
         const auto& t = _ss._topology_state_machine._topology;
-        raft::server_id raft_id{id.uuid()};
 
         if (t.left_nodes.contains(raft_id)) {
             // Emit 'left' events at the same time we remove the node from the
@@ -624,18 +626,15 @@ public:
         update_state state{prev_normal, co_await _ss.get_host_id_to_ip_map()};
 
         if (target) {
-            locator::host_id host_id{target->uuid()};
             state.sys_ks_futures.reserve(1);
-            update_node(host_id, state);
+            update_node(*target, state);
         } else {
             state.sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
             for (const auto& id: t.left_nodes) {
-                locator::host_id host_id{id.uuid()};
-                update_node(host_id, state);
+                update_node(id, state);
             }
             for (const auto& [id, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
-                locator::host_id host_id{id.uuid()};
-                update_node(host_id, state);
+                update_node(id, state);
             }
         }
 
