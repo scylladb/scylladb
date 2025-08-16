@@ -506,6 +506,14 @@ public:
         node_events left;
         node_events joined;
         std::vector<future<>> sys_ks_futures;
+
+        std::optional<gms::inet_address> get_old_ip(locator::host_id id) {
+            const auto it = host_id_to_ip_map.find(id);
+            if (it == host_id_to_ip_map.end()) {
+                return std::nullopt;
+            }
+            return it->second;
+        }
     };
 
     raft_system_peers_updater(storage_service& ss)
@@ -577,19 +585,23 @@ public:
                     state.sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, *info));
                 }
 
-                auto it = state.host_id_to_ip_map.find(id);
-                if (it == state.host_id_to_ip_map.end() || it->second != *new_ip || (state.prev_normal && !state.prev_normal->contains(raft_id))) {
+                // We emit 'joined' events even if the peers table is not fully updated.
+                // This is not ideal: drivers may ignore incomplete peer records and log warnings.
+                // However, we must ensure a 'joined' event is emitted whenever a node transitions
+                // to NORMAL. If the node has no gossiper state at that moment and we skip the event,
+                // we would need to track it and notify later, which is more complex.
+                const auto old_ip = state.get_old_ip(id);
+                if (old_ip != new_ip || (state.prev_normal && !state.prev_normal->contains(raft_id))) {
                     state.joined.emplace_back(*new_ip, id);
                 }
 
-                if (const auto it = state.host_id_to_ip_map.find(id); it != state.host_id_to_ip_map.end() && it->second != *new_ip) {
+                if (old_ip && old_ip != *new_ip) {
                     utils::get_local_injector().inject("crash-before-prev-ip-removed", [] {
                         slogger.info("crash-before-prev-ip-removed hit, killing the node");
                         _exit(1);
                     });
 
-                    auto old_ip = it->second;
-                    state.sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(old_ip));
+                    state.sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(*old_ip));
                 }
             }
             break;
