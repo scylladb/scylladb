@@ -494,7 +494,10 @@ class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_c
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
                 // Set notify_join to true since here we detected address change and drivers have to be notified
                 nodes_to_notify_after_sync nodes_to_notify;
-                co_await update_node(id, endpoint, co_await _ss.get_host_id_to_ip_map(), &nodes_to_notify);
+                std::vector<future<>> sys_ks_futures;
+                sys_ks_futures.reserve(1);
+                update_node(id, endpoint, co_await _ss.get_host_id_to_ip_map(), &nodes_to_notify, sys_ks_futures);
+                co_await when_all_succeed(std::move(sys_ks_futures));
                 co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
         }
@@ -520,16 +523,14 @@ public:
         return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
     }
 
-    future<> update_node(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync* nodes_to_notify) {
+    void update_node(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync* nodes_to_notify, std::vector<future<>>& sys_ks_futures) {
         const auto& t = _ss._topology_state_machine._topology;
         raft::server_id raft_id{id.uuid()};
-
-        std::vector<future<>> sys_ks_futures;
 
         auto node = t.find(raft_id);
 
         if (!node) {
-            co_return;
+            return;
         }
 
         const auto& rs = node->second;
@@ -537,7 +538,7 @@ public:
         switch (rs.state) {
             case node_state::normal: {
                 if (_ss.is_me(id)) {
-                    co_return;
+                    return;
                 }
                 // In replace-with-same-ip scenario the replaced node IP will be the same
                 // as ours, we shouldn't put it into system.peers.
@@ -586,7 +587,6 @@ public:
             default:
             break;
         }
-        co_await when_all_succeed(sys_ks_futures.begin(), sys_ks_futures.end()).discard_result();
     }
 };
 
@@ -712,7 +712,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         auto ip = _address_map.find(host_id);
         co_await process_left_node(id, host_id, ip);
         if (ip) {
-            sys_ks_futures.push_back(_raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, nullptr));
+            _raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, nullptr, sys_ks_futures);
         }
     }
     for (const auto& [id, rs]: t.normal_nodes) {
@@ -722,7 +722,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         if (ip) {
             auto it = id_to_ip_map.find(host_id);
             bool notify = it == id_to_ip_map.end() || it->second != ip || !prev_normal.contains(id);
-            sys_ks_futures.push_back(_raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, notify ?  &nodes_to_notify : nullptr));
+            _raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, notify ?  &nodes_to_notify : nullptr, sys_ks_futures);
         }
     }
     for (const auto& [id, rs]: t.transition_nodes) {
@@ -730,7 +730,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
         auto ip = _address_map.find(host_id);
         co_await process_transition_node(id, host_id, ip, rs);
         if (ip) {
-            sys_ks_futures.push_back(_raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, nullptr));
+            _raft_system_peers_updater->update_node(host_id, *ip, id_to_ip_map, nullptr, sys_ks_futures);
         }
     }
     for (auto id : t.get_excluded_nodes()) {
