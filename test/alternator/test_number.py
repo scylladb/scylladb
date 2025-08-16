@@ -240,7 +240,7 @@ def test_invalid_numbers(test_table_s):
     # Note that client_no_transform, the number 3 should be passed as
     # {'N': '3'}.
     with client_no_transform(test_table_s.meta.client) as client:
-        for s in ['NaN', 'Infinity', '-Infinity', '-NaN', 'dog', '-dog', ' 1', '1 ']:
+        for s in ['NaN', 'Infinity', '-Infinity', '-NaN', 'dog', '-dog', ' 1', '1 ', '', '1e', '.', '+.']:
             with pytest.raises(ClientError, match='ValidationException.*numeric'):
                 client.update_item(TableName=test_table_s.name,
                     Key={'p': {'S': p}},
