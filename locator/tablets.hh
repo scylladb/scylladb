@@ -1048,6 +1048,7 @@ public:
     // Uses the copy-modify-swap idiom.
     // If func throws, no changes are done to the tablet map.
     future<> mutate_tablet_map_async(table_id, noncopyable_function<future<>(shared_tablet_map&, per_table_tablet_map&)> func);
+    future<> mutate_colocated_tablet_map_async(table_id id, noncopyable_function<future<>(const shared_tablet_map&, per_table_tablet_map&)> func);
 
     future<> clear_gently();
 public:
