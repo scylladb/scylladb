@@ -380,6 +380,18 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
     it->second = tablet_map_view { make_foreign(std::move(new_shared_map_ptr)), make_foreign(std::move(new_per_table_map_ptr)) };
 }
 
+future<> tablet_metadata::mutate_colocated_tablet_map_async(table_id id, noncopyable_function<future<>(const shared_tablet_map&, per_table_tablet_map&)> func) {
+    auto it = _tablets.find(id);
+    if (it == _tablets.end()) {
+        throw no_such_tablet_map(id);
+    }
+    const auto& shared_map = *it->second.shared;
+    auto per_table_map_copy = make_lw_shared<per_table_tablet_map>(co_await it->second.per_table->clone_gently());
+    co_await func(shared_map, *per_table_map_copy);
+    auto new_per_table_map_ptr = lw_shared_ptr<const per_table_tablet_map>(std::move(per_table_map_copy));
+    it->second.per_table = make_foreign(std::move(new_per_table_map_ptr));
+}
+
 future<tablet_metadata> tablet_metadata::copy() const {
     tablet_metadata copy;
     for (const auto& e : _tablets) {
