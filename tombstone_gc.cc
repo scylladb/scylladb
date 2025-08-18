@@ -278,7 +278,7 @@ static bool requires_repair_before_gc(data_dictionary::database db, sstring ks_n
     return rs.uses_tablets() && needs_repair_before_gc(*real_db_ptr, ks_name);
 }
 
-std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name) {
+std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name) {
     return {{"mode", requires_repair_before_gc(db, ks_name) ? "repair" : "timeout"}};
 }
 

@@ -154,5 +154,5 @@ public:
     [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_shared_state, false); }
 };
 
-std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name);
+std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name);
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name);
