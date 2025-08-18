@@ -139,6 +139,8 @@ public:
     // flushing memtable(s), so all data can be found in the SSTable set.
     future<> stop(sstring reason) noexcept;
 
+    bool stopped() const noexcept;
+
     bool empty() const noexcept;
 
     // This removes all the storage belonging to the group. In order to avoid data
