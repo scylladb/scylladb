@@ -20,6 +20,7 @@ target_sources(sstables
     sstables_manager.cc
     sstable_version.cc
     storage.cc
+    trie/bti_key_translation.cc
     trie/bti_node_reader.cc
     trie/bti_node_sink.cc
     trie/trie_writer.cc
