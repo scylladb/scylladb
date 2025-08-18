@@ -205,26 +205,26 @@ void set_cache_service(http_context& ctx, routes& r) {
     });
 
     cs::get_row_hits.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, uint64_t(0), [](const replica::column_family& cf) {
+        return map_reduce_cf(ctx.db, uint64_t(0), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.count();
         }, std::plus<uint64_t>());
     });
 
     cs::get_row_requests.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, uint64_t(0), [](const replica::column_family& cf) {
+        return map_reduce_cf(ctx.db, uint64_t(0), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.count() + cf.get_row_cache().stats().misses.count();
         }, std::plus<uint64_t>());
     });
 
     cs::get_row_hit_rate.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx, ratio_holder(), [](const replica::column_family& cf) {
+        return map_reduce_cf(ctx.db, ratio_holder(), [](const replica::column_family& cf) {
             return ratio_holder(cf.get_row_cache().stats().hits.count() + cf.get_row_cache().stats().misses.count(),
                     cf.get_row_cache().stats().hits.count());
         }, std::plus<ratio_holder>());
     });
 
     cs::get_row_hits_moving_avrage.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_raw(ctx, utils::rate_moving_average(), [](const replica::column_family& cf) {
+        return map_reduce_cf_raw(ctx.db, utils::rate_moving_average(), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.rate();
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
@@ -232,7 +232,7 @@ void set_cache_service(http_context& ctx, routes& r) {
     });
 
     cs::get_row_requests_moving_avrage.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_raw(ctx, utils::rate_moving_average(), [](const replica::column_family& cf) {
+        return map_reduce_cf_raw(ctx.db, utils::rate_moving_average(), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.rate() + cf.get_row_cache().stats().misses.rate();
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));

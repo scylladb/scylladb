@@ -55,14 +55,14 @@ table_info parse_table_info(const sstring& name, const replica::database& db) {
 
 future<json::json_return_type>  get_cf_stats(http_context& ctx, const sstring& name,
         int64_t replica::column_family_stats::*f) {
-    return map_reduce_cf(ctx, name, int64_t(0), [f](const replica::column_family& cf) {
+    return map_reduce_cf(ctx.db, name, int64_t(0), [f](const replica::column_family& cf) {
         return cf.get_stats().*f;
     }, std::plus<int64_t>());
 }
 
 future<json::json_return_type>  get_cf_stats(http_context& ctx,
         int64_t replica::column_family_stats::*f) {
-    return map_reduce_cf(ctx, int64_t(0), [f](const replica::column_family& cf) {
+    return map_reduce_cf(ctx.db, int64_t(0), [f](const replica::column_family& cf) {
         return cf.get_stats().*f;
     }, std::plus<int64_t>());
 }
