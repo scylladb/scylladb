@@ -665,7 +665,10 @@ struct tablet_metadata_builder {
     // when reading the tablet metadata of a co-located table, we store it in the map, and we apply
     // all co-located tables in on_end_of_stream. This is because we want to apply all normal tables first,
     // to ensure the base table tablet map is already present when we apply the co-located tables.
-    std::unordered_map<table_id, table_id> base_tables;
+    struct colocated_table_info_t {
+        table_id base_table;
+    };
+    std::unordered_map<table_id, colocated_table_info_t> colocated_table_info;
 
     void process_row(const cql3::untyped_result_set_row& row) {
         auto table = table_id(row.get_as<utils::UUID>("table_id"));
@@ -676,7 +679,7 @@ struct tablet_metadata_builder {
             }
             if (row.has("base_table")) {
                 auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
-                base_tables[table] = base_table;
+                colocated_table_info[table] = {.base_table = base_table};
                 current = {};
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
@@ -714,8 +717,8 @@ struct tablet_metadata_builder {
         }
         // Set co-located tables after setting all other tablet maps to ensure the tablet map
         // of the base table is found.
-        for (auto&& [table, base_table] : base_tables) {
-            co_await tm.set_colocated_table(table, base_table);
+        for (auto&& [table, cinfo] : colocated_table_info) {
+            co_await tm.set_colocated_table(table, cinfo.base_table);
         }
 
         for (auto& [table, tablet_token] : pending_update_repair_time) {
@@ -811,7 +814,7 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
     if (builder.current) {
         tm.set_tablet_map(builder.current->table, std::move(builder.current->map));
         builder.current = {};
-    } else if (builder.base_tables.contains(hint.table_id)) {
+    } else if (builder.colocated_table_info.contains(hint.table_id)) {
         // it's a co-located table. we handle it later, after processing all tables, by builder.on_end_of_stream().
     } else {
         tm.drop_tablet_map(hint.table_id);
