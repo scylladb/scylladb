@@ -140,6 +140,7 @@ static std::generator<position_in_partition_view> generate_pipvs(const schema& s
     constexpr auto alphabet = std::string_view("\x00\xff", 2);
     constexpr auto max_len = 2;
     auto all_strings = tests::generate_all_strings(alphabet, max_len);
+    co_yield position_in_partition_view::for_partition_start();
     co_yield position_in_partition_view::before_all_clustered_rows();
     for (const auto& ck1 : all_strings) {
         std::vector<data_value> components;
@@ -160,6 +161,7 @@ static std::generator<position_in_partition_view> generate_pipvs(const schema& s
         co_yield position_in_partition_view(ckp, bound_weight(1));
     }
     co_yield position_in_partition_view::after_all_clustered_rows();
+    co_yield position_in_partition_view::for_partition_end();
 }
 
 // Performs key conversion to BTI format for various keys,
