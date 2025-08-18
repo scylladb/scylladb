@@ -708,7 +708,7 @@ rest_describe_ring(http_context& ctx, sharded<service::storage_service>& ss, std
 static
 future<json::json_return_type>
 rest_get_load(http_context& ctx, std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
+        return get_cf_stats(ctx.db, &replica::column_family_stats::live_disk_space_used);
 }
 
 static
@@ -1327,7 +1327,7 @@ rest_set_hinted_handoff_throttle_in_kb(std::unique_ptr<http::request> req) {
 static
 future<json::json_return_type>
 rest_get_metrics_load(http_context& ctx, std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
+        return get_cf_stats(ctx.db, &replica::column_family_stats::live_disk_space_used);
 }
 
 static
