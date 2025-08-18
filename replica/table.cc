@@ -2710,6 +2710,10 @@ compaction_group_ptr compaction_group::make_empty_group(const compaction_group& 
     return make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
 }
 
+bool compaction_group::stopped() const noexcept {
+    return _async_gate.is_closed();
+}
+
 bool compaction_group::compaction_disabled() const {
     return std::ranges::all_of(all_views(), [this] (compaction::compaction_group_view* view) {
         return _t._compaction_manager.compaction_disabled(*view);
@@ -2738,6 +2742,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     co_await _flush_gate.close();
   // FIXME: indentation
   _compaction_disabler_for_views.clear();
+  co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
   for (auto view : all_views()) {
     co_await _t._compaction_manager.remove(*view, reason);
   }
@@ -3492,7 +3497,11 @@ future<> table::clear() {
 }
 
 bool storage_group::compaction_disabled() const {
-    return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
+    // Compaction group that has been stopped will be excluded, since the group will not be available for a caller
+    // to disable compaction explicitly on it, e.g. on truncate, and the caller might want to perform a check
+    // that compaction was disabled on all groups. Stopping a group is equivalent to disabling compaction on it.
+    return std::ranges::all_of(compaction_groups()
+            | std::views::filter(std::not_fn(&compaction_group::stopped)), [] (const_compaction_group_ptr& cg) {
         return cg->compaction_disabled(); });
 }
 
