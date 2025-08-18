@@ -104,6 +104,8 @@ public:
     // flushing memtable(s), so all data can be found in the SSTable set.
     future<> stop(sstring reason) noexcept;
 
+    bool stopped() const noexcept;
+
     bool empty() const noexcept;
 
     // This removes all the storage belonging to the group. In order to avoid data
@@ -192,6 +194,7 @@ public:
 
     compaction_manager& get_compaction_manager() noexcept;
     const compaction_manager& get_compaction_manager() const noexcept;
+    bool compaction_disabled() const;
 
     friend class storage_group;
 };

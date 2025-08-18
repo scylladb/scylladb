@@ -2462,6 +2462,10 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     _t._compaction_manager.add(as_table_state());
 }
 
+bool compaction_group::stopped() const noexcept {
+    return _async_gate.is_closed();
+}
+
 compaction_group::~compaction_group() {
     // Unclosed group is not tolerated since it might result in an use-after-free.
     if (!_t._compaction_manager.compaction_disabled(as_table_state())) {
@@ -2477,6 +2481,7 @@ future<> compaction_group::stop(sstring reason) noexcept {
     auto closed_gate_fut = _async_gate.close();
 
     auto flush_future = co_await seastar::coroutine::as_future(flush());
+    co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
     co_await _t._compaction_manager.remove(as_table_state(), reason);
 
     if (flush_future.failed()) {
@@ -3176,9 +3181,17 @@ future<> table::clear() {
     co_await _cache.invalidate(row_cache::external_updater([] { /* There is no underlying mutation source */ }));
 }
 
+bool compaction_group::compaction_disabled() const {
+    return _t._compaction_manager.compaction_disabled(as_table_state());
+}
+
 bool storage_group::compaction_disabled() const {
-    return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
-        return cg->get_compaction_manager().compaction_disabled(cg->as_table_state()); });
+    // Compaction group that has been stopped will be excluded, since the group will not be available for a caller
+    // to disable compaction explicitly on it, e.g. on truncate, and the caller might want to perform a check
+    // that compaction was disabled on all groups. Stopping a group is equivalent to disabling compaction on it.
+    return std::ranges::all_of(compaction_groups()
+            | std::views::filter(std::not_fn(&compaction_group::stopped)), [] (const_compaction_group_ptr& cg) {
+        return cg->compaction_disabled(); });
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
