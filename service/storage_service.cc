@@ -492,13 +492,22 @@ class storage_service::raft_system_peers_updater: public gms::i_endpoint_state_c
             (void)futurize_invoke(ensure_alive([this, id, h = _ss._async_gate.hold()]() -> future<> {
                 auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
-                auto nodes_to_notify = co_await update(nullptr, raft::server_id{id.uuid()});
-                co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
+                auto update_state = co_await update(nullptr, raft::server_id{id.uuid()});
+                co_await notify_nodes(std::move(update_state));
             }));
         }
     }
 
 public:
+    struct update_state {
+        const std::unordered_set<raft::server_id>* prev_normal;
+        host_id_to_ip_map_t host_id_to_ip_map;
+        using node_events = std::vector<std::pair<gms::inet_address, locator::host_id>>;
+        node_events left;
+        node_events joined;
+        std::vector<future<>> sys_ks_futures;
+    };
+
     raft_system_peers_updater(storage_service& ss)
         : _ss(ss)
     {}
@@ -518,7 +527,7 @@ public:
         return on_endpoint_change(endpoint, id, ep_state, permit_id, "on_restart");
     }
 
-    void update_node(locator::host_id id, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync& nodes_to_notify, std::vector<future<>>& sys_ks_futures, const std::unordered_set<raft::server_id>* prev_normal) {
+    void update_node(locator::host_id id, update_state& state) {
         if (_ss.is_me(id)) {
             return;
         }
@@ -534,9 +543,9 @@ public:
             // Emit 'left' events at the same time we remove the node from the
             // gossiper and from  the peers table. Next time this function is called
             // the node will no longer have an IP, ensuring the event is emitted only once.
-            sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(*new_ip));
-            sys_ks_futures.push_back(_ss._gossiper.force_remove_endpoint(id, gms::null_permit_id));
-            nodes_to_notify.left.push_back({*new_ip, id});
+            state.sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(*new_ip));
+            state.sys_ks_futures.push_back(_ss._gossiper.force_remove_endpoint(id, gms::null_permit_id));
+            state.left.push_back({*new_ip, id});
             return;
         }
 
@@ -563,22 +572,22 @@ public:
                     info->rack = rs.rack;
                     info->release_version = rs.release_version;
                     info->supported_features = fmt::to_string(fmt::join(rs.supported_features, ","));
-                    sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, *info));
+                    state.sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, *info));
                 }
 
-                auto it = host_id_to_ip_map.find(id);
-                if (it == host_id_to_ip_map.end() || it->second != *new_ip || (prev_normal && !prev_normal->contains(raft_id))) {
-                    nodes_to_notify.joined.emplace_back(*new_ip, id);
+                auto it = state.host_id_to_ip_map.find(id);
+                if (it == state.host_id_to_ip_map.end() || it->second != *new_ip || (state.prev_normal && !state.prev_normal->contains(raft_id))) {
+                    state.joined.emplace_back(*new_ip, id);
                 }
 
-                if (const auto it = host_id_to_ip_map.find(id); it != host_id_to_ip_map.end() && it->second != *new_ip) {
+                if (const auto it = state.host_id_to_ip_map.find(id); it != state.host_id_to_ip_map.end() && it->second != *new_ip) {
                     utils::get_local_injector().inject("crash-before-prev-ip-removed", [] {
                         slogger.info("crash-before-prev-ip-removed hit, killing the node");
                         _exit(1);
                     });
 
                     auto old_ip = it->second;
-                    sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(old_ip));
+                    state.sys_ks_futures.push_back(_ss._sys_ks.local().remove_endpoint(old_ip));
                 }
             }
             break;
@@ -603,38 +612,44 @@ public:
                 // In this case, we store only the IP <-> host_id mapping (leaving other columns empty) 
                 // to signal to drivers that the node is not yet ready to serve reads. Drivers skip 
                 // such 'incomplete' system.peers rows.
-                sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, {}));
+                state.sys_ks_futures.push_back(_ss._sys_ks.local().update_peer_info(*new_ip, id, {}));
             break;
             default:
             break;
         }
     }
 
-    future<nodes_to_notify_after_sync> update(const std::unordered_set<raft::server_id>* prev_normal, std::optional<raft::server_id> target) {
+    future<update_state> update(const std::unordered_set<raft::server_id>* prev_normal, std::optional<raft::server_id> target) {
         const auto& t = _ss._topology_state_machine._topology;
-
-        std::vector<future<>> sys_ks_futures;
-        nodes_to_notify_after_sync nodes_to_notify;
-        const auto id_to_ip_map = co_await _ss.get_host_id_to_ip_map();
+        update_state state{prev_normal, co_await _ss.get_host_id_to_ip_map()};
 
         if (target) {
             locator::host_id host_id{target->uuid()};
-            sys_ks_futures.reserve(1);
-            update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, prev_normal);
+            state.sys_ks_futures.reserve(1);
+            update_node(host_id, state);
         } else {
-            sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
+            state.sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
             for (const auto& id: t.left_nodes) {
                 locator::host_id host_id{id.uuid()};
-                update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, prev_normal);
+                update_node(host_id, state);
             }
             for (const auto& [id, rs]: boost::range::join(t.normal_nodes, t.transition_nodes)) {
                 locator::host_id host_id{id.uuid()};
-                update_node(host_id, id_to_ip_map, nodes_to_notify, sys_ks_futures, prev_normal);
+                update_node(host_id, state);
             }
         }
 
-        co_await when_all_succeed(std::move(sys_ks_futures));
-        co_return nodes_to_notify;
+        co_await when_all_succeed(std::move(state.sys_ks_futures));
+        co_return state;
+    }
+
+    future<> notify_nodes(update_state&& state) {
+        for (auto [ip, host_id] : state.left) {
+            co_await _ss.notify_left(ip, host_id);
+        }
+        for (auto [ip, host_id] : state.joined) {
+            co_await _ss.notify_joined(ip, host_id);
+        }
     }
 };
 
@@ -763,15 +778,6 @@ future<> storage_service::sync_raft_topology_nodes(mutable_token_metadata_ptr tm
     rtlogger.trace("End sync_raft_topology_nodes");
 }
 
-future<> storage_service::notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify) {
-    for (auto [ip, host_id] : nodes_to_notify.left) {
-        co_await notify_left(ip, host_id);
-    }
-    for (auto [ip, host_id] : nodes_to_notify.joined) {
-        co_await notify_joined(ip, host_id);
-    }
-}
-
 future<> storage_service::topology_state_load(state_change_hint hint) {
 #ifdef SEASTAR_DEBUG
     static bool running = false;
@@ -878,7 +884,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         tmptr->set_read_new(read_new);
 
         co_await sync_raft_topology_nodes(tmptr);
-        auto nodes_to_notify = co_await _raft_system_peers_updater->update(std::move(prev_normal));
+        auto peers_update_state = co_await _raft_system_peers_updater->update(&prev_normal, std::nullopt);
 
         std::optional<locator::tablet_metadata> tablets;
         if (hint.tablets_hint) {
@@ -893,7 +899,7 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         tmptr->set_tablets(std::move(*tablets));
 
         co_await replicate_to_all_cores(std::move(tmptr));
-        co_await notify_nodes_after_sync(&nodes_to_notify, std::nullopt);
+        co_await _raft_system_peers_updater->notify_nodes(std::move(peers_update_state));
         rtlogger.debug("topology_state_load: token metadata replication to all cores finished");
     }
 

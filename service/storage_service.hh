@@ -1015,19 +1015,11 @@ private:
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
-    struct nodes_to_notify_after_sync {
-        std::vector<std::pair<gms::inet_address, locator::host_id>> left;
-        std::vector<std::pair<gms::inet_address, locator::host_id>> joined;
-    };
-
     using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
     future<host_id_to_ip_map_t> get_host_id_to_ip_map();
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
     future<> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr);
-    // Triggers notifications (on_joined, on_left) based on the recent changes to token metadata, as described by the passed in structure.
-    // This function should be called on the result of `sync_raft_topology_nodes`, after the global token metadata is updated.
-    future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load(state_change_hint hint = {});
