@@ -81,3 +81,28 @@ private:
 };
 
 }
+
+template <>
+struct fmt::formatter<encryption::kms_host::host_options> : fmt::formatter<std::string_view> {
+    template <typename FormatContext>
+    auto format(const encryption::kms_host::host_options& opts, FormatContext& ctx) const {
+        return fmt::format_to(ctx.out(),
+                "endpoint: {}, host: {}, port: {}, https: {}, "
+                // open if needed: "aws_access_key_id: {}, aws_secret_access_key: {}, aws_session_token: {}, 
+                "aws_region: {}, aws_profile: {}, "
+                "aws_assume_role_arn: {}, aws_use_ec2_credentials: {}, "
+                "aws_use_ec2_region: {}, master_key: {}, "
+                "certfile: {}, keyfile: {}, truststore: {}, "
+                "priority_string: {}, key_cache_expiry: {}, key_cache_refresh: {}",
+                opts.endpoint, opts.host, opts.port, opts.https,
+                // open if needed: opts.aws_access_key_id, opts.aws_secret_access_key, opts.aws_session_token, 
+                opts.aws_region, opts.aws_profile,
+                opts.aws_assume_role_arn, opts.aws_use_ec2_credentials,
+                opts.aws_use_ec2_region, opts.master_key,
+                opts.certfile, opts.keyfile, opts.truststore,
+                opts.priority_string,
+                opts.key_cache_expiry ? std::to_string(opts.key_cache_expiry->count()) : "none",
+                opts.key_cache_refresh ? std::to_string(opts.key_cache_refresh->count()) : "none");
+    }
+};
+
