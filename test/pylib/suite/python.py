@@ -186,8 +186,8 @@ class PythonTest(Test):
             no_tests_selected_exit_code = 5
             self.valid_exit_codes = [0, no_tests_selected_exit_code]
 
-        if options.pytest_arg:
-            self.args += shlex.split(options.pytest_arg)
+        if pytest_arg := getattr(options, "pytest_arg", ""):
+            self.args += shlex.split(pytest_arg)
 
         arg = str(self.suite.suite_path / f"{self.shortname}{self.suite.test_file_ext}")
         if self.casename is not None:

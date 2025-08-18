@@ -15,8 +15,8 @@ import requests
 import re
 
 from test.alternator.util import create_test_table, is_aws, scylla_log
-from test.conftest import testpy_test_fixture_scope
 from test.cqlpy.conftest import host  # add required fixtures
+from test.pylib.runner import testpy_test_fixture_scope
 from test.pylib.suite.python import add_host_option
 from urllib.parse import urlparse
 from functools import cache
