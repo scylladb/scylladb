@@ -71,6 +71,22 @@ static shared_ptr<s3::client> make_minio_client(semaphore& mem) {
     return s3::client::make(tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"), make_lw_shared<s3::endpoint_config>(std::move(cfg)), mem);
 }
 
+static future<uint32_t> create_file(const std::string& path, size_t file_size) {
+    uint32_t ret_val = crc32_utils::init_checksum();
+    file f = co_await open_file_dma(path, open_flags::truncate | open_flags::create | open_flags::wo);
+    auto output = co_await make_file_output_stream(std::move(f));
+
+    for (size_t bytes_written = 0; bytes_written < file_size;) {
+        auto rnd = tests::random::get_bytes(std::min(file_size - bytes_written, 128_KiB));
+        const auto buff_pointer = reinterpret_cast<const char*>(rnd.data());
+        co_await output.write(buff_pointer, rnd.size());
+        ret_val = crc32_utils::checksum(ret_val, buff_pointer, rnd.size());
+        bytes_written += rnd.size();
+    }
+    co_await output.close();
+    co_return ret_val;
+}
+
 using client_maker_function = std::function<shared_ptr<s3::client>(semaphore&)>;
 
 /*
@@ -243,27 +259,7 @@ future<> test_client_upload_file(const client_maker_function& client_maker, std:
     tmpdir tmp;
     const auto file_path = tmp.path() / "test";
 
-    uint32_t expected_checksum = crc32_utils::init_checksum();
-
-    // 1. prefill the data file to be uploaded
-    {
-        file f = co_await open_file_dma(file_path.native(), open_flags::create | open_flags::wo);
-        auto output = co_await make_file_output_stream(std::move(f));
-        std::string_view data = "1234567890ABCDEF";
-        // so we can test !with_remainder case properly with multiple writes
-        SCYLLA_ASSERT(total_size % data.size() == 0);
-
-        for (size_t bytes_written = 0;
-             bytes_written < total_size;
-             bytes_written += data.size()) {
-            co_await output.write(data.data(), data.size());
-            uint32_t chunk_checksum = crc32_utils::checksum(data.data(), data.size());
-            expected_checksum = checksum_combine_or_feed<crc32_utils>(
-                expected_checksum, chunk_checksum, data.data(), data.size());
-        }
-        co_await output.close();
-    }
-
+    auto expected_checksum = co_await create_file(file_path, total_size);
     const auto object_name = fmt::format("/{}/{}-{}",
                                          tests::getenv_safe("S3_BUCKET_FOR_TEST"),
                                          test_name,
@@ -353,15 +349,7 @@ SEASTAR_THREAD_TEST_CASE(test_client_abort_stuck_semaphore) {
     tmpdir tmp;
     const auto file_path = tmp.path() / base_name;
 
-    file f = open_file_dma(file_path.native(), open_flags::create | open_flags::wo).get();
-    auto output = make_file_output_stream(std::move(f)).get();
-
-    for (size_t bytes_written = 0; bytes_written < object_size;) {
-        auto rnd = tests::random::get_bytes(std::min(object_size - bytes_written, 1024ul));
-        output.write(reinterpret_cast<char*>(rnd.data()), rnd.size()).get();
-        bytes_written += rnd.size();
-    }
-    output.close().get();
+    create_file(file_path, object_size).get();
 
     testlog.info("Make client\n");
     semaphore mem(32_KiB);
@@ -719,15 +707,7 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
     tmpdir tmp;
     const auto file_path = tmp.path() / base_name;
 
-    file f = open_file_dma(file_path.native(), open_flags::create | open_flags::wo).get();
-    auto output = make_file_output_stream(std::move(f)).get();
-
-    for (size_t bytes_written = 0; bytes_written < object_size;) {
-        auto rnd = tests::random::get_bytes(std::min(object_size - bytes_written, 1024ul));
-        output.write(reinterpret_cast<char*>(rnd.data()), rnd.size()).get();
-        bytes_written += rnd.size();
-    }
-    output.close().get();
+    create_file(file_path, object_size).get();
 
     testlog.info("Make client\n");
     semaphore mem(16 << 20);
@@ -804,15 +784,7 @@ void do_test_chunked_download_data_source_memory(const client_maker_function& cl
     tmpdir tmp;
     const auto file_path = tmp.path() / base_name;
 
-    file f = open_file_dma(file_path.native(), open_flags::create | open_flags::wo).get();
-    auto output = make_file_output_stream(std::move(f)).get();
-
-    for (size_t bytes_written = 0; bytes_written < object_size;) {
-        auto rnd = tests::random::get_bytes(std::min(object_size - bytes_written, 1024ul));
-        output.write(reinterpret_cast<char*>(rnd.data()), rnd.size()).get();
-        bytes_written += rnd.size();
-    }
-    output.close().get();
+    create_file(file_path, object_size).get();
 
     testlog.info("Make client\n");
     semaphore mem(1_MiB);
