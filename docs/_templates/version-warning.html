@@ -1,4 +1,6 @@
-{% if flag != "manual" %}
+{% if 'upgrade/upgrade-guides/' in pagename %}
+    {# Do not show any version warning for upgrade guide pages #}
+{% elif flag != "manual" %}
 <div class="admonition caution">
     <p class="admonition-title">Caution</p>
     <p>
