@@ -34,6 +34,7 @@ target_sources(db
     view/view.cc
     view/view_update_generator.cc
     view/row_locking.cc
+    view/view_building_state.cc
     sstables-format-selector.cc
     snapshot-ctl.cc
     snapshot/backup_task.cc
