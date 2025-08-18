@@ -670,13 +670,18 @@ struct tablet_metadata_builder {
     };
     std::unordered_map<table_id, colocated_table_info_t> colocated_table_info;
 
+    void flush_current() {
+        if (current) {
+            tm.set_tablet_map(current->table, std::move(current->map));
+        }
+    }
+
     void process_row(const cql3::untyped_result_set_row& row) {
         auto table = table_id(row.get_as<utils::UUID>("table_id"));
 
         if (!current || current->table != table) {
-            if (current) {
-                tm.set_tablet_map(current->table, std::move(current->map));
-            }
+            flush_current();
+
             if (row.has("base_table")) {
                 auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
                 colocated_table_info[table] = {.base_table = base_table};
@@ -712,9 +717,8 @@ struct tablet_metadata_builder {
     }
 
     future<> on_end_of_stream(replica::database& db) {
-        if (current) {
-            tm.set_tablet_map(current->table, std::move(current->map));
-        }
+        flush_current();
+
         // Set co-located tables after setting all other tablet maps to ensure the tablet map
         // of the base table is found.
         for (auto&& [table, cinfo] : colocated_table_info) {
@@ -812,7 +816,7 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
                 return make_ready_future<stop_iteration>(stop_iteration::no);
             });
     if (builder.current) {
-        tm.set_tablet_map(builder.current->table, std::move(builder.current->map));
+        builder.flush_current();
         builder.current = {};
     } else if (builder.colocated_table_info.contains(hint.table_id)) {
         // it's a co-located table. we handle it later, after processing all tables, by builder.on_end_of_stream().
