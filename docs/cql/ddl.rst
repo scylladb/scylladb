@@ -173,6 +173,11 @@ sub-option                             type  description
                                              may prevent creating tables in that keyspace. 
 ===================================== ====== =============================================
 
+If no datacenters are specified, and ``replication_factor`` is left unspecified,
+then every rack in every datacenter receives a replica, except for racks comprised
+of only :doc:`zero-token nodes </architecture/zero-token-nodes>`. Racks added after
+the keyspace creation do not receive replicas.
+
 Note that when ``ALTER`` ing keyspaces and supplying ``replication_factor``,
 auto-expansion will only *add* new datacenters for safety, it will not alter
 existing datacenters or remove any even if they are no longer in the cluster.
@@ -211,6 +216,22 @@ An example that excludes class and uses only datacenter options::
 
     DESCRIBE KEYSPACE excalibur
         CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3'} AND durable_writes = true;
+
+An example that excludes datacenter options and uses only class::
+
+    CREATE KEYSPACE excalibur
+        WITH replication = {'class': 'NetworkTopologyStrategy'} ;
+
+    DESCRIBE KEYSPACE excalibur
+        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3', 'DC2': '2'} AND durable_writes = true;
+
+An example that excludes both class and datacenter options::
+
+    CREATE KEYSPACE excalibur
+        WITH replication = {} ;
+
+    DESCRIBE KEYSPACE excalibur
+        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3', 'DC2': '2'} AND durable_writes = true;
 
 .. _tablets:
 
