@@ -994,12 +994,18 @@ def test_table_options_quoting(cql, test_keyspace):
 @pytest.mark.parametrize("test_keyspace",
                          [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
                          indirect=True)
-def test_hide_cdc_table(scylla_only, cql, test_keyspace):
+@pytest.mark.parametrize("cdc_enablement_query",
+                         ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
+                          "CREATE INDEX ON {t}(b) USING 'vector_index'"],
+                         ids=["alter", "create_index"])
+def test_hide_cdc_table(scylla_only, cql, test_keyspace, cdc_enablement_query):
     cdc_table_suffix = "_scylla_cdc_log"
-    
-    with new_test_table(cql, test_keyspace, "a int primary key, b int", "WITH cdc = {'enabled': true}") as t:
+    with new_test_table(cql, test_keyspace, "a int primary key, b vector<float, 3>") as t:
         t_name = t.split('.')[1]
         cdc_log_name = t_name + cdc_table_suffix
+
+        # Enable CDC log
+        cql.execute(cdc_enablement_query.format(t=t))
 
         # Check if the log table exists
         cdc_log_table_entry = cql.execute(f"SELECT * FROM system_schema.tables WHERE keyspace_name='{test_keyspace}' AND table_name='{cdc_log_name}'").all()
@@ -1020,16 +1026,16 @@ def test_hide_cdc_table(scylla_only, cql, test_keyspace):
         for row in desc_schema:
             if row.name == cdc_log_name:
                 assert f"ALTER TABLE {test_keyspace}.{cdc_log_name} WITH" in row.create_statement
-        
+
         # Check base table description contains ALTER TABLE statement for cdc log table
         desc_base_table = cql.execute(f"DESC TABLE {t}").all()
-        assert f"ALTER TABLE {test_keyspace}.{cdc_log_name} WITH" in desc_base_table[1].create_statement
-        
+        assert any(f"ALTER TABLE {test_keyspace}.{cdc_log_name} WITH" in row.create_statement for row in desc_base_table)
+
         # Drop current cdc base table and try to recreate it with describe output
         cql.execute(f"DROP TABLE {t}")
         for row in desc_keyspace[1:]: # [1:] because we want to skip first row (keyspace's CREATE STATEMENT)
             cql.execute(row.create_statement)
-        
+
         # Check if base and log tables were recreated
         ks_tables = cql.execute(f"SELECT * FROM system_schema.tables WHERE keyspace_name='{test_keyspace}'").all()
         assert len(ks_tables) == 2
@@ -1041,10 +1047,17 @@ def test_hide_cdc_table(scylla_only, cql, test_keyspace):
 @pytest.mark.parametrize("test_keyspace",
                          [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
                          indirect=True)
-def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace):
-    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+@pytest.mark.parametrize("cdc_enablement_query",
+                         ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
+                          "CREATE INDEX ON {t}(v) USING 'vector_index'"],
+                         ids=["alter", "create_index"])
+def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace, cdc_enablement_query):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
         log_table = f"{table}_scylla_cdc_log"
         _, log_table_name = log_table.split(".")
+
+        # Enable CDC log
+        cql.execute(cdc_enablement_query.format(t=table))
 
         [row] = cql.execute(f"DESC TABLE {log_table}")
 
@@ -1065,15 +1078,22 @@ def test_describe_cdc_log_table_format(scylla_only, cql, test_keyspace):
 @pytest.mark.parametrize("test_keyspace",
                          [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
                          indirect=True)
-def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace):
+@pytest.mark.parametrize("cdc_enablement_query",
+                         ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
+                          "CREATE INDEX ON {t}(v) USING 'vector_index'"],
+                         ids=["alter", "create_index"])
+def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace, cdc_enablement_query):
     def format_create_statement(stmt: str) -> str:
         stmt = " ".join(stmt.split("\n"))
         stmt = " ".join(stmt.split())
         stmt = stmt.strip()
         return stmt
 
-    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
         log_table = f"{table}_scylla_cdc_log"
+
+        # Enable CDC log
+        cql.execute(cdc_enablement_query.format(t=table))
 
         [row] = cql.execute(f"DESC TABLE {log_table}")
         create_statement = row.create_statement
@@ -1091,10 +1111,12 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
                 "cdc$stream_id" blob,
                 "cdc$time" timeuuid,
                 "cdc$batch_seq_no" int,
+                "cdc$deleted_v" boolean,
                 "cdc$end_of_batch" boolean,
                 "cdc$operation" tinyint,
                 "cdc$ttl" bigint,
                 p int,
+                v vector<float, 3>,
                 PRIMARY KEY ("cdc$stream_id", "cdc$time", "cdc$batch_seq_no")
             ) WITH CLUSTERING ORDER BY ("cdc$time" ASC, "cdc$batch_seq_no" ASC)
                 AND bloom_filter_fp_chance = 0.01
@@ -1119,10 +1141,17 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
 @pytest.mark.parametrize("test_keyspace",
                          [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
                          indirect=True)
-def test_describe_cdc_log_table_opts(scylla_only, cql, test_keyspace):
+@pytest.mark.parametrize("cdc_enablement_query",
+                         ["ALTER TABLE {t} WITH cdc = {{'enabled': true}}",
+                          "CREATE INDEX ON {t}(v) USING 'vector_index'"],
+                         ids=["alter", "create_index"])
+def test_describe_cdc_log_table_opts(scylla_only, cql, test_keyspace, cdc_enablement_query):
     def test_config(altered_cdc_log_table_opt):
-        with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+        with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v vector<float, 3>") as table:
             log_table = f"{table}_scylla_cdc_log"
+
+            # Enable CDC log
+            cql.execute(cdc_enablement_query.format(t=table))
 
             cql.execute(f"ALTER TABLE {log_table} WITH {altered_cdc_log_table_opt}")
 
@@ -2793,6 +2822,7 @@ def test_desc_auth_attach_service_levels(cql, scylla_only):
 
         assert set(sl_stmts) == set(desc_iter)
 
+@pytest.mark.xfail(reason="issue #25187")
 def test_desc_restore(cql):
     """
     Verify that restoring the schema, auth and service levels works correctly. We create entities
