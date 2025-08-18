@@ -42,7 +42,6 @@ public:
     virtual future<> abort(tasks::task_id id, tasks::virtual_task_hint hint) noexcept override;
     virtual future<std::vector<tasks::task_stats>> get_stats() override;
 private:
-    std::vector<table_id> get_table_ids() const;
     future<std::optional<status_helper>> get_status_helper(tasks::task_id id, tasks::virtual_task_hint hint);
 };
 
