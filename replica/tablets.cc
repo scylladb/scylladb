@@ -655,9 +655,15 @@ struct tablet_metadata_builder {
     utils::chunked_vector<std::pair<table_id, token>> pending_update_repair_time;
 
     struct active_tablet_map {
+        struct base_tablet_map {
+            tablet_map map;
+            tablet_id tid;
+        };
+        struct colocated_tablet_map {
+            table_id base_table;
+        };
         table_id table;
-        tablet_map map;
-        tablet_id tid;
+        std::variant<base_tablet_map, colocated_tablet_map> v;
     };
     std::optional<active_tablet_map> current;
 
@@ -672,7 +678,16 @@ struct tablet_metadata_builder {
 
     void flush_current() {
         if (current) {
-            tm.set_tablet_map(current->table, std::move(current->map));
+            std::visit(overloaded_functor {
+                [&] (active_tablet_map::base_tablet_map&& base_map) {
+                    tm.set_tablet_map(current->table, std::move(base_map.map));
+                },
+                [&] (active_tablet_map::colocated_tablet_map&& colocated_map) {
+                    colocated_table_info[current->table] = {
+                        .base_table = colocated_map.base_table
+                    };
+                }
+            }, std::move(current->v));
         }
     }
 
@@ -684,14 +699,17 @@ struct tablet_metadata_builder {
 
             if (row.has("base_table")) {
                 auto base_table = table_id(row.get_as<utils::UUID>("base_table"));
-                colocated_table_info[table] = {.base_table = base_table};
-                current = {};
+                current = active_tablet_map{table, active_tablet_map::colocated_tablet_map{base_table}};
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
                 auto tmap = tablet_map(tablet_count);
                 auto first_tablet = tmap.first_tablet();
-                current = active_tablet_map{table, std::move(tmap), first_tablet};
+                current = active_tablet_map{table, active_tablet_map::base_tablet_map{std::move(tmap), first_tablet}};
             }
+
+          // TODO fix indent
+          if (std::holds_alternative<active_tablet_map::base_tablet_map>(current->v)) {
+            auto& current_map = std::get<active_tablet_map::base_tablet_map>(current->v).map;
 
             // Resize decision fields are static columns, so set them only once per table.
             if (row.has("resize_type") && row.has("resize_seq_number")) {
@@ -699,20 +717,28 @@ struct tablet_metadata_builder {
                 int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
 
                 locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
-                current->map.set_resize_decision(std::move(resize_decision));
+                current_map.set_resize_decision(std::move(resize_decision));
             }
             if (row.has("resize_task_info")) {
-                current->map.set_resize_task_info(deserialize_tablet_task_info(row.get_view("resize_task_info")));
+                current_map.set_resize_task_info(deserialize_tablet_task_info(row.get_view("resize_task_info")));
             }
 
             if (row.has("repair_scheduler_config")) {
                 auto config = deserialize_repair_scheduler_config(row.get_view("repair_scheduler_config"));
-                current->map.set_repair_scheduler_config(std::move(config));
+                current_map.set_repair_scheduler_config(std::move(config));
             }
+          }
         }
 
         if (row.has("last_token")) {
-            current->tid = process_one_row(current->table, current->map, current->tid, row, pending_update_repair_time);
+            std::visit(overloaded_functor {
+                [&] (active_tablet_map::base_tablet_map& base_map) {
+                    base_map.tid = process_one_row(current->table, base_map.map, base_map.tid, row, pending_update_repair_time);
+                },
+                [&] (active_tablet_map::colocated_tablet_map& colocated_map) {
+                    // TODO MICHAEL process rows for colocated tables
+                }
+            }, current->v);
         }
     }
 
@@ -818,8 +844,6 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
     if (builder.current) {
         builder.flush_current();
         builder.current = {};
-    } else if (builder.colocated_table_info.contains(hint.table_id)) {
-        // it's a co-located table. we handle it later, after processing all tables, by builder.on_end_of_stream().
     } else {
         tm.drop_tablet_map(hint.table_id);
     }
