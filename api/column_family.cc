@@ -455,12 +455,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         }, std::plus<int64_t>());
     });
 
-    cf::get_memtable_switch_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, req->get_path_param("name") ,&replica::column_family_stats::memtable_switch_count);
+    cf::get_memtable_switch_count.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, req->get_path_param("name") ,&replica::column_family_stats::memtable_switch_count);
     });
 
-    cf::get_all_memtable_switch_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, &replica::column_family_stats::memtable_switch_count);
+    cf::get_all_memtable_switch_count.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, &replica::column_family_stats::memtable_switch_count);
     });
 
     // FIXME: this refers to partitions, not rows.
@@ -504,12 +504,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         return make_ready_future<json::json_return_type>(0);
     });
 
-    cf::get_pending_flushes.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, req->get_path_param("name") ,&replica::column_family_stats::pending_flushes);
+    cf::get_pending_flushes.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, req->get_path_param("name") ,&replica::column_family_stats::pending_flushes);
     });
 
-    cf::get_all_pending_flushes.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, &replica::column_family_stats::pending_flushes);
+    cf::get_all_pending_flushes.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, &replica::column_family_stats::pending_flushes);
     });
 
     cf::get_read.set(r, [&db] (std::unique_ptr<http::request> req) {
@@ -580,12 +580,12 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         }, std::plus<int64_t>());
     });
 
-    cf::get_live_ss_table_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, req->get_path_param("name"), &replica::column_family_stats::live_sstable_count);
+    cf::get_live_ss_table_count.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, req->get_path_param("name"), &replica::column_family_stats::live_sstable_count);
     });
 
-    cf::get_all_live_ss_table_count.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, &replica::column_family_stats::live_sstable_count);
+    cf::get_all_live_ss_table_count.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, &replica::column_family_stats::live_sstable_count);
     });
 
     cf::get_unleveled_sstables.set(r, [&db] (std::unique_ptr<http::request> req) {
