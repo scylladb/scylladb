@@ -303,7 +303,9 @@ BOOST_AUTO_TEST_CASE(test_lcb_mismatch) {
                     fmt_fragmented_buffer{fragments_a},
                     fmt_fragmented_buffer{fragments_b});
                 auto generator_from_range = [&](auto& r) -> std::generator<std::ranges::range_value_t<decltype(r)>> {
-                    co_yield std::ranges::elements_of(r);
+                    for (auto e : r) {
+                        co_yield e;
+                    }
                 };
                 return sstables::trie::lcb_mismatch(
                     generator_from_range(fragments_a).begin(),
