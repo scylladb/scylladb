@@ -110,6 +110,7 @@ public:
     void pad_to_page_boundary();
     // Returns the position reported by the underlying `file_writer`.
     sink_pos pos() const;
+    sstables::file_writer& file_writer();
 };
 static_assert(trie_writer_sink<bti_node_sink>);
 

@@ -106,6 +106,7 @@ public:
     // Flushes all remaining nodes and returns the position of the root node.
     // The position is valid iff at least one key was added.
     sink_pos finish();
+    Output& sink();
 };
 
 template <trie_writer_sink Output>
@@ -444,6 +445,11 @@ inline sink_pos trie_writer<Output>::finish() {
     reset_root();
 
     return root_pos;
+}
+
+template <trie_writer_sink Output>
+inline Output& trie_writer<Output>::sink() {
+    return _out;
 }
 
 } // namespace sstables::trie
