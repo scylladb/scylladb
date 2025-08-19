@@ -45,5 +45,6 @@ run_in_dev:
   - dtest/bypass_cache_test
   - dtest/auth_roles_test
   - dtest/audit_test
+  - dtest/commitlog_test
 run_in_debug:
   - random_failures/test_random_failures

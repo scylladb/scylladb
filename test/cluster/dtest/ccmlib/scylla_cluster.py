@@ -226,6 +226,9 @@ class ScyllaCluster:
                 self.manager.server_update_config(server_id=node.server_id, config_options=values)
         return self
 
+    def flush(self) -> None:
+        self.nodetool("flush")
+
     @staticmethod
     def debug(message: str) -> None:
         logger.debug(message)
