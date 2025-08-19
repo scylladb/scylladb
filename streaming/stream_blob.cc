@@ -140,13 +140,13 @@ future<> stream_blob_handler(replica::database& db,
 
     // Will log a message when streaming is done. Used to synchronize tests.
     lw_shared_ptr<std::any> log_done;
-    if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
-        log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
-            blogger.info("stream_mutation_fragments: done (tablets)");
-        })));
-    }
 
     try {
+        if (utils::get_local_injector().is_enabled("stream_mutation_fragments")) {
+            log_done = make_lw_shared<std::any>(seastar::make_shared(seastar::defer([] {
+                blogger.info("stream_mutation_fragments: done (tablets)");
+            })));
+        }
         auto status = get_tablet_stream(meta.ops_id);
         auto guard = service::topology_guard(meta.topo_guard);
 
@@ -243,8 +243,6 @@ future<> stream_blob_handler(replica::database& db,
         error = std::current_exception();
     }
     if (error) {
-        blogger.warn("fstream[{}] Follower failed peer={} file={} received_size={} bw={} error={}",
-                meta.ops_id, from, meta.filename, total_size, get_bw(total_size, start_time), error);
         if (!fstream_closed) {
             try {
                 if (fstream) {
@@ -301,6 +299,8 @@ future<> stream_blob_handler(replica::database& db,
                     meta.ops_id, meta.filename, std::current_exception());
         }
 
+        blogger.warn("fstream[{}] Follower failed peer={} file={} received_size={} bw={} error={}",
+                meta.ops_id, from, meta.filename, total_size, get_bw(total_size, start_time), error);
         // Do not call rethrow_exception(error) because the caller could do nothing but log
         // the error. We have already logged the error here.
     } else {
