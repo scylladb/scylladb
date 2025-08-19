@@ -172,7 +172,7 @@ public:
 
     future<> move_to(utils::chunked_vector<frozen_mutation_and_schema>& mutations);
 
-    void generate_update(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
+    future<> generate_update(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, const std::optional<clustering_or_static_row>& existing, gc_clock::time_point now);
     bool generate_partition_tombstone_update(data_dictionary::database db, const partition_key& base_key, tombstone partition_tomb);
 
     size_t op_count() const;
@@ -243,8 +243,8 @@ public:
     future<> close() noexcept;
 
 private:
-    void generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
-    void generate_update(static_row&& update, const tombstone& update_tomb, std::optional<static_row>&& existing, const tombstone& existing_tomb);
+    future<> generate_update(clustering_row&& update, std::optional<clustering_row>&& existing);
+    future<> generate_update(static_row&& update, const tombstone& update_tomb, std::optional<static_row>&& existing, const tombstone& existing_tomb);
     future<stop_iteration> on_results();
 
     future<stop_iteration> advance_all();
