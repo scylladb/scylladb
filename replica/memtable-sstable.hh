@@ -17,7 +17,6 @@
 
 class mutation_reader;
 class reader_permit;
-class tombstone_gc;
 
 namespace sstables {
 class sstables_manager;
@@ -38,7 +37,6 @@ write_memtable_to_sstable(mutation_reader reader,
 
 seastar::future<>
 write_memtable_to_sstable(memtable& mt,
-        sstables::shared_sstable sst,
-        tombstone_gc gc);
+        sstables::shared_sstable sst);
 
 }
