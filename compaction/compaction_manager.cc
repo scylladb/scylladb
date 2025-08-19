@@ -270,7 +270,23 @@ std::vector<std::ranges::range_value_t<Range>> compaction_manager::get_candidate
             | std::views::transform(std::mem_fn(&compaction_task_executor::output_run_id))
             | std::ranges::to<std::unordered_set>();
 
-    // Filter out sstables that are being compacted.
+    // When compact-on-flush is enabled for a table, tombstones which are eligible
+    // for GC but are blocked by CommitLog are written to a GC sstable.
+    // We expect these sstables to be fully expired and droppable soon.
+    // No point in compacting them, wait until the CL segments blocking them are
+    // released, after that we can simply drop them.
+    auto fully_expired_not_considering_cl = [this, gc_state_no_cl = _tombstone_gc_state.with_commitlog_check_disabled(), compaction_time = gc_clock::now()] (const sstables::shared_sstable& sst) {
+        // For now we limit this to flushed sstables.
+        if (sst->get_origin() != "memtable") {
+            return false;
+        }
+        const auto gc_before_with_cl = sst->get_gc_before_for_fully_expire(compaction_time, _tombstone_gc_state, sst->get_schema());
+        const auto gc_before_no_cl = sst->get_gc_before_for_fully_expire(compaction_time, gc_state_no_cl, sst->get_schema());
+        const auto deletion_time = sst->get_max_local_deletion_time();
+        return deletion_time < gc_before_no_cl && deletion_time >= gc_before_with_cl;
+    };
+
+    // Filter out sstables that are being compacted and those that are not worth compacting.
     for (const auto& sst : sstables) {
         if (!eligible_for_compaction(sst)) {
             continue;
@@ -278,8 +294,20 @@ std::vector<std::ranges::range_value_t<Range>> compaction_manager::get_candidate
         if (partial_run_identifiers.contains(sst->run_identifier())) {
             continue;
         }
+        // No point in compacting expired sstables that are only blocked by CL,
+        // we will drop them later when the CL segments blocking them are released.
+        if constexpr (std::convertible_to<std::ranges::range_value_t<Range>, sstables::shared_sstable>) {
+            if (fully_expired_not_considering_cl(sst)) {
+                continue;
+            }
+        } else {
+            if (std::ranges::all_of(sst->all(), fully_expired_not_considering_cl)) {
+                continue;
+            }
+        }
         candidates.push_back(sst);
     }
+
     return candidates;
 }
 
