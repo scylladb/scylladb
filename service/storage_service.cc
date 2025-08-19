@@ -6623,11 +6623,6 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // Currently tablet repair works only on base tables.
-        if (!get_token_metadata().tablets().is_base_table(table)) {
-            throw std::runtime_error("Can't set repair request on a co-located table");
-        }
-
         auto& tmap = get_token_metadata().tablets().get_tablet_map_view(table);
         utils::chunked_vector<canonical_mutation> updates;
 
@@ -6650,7 +6645,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             }
             auto last_token = tmap.get_last_token(tid);
             updates.emplace_back(
-                tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+                replica::tablet_mutation_builder(guard.write_timestamp(), table)
                     .set_repair_task_info(last_token, repair_task_info, _feature_service)
                     .build());
         }
@@ -6703,11 +6698,6 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // Currently tablet repair requests can be set only on base tables.
-        if (!get_token_metadata().tablets().is_base_table(table)) {
-            throw std::runtime_error("Can't set repair request on a co-located table");
-        }
-
         auto& tmap = get_token_metadata().tablets().get_tablet_map_view(table);
         utils::chunked_vector<canonical_mutation> updates;
 
@@ -6718,7 +6708,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             }
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
-            auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+            auto update = replica::tablet_mutation_builder(guard.write_timestamp(), table)
                             .del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
