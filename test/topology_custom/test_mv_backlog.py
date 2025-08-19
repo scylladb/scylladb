@@ -46,7 +46,7 @@ async def test_view_backlog_increased_after_write(manager: ManagerClient) -> Non
             await cql.run_async(f"INSERT INTO {ks}.tab (base_key, view_key, v) VALUES ({v}, {v}, '{v*'a'}')")
             # The view update backlog should increase on the node generating view updates
             local_metrics = await manager.metrics.query(servers[0].ip_addr)
-            view_backlog = local_metrics.get('scylla_storage_proxy_replica_view_update_backlog', shard=str(shard))
+            view_backlog = local_metrics.get('scylla_storage_proxy_replica_view_update_backlog', {'shard':str(shard)})
             # The read view_backlog might still contain backlogs from the previous iterations, so we only assert that it is large enough
             assert view_backlog > v
 
@@ -147,8 +147,8 @@ async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> Non
 
             # Measure the total delay before the second write, and the number of delayed writes
             local_metrics = await manager.metrics.query(srv_base.ip_addr)
-            before_computed_delay = local_metrics.get(delay_metric_name, shard=str(shard)) or 0.0
-            before_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, shard=str(shard)) or 0.0
+            before_computed_delay = local_metrics.get(delay_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
+            before_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
 
             # Do the second write, as mentioned previously
             await cql.run_async(stmt, [0, 0, ''], host=host_base)
@@ -156,8 +156,8 @@ async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> Non
             # Make sure that there is exactly one throttled write and calculate a delay for it.
             # If we're testing the 0ms delay, instead make sure that there were no delayed writes.
             local_metrics = await manager.metrics.query(srv_base.ip_addr)
-            after_computed_delay = local_metrics.get(delay_metric_name, shard=str(shard)) or 0.0
-            after_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, shard=str(shard)) or 0.0
+            after_computed_delay = local_metrics.get(delay_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
+            after_total_throttled_writes = local_metrics.get(throttled_writes_metric_name, {'scheduling_group_name': 'sl:default', 'shard': str(shard)}) or 0.0
 
             if delay_limit == 0:
                 assert after_total_throttled_writes == before_total_throttled_writes
@@ -171,7 +171,7 @@ async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> Non
             await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "never_finish_remote_view_updates") for s in servers))
             async def view_updates_drained():
                 local_metrics = await manager.metrics.query(srv_base.ip_addr)
-                backlog = local_metrics.get('scylla_storage_proxy_replica_view_update_backlog', shard=str(shard))
+                backlog = local_metrics.get('scylla_storage_proxy_replica_view_update_backlog', {'shard':str(shard)})
                 if backlog == 0:
                     return True
             await wait_for(view_updates_drained, deadline=time.time() + 30.0)
