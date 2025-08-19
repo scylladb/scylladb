@@ -39,6 +39,7 @@ class server;
 // member function to perform request processing. This base class provides a
 // `_read_buf` and a `_write_buf` for reading requests and writing responses.
 class connection : public boost::intrusive::list_base_hook<> {
+    friend class server;
 public:
     using connection_process_loop = noncopyable_function<future<> ()>;
     using execute_under_tenant_type = noncopyable_function<future<> (connection_process_loop)>;
@@ -61,6 +62,8 @@ protected:
 
 private:
     future<> process_until_tenant_switch();
+    bool shutdown_input();
+    bool shutdown_output();
 public:
     connection(server& server, connected_socket&& fd, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units);
     virtual ~connection();
@@ -82,6 +85,7 @@ public:
 
 struct config {
     utils::updateable_value<uint32_t> uninitialized_connections_semaphore_cpu_concurrency;
+    utils::updateable_value<uint32_t> shutdown_timeout_in_seconds;
 };
 
 // A generic TCP socket server.
@@ -125,10 +129,11 @@ private:
     utils::observer<uint32_t> _conns_cpu_concurrency_observer;
     uint32_t _prev_conns_cpu_concurrency;
     named_semaphore _conns_cpu_concurrency_semaphore;
+    std::chrono::seconds _shutdown_timeout;
 public:
     server(const sstring& server_name, logging::logger& logger, config cfg);
 
-    virtual ~server();
+    virtual ~server() = default;
 
     // Makes sure listening sockets no longer generate new connections and aborts the
     // connected sockets, so that new requests are not served and existing requests don't
@@ -139,9 +144,9 @@ public:
     future<> shutdown();
     future<> stop();
 
-    future<> listen(socket_address addr, 
-        std::shared_ptr<seastar::tls::credentials_builder> creds, 
-        bool is_shard_aware, bool keepalive, 
+    future<> listen(socket_address addr,
+        std::shared_ptr<seastar::tls::credentials_builder> creds,
+        bool is_shard_aware, bool keepalive,
         std::optional<file_permissions> unix_domain_socket_permissions,
         std::function<server&()> get_shard_instance = {}
         );
