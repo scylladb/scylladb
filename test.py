@@ -11,9 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import shlex
-import socket
 from random import randint
 
 from types import SimpleNamespace
@@ -37,7 +35,7 @@ import humanfriendly
 import treelib
 
 from scripts import coverage
-from test import ALL_MODES, TOP_SRC_DIR, path_to, TEST_DIR
+from test import ALL_MODES, HOST_ID, TOP_SRC_DIR, path_to, TEST_DIR
 from test.pylib import coverage_utils
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
@@ -293,13 +291,12 @@ async def find_tests(options: argparse.Namespace) -> None:
 
 def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]:
     # When tests are executed in parallel on different hosts, we need to distinguish results from them.
-    # So this host_id needed to not overwrite results from different hosts during Jenkins will copy to one directory.
-    hostname = socket.gethostname()
-    host_id = hashlib.sha3_224((hostname + str(time.time())).encode('utf-8')).hexdigest()[:5]
+    # So HOST_ID needed to not overwrite results from different hosts during Jenkins will copy to one directory.
+
     failed_tests = []
     temp_dir = pathlib.Path(options.tmpdir).absolute()
     report_dir =  temp_dir / 'report'
-    junit_output_file = report_dir / f'pytest_cpp_{host_id}.xml'
+    junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
     files_to_run = []
     for name in options.name:
         file_name = name
@@ -329,7 +326,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             f'-n{int(options.jobs)}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
-            f'--alluredir={report_dir / f"allure_{host_id}"}',
+            f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
             '-v' if options.verbose else '-q',
         ])
     if options.pytest_arg:

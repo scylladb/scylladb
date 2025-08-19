@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import psutil
 
+from test import HOST_ID
 from test.pylib.db.model import Metric, SystemResourceMetric, CgroupMetric, Test
 from test.pylib.db.writer import (
     CGROUP_MEMORY_METRICS_TABLE,
@@ -143,11 +144,12 @@ class ResourceGatherOn(ResourceGather):
         self.sqlite_writer = SQLiteWriter(self.db_path)
         self.test_id: int = self.sqlite_writer.write_row_if_not_exist(
             Test(
+                host_id=HOST_ID,
                 architecture=platform.machine(),
                 directory=test.suite.name,
                 mode=test.mode,
                 run_id=test.id,
-                test_name=test.shortname
+                test_name=test.shortname,
             ),
             TESTS_TABLE)
 
@@ -155,7 +157,7 @@ class ResourceGatherOn(ResourceGather):
         os.makedirs(self.cgroup_path, exist_ok=True)
 
     def get_test_metrics(self) -> Metric:
-        test_metrics: Metric = Metric(test_id=self.test_id)
+        test_metrics: Metric = Metric(test_id=self.test_id, host_id=HOST_ID)
         test_metrics.time_taken = self.test.time_end - self.test.time_start
         test_metrics.time_start = datetime.fromtimestamp(self.test.time_start)
         test_metrics.time_end = datetime.fromtimestamp(self.test.time_end)
@@ -218,6 +220,7 @@ class ResourceGatherOn(ResourceGather):
                 with  open(self.cgroup_path / 'memory.current', 'r') as memory_current:
                     timeline_record = CgroupMetric(
                         test_id=self.test_id,
+                        host_id=HOST_ID,
                         memory=int(memory_current.read()),
                         timestamp=datetime.now()
                     )
@@ -311,9 +314,10 @@ async def monitor_resources(cancel_event: Event, stop_event: Event, tmpdir: Path
     sqlite_writer = SQLiteWriter(tmpdir / DEFAULT_DB_NAME)
     while not cancel_event.is_set() and not stop_event.is_set():
         timeline_record = SystemResourceMetric(
+            host_id=HOST_ID,
             cpu=psutil.cpu_percent(interval=0.1),
             memory=psutil.virtual_memory().percent,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         sqlite_writer.write_row(timeline_record, SYSTEM_RESOURCE_METRICS_TABLE)
