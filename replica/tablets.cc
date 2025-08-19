@@ -707,27 +707,26 @@ struct tablet_metadata_builder {
                 current = active_tablet_map{table, active_tablet_map::base_tablet_map{std::move(tmap), first_tablet}};
             }
 
-          // TODO fix indent
-          if (std::holds_alternative<active_tablet_map::base_tablet_map>(current->v)) {
-            auto& current_map = std::get<active_tablet_map::base_tablet_map>(current->v).map;
+            if (std::holds_alternative<active_tablet_map::base_tablet_map>(current->v)) {
+                auto& current_map = std::get<active_tablet_map::base_tablet_map>(current->v).map;
 
-            // Resize decision fields are static columns, so set them only once per table.
-            if (row.has("resize_type") && row.has("resize_seq_number")) {
-                auto resize_type_name = row.get_as<sstring>("resize_type");
-                int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
+                // Resize decision fields are static columns, so set them only once per table.
+                if (row.has("resize_type") && row.has("resize_seq_number")) {
+                    auto resize_type_name = row.get_as<sstring>("resize_type");
+                    int64_t resize_seq_number = row.get_as<int64_t>("resize_seq_number");
 
-                locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
-                current_map.set_resize_decision(std::move(resize_decision));
-            }
-            if (row.has("resize_task_info")) {
-                current_map.set_resize_task_info(deserialize_tablet_task_info(row.get_view("resize_task_info")));
-            }
+                    locator::resize_decision resize_decision(std::move(resize_type_name), resize_seq_number);
+                    current_map.set_resize_decision(std::move(resize_decision));
+                }
+                if (row.has("resize_task_info")) {
+                    current_map.set_resize_task_info(deserialize_tablet_task_info(row.get_view("resize_task_info")));
+                }
 
-            if (row.has("repair_scheduler_config")) {
-                auto config = deserialize_repair_scheduler_config(row.get_view("repair_scheduler_config"));
-                current_map.set_repair_scheduler_config(std::move(config));
+                if (row.has("repair_scheduler_config")) {
+                    auto config = deserialize_repair_scheduler_config(row.get_view("repair_scheduler_config"));
+                    current_map.set_repair_scheduler_config(std::move(config));
+                }
             }
-          }
         }
 
         if (row.has("last_token")) {
