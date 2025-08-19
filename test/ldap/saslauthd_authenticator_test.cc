@@ -187,7 +187,7 @@ SEASTAR_TEST_CASE(alter) {
 
 SEASTAR_TEST_CASE(drop) {
     return do_with_authenticator_thread([] (auth::authenticator& authr, service::group0_batch& b) {
-        BOOST_REQUIRE_EXCEPTION(authr.drop("jdoe", b).get(), authentication_exception, message_contains("Cannot delete"));
+        authr.drop("jdoe", b).get(); // Just wait for empty future
     });
 }
 

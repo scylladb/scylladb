@@ -182,7 +182,7 @@ future<> saslauthd_authenticator::alter(std::string_view role_name, const authen
 }
 
 future<> saslauthd_authenticator::drop(std::string_view name, ::service::group0_batch& mc) {
-    throw exceptions::authentication_exception("Cannot delete passwords with SaslauthdAuthenticator");
+    return make_ready_future<>();
 }
 
 future<custom_options> saslauthd_authenticator::query_custom_options(std::string_view role_name) const {
