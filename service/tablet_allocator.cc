@@ -1170,9 +1170,14 @@ public:
 
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map_view(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_tables_ungrouped()) {
             co_await coroutine::maybe_yield();
+
+            // repair for non-base co-located tables requires tablet_map_per_colocated_table.
+            if (!_db.features().tablet_map_per_colocated_table && !_tm->tablets().is_base_table(table)) {
+                continue;
+            }
+
             auto config = tmap.get_repair_scheduler_config();
             auto auto_repair_enabled = is_auto_repair_enabled(config);
             auto now = db_clock::now();
@@ -1191,7 +1196,8 @@ public:
                 }
 
                 // Skip the tablet that is about to be in transition.
-                if (migration_tablet_ids.contains(gid)) {
+                auto base_gid = locator::global_tablet_id{_tm->tablets().get_base_table(table), id};
+                if (migration_tablet_ids.contains(base_gid)) {
                     co_return;
                 }
 
@@ -1226,6 +1232,13 @@ public:
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
                 plans.push_back(repair_plan{gid, info.shared, range, last_token, diff, is_user_request});
+
+                // don't schedule repairs of colocated tablets together.
+                // currently there are some technical limitations that prevent us from scheduling repairs
+                // of colocated tablets in parallel because the repair transition is shared.
+                // when some tablet is scheduled for repair, the tablet and all its colocated tablets will move to repair transition stage, so
+                // we can't schedule repair for them until the transition is finished.
+                migration_tablet_ids.insert(base_gid);
             });
         }
 
