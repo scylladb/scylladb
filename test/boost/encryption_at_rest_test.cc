@@ -320,6 +320,14 @@ static future<> kmip_test_helper(const std::function<future<>(const kmip_test_in
     tmpdir tmp;
     bool host_set = false;
 
+    // Preserve tmpdir on exception.
+    // The directory contains PyKMIP server logs that may help diagnose test failures.
+    // Allow the user to disable this with an env var (e.g., for local debugging).
+    auto preserve_tmpdir = get_var_or_default("SCYLLA_TEST_PRESERVE_TMP_ON_EXCEPTION", "true");
+    if (preserve_tmpdir == "1" || strcasecmp(preserve_tmpdir.data(), "true") == 0) {
+        tmp.preserve_on_exception(true);
+    }
+
     static const char* def_resourcedir = "./test/resource/certs";
     const char* resourcedir = std::getenv("KMIP_RESOURCE_DIR");
     if (resourcedir == nullptr) {

@@ -17,6 +17,7 @@ namespace fs = std::filesystem;
 // automatically when tmpdir object goes out of scope.
 class tmpdir {
     fs::path _path;
+    bool _preserve_on_exception = false;
 
 private:
     void remove() noexcept;
@@ -40,4 +41,5 @@ public:
 
     const fs::path& path() const noexcept { return _path; }
     sweeper make_sweeper() const noexcept { return sweeper(*this); }
+    void preserve_on_exception(bool p) { _preserve_on_exception = p; }
 };

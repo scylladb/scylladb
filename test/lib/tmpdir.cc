@@ -24,6 +24,9 @@ void tmpdir::remove() noexcept {
 
 tmpdir::sweeper::~sweeper() {
     memory::scoped_critical_alloc_section dfg;
+    if (_tmpd._preserve_on_exception && std::uncaught_exceptions() > 0) {
+        return;
+    }
     if (!_tmpd._path.empty()) {
         for (const auto& ent : fs::directory_iterator(_tmpd._path)) {
             fs::remove_all(ent.path());
@@ -62,5 +65,8 @@ void tmpdir::operator=(tmpdir&& other) noexcept {
 }
 
 tmpdir::~tmpdir() {
+    if (_preserve_on_exception && std::uncaught_exceptions() > 0) {
+        return;
+    }
     remove();
 }
