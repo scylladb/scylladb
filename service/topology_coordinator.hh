@@ -15,7 +15,6 @@
 
 #include "utils/log.hh"
 #include "raft/raft.hh"
-#include "gms/feature_service.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_state_machine.hh"
 
@@ -26,6 +25,7 @@ class system_distributed_keyspace;
 
 namespace gms {
 class gossiper;
+class feature_service;
 }
 
 namespace netw {

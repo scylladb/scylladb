@@ -18,7 +18,6 @@
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
-#include "gms/feature_service.hh"
 #include "schema/schema_fwd.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
@@ -32,18 +31,15 @@ future<std::filesystem::path> get_table_directory(std::filesystem::path scylla_d
 struct sstable_manager_service {
     db::nop_large_data_handler large_data_handler;
     db::nop_corrupt_data_handler corrupt_data_handler;
-    gms::feature_service feature_service;
+    std::unique_ptr<gms::feature_service> feature_service_impl;
+    gms::feature_service& feature_service = *feature_service_impl;
     cache_tracker tracker;
     sstables::directory_semaphore dir_sem;
     sstables::sstables_manager sst_man;
     abort_source abort;
 
-    explicit sstable_manager_service(const db::config& dbcfg, sstable_compressor_factory& scf)
-        : corrupt_data_handler(db::corrupt_data_handler::register_metrics::no)
-        , feature_service({get_disabled_features_from_db_config(dbcfg)})
-        , dir_sem(1)
-        , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
-    }
+    explicit sstable_manager_service(const db::config& dbcfg, sstable_compressor_factory& scf);
+    ~sstable_manager_service();
 
     future<> stop() {
         return sst_man.close();

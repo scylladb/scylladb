@@ -10,7 +10,6 @@
 
 #pragma once
 
-#include "gms/feature_service.hh"
 #include "schema/schema.hh"
 
 #include "data_dictionary/data_dictionary.hh"
@@ -23,6 +22,12 @@
 namespace cql3::expr {
 
 enum class oper_t;
+
+}
+
+namespace gms {
+
+class feature_service;
 
 }
 
