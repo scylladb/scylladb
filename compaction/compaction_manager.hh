@@ -16,6 +16,7 @@
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/condition-variable.hh>
+#include <seastar/core/rwlock.hh>
 #include "sstables/shared_sstable.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "utils/updateable_value.hh"
@@ -33,6 +34,7 @@
 #include "sstables/exceptions.hh"
 #include "tombstone_gc.hh"
 #include "utils/pluggable.hh"
+#include "compaction/compaction_reenabler.hh"
 
 namespace db {
 class compaction_history_entry;
@@ -180,7 +182,8 @@ private:
     }
     future<compaction_manager::compaction_stats_opt> perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
 
-    future<> stop_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>> tasks, sstring reason) noexcept;
+    void stop_tasks(const std::vector<shared_ptr<compaction::compaction_task_executor>>& tasks, sstring reason) noexcept;
+    future<> await_tasks(std::vector<shared_ptr<compaction::compaction_task_executor>>, bool task_stopped) const noexcept;
     future<> update_throughput(uint32_t value_mbs);
 
     // Return the largest fan-in of currently running compactions
@@ -367,30 +370,14 @@ public:
     // parameter job is a function that will carry the operation
     future<> run_custom_job(compaction::compaction_group_view& s, sstables::compaction_type type, const char *desc, noncopyable_function<future<>(sstables::compaction_data&, sstables::compaction_progress_monitor&)> job, tasks::task_info info, throw_if_stopping do_throw_if_stopping);
 
-    class compaction_reenabler {
-        compaction_manager& _cm;
-        compaction::compaction_group_view* _table;
-        compaction::compaction_state& _compaction_state;
-        gate::holder _holder;
-
-    public:
-        compaction_reenabler(compaction_manager&, compaction::compaction_group_view&);
-        compaction_reenabler(compaction_reenabler&&) noexcept;
-
-        ~compaction_reenabler();
-
-        compaction::compaction_group_view* compacting_table() const noexcept {
-            return _table;
-        }
-
-        const compaction::compaction_state& compaction_state() const noexcept {
-            return _compaction_state;
-        }
-    };
-
     // Disable compaction temporarily for a table t.
     // Caller should call the compaction_reenabler::reenable
     future<compaction_reenabler> stop_and_disable_compaction(sstring reason, compaction::compaction_group_view& t);
+
+    future<compaction_reenabler> await_and_disable_compaction(compaction::compaction_group_view& t);
+
+    future<seastar::rwlock::holder> get_incremental_repair_read_lock(compaction::compaction_group_view& t, const sstring& reason);
+    future<seastar::rwlock::holder> get_incremental_repair_write_lock(compaction::compaction_group_view& t, const sstring& reason);
 
     // Run a function with compaction temporarily disabled for a table T.
     future<> run_with_compaction_disabled(compaction::compaction_group_view& t, std::function<future<> ()> func, sstring reason = "custom operation");
@@ -424,8 +411,17 @@ public:
     // Stops ongoing compaction of a given type.
     future<> stop_compaction(sstring type, compaction::compaction_group_view* table = nullptr);
 
+private:
+    std::vector<shared_ptr<compaction_task_executor>>
+    do_stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<sstables::compaction_type> type_opt) noexcept;
+
+public:
     // Stops ongoing compaction of a given table and/or compaction_type.
     future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
+
+    future<> await_ongoing_compactions(compaction_group_view* t);
+
+    compaction_reenabler stop_and_disable_compaction_no_wait(compaction_group_view& t, sstring reason);
 
     double backlog() {
         return _backlog_manager.backlog();
@@ -475,6 +471,7 @@ public:
     friend class compaction::rewrite_sstables_compaction_task_executor;
     friend class compaction::cleanup_sstables_compaction_task_executor;
     friend class compaction::validate_sstables_compaction_task_executor;
+    friend compaction_reenabler;
 };
 
 namespace compaction {
@@ -627,7 +624,8 @@ public:
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args);
     friend future<compaction_manager::compaction_stats_opt> compaction_manager::perform_task(shared_ptr<compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
     friend fmt::formatter<compaction_task_executor>;
-    friend future<> compaction_manager::stop_tasks(std::vector<shared_ptr<compaction_task_executor>> tasks, sstring reason) noexcept;
+    friend void compaction_manager::stop_tasks(const std::vector<shared_ptr<compaction_task_executor>>& tasks, sstring reason) noexcept;
+    friend future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_executor>>, bool task_stopped) const noexcept;
     friend sstables::test_env_compaction_manager;
 };
 

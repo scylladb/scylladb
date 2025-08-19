@@ -483,6 +483,15 @@ class ScyllaServer:
             if ((root_dir/f).is_file()):
                 (root_dir/f).unlink()
 
+    def get_sstables(self, keyspace: str, table: str):
+        root_dir = self.workdir/"data"
+        sstables = []
+        for f in glob.iglob(f"./{keyspace}/{table}-????????????????????????????????/**/*", root_dir=root_dir, recursive=True):
+            if ((root_dir/f).is_file()):
+                file_path = root_dir / f
+                sstables.append(file_path.name)
+        return sstables
+
     def get_sstables_disk_usage(self, keyspace: str, table: str) -> int:
         size = 0
 

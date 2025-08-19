@@ -1331,6 +1331,13 @@ public:
                 maybe_apply({table_plan.current_tablet_count, "current count"});
             }
 
+            if (utils::get_local_injector().enter("tablet_force_tablet_count_increase")) {
+                target_tablet_count = {tablet_count * 2, "force_tablet_count_increase"};
+            } else if (utils::get_local_injector().enter("tablet_force_tablet_count_decrease")) {
+                auto size = std::max(size_t(1), tablet_count / 2);
+                target_tablet_count = {size, "force_tablet_count_decrease"};
+            }
+
             table_plan.target_tablet_count = target_tablet_count.tablet_count;
             table_plan.target_tablet_count_reason = target_tablet_count.reason;
 
@@ -3344,6 +3351,7 @@ private:
                 throw std::runtime_error(format("Unable to merge tablet info of sibling tablets {} (r: {}) and {} (r: {}).",
                                                 old_left_tid, left_tablet_replicas, old_right_tid, right_tablet_replicas));
             }
+            lblogger.debug("Got merged_tablet_info with sstables_repaired_at={}", merged_tablet_info->sstables_repaired_at);
 
             new_tablets.set_tablet(tid, *merged_tablet_info);
         }

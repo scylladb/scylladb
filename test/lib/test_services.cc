@@ -131,6 +131,7 @@ public:
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override {
         return table().get_token_range_after_split(t);
     }
+    int64_t get_sstables_repaired_at() const noexcept override { return 0; }
 };
 
 table_for_tests::data::data()

@@ -71,6 +71,7 @@
 #include "compaction_group.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "replica/tables_metadata_lock.hh"
+#include "service/topology_guard.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -78,6 +79,8 @@ class locked_cell;
 class mutation;
 
 class compaction_manager;
+class compaction_reenabler;
+
 class frozen_mutation;
 class reconcilable_result;
 
@@ -166,6 +169,11 @@ class sigquit_handler;
 extern logging::logger dblog;
 
 namespace replica {
+
+struct compaction_reenablers_and_lock_holders {
+    std::vector<std::unique_ptr<compaction_reenabler>> cres;
+    std::vector<seastar::rwlock::holder> lock_holders;
+};
 
 using shared_memtable = lw_shared_ptr<memtable>;
 class global_table_ptr;
@@ -1331,6 +1339,15 @@ public:
     future<utils::chunked_vector<sstables::entry_descriptor>> clone_tablet_storage(locator::tablet_id tid);
 
     friend class compaction_group;
+
+    future<> update_repaired_at_for_merge();
+
+    future<> clear_being_repaired_for_range(dht::token_range range);
+
+    future<compaction_reenablers_and_lock_holders> get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
+            const service::frozen_topology_guard& guard, dht::token_range range);
+private:
+    future<std::vector<compaction::compaction_group_view*>> get_compaction_group_views_for_repair(dht::token_range range);
 };
 
 lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr, const storage_group_manager& sgm, const locator::tablet_map&);

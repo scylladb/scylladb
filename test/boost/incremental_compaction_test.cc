@@ -32,6 +32,7 @@
 #include "dht/murmur3_partitioner.hh"
 #include "db/large_data_handler.hh"
 #include "db/config.hh"
+#include "repair/incremental.hh"
 
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"

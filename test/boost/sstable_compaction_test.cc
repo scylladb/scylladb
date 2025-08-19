@@ -1955,9 +1955,12 @@ SEASTAR_TEST_CASE(size_tiered_beyond_max_threshold_test) {
     std::vector<sstables::shared_sstable> candidates;
     int max_threshold = cf->schema()->max_compaction_threshold();
     candidates.reserve(max_threshold+1);
+    const auto keys = tests::generate_partition_keys(2, cf->schema());
     for (auto i = 0; i < (max_threshold+1); i++) { // (max_threshold+1) sstables of similar size
         auto sst = env.make_sstable(cf->schema());
         sstables::test(sst).set_data_file_size(1);
+        // So that the stats_metadata of the sst is written which is checked by incremental repair code
+        sstables::test(sst).set_values(keys[0].key(), keys[1].key(), stats_metadata{});
         candidates.push_back(std::move(sst));
     }
     auto desc = get_sstables_for_compaction(cs, cf.as_compaction_group_view(), std::move(candidates)).get();

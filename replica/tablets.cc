@@ -75,6 +75,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_time", timestamp_type)
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
+            .with_column("sstables_repaired_at", long_type)
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
@@ -154,6 +155,11 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
                 m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
             }
         }
+
+        if (features.tablet_incremental_repair) {
+            m.set_clustered_cell(ck, "sstables_repaired_at", data_value(tablet.sstables_repaired_at), ts);
+        }
+
         if (auto tr_info = tablets.get_tablet_transition_info(tid)) {
             m.set_clustered_cell(ck, "stage", tablet_transition_stage_to_string(tr_info->stage), ts);
             m.set_clustered_cell(ck, "transition", tablet_transition_kind_to_string(tr_info->transition), ts);
@@ -262,6 +268,12 @@ tablet_mutation_builder::set_repair_scheduler_config(locator::repair_scheduler_c
 tablet_mutation_builder&
 tablet_mutation_builder::set_repair_time(dht::token last_token, db_clock::time_point repair_time) {
     _m.set_clustered_cell(get_ck(last_token), "repair_time", data_value(repair_time), _ts);
+    return *this;
+}
+
+tablet_mutation_builder&
+tablet_mutation_builder::set_sstables_repair_at(dht::token last_token, int64_t sstables_repaired_at) {
+    _m.set_clustered_cell(get_ck(last_token), "sstables_repaired_at", data_value(sstables_repaired_at), _ts);
     return *this;
 }
 
@@ -548,6 +560,11 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         update_repair_time = true;
     }
 
+    int64_t sstables_repaired_at = 0;
+    if (row.has("sstables_repaired_at")) {
+        sstables_repaired_at = row.get_as<int64_t>("sstables_repaired_at");
+    }
+
     locator::tablet_task_info repair_task_info;
     if (row.has("repair_task_info")) {
         repair_task_info = deserialize_tablet_task_info(row.get_view("repair_task_info"));
@@ -579,7 +596,8 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
                 std::move(new_tablet_replicas), pending_replica, session_id});
     }
 
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info});
+    tablet_logger.info("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
+    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
 
     if (update_repair_time && db) {
         auto myid = db->get_token_metadata().get_my_id();

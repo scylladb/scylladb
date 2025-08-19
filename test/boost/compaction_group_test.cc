@@ -128,6 +128,7 @@ public:
     virtual const std::string get_group_id() const noexcept override { return "0"; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
+    int64_t get_sstables_repaired_at() const noexcept override { return 0; }
 };
 
 SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {
@@ -244,7 +245,7 @@ SEASTAR_TEST_CASE(compactions_dont_cross_group_boundary_test) {
             }
             return replica::repair_sstable_classification::repaired;
         };
-        auto repair_sstable_classifier = [&] (const sstables::shared_sstable& sst) -> replica::repair_sstable_classification {
+        auto repair_sstable_classifier = [&] (const sstables::shared_sstable& sst, int64_t sstables_repaired_at) -> replica::repair_sstable_classification {
             return repair_token_classifier(sst->get_first_decorated_key().token());
         };
         t.set_repair_sstable_classifier(repair_sstable_classifier);
@@ -257,7 +258,7 @@ SEASTAR_TEST_CASE(compactions_dont_cross_group_boundary_test) {
             auto reader = sstable_reader(sst, s, env.make_reader_permit()); // reader holds sst and s alive.
             auto close_reader = deferred_close(reader);
 
-            auto expected_classification = repair_sstable_classifier(sst);
+            auto expected_classification = repair_sstable_classifier(sst, 0);
 
             while (auto m = read_mutation_from_mutation_reader(reader).get()) {
                 BOOST_REQUIRE(repair_token_classifier(m->decorated_key().token()) == expected_classification);
