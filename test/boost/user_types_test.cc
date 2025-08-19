@@ -110,10 +110,9 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
     // this may take a while in debug builds,
     // to avoid raft operation timeout set the threshold
     // to some big value.
-    co_await utils::get_local_injector().enable_on_all("group0-raft-op-timeout-in-ms", false, {
-        {"value", "600000" } // ten minutes
-    });
-
+    auto db_cfg_ptr = make_shared<db::config>();
+    auto& db_cfg = *db_cfg_ptr;
+    db_cfg.group0_raft_op_timeout_in_ms(600000); // ten minutes
     co_await do_with_cql_env_thread([] (cql_test_env& e) {
         e.execute_cql("create type ut1 (a int)").discard_result().get();
 
@@ -218,7 +217,7 @@ SEASTAR_TEST_CASE(test_invalid_user_type_statements) {
         e.execute_cql("create table cf4 (pk int, ck frozen<ut8>, primary key(pk, ck))").discard_result().get();
         REQUIRE_INVALID(e, "alter type ut8 add d duration",
                 "Cannot add new field to type ks.ut8 because it is used in the clustering key column ck of table ks.cf4 where durations are not allowed");
-    });
+    }, db_cfg_ptr);
 }
 
 SEASTAR_TEST_CASE(test_drop_user_type_used_in_udf) {
