@@ -855,9 +855,9 @@ static void add_cells_to_view(const schema& base, const schema& view, column_kin
  * Creates a view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before applying anything.
  */
-void view_updates::create_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now, row_marker update_marker) {
+future<> view_updates::create_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, gc_clock::time_point now, row_marker update_marker) {
     if (!matches_view_filter(db, *_base, _view_info, base_key, update, now)) {
-        return;
+        co_return;
     }
 
     auto view_rows = get_view_rows(base_key, update, std::nullopt, {});
@@ -870,6 +870,7 @@ void view_updates::create_entry(data_dictionary::database db, const partition_ke
         }
         r->apply(update.tomb());
         add_cells_to_view(*_base, *_view, kind, row(*_base, kind, update.cells()), r->cells());
+        co_await maybe_yield();
     }
     _op_count += view_rows.size();
 }
@@ -878,15 +879,15 @@ void view_updates::create_entry(data_dictionary::database db, const partition_ke
  * Deletes the view entry corresponding to the provided base row.
  * This method checks that the base row does match the view filter before bothering.
  */
-void view_updates::delete_old_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now, api::timestamp_type deletion_ts) {
+future<> view_updates::delete_old_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now, api::timestamp_type deletion_ts) {
     // Before deleting an old entry, make sure it was matching the view filter
     // (otherwise there is nothing to delete)
     if (matches_view_filter(db, *_base, _view_info, base_key, existing, now)) {
-        do_delete_old_entry(base_key, existing, update, now, deletion_ts);
+        co_await do_delete_old_entry(base_key, existing, update, now, deletion_ts);
     }
 }
 
-void view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now, api::timestamp_type deletion_ts) {
+future<> view_updates::do_delete_old_entry(const partition_key& base_key, const clustering_or_static_row& existing, const clustering_or_static_row& update, gc_clock::time_point now, api::timestamp_type deletion_ts) {
     auto view_rows = get_view_rows(base_key, existing, std::nullopt, update.tomb());
     const auto kind = existing.column_kind();
     for (const auto& [r, action] : view_rows) {
@@ -909,6 +910,7 @@ void view_updates::do_delete_old_entry(const partition_key& base_key, const clus
             add_cells_to_view(*_base, *_view, kind, std::move(diff), r->cells());
         }
         r->apply(update.tomb());
+        co_await maybe_yield();
     }
     _op_count += view_rows.size();
 }
@@ -1000,20 +1002,18 @@ bool view_updates::can_skip_view_updates(const clustering_or_static_row& update,
  * This method checks that the base row (before and after) matches the view filter before
  * applying anything.
  */
-void view_updates::update_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, const clustering_or_static_row& existing, gc_clock::time_point now, row_marker update_marker) {
+future<> view_updates::update_entry(data_dictionary::database db, const partition_key& base_key, const clustering_or_static_row& update, const clustering_or_static_row& existing, gc_clock::time_point now, row_marker update_marker) {
     // While we know update and existing correspond to the same view entry,
     // they may not match the view filter.
     if (!matches_view_filter(db, *_base, _view_info, base_key, existing, now)) {
-        create_entry(db, base_key, update, now, update_marker);
-        return;
+        co_await create_entry(db, base_key, update, now, update_marker);
     }
     if (!matches_view_filter(db, *_base, _view_info, base_key, update, now)) {
-        do_delete_old_entry(base_key, existing, update, now, update_marker.timestamp());
-        return;
+        co_return co_await do_delete_old_entry(base_key, existing, update, now, update_marker.timestamp());
     }
 
     if (can_skip_view_updates(update, existing)) {
-        return;
+        co_return;
     }
 
     auto view_rows = get_view_rows(base_key, update, std::nullopt, {});
@@ -1029,6 +1029,7 @@ void view_updates::update_entry(data_dictionary::database db, const partition_ke
 
         auto diff = update.cells().difference(*_base, kind, existing.cells());
         add_cells_to_view(*_base, *_view, kind, std::move(diff), r->cells());
+        co_await maybe_yield();
     }
     _op_count += view_rows.size();
 }
@@ -1103,7 +1104,7 @@ void view_updates::update_entry_for_computed_column(
 //   this happens if an update modifies just one of them. In this case the
 //   timestamp of the view update (and that of the row marker) is the later
 //    of these two updated columns.
-void view_updates::generate_update(
+future<> view_updates::generate_update(
         data_dictionary::database db,
         const partition_key& base_key,
         const clustering_or_static_row& update,
@@ -1114,7 +1115,7 @@ void view_updates::generate_update(
     // If it's not a real case, remove this if().
     if (update.is_clustering_row()) {
         if (!update.key()->is_full(*_base)) {
-            return;
+            co_return;
         }
     }
     // If the view key depends on any regular column in the base, the update
@@ -1125,19 +1126,19 @@ void view_updates::generate_update(
         !_view_info.has_computed_column_depending_on_base_non_primary_key()) {
         if (update.is_static_row()) {
             // TODO: support static rows in views with pk only including columns from base pk
-            return;
+            co_return;
         }
         // The view key is necessarily the same pre and post update.
         if (existing && existing->is_live(*_base)) {
             if (update.is_live(*_base)) {
-                update_entry(db, base_key, update, *existing, now, update.marker());
+                co_await update_entry(db, base_key, update, *existing, now, update.marker());
             } else {
-                delete_old_entry(db, base_key, *existing, update, now, api::missing_timestamp);
+                co_await delete_old_entry(db, base_key, *existing, update, now, api::missing_timestamp);
             }
         } else if (update.is_live(*_base)) {
-            create_entry(db, base_key, update, now, update.marker());
+            co_await create_entry(db, base_key, update, now, update.marker());
         }
-        return;
+        co_return;
     }
 
     // Find the view key columns that may be changed by an update.
@@ -1168,7 +1169,7 @@ void view_updates::generate_update(
                     // depends_on_non_primary_key_column is
                     // collection_column_computation, and we have a special
                     // function to handle that case:
-                    return update_entry_for_computed_column(base_key, update, existing, now);
+                    co_return update_entry_for_computed_column(base_key, update, existing, now);
                 }
             }
         } else {
@@ -1212,7 +1213,7 @@ void view_updates::generate_update(
     // correspond to the column's kind, updatable_view_key_cols will be empty
     // and we can just stop here.
     if (updatable_view_key_cols.empty()) {
-        return;
+        co_return;
     }
 
     // Use updatable_view_key_cols - the before and after values of the
@@ -1293,21 +1294,21 @@ void view_updates::generate_update(
         }
         if (has_new_row) {
             if (same_row) {
-                update_entry(db, base_key, update, *existing, now, new_row_rm);
+                co_await update_entry(db, base_key, update, *existing, now, new_row_rm);
             } else {
                 // The following code doesn't work if the old and new view row
                 // have the same key, because if they do we can get both data
                 // and tombstone for the same timestamp and the tombstone
                 // wins. This is why we need the "same_row" case above - it's
                 // not just a performance optimization.
-                delete_old_entry(db, base_key, *existing, update, now, old_row_ts);
-                create_entry(db, base_key, update, now, new_row_rm);
+                co_await delete_old_entry(db, base_key, *existing, update, now, old_row_ts);
+                co_await create_entry(db, base_key, update, now, new_row_rm);
             }
         } else {
-            delete_old_entry(db, base_key, *existing, update, now, old_row_ts);
+            co_await delete_old_entry(db, base_key, *existing, update, now, old_row_ts);
         }
     } else if (has_new_row) {
-        create_entry(db, base_key, update, now, new_row_rm);
+        co_await create_entry(db, base_key, update, now, new_row_rm);
     }
 
 }
@@ -1455,13 +1456,13 @@ future<std::optional<utils::chunked_vector<frozen_mutation_and_schema>>> view_up
     co_return mutations;
 }
 
-void view_update_builder::generate_update(clustering_row&& update, std::optional<clustering_row>&& existing) {
+future<> view_update_builder::generate_update(clustering_row&& update, std::optional<clustering_row>&& existing) {
     if (update.empty()) {
         // An empty update row (no cells and no tombstone) is rare, but it is
         // possible (see #15228): A mutation can modify a column that was
         // later dropped, and upgrade()ing the mutation's schema in
         // table::do_push_view_replica_updates() left an empty row.
-        return;
+        co_return;
     }
 
     auto dk = dht::decorate_key(*_schema, _key);
@@ -1483,11 +1484,11 @@ void view_update_builder::generate_update(clustering_row&& update, std::optional
             ? std::make_optional<clustering_or_static_row>(std::move(*existing))
             : std::optional<clustering_or_static_row>();
     for (auto&& v : _view_updates) {
-        v.generate_update(_db, _key, update_row, existing_row, _now);
+        co_await v.generate_update(_db, _key, update_row, existing_row, _now);
     }
 }
 
-void view_update_builder::generate_update(static_row&& update, const tombstone& update_tomb,
+future<> view_update_builder::generate_update(static_row&& update, const tombstone& update_tomb,
         std::optional<static_row>&& existing, const tombstone& existing_tomb) {
     if (!update_tomb && update.empty()) {
         throw std::logic_error("A materialized view update cannot be empty");
@@ -1510,7 +1511,7 @@ void view_update_builder::generate_update(static_row&& update, const tombstone& 
             ? std::make_optional<clustering_or_static_row>(std::move(*existing))
             : std::optional<clustering_or_static_row>();
     for (auto&& v : _view_updates) {
-        v.generate_update(_db, _key, update_row, existing_row, _now);
+        co_await v.generate_update(_db, _key, update_row, existing_row, _now);
     }
 }
 
@@ -1535,16 +1536,16 @@ future<stop_iteration> view_update_builder::on_results() {
                 auto existing = tombstone
                               ? std::optional<clustering_row>(std::in_place, update.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row())
                               : std::nullopt;
-                generate_update(std::move(update), std::move(existing));
+                co_await generate_update(std::move(update), std::move(existing));
             } else if (_update->is_static_row()) {
                 auto update = std::move(*_update).as_static_row();
                 auto tombstone = _existing_partition_tombstone;
                 auto existing = tombstone
                               ? std::optional<static_row>(std::in_place)
                               : std::nullopt;
-                generate_update(std::move(update), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
+                co_await generate_update(std::move(update), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
             }
-            return should_stop_updates() ? stop() : advance_updates();
+            co_return should_stop_updates() ? co_await stop() : co_await advance_updates();
         }
         if (cmp > 0) {
             // We have something existing but no update (which will happen either because it's a range tombstone marker in
@@ -1562,7 +1563,7 @@ future<stop_iteration> view_update_builder::on_results() {
                 // read method ever changes.
                 if (tombstone) {
                     auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
-                    generate_update(std::move(update), { std::move(existing) });
+                    co_await generate_update(std::move(update), { std::move(existing) });
                 }
             } else if (_existing->is_static_row()) {
                 auto existing = std::move(*_existing).as_static_row();
@@ -1577,10 +1578,10 @@ future<stop_iteration> view_update_builder::on_results() {
                 // If we are here, this means that (1) is not present. The `if` that follows checks for (2).
                 if (tombstone) {
                     auto update = static_row();
-                    generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
+                    co_await generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
                 }
             }
-            return should_stop_updates() ? stop () : advance_existings();
+            co_return should_stop_updates() ? co_await stop () : co_await advance_existings();
         }
         // We're updating a row that had pre-existing data
         if (_update->is_range_tombstone_change()) {
@@ -1595,16 +1596,16 @@ future<stop_iteration> view_update_builder::on_results() {
             _existing->mutate_as_clustering_row(*_schema, [&] (clustering_row& cr) mutable {
                 cr.apply(std::max(_existing_partition_tombstone, _existing_current_tombstone));
             });
-            generate_update(std::move(*_update).as_clustering_row(), { std::move(*_existing).as_clustering_row() });
+            co_await generate_update(std::move(*_update).as_clustering_row(), { std::move(*_existing).as_clustering_row() });
         } else if (_update->is_static_row()) {
             if (!_existing->is_static_row()) {
                 on_internal_error(vlogger, format("Static row update mutation part {} shouldn't compare equal with an existing, non-static row mutation part {}",
                                                   mutation_fragment_v2::printer(*_schema, *_update), mutation_fragment_v2::printer(*_schema, *_existing)));
             }
-            generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, { std::move(*_existing).as_static_row() }, _existing_partition_tombstone);
+            co_await generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, { std::move(*_existing).as_static_row() }, _existing_partition_tombstone);
 
         }
-        return should_stop_updates() ? stop() : advance_all();
+        co_return should_stop_updates() ? co_await stop() : co_await advance_all();
     }
 
     auto tombstone = std::max(_update_partition_tombstone, _update_current_tombstone);
@@ -1613,13 +1614,13 @@ future<stop_iteration> view_update_builder::on_results() {
         if (_existing->is_clustering_row()) {
             auto existing = clustering_row(*_schema, _existing->as_clustering_row());
             auto update = clustering_row(existing.key(), row_tombstone(std::move(tombstone)), row_marker(), ::row());
-            generate_update(std::move(update), { std::move(existing) });
+            co_await generate_update(std::move(update), { std::move(existing) });
         } else if (_existing->is_static_row()) {
             auto existing = static_row(*_schema, _existing->as_static_row());
             auto update = static_row();
-            generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
+            co_await generate_update(std::move(update), _update_partition_tombstone, { std::move(existing) }, _existing_partition_tombstone);
         }
-        return should_stop_updates() ? stop() : advance_existings();
+        co_return should_stop_updates() ? co_await stop() : co_await advance_existings();
     }
 
     // If we have updates and it's a range tombstone, it removes nothing pre-exisiting, so we can ignore it
@@ -1632,18 +1633,18 @@ future<stop_iteration> view_update_builder::on_results() {
             auto existing = existing_tombstone
                           ? std::optional<clustering_row>(std::in_place, _update->as_clustering_row().key(), row_tombstone(std::move(existing_tombstone)), row_marker(), ::row())
                           : std::nullopt;
-            generate_update(std::move(*_update).as_clustering_row(), std::move(existing));
+            co_await generate_update(std::move(*_update).as_clustering_row(), std::move(existing));
         } else if (_update->is_static_row()) {
             auto existing_tombstone = _existing_partition_tombstone;
             auto existing = existing_tombstone
                           ? std::optional<static_row>(std::in_place)
                           : std::nullopt;
-            generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
+            co_await generate_update(std::move(*_update).as_static_row(), _update_partition_tombstone, std::move(existing), _existing_partition_tombstone);
         }
-        return should_stop_updates() ? stop() : advance_updates();
+        co_return should_stop_updates() ? co_await stop() : co_await advance_updates();
     }
 
-    return stop();
+    co_return co_await stop();
 }
 
 view_update_builder make_view_update_builder(
