@@ -6742,22 +6742,6 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // we don't allow requesting repair on tablets of colocated tables, because the repair task info
-        // is stored on the base table's tablet map which is shared by all the tables that are colocated with it.
-        // we don't have a way currently to store the repair task info for a specific colocated table.
-        // repair can only be requested for the base table, and this will repair the base table's tablets
-        // and all its colocated tablets as well.
-        if (!get_token_metadata().tablets().is_base_table(table)) {
-            auto table_schema = _db.local().find_schema(table);
-            auto base_schema = _db.local().find_schema(get_token_metadata().tablets().get_base_table(table));
-
-            throw std::invalid_argument(::format(
-                "Cannot set repair request on table '{}'.'{}' because it is colocated with the base table '{}'.'{}'. "
-                "Repair requests can be made only on the base table. "
-                "Repairing the base table will also repair all tables colocated with it.",
-                table_schema->ks_name(), table_schema->cf_name(), base_schema->ks_name(), base_schema->cf_name()));
-        }
-
         auto& tmap = get_token_metadata().tablets().get_tablet_map_view(table);
         utils::chunked_vector<canonical_mutation> updates;
 
@@ -6780,7 +6764,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             }
             auto last_token = tmap.get_last_token(tid);
             updates.emplace_back(
-                tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+                replica::tablet_mutation_builder(guard.write_timestamp(), table)
                     .set_repair_task_info(last_token, repair_task_info, _feature_service)
                     .build());
         }
@@ -6833,17 +6817,6 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // see add_repair_tablet_request. repair requests can only be added on base tables.
-        if (!get_token_metadata().tablets().is_base_table(table)) {
-            auto table_schema = _db.local().find_schema(table);
-            auto base_schema = _db.local().find_schema(get_token_metadata().tablets().get_base_table(table));
-
-            throw std::invalid_argument(::format(
-                "Cannot delete repair request on table '{}'.'{}' because it is colocated with the base table '{}'.'{}'. "
-                "Repair requests can be added and deleted only on the base table.",
-                table_schema->ks_name(), table_schema->cf_name(), base_schema->ks_name(), base_schema->cf_name()));
-        }
-
         auto& tmap = get_token_metadata().tablets().get_tablet_map_view(table);
         utils::chunked_vector<canonical_mutation> updates;
 
@@ -6854,7 +6827,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             }
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
-            auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+            auto update = replica::tablet_mutation_builder(guard.write_timestamp(), table)
                             .del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
