@@ -392,55 +392,61 @@ async def test_create_colocated_table_while_base_is_migrating(manager: ManagerCl
 # 1. Create a base table and a co-located view table with a single tablet and RF=2 (replica on each node)
 # 2. write data to the base table while one node is down
 # 3. bring the node back up - it is now missing some data
-# 4. run tablet repair on the base table
-# 5. verify both the base table and the view contain the missing data on the node that was down
+# 4. run tablet repair on the base / view table
+# 5. verify the table is repaired and contains the missing data
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="tablet repair of colocated tables is not supported currently")
 async def test_repair_colocated_base_and_view(manager: ManagerClient):
     cfg = {'enable_tablets': True}
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'repair=debug',
+        '--logger-log-level', 'tablets=debug',
+        '--logger-log-level', 'raft_topology=debug',
     ]
     servers = await manager.servers_add(2, config=cfg, cmdline=cmdline, auto_rack_dc="dc1")
-    await asyncio.gather(*[manager.api.disable_tablet_balancing(s.ip_addr) for s in servers])
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     cql = manager.get_cql()
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
 
+        # Insert initial data
         cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES(1, 10)", consistency_level=ConsistencyLevel.ONE))
         await manager.api.flush_keyspace(servers[0].ip_addr, ks)
         await manager.api.flush_keyspace(servers[1].ip_addr, ks)
 
-        # Stop node 2 and write data while it is down
-        await manager.server_stop(servers[1].server_id)
+        log = await manager.server_open_log(servers[0].server_id)
 
-        cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES(2, 20)", consistency_level=ConsistencyLevel.ONE))
-        await manager.api.flush_keyspace(servers[0].ip_addr, ks)
+        # Loop for both repair scenarios: first view, then base
+        for pk, table in [(2, 'tv'), (3, 'test')]:
+            # Stop node 2 and write data while it is down
+            await manager.server_stop(servers[1].server_id)
+            cql.execute(SimpleStatement(f"INSERT INTO {ks}.test(pk, c) VALUES({pk}, {pk*10})", consistency_level=ConsistencyLevel.ONE))
+            await manager.api.flush_keyspace(servers[0].ip_addr, ks)
 
-        # Start node 2 back up
-        await manager.server_start(servers[1].server_id)
-        await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
-        await manager.servers_see_each_other(servers)
+            # Start node 2 back up
+            await manager.server_start(servers[1].server_id)
+            await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+            await manager.servers_see_each_other(servers)
 
-        # At this point, node 2 is missing pk=2
-        # Verify that pk=2 is missing on node 2 before repair
-        # Connect directly to server 2 to check its data
-        cql_server2 = await manager.get_cql_exclusive(servers[1])
-        rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.test", consistency_level=ConsistencyLevel.ONE))
-        pks = set(row.pk for row in rows)
-        assert 1 in pks and 2 not in pks
+            # At this point, node 2 is missing pk
+            cql_server2 = await manager.get_cql_exclusive(servers[1])
+            rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.test", consistency_level=ConsistencyLevel.ONE))
+            pks = set(row.pk for row in rows)
+            assert pk not in pks
 
-        # Trigger repair of the single tablet
-        tablet_token = 0
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, 'test', tablet_token)
+            # Repair the specified tablet (view or base)
+            tablet_token = 0
+            mark = await log.mark()
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, table, tablet_token)
+            table_id = await manager.get_table_id(ks, table) if table == 'test' else await manager.get_view_id(ks, table)
+            await log.wait_for(f"Initiating tablet repair.*tablet={table_id}", from_mark=mark, timeout=60)
 
-        # Verify the view is repaired on server 2
-        rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv", consistency_level=ConsistencyLevel.ONE))
-        pks = set(row.pk for row in rows)
-        assert 1 in pks and 2 in pks
+            # Verify that the repaired table contains the missing pk
+            rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.{table}", consistency_level=ConsistencyLevel.ONE))
+            pks = set(row.pk for row in rows)
+            assert pk in pks
 
 # Verify the default tombstone GC mode for colocated tables is 'timeout',
 # and that altering it to 'repair' is not allowed.
