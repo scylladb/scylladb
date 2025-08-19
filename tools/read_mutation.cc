@@ -10,9 +10,19 @@
 #include "readers/combined.hh"
 #include "replica/database.hh"
 #include "partition_slice_builder.hh"
+#include "gms/feature_service.hh"
 
 #include <algorithm>
 #include <seastar/util/closeable.hh>
+
+sstable_manager_service::sstable_manager_service(const db::config& dbcfg, sstable_compressor_factory& scf)
+    : corrupt_data_handler(db::corrupt_data_handler::register_metrics::no)
+    , feature_service_impl(std::make_unique<gms::feature_service>(gms::feature_config{get_disabled_features_from_db_config(dbcfg)}))
+    , dir_sem(1)
+    , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
+}
+
+sstable_manager_service::~sstable_manager_service() = default;
 
 future<std::filesystem::path> get_table_directory(std::filesystem::path scylla_data_path,
                                                   std::string_view keyspace_name,
