@@ -198,7 +198,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 testlog.info("Simple read");
                 auto mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
 
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), tombstone_gc::disabled()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_compacted(compacted_muts[1], now)
                     .produces_compacted(compacted_muts[2], now)
@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls between partition");
                 mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), tombstone_gc::disabled()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
                     .next_partition()
                     .produces_compacted(compacted_muts[0], now)
                     .next_partition()
@@ -221,7 +221,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls inside partitions");
                 mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), tombstone_gc::disabled()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
                     .next_partition()
@@ -333,7 +333,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
         std::vector<size_t> unspooled_dirty_values;
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
-        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit(), tombstone_gc::disabled()));
+        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit()));
         flush_reader_check.produces_partition(current_ring[0]);
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
         flush_reader_check.produces_partition(current_ring[1]);
@@ -453,7 +453,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
             mt->apply(m);
         }
 
-        auto rd = mt->make_flush_reader(s, semaphore.make_permit(), tombstone_gc::disabled());
+        auto rd = mt->make_flush_reader(s, semaphore.make_permit());
         auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
@@ -522,7 +522,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
             auto revert = defer([&] {
                 mt->revert_flushed_memory();
             });
-            assert_that(mt->make_flush_reader(s, semaphore.make_permit(), tombstone_gc::disabled()))
+            assert_that(mt->make_flush_reader(s, semaphore.make_permit()))
                 .produces(ms);
         });
     });
@@ -578,7 +578,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
 
     mt->apply(rt_m); // whatever
 
-    auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit(), tombstone_gc::disabled());
+    auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit());
     auto close_flush_rd = defer([&] { flush_rd.close().get(); });
 
     while (!flush_rd.is_end_of_stream()) {
@@ -1604,6 +1604,7 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
 }
 
 void repair_table(cql_test_env& env, table_id tid, gc_clock::time_point repair_time) {
+    testlog.info("repair_table({}, {})", tid, repair_time);
     const auto repair_range = dht::token_range::make(dht::first_token(), dht::last_token());
     env.db().invoke_on_all([&] (replica::database& db) {
         auto& tbl = db.find_column_family(tid);
@@ -1629,7 +1630,7 @@ SEASTAR_TEST_CASE(memtable_flush_compaction_garbage_collection) {
             // Ensure the test table gets its own commitlog segment.
             env.db().invoke_on_all([&] (replica::database& db) { return db.flush_commitlog(); }).get();
 
-            env.execute_cql(seastar::format("CREATE TABLE {}.{} (pk text, ck text, v text, PRIMARY KEY (pk, ck))"
+            env.execute_cql(seastar::format("CREATE TABLE {}.{} (pk int, ck text, v text, PRIMARY KEY (pk, ck))"
                     " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
                     " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}"
                     " AND memtable_compact_flushed_data = {}",
@@ -1638,48 +1639,101 @@ SEASTAR_TEST_CASE(memtable_flush_compaction_garbage_collection) {
                     table_compacts_on_flush)).get();
 
             auto& table = db.find_column_family(keyspace_name, table_name);
-            const auto table_id = table.schema()->id();
+            auto schema = table.schema();
+            const auto table_id = schema->id();
 
-            env.execute_cql(seastar::format("INSERT INTO {}.{} (pk, ck, v) VALUES ('live', 'live', 'value')", keyspace_name, table_name)).get();
-            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = 'live' AND ck = 'dead'", keyspace_name, table_name)).get();
-            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = 'dead'", keyspace_name, table_name)).get();
+            const auto dks = tests::generate_partition_keys(2, schema, this_shard_id());
+            const auto key_values = dks
+                | std::views::transform([&schema] (const dht::decorated_key& dk) {
+                    return value_cast<int32_t>(int32_type->deserialize(dk.key().explode(*schema).at(0)));
+                })
+                | std::ranges::to<std::vector<int32_t>>();
+            const auto live_key = key_values[0];
+            const auto dead_key = key_values[1];
+
+            testlog.info("live_key: {}, dead_key: {}", live_key, dead_key);
+
+            env.execute_cql(seastar::format("INSERT INTO {}.{} (pk, ck, v) VALUES ({}, 'live', 'value')", keyspace_name, table_name, live_key)).get();
+            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = {} AND ck = 'dead'", keyspace_name, table_name, live_key)).get();
+            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = {}", keyspace_name, table_name, dead_key)).get();
 
             // Make tombstone garbage-collectible, via a repair in the future.
             if (make_tombstones_garbage_collectible) {
                 repair_table(env, table_id, gc_clock::now() + std::chrono::seconds(10));
             }
 
-            // Ensure that the flush below will find the test table as the only dirty one in its commitlog segment.
-            env.db().invoke_on_all([table_id] (replica::database& db) -> future<> {
-                co_await db.commitlog()->force_new_active_segment();
-                co_await db.get_tables_metadata().parallel_for_each_table([=] (::table_id tid, lw_shared_ptr<replica::table> t) {
-                    if (tid != table_id) {
-                        return t->flush();
-                    }
-                    return make_ready_future<>();
-                });
-                co_await db.commitlog()->wait_for_pending_deletes();
-            }).get();
-
+            // Will flush the tombstones pinned by CL to a GC sstable.
             replica::database::flush_table_on_all_shards(env.db(), keyspace_name, table_name).get();
 
             const bool expect_tombstone_gc = table_compacts_on_flush && make_tombstones_garbage_collectible;
+
+            struct content {
+                int32_t pk;
+                std::optional<sstring> ck;
+            };
+            std::unordered_map<sstring, std::vector<content>> sstables;
 
             assert_that(env.execute_cql(seastar::format(
                             "SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE mutation_source > 'sstable:' AND partition_region < 3 ALLOW FILTERING",
                             keyspace_name,
                             table_name)).get())
                 .is_rows()
-                .with_size(expect_tombstone_gc ? 2 : 4)
+                .with_size(4 + int(expect_tombstone_gc))
                 .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
+                    sstring mutation_source;
                     columns
-                        .with_typed_column<sstring>("pk", [&] (const sstring& v) {
-                            return "live" == v || !expect_tombstone_gc;
+                        .with_typed_column<sstring>("mutation_source", [&] (const sstring& v) {
+                            mutation_source = v;
+                            sstables.emplace(v, std::vector<content>{});
+                            return true;
+                        })
+                        .with_typed_column<int32_t>("pk", [&] (const int32_t& v) {
+                            auto& r = sstables[mutation_source].emplace_back();
+                            r.pk = v;
+                            return true;
                         })
                         .with_typed_column<sstring>("ck", [&] (const sstring* v) {
-                            return !v || "live" == *v || !expect_tombstone_gc;
-                        });
+                            auto& r = sstables[mutation_source].back();
+                            r.ck = v ? std::optional<sstring>(*v) : std::nullopt;
+                            return true;
+                        })
+                        ;
                 });
+
+            auto to_string = [] (const std::vector<content>& c) {
+                return seastar::format("[{}]", fmt::join(c | std::views::transform([] (const content& v) {
+                    return seastar::format("{{pk: {}, ck: {}}}", v.pk, v.ck ? *v.ck : "null");
+                }), ", "));
+            };
+
+            testlog.info("sstables: {{\n    {}\n}}", fmt::join(sstables | std::views::transform([&] (const auto& kv) {
+                return seastar::format("{}: {}", kv.first, to_string(kv.second));
+            }), "\n    "));
+
+            // Example of expected content (expect_tombstone_gc=true):
+            //  cqlsh> SELECT pk, mutation_source, partition_region, ck from mutation_fragments(ks.test) WHERE mutation_source > 'sstable:' AND partition_region < 3 ALLOW FILTERING;
+            //  pk   | mutation_source                                                                                                   | partition_region | ck
+            // ------+-------------------------------------------------------------------------------------------------------------------+------------------+------
+            //  live | sstable:/var/lib/scylla/data/ks/test-d63c22a07e6411f0a441cea9e19bda54/me-3gt0_0m90_35li82hx9oociwoi8k-big-Data.db |                0 |
+            //  live | sstable:/var/lib/scylla/data/ks/test-d63c22a07e6411f0a441cea9e19bda54/me-3gt0_0m90_35li82hx9oociwoi8k-big-Data.db |                2 | live
+            //  live | sstable:/var/lib/scylla/data/ks/test-d63c22a07e6411f0a441cea9e19bda54/me-3gt0_0m90_36gdc2hx9oociwoi8k-big-Data.db |                0 |
+            //  live | sstable:/var/lib/scylla/data/ks/test-d63c22a07e6411f0a441cea9e19bda54/me-3gt0_0m90_36gdc2hx9oociwoi8k-big-Data.db |                2 | dead
+            //  dead | sstable:/var/lib/scylla/data/ks/test-d63c22a07e6411f0a441cea9e19bda54/me-3gt0_0m90_36gdc2hx9oociwoi8k-big-Data.db |                0 |
+            //
+            // (5 rows)
+            if (expect_tombstone_gc) {
+                BOOST_REQUIRE_EQUAL(sstables.size(), 2);
+
+                auto it = sstables.begin();
+                BOOST_REQUIRE_EQUAL(to_string(it->second), to_string({{live_key, std::nullopt}, {live_key, "dead"}, {dead_key, std::nullopt}}));
+
+                ++it;
+                BOOST_REQUIRE_EQUAL(to_string(it->second), to_string({{live_key, std::nullopt}, {live_key, "live"}}));
+            } else { // when expect_tombstone_gc=false, all content is in the same sstable.
+                BOOST_REQUIRE_EQUAL(sstables.size(), 1);
+                auto it = sstables.begin();
+                BOOST_REQUIRE_EQUAL(to_string(it->second), to_string({{live_key, std::nullopt}, {live_key, "dead"}, {live_key, "live"}, {dead_key, std::nullopt}}));
+            }
 
             env.execute_cql(seastar::format("DROP TABLE {}.{}", keyspace_name, table_name)).get();
         };

@@ -14,7 +14,6 @@
 #include "partition_builder.hh"
 #include "mutation/mutation_partition_view.hh"
 #include "readers/empty.hh"
-#include "readers/compacting.hh"
 #include "readers/forwardable.hh"
 #include "sstables/types.hh"
 
@@ -752,20 +751,15 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
 }
 
 mutation_reader
-memtable::make_flush_reader(schema_ptr s, reader_permit permit, tombstone_gc gc) {
-    mutation_reader reader(nullptr);
+memtable::make_flush_reader(schema_ptr s, reader_permit permit) {
     if (!_merged_into_cache) {
         revert_flushed_memory();
-        reader = make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this());
+        return make_mutation_reader<flush_reader>(std::move(s), std::move(permit), shared_from_this());
     } else {
         auto& full_slice = s->full_slice();
-        reader = make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
+        return make_mutation_reader<scanning_reader>(std::move(s), shared_from_this(), std::move(permit),
                       query::full_partition_range, full_slice, mutation_reader::forwarding::no);
     }
-    if (gc && reader.schema()->memtable_compact_flushed_data()) {
-        return make_compacting_reader(std::move(reader), gc_clock::now(), gc.get_max_purgeable_fn(), gc.get_tombstone_gc_state());
-    }
-    return reader;
 }
 
 void
