@@ -67,7 +67,7 @@ returns:
 
     (2 rows)
 
-.. note:: To make the above example, we simply kept inserting rows with different partition keys until we found two that went to the same stream. 
+.. note:: To make the above example, we simply kept inserting rows with different partition keys until we found two rows that went to the same stream. 
 
 .. note:: For a given stream there is no straightforward way to find a partition key which will get mapped to this stream, because of the partitioner, which uses the murmur3 hash function underneath (the truth is you can efficiently find such a key, as murmur3 is not a cryptographic hash, but it's not completely obvious).
 
