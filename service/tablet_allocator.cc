@@ -873,8 +873,7 @@ public:
 
         utils::chunked_vector<repair_plan> plans;
         auto migration_tablet_ids = co_await mplan.get_migration_tablet_ids();
-        for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
-            const auto& tmap = _tm->tablets().get_tablet_map_view(table);
+        for (auto&& [table, tmap] : _tm->tablets().all_tables_ungrouped()) {
             co_await coroutine::maybe_yield();
             auto& config = tmap.repair_scheduler_config();
             auto now = db_clock::now();
@@ -888,7 +887,8 @@ public:
                 }
 
                 // Skip the tablet that is about to be in transition.
-                if (migration_tablet_ids.contains(gid)) {
+                auto base_gid = locator::global_tablet_id{_tm->tablets().get_base_table(table), id};
+                if (migration_tablet_ids.contains(base_gid)) {
                     co_return;
                 }
 
