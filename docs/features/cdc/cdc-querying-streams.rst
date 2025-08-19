@@ -28,10 +28,21 @@ With the above approach you can, for instance, build a distributed CDC consumer,
 Learning about available streams
 --------------------------------
 
+.. note::
+   The following subsections describe how to discover available CDC streams depending on the type of keyspace:
+   - For **vnode-based keyspaces**, use the method described in :ref:`vnode-based-keyspaces`.
+   - For **tablets-based keyspaces**, see :ref:`tablets-based-keyspaces`.
+
+
+.. _vnode-based-keyspaces:
+
+Vnode-based keyspaces
+^^^^^^^^^^^^^^^^^^^^^
+
 To query the log table without performing partition scans, you need to know which streams to look at. For this you can use the ``system_distributed.cdc_generation_timestamps`` and ``system_distributed.cdc_streams_descriptions_v2`` tables.
 
 Example: querying the CDC description table
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 #. Retrieve the timestamp of the currently operating CDC generation from the ``cdc_generation_timestamps`` table. If you have a multi-node cluster, query the table with QUORUM or ALL consistency level so you don't miss any entry:
 
@@ -106,7 +117,7 @@ Query all streams to read the entire CDC log.
 Reacting to topology changes
 ----------------------------
 
-As explained in :doc:`./cdc-stream-generations`, the set of used CDC stream IDs changes whenever you bootstrap a new node. You should then query the CDC description table to read the new set of stream IDs and the corresponding timestamp.
+As explained in :doc:`./cdc-stream-changes`, the set of used CDC stream IDs changes whenever you bootstrap a new node. You should then query the CDC description table to read the new set of stream IDs and the corresponding timestamp.
 
 If you're periodically querying streams and you don't want to miss any writes that are sent to the old generation, you should query it at least one time **after** the old generation stops operating (which happens when the new generation starts operating).
 
@@ -215,3 +226,88 @@ Note that after upgrading the cluster to 4.4, all new generations (which are cre
 
 .. note::
    We highly recommend using the newest releases of our client CDC libraries (`Java CDC library <https://github.com/scylladb/scylla-cdc-java>`_, `Go CDC library <https://github.com/scylladb/scylla-cdc-go>`_, `Rust CDC library <https://github.com/scylladb/scylla-cdc-rust>`_). They take care of correctly querying the stream description tables and they handle the upgrade procedure for you.
+
+.. _tablets-based-keyspaces:
+
+Tablets-based keyspaces
+^^^^^^^^^^^^^^^^^^^^^^^
+
+To list all available CDC streams for a tablets-based keyspace:
+
+1. Retrieve the timestamps of the CDC stream sets for your table:
+
+   .. code-block:: cql
+
+      SELECT timestamp FROM system.cdc_timestamps WHERE keyspace_name = '<your_keyspace>' AND table_name = '<your_table>';
+
+   The query can return multiple timestamps. The last one is the timestamp for the currently operating CDC stream set. For example:
+
+   .. code-block:: none
+
+      timestamp
+      -+---------------------------------
+      2025-08-04 11:59:07.731000+0000
+      2025-08-04 12:06:05.880000+0000
+
+      (2 rows)
+
+2. Retrieve all CDC streams for a specific timestamp (stream_kind = 0 means the stream is active at this timestamp):
+
+   .. code-block:: cql
+
+      SELECT stream_id FROM system.cdc_streams WHERE keyspace_name='ks' AND table_name='t' AND timestamp = '2025-08-04 12:06:05.880+0000' AND stream_kind = 0;
+
+   For example, the query can return:
+
+   .. code-block:: none
+
+      stream_id
+      ------------------------------------
+      0xbfffffffffffffff07136c36d8000001
+      0xffffffffffffffff45e48e51fc000001
+      0x3fffffffffffffff2659d60fbc000001
+      0x7fffffffffffffffe0e37f9670000001
+
+      (4 rows)
+
+   Or, you can query for the streams that were opened or closed at a specific timestamp as follows:
+
+   .. code-block:: cql
+
+      SELECT stream_kind, stream_id FROM system.cdc_streams WHERE keyspace_name='ks' AND table_name='t' AND timestamp = '2025-08-04 12:06:05.880+0000' AND stream_kind >= 1 AND stream_kind <= 2;
+
+   returns:
+
+   .. code-block:: none
+
+      stream_kind | stream_id
+      -------------+------------------------------------
+               1 | 0xffffffffffffffff08cff7af30000001
+               1 | 0x7fffffffffffffff37b4e287f8000001
+               2 | 0xbfffffffffffffff07136c36d8000001
+               2 | 0xffffffffffffffff45e48e51fc000001
+               2 | 0x3fffffffffffffff2659d60fbc000001
+               2 | 0x7fffffffffffffffe0e37f9670000001
+
+      (6 rows)
+
+   Here, ``stream_kind = 1`` means that the stream was closed at this timestamp, and ``stream_kind = 2`` means that the stream was opened at this timestamp. ``stream_kind = 0`` means that the stream is active at this timestamp.
+
+3. Use the obtained stream IDs and timestamps to query your CDC log tables. For each stream ID, query the table for entries with timestamps in the range between the stream's opening and closing timestamps (if exists). For example:
+
+   .. code-block:: cql
+
+      SELECT * FROM ks.t_scylla_cdc_log WHERE "cdc$stream_id" = 0xffffffffffffffff08cff7af30000001 AND "cdc$time" >= minTimeuuid('2025-08-04 11:59:07.731+0000') AND "cdc$time" < minTimeuuid('2025-08-04 12:06:05.880+0000');
+
+   .. note::
+      It is necessary to restrict the timestamps range in order to avoid reading duplicated entries from the CDC log table. A single entry may be written to two different streams when switching from one stream set to another.
+
+   Query all streams to read the entire CDC log.
+
+Reacting to stream changes
+--------------------------
+As explained in :doc:`./cdc-stream-changes`, the set of used CDC stream IDs changes whenever the tablets of the base table are split or merged.
+
+To learn about new streams, you should query ``system.cdc_timestamps`` periodically for new timestamps.
+In addition, the closing time of a stream is indicated by setting the ``cdc$closed_time`` static column in the CDC log table for that stream.
+If while reading the stream you discover that ``cdc$closed_time`` is not null, you should complete reading the stream until its closing timestamp, and then switch to reading from the new streams.
