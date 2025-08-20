@@ -197,6 +197,7 @@ public:
     const db::config& db_config() const { return _db_config; }
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
+    std::vector<sstables::file_io_extension*> file_io_extensions() const;
 
     // Get the highest supported sstable version, according to cluster features.
     sstables::sstable::version_types get_highest_supported_format() const noexcept;

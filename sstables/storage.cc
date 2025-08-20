@@ -156,7 +156,7 @@ future<> filesystem_storage::rename_new_file(const sstable& sst, sstring from_na
 
 static future<file> maybe_wrap_file(const sstable& sst, component_type type, open_flags flags, future<file> f) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto * ext : sst.manager().db_config().extensions().sstable_file_io_extensions()) {
+        for (auto * ext : sst.manager().file_io_extensions()) {
             f = with_file_close_on_failure(std::move(f), [ext, &sst, type, flags] (file f) {
                return ext->wrap_file(sst, type, f, flags).then([f](file nf) mutable {
                    return nf ? nf : std::move(f);
@@ -688,7 +688,7 @@ future<file> object_storage_base::open_component(const sstable& sst, component_t
 
 static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type, data_sink sink) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto* ext : sst.manager().db_config().extensions().sstable_file_io_extensions()) {
+        for (auto* ext : sst.manager().file_io_extensions()) {
             std::exception_ptr p;
             try {
                 sink = co_await ext->wrap_sink(sst, type, std::move(sink));
@@ -706,7 +706,7 @@ static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type
 
 static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source src, uint64_t offset, uint64_t len) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
-        for (auto* ext : sst.manager().db_config().extensions().sstable_file_io_extensions()) {
+        for (auto* ext : sst.manager().file_io_extensions()) {
             std::exception_ptr p;
             try {
                 src = co_await ext->wrap_source(sst, type, std::move(src));

@@ -21,6 +21,7 @@
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
 #include "exceptions/exceptions.hh"
+#include "db/extensions.hh" // temporary
 
 namespace sstables {
 
@@ -445,6 +446,10 @@ std::vector<std::filesystem::path> sstables_manager::get_local_directories(const
 void sstables_manager::on_unlink(sstable* sst) {
     reclaim_memory_and_stop_tracking_sstable(sst);
     _signal_source(sst->generation(), notification_event_type::deleted);
+}
+
+std::vector<sstables::file_io_extension*> sstables_manager::file_io_extensions() const {
+    return _db_config.extensions().sstable_file_io_extensions();
 }
 
 sstables_registry::~sstables_registry() = default;
