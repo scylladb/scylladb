@@ -127,9 +127,9 @@ int64_t compaction_group::get_sstables_repaired_at() const noexcept {
         if (!erm->get_replication_strategy().uses_tablets()) {
             return 0;
         }
-        auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_t.schema()->id());
-        auto& tinfo = tmap.get_tablet_info(tid);
-        return tinfo.sstables_repaired_at;
+        auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map_view(_t.schema()->id());
+        const auto& tinfo = tmap.get_tablet_info(tid);
+        return tinfo.sstables_repaired_at();
     } catch (locator::no_such_tablet_map) {
         return 0;
     }
@@ -746,7 +746,7 @@ public:
 class tablet_storage_group_manager final : public storage_group_manager {
     replica::table& _t;
     locator::host_id _my_host_id;
-    const locator::tablet_map* _tablet_map;
+    const locator::tablet_map_view* _tablet_map;
     future<> _stop_fut = make_ready_future();
     // Every table replica that completes split work will load the seq number from tablet metadata into its local
     // state. So when coordinator pull the local state of a table, it will know whether the table is ready for the
@@ -762,7 +762,7 @@ private:
         return _t.schema();
     }
 
-    const locator::tablet_map& tablet_map() const noexcept {
+    const locator::tablet_map_view& tablet_map() const noexcept {
         return *_tablet_map;
     }
 
@@ -775,12 +775,12 @@ private:
     // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
     // each tablet split into two, so this replica will remap all of its compaction groups
     // that were previously split.
-    void handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+    void handle_tablet_split_completion(const locator::tablet_map_view& old_tmap, const locator::tablet_map_view& new_tmap);
 
     // Called when coordinator executes tablet merge. Tablet ids X and X+1 are merged into
     // the new tablet id (X >> 1). In practice, that means storage groups for X and X+1
     // are merged into a new storage group with id (X >> 1).
-    void handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap);
+    void handle_tablet_merge_completion(const locator::tablet_map_view& old_tmap, const locator::tablet_map_view& new_tmap);
 
     // When merge completes, compaction groups of sibling tablets are added to same storage
     // group, but they're not merged yet into one, since the merge completion handler happens
@@ -841,7 +841,7 @@ public:
     tablet_storage_group_manager(table& t, const locator::effective_replication_map& erm)
         : _t(t)
         , _my_host_id(erm.get_token_metadata().get_my_id())
-        , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map(schema()->id()))
+        , _tablet_map(&erm.get_token_metadata().tablets().get_tablet_map_view(schema()->id()))
         , _merge_completion_fiber(merge_completion_fiber())
     {
         storage_group_map ret;
@@ -2936,7 +2936,7 @@ locator::combined_load_stats table::table_load_stats(std::function<bool(const lo
     return _sg_manager->table_load_stats(std::move(tablet_filter));
 }
 
-void tablet_storage_group_manager::handle_tablet_split_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+void tablet_storage_group_manager::handle_tablet_split_completion(const locator::tablet_map_view& old_tmap, const locator::tablet_map_view& new_tmap) {
     auto table_id = schema()->id();
     size_t old_tablet_count = old_tmap.tablet_count();
     size_t new_tablet_count = new_tmap.tablet_count();
@@ -2986,7 +2986,7 @@ void tablet_storage_group_manager::handle_tablet_split_completion(const locator:
             auto group_id = first_new_id + i;
             auto old_range = old_tmap.get_token_range(locator::tablet_id(id));
             auto new_range = new_tmap.get_token_range(locator::tablet_id(group_id));
-            auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at;
+            auto sstables_repaired_at = new_tmap.get_tablet_info(locator::tablet_id(group_id)).sstables_repaired_at();
             tlogger.debug("Setting sstables_repaired_at={} for split tablet_id={} old_tid={} new_tid={} old_range={} new_range={} idx={}",
                     sstables_repaired_at, table_id, id, group_id, old_range, new_range, i);
             split_ready_groups[i]->update_id_and_range(group_id, new_range);
@@ -3044,7 +3044,7 @@ future<> tablet_storage_group_manager::merge_completion_fiber() {
     }
 }
 
-void tablet_storage_group_manager::handle_tablet_merge_completion(const locator::tablet_map& old_tmap, const locator::tablet_map& new_tmap) {
+void tablet_storage_group_manager::handle_tablet_merge_completion(const locator::tablet_map_view& old_tmap, const locator::tablet_map_view& new_tmap) {
     auto table_id = schema()->id();
     size_t old_tablet_count = old_tmap.tablet_count();
     size_t new_tablet_count = new_tmap.tablet_count();
@@ -3101,7 +3101,7 @@ void tablet_storage_group_manager::handle_tablet_merge_completion(const locator:
 }
 
 void tablet_storage_group_manager::update_effective_replication_map(const locator::effective_replication_map& erm, noncopyable_function<void()> refresh_mutation_source) {
-    auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map(schema()->id());
+    auto* new_tablet_map = &erm.get_token_metadata().tablets().get_tablet_map_view(schema()->id());
     auto* old_tablet_map = std::exchange(_tablet_map, new_tablet_map);
 
     size_t old_tablet_count = old_tablet_map->tablet_count();
