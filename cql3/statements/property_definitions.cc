@@ -8,9 +8,12 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include <ranges>
+
 #include <seastar/core/format.hh>
 #include "cql3/statements/property_definitions.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/overloaded_functor.hh"
 
 namespace cql3 {
 
@@ -26,7 +29,7 @@ void property_definitions::add_property(const sstring& name, sstring value) {
     }
 }
 
-void property_definitions::add_property(const sstring& name, const std::map<sstring, sstring>& value) {
+void property_definitions::add_property(const sstring& name, const extended_map_type& value) {
     if (auto [ignored, added] = _properties.try_emplace(name, value); !added) {
         throw exceptions::syntax_exception(format("Multiple definition for property '{}'", name));
     }
@@ -60,16 +63,39 @@ std::optional<sstring> property_definitions::get_simple(const sstring& name) con
     }
 }
 
-std::optional<std::map<sstring, sstring>> property_definitions::get_map(const sstring& name) const {
+std::optional<property_definitions::extended_map_type> property_definitions::get_extended_map(const sstring& name) const {
     auto it = _properties.find(name);
     if (it == _properties.end()) {
         return std::nullopt;
     }
     try {
-        return std::get<map_type>(it->second);
+        return std::get<extended_map_type>(it->second);
     } catch (const std::bad_variant_access& e) {
         throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a map.", name));
     }
+}
+
+std::optional<property_definitions::map_type> property_definitions::get_map(const sstring& name) const {
+    auto xmap = get_extended_map(name);
+    if (!xmap) {
+        return std::nullopt;
+    }
+    return to_simple_map(std::move(*xmap));
+}
+
+property_definitions::map_type property_definitions::to_simple_map(const extended_map_type& xmap) {
+    return xmap | std::views::transform([](const auto& x) {
+        // Convert each pair to a string key and value
+        try {
+            return std::make_pair(x.first, std::get<sstring>(x.second));
+        } catch (const std::bad_variant_access& e) {
+            throw exceptions::syntax_exception(seastar::format("Invalid map value '{}' for key '{}'. It should be a simple string.", std::get<list_type>(x.second), x.first));
+        }
+    }) | std::ranges::to<map_type>();
+}
+
+property_definitions::extended_map_type property_definitions::to_extended_map(const map_type& map) {
+    return map | std::ranges::to<extended_map_type>();
 }
 
 bool property_definitions::has_property(const sstring& name) const {
@@ -166,12 +192,74 @@ void property_definitions::remove_from_map_if_exists(const sstring& name, const 
         return;
     }
     try {
-        auto map = std::get<map_type>(it->second);
+        auto map = std::get<extended_map_type>(it->second);
         map.erase(key);
         _properties[name] = map;
     } catch (const std::bad_variant_access& e) {
         throw exceptions::syntax_exception(format("Invalid value for property '{}'. It should be a map.", name));
     }
+}
+
+/// Converts extended map into a flat map.
+///
+/// Values which are lists are represented as multiple entries in the map
+/// with the list index appended to the key, with ':' as a separator.
+/// Empty list is represented as a single entry with index -1 and empty string as value.
+///
+/// For example:
+///
+///    {'dc1': '3', 'dc2': ['rack1', 'rack2'], 'dc3': []}
+///
+/// has a flattened representation of:
+///
+///   {'dc1': '3', 'dc2:0': 'rack1', 'dc2:1': 'rack2', 'dc3:-1': ''}
+///
+property_definitions::map_type to_flattened_map(const property_definitions::extended_map_type& in) {
+    property_definitions::map_type out;
+    for (const auto& [in_key, in_value]: in) {
+        if (in_key.find(':') != sstring::npos) {
+            throw std::invalid_argument(fmt::format("key '{}' contains reserved character ':'", in_key));
+        }
+        std::visit(overloaded_functor{
+            [&] (const sstring& value) {
+                out[in_key] = value;
+            },
+            [&] (const std::vector<sstring>& list) {
+                if (list.empty()) {
+                    out[fmt::format("{}:{}", in_key, -1)] = "";
+                } else {
+                    // flatten the rack list in multiple entries
+                    for (size_t i = 0; i < list.size(); ++i) {
+                        const auto& v = list[i];
+                        out[fmt::format("{}:{}", in_key, i)] = v;
+                    }
+                }
+            }
+        }, in_value);
+    }
+    return out;
+}
+
+property_definitions::extended_map_type from_flattened_map(const property_definitions::map_type& in) {
+    property_definitions::extended_map_type out;
+    for (const auto& [key, value] : in) {
+        auto pos = key.find(':');
+        if (pos == sstring::npos) {
+            out.emplace(key, value);
+        } else {
+            auto dc = key.substr(0, pos);
+            auto index = std::stol(key.substr(pos + 1));
+            auto [it, empty] = out.try_emplace(dc, std::vector<sstring>());
+            auto& vec = std::get<std::vector<sstring>>(it->second);
+            if (index >= 0) {
+                if (vec.size() <= size_t(index)) {
+                    vec.resize(index + 1);
+                }
+                vec[index] = value;
+            }
+        }
+    }
+    return out;
 }
 
 }

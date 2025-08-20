@@ -723,7 +723,9 @@ There are also a few static columns for cluster-global properties:
 - `new_cdc_generation_data_uuid` - used in `commit_cdc_generation` state, the time UUID of the generation to be committed
 - `upgrade_state` - describes the progress of the upgrade to raft-based topology.
 - `new_keyspace_rf_change_ks_name` - the name of the KS that is being the target of the scheduled ALTER KS statement
-- `new_keyspace_rf_change_data` - the KS options to be used when executing the scheduled ALTER KS statement
+- `new_keyspace_rf_change_data` - the KS options to be used when executing the scheduled ALTER KS statement.
+        Same format as that of the `replication` column of `system_schema.keyspaces`. See docs/dev/system_schema_keyspace.md
+        Contains only the subset of options which are changed.
 - `global_requests` - contains a list of ids of pending global requests, the information about requests (type and parameters)
                       can be obtained from topology_requests table by using request's id as a look up key.
 
