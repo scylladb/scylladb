@@ -29,7 +29,9 @@ static locator::replication_strategy_config_options prepare_options(
         const sstring& strategy_class,
         const locator::token_metadata& tm,
         locator::replication_strategy_config_options options,
-        const locator::replication_strategy_config_options& old_options = {}) {
+        const locator::replication_strategy_config_options& old_options,
+        bool rack_list_enabled,
+        bool uses_tablets) {
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
@@ -49,21 +51,66 @@ static locator::replication_strategy_config_options prepare_options(
     auto it = options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
     if (it != options.end()) {
         // Expand: the user explicitly provided a 'replication_factor'.
-        rf = it->second;
+        try {
+            rf = std::get<sstring>(it->second);
+        } catch (...) {
+            throw exceptions::configuration_exception(fmt::format("Invalid replication factor: {}: must be a string holding a numerical value", it->second));
+        }
         options.erase(it);
     } else if (options.empty()) {
         auto it = old_options.find(ks_prop_defs::REPLICATION_FACTOR_KEY);
         if (it != old_options.end()) {
             // Expand: the user switched from another strategy that specified a 'replication_factor'
             // and didn't provide any additional options.
-            rf = it->second;
+            rf = std::get<sstring>(it->second);
+        }
+    }
+
+    // Validate options.
+    for (auto&& [dc, opt] : options) {
+        locator::replication_factor_data rf(opt);
+
+        std::optional<locator::replication_factor_data> old_rf;
+        auto i = old_options.find(dc);
+        if (i != old_options.end()) {
+            old_rf = locator::replication_factor_data(i->second);
+        }
+
+        if (!rf.is_rack_based()) {
+            if (old_rf && old_rf->is_rack_based() && rf.count() != 0) {
+                if (old_rf->count() != rf.count()) {
+                    throw exceptions::configuration_exception(fmt::format(
+                            "Cannot change replication factor for '{}' from {} to {} when the old value was a rack list",
+                            dc, old_options.at(dc), opt));
+                } else {
+                    options[dc] = i->second; // Preserve rack list.
+                }
+            }
+            continue;
+        }
+        if (!rack_list_enabled) {
+            throw exceptions::configuration_exception(fmt::format(
+                    "Using rack list for '{}' is not allowed because the 'rf_rack_list' feature is disabled", dc));
+        }
+        if (!uses_tablets) {
+            throw exceptions::configuration_exception(fmt::format(
+                    "Using rack list for '{}' is not allowed because the keyspace is not using tablets", dc));
+        }
+        auto& racks = rf.get_rack_list();
+        if (std::unordered_set<sstring>(racks.begin(), racks.end()).size() != rf.count()) {
+            throw exceptions::configuration_exception(fmt::format(
+                    "Rack list for '{}' contains duplicate entries", dc));
+        }
+        if (old_rf && !old_rf->is_rack_based() && old_rf->count() != 0) {
+            // FIXME: Allow this if replicas already conform to the given rack list.
+            // FIXME: Implement automatic colocation to allow transition to rack list.
+            throw exceptions::configuration_exception(fmt::format(
+                    "Cannot change replication factor from numeric to rack list for '{}'", dc));
         }
     }
 
     if (rf.has_value()) {
-        // The code below may end up not using "rf" at all (if all the DCs
-        // already have rf settings), so let's validate it once (#8880).
-        locator::abstract_replication_strategy::parse_replication_factor(*rf);
+        locator::replication_factor_data::parse(*rf);
 
         // We keep previously specified DC factors for safety.
         for (const auto& opt : old_options) {
@@ -122,7 +169,7 @@ ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
     }
 
     if (!replication_opts.empty())
-        add_property(KW_REPLICATION, replication_opts);
+        add_property(KW_REPLICATION, from_flattened_map(replication_opts));
     if (!storage_opts.empty())
         add_property(KW_STORAGE, storage_opts);
     if (!tablets_opts.empty())
@@ -143,12 +190,16 @@ void ks_prop_defs::validate() {
 
     auto replication_options = get_replication_options();
     if (replication_options.contains(REPLICATION_STRATEGY_CLASS_KEY)) {
-        _strategy_class = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
+        const auto& class_name = replication_options[REPLICATION_STRATEGY_CLASS_KEY];
+        if (!std::holds_alternative<sstring>(class_name)) {
+            throw exceptions::configuration_exception(seastar::format("Invalid replication strategy class: {}", class_name));
+        }
+        _strategy_class = std::get<sstring>(class_name);
     }
 }
 
 locator::replication_strategy_config_options ks_prop_defs::get_replication_options() const {
-    auto replication_options = get_map(KW_REPLICATION);
+    auto replication_options = get_extended_map(KW_REPLICATION);
     if (replication_options) {
         return replication_options.value();
     }
@@ -234,7 +285,9 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     std::optional<unsigned> default_initial_tablets = enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy"
             ? std::optional<unsigned>(0) : std::nullopt;
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
-    auto options = prepare_options(sc, tm, get_replication_options());
+    bool uses_tablets = initial_tablets.has_value();
+    bool rack_list_enabled = feat.rack_list_rf;
+    auto options = prepare_options(sc, tm, get_replication_options(), {}, rack_list_enabled, uses_tablets);
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
             std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
@@ -249,8 +302,9 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
         throw exceptions::invalid_request_exception("Cannot alter replication strategy vnode/tablets flavor");
     }
     auto sc = get_replication_strategy_class();
+    bool rack_list_enabled = feat.rack_list_rf;
     if (sc) {
-        options = prepare_options(*sc, tm, get_replication_options(), old_options);
+        options = prepare_options(*sc, tm, get_replication_options(), old_options, rack_list_enabled, uses_tablets);
     } else {
         sc = old->strategy_name();
         options = old_options;

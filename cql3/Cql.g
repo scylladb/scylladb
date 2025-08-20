@@ -227,6 +227,11 @@ using uexpression = uninitialized<expression>;
         return cql3::expr::convert_property_map(map, get_error_sink());
     }
 
+    property_definitions::extended_map_type
+    convert_extended_property_map(const collection_constructor& map) {
+        return cql3::expr::convert_extended_property_map(map, get_error_sink());
+    }
+
     sstring to_lower(std::string_view s) {
         sstring lower_s(s.size(), '\0');
         std::transform(s.cbegin(), s.cend(), lower_s.begin(), &::tolower);
@@ -1802,7 +1807,7 @@ properties[cql3::statements::property_definitions& props]
 
 property[cql3::statements::property_definitions& props]
     : k=ident '=' simple=propertyValue { try { $props.add_property(k->to_string(), simple); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
-    | k=ident '=' map=mapLiteral { try { $props.add_property(k->to_string(), convert_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
+    | k=ident '=' map=mapLiteral { try { $props.add_property(k->to_string(), convert_extended_property_map(map)); } catch (exceptions::syntax_exception e) { add_recognition_error(e.what()); } }
     ;
 
 propertyValue returns [sstring str]

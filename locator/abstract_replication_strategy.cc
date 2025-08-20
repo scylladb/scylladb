@@ -178,6 +178,34 @@ size_t get_replication_factor(const replication_strategy_config_option& opt) {
     return replication_factor_data(opt).count();
 }
 
+replication_factor_data::replication_factor_data(const replication_strategy_config_option& rf) {
+    std::visit(overloaded_functor {
+            [&] (const sstring& rf) {
+                auto rf_value = parse(rf);
+                _data.emplace<size_t>(rf_value);
+                _count = rf_value;
+            },
+            [&] (const std::vector<sstring>& racks) {
+                _data.emplace<std::vector<sstring>>(racks);
+                _count = racks.size();
+            }
+    }, rf);
+}
+
+void replication_factor_data::validate(const std::unordered_set<sstring>& allowed_racks) {
+    std::visit(overloaded_functor {
+            [&] (const size_t& rf) {},
+            [&] (const std::vector<sstring>& racks) {
+                for (const auto& rack : racks) {
+                    if (!allowed_racks.contains(rack)) {
+                        throw exceptions::configuration_exception(
+                                fmt::format("Unrecognized rack name '{}'. allowed_racks={}", rack, allowed_racks));
+                    }
+                }
+            }
+    }, _data);
+}
+
 static
 void
 insert_token_range_to_sorted_container_while_unwrapping(
