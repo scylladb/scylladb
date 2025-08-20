@@ -104,7 +104,7 @@ For example:
 .. code-block:: cql
 
    CREATE KEYSPACE Excalibur
-   WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1' : 1, 'DC2' : 3}
+   WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1' : ['RAC1', 'RAC2', 'RAC3'], 'DC2' : 3}
    AND durable_writes = true;
 
 The supported ``options`` are:
@@ -157,23 +157,26 @@ factor independently for each data-center. The rest of the sub-options are
 key-value pairs where a key is a data-center name and its value is the
 associated replication factor. Options:
 
-===================================== ====== =============================================
-sub-option                             type  description
-===================================== ====== =============================================
-``'<datacenter>'``                     int   The number of replicas to store per range in
-                                             the provided datacenter.
-``'replication_factor'``               int   The number of replicas to use as a default
-                                             per datacenter if not specifically provided.
-                                             Note that this always defers to existing
-                                             definitions or explicit datacenter settings.
-                                             For example, to have three replicas per
-                                             datacenter, supply this with a value of 3.
+===================================== ========= =============================================
+sub-option                             type      description
+===================================== ========= =============================================
+``'<datacenter>'``                     int|list The number of replicas to store per range in
+                                                the provided datacenter, or a list of rack names
+                                                to place replicas.
 
-                                             The replication factor configured for a DC
-                                             should be equal to or lower than the number
-                                             of nodes in that DC. Configuring a higher RF 
-                                             may prevent creating tables in that keyspace. 
-===================================== ====== =============================================
+``'replication_factor'``               int      The number of replicas to use as a default
+                                                per datacenter if not specifically provided.
+
+                                                Note that this always defers to existing
+                                                definitions or explicit datacenter settings.
+                                                For example, to have three replicas per
+                                                datacenter, supply this with a value of 3.
+
+                                                The replication factor configured for a DC
+                                                should be equal to or lower than the number
+                                                of nodes in that DC. Configuring a higher RF
+                                                may prevent creating tables in that keyspace.
+===================================== ========= =============================================
 
 If no datacenters are specified, and ``replication_factor`` is left unspecified,
 then every rack in every datacenter receives a replica, except for racks comprised
@@ -204,7 +207,7 @@ An example of auto-expanding datacenters with two datacenters: ``DC1`` and ``DC2
         WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor' : 3}
 
     DESCRIBE KEYSPACE excalibur
-        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3', 'DC2': '3'} AND durable_writes = true;
+        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': [ 'RAC1-1', 'RAC1-2', 'RAC1-3' ], 'DC2': [ 'RAC2-1', 'RAC2-2', 'RAC2-3' ]} AND durable_writes = true;
 
 
 An example of auto-expanding and overriding a datacenter::
@@ -213,7 +216,7 @@ An example of auto-expanding and overriding a datacenter::
         WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor' : 3, 'DC2': 2}
 
     DESCRIBE KEYSPACE excalibur
-        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3', 'DC2': '2'} AND durable_writes = true;
+        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': [ 'RAC1-1', 'RAC1-2', 'RAC1-3' ], 'DC2': [ 'RAC2-1', 'RAC2-2' ]} AND durable_writes = true;
 
 An example that excludes a datacenter while using ``replication_factor``::
 
@@ -221,7 +224,7 @@ An example that excludes a datacenter while using ``replication_factor``::
         WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor' : 3, 'DC2': 0} ;
 
     DESCRIBE KEYSPACE excalibur
-        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3'} AND durable_writes = true;
+        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': [ 'RAC1', 'RAC2', 'RAC3' ]} AND durable_writes = true;
 
 An example that excludes class and uses only datacenter options::
 
