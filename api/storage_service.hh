@@ -81,7 +81,7 @@ void set_snapshot(http_context& ctx, httpd::routes& r, sharded<db::snapshot_ctl>
 void unset_snapshot(http_context& ctx, httpd::routes& r);
 void set_load_meter(http_context& ctx, httpd::routes& r, service::load_meter& lm);
 void unset_load_meter(http_context& ctx, httpd::routes& r);
-seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request = false);
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, bool legacy_request = false);
 
 // converts string value of boolean parameter into bool
 // maps (case insensitively)

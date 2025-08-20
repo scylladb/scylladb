@@ -198,7 +198,7 @@ static ss::token_range token_range_endpoints_to_json(const dht::token_range_endp
     return r;
 }
 
-seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, http_context &ctx, bool legacy_request) {
+seastar::future<json::json_return_type> run_toppartitions_query(db::toppartitions_query& q, bool legacy_request) {
     return q.scatter().then([&q, legacy_request] {
         return sleep(q.duration()).then([&q, legacy_request] {
             return q.gather(q.capacity()).then([&q, legacy_request] (auto topk_results) {
@@ -618,8 +618,8 @@ rest_toppartitions_generic(http_context& ctx, std::unique_ptr<http::request> req
         apilog.info("toppartitions query: #table_filters={} #keyspace_filters={} duration={} list_size={} capacity={}",
             !table_filters.empty() ? std::to_string(table_filters.size()) : "all", !keyspace_filters.empty() ? std::to_string(keyspace_filters.size()) : "all", duration.value, list_size.value, capacity.value);
 
-        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [&ctx] (db::toppartitions_query& q) {
-            return run_toppartitions_query(q, ctx);
+        return seastar::do_with(db::toppartitions_query(ctx.db, std::move(table_filters), std::move(keyspace_filters), duration.value, list_size, capacity), [] (db::toppartitions_query& q) {
+            return run_toppartitions_query(q);
         });
 }
 
@@ -708,7 +708,7 @@ rest_describe_ring(http_context& ctx, sharded<service::storage_service>& ss, std
 static
 future<json::json_return_type>
 rest_get_load(http_context& ctx, std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
+        return get_cf_stats(ctx.db, &replica::column_family_stats::live_disk_space_used);
 }
 
 static
@@ -1327,7 +1327,7 @@ rest_set_hinted_handoff_throttle_in_kb(std::unique_ptr<http::request> req) {
 static
 future<json::json_return_type>
 rest_get_metrics_load(http_context& ctx, std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx, &replica::column_family_stats::live_disk_space_used);
+        return get_cf_stats(ctx.db, &replica::column_family_stats::live_disk_space_used);
 }
 
 static
