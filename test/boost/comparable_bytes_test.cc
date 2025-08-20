@@ -50,7 +50,7 @@ BOOST_AUTO_TEST_CASE(test_bool) {
     BOOST_REQUIRE(cb_false < cb_true);
 }
 
-void byte_comparable_test(std::vector<data_value>&& test_data) {
+void byte_comparable_test(std::vector<data_value>&& test_data, bool test_reversed_type = false) {
     struct test_item {
         managed_bytes serialized_bytes;
         comparable_bytes comparable_bytes;
@@ -58,8 +58,10 @@ void byte_comparable_test(std::vector<data_value>&& test_data) {
     std::vector<test_item> test_items;
 
     // test encode/decode
-    const auto test_data_type = test_data.at(0).type();
-    testlog.info("testing type '{}' with {} items...", test_data_type.get()->cql3_type_name(), test_data.size());
+    const auto test_data_type = test_reversed_type ? reversed(test_data.at(0).type()) : test_data.at(0).type();
+    testlog.info("testing type '{}' with {} items...",
+        test_reversed_type ? format("reversed<{}>", test_data_type.get()->cql3_type_name()) : test_data_type.get()->cql3_type_name(),
+        test_data.size());
     testlog.trace("test data : {}", test_data);
     for (const data_value& value : test_data) {
         // verify comparable bytes encode/decode
@@ -772,6 +774,23 @@ BOOST_AUTO_TEST_CASE(test_vector) {
     do_test(uuid_type, generate_collection_test_data<128>(make_random_data_value_uuid));
         // Test the collection with a data type that has variable length : bytes
     do_test(bytes_type, generate_collection_test_data<16>(make_random_data_value_bytes));
+}
+
+BOOST_AUTO_TEST_CASE(test_reversed) {
+    // Test reversed with native types
+    byte_comparable_test(generate_integer_test_data<int64_t>(), true);
+    byte_comparable_test(generate_string_test_data([] (std::string&& str) {
+        return data_value(str);
+    }), true);
+
+    // Test reversed with a collection
+    const auto list_type = list_type_impl::get_instance(bytes_type, false);
+    std::vector<data_value> collection_test_data;
+    collection_test_data.reserve(510);
+    for (const auto& test_case : generate_collection_test_data(make_random_data_value_bytes)) {
+        collection_test_data.emplace_back(make_list_value(list_type, test_case));
+    }
+    byte_comparable_test(std::move(collection_test_data), true);
 }
 
 // Test Scylla's byte-comparable encoding compatibility with Cassandra's implementation by
