@@ -2300,7 +2300,7 @@ future<> sstable::generate_summary() {
         file_input_stream_options options;
         options.buffer_size = sstable_buffer_size;
 
-        auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.db_config().sstable_summary_ratio());
+        auto s = summary_generator(_schema->get_partitioner(), _components->summary, _manager.get_config().sstable_summary_ratio);
             auto ctx = make_lw_shared<index_consume_entry_context<summary_generator>>(
                     *this, sem.make_tracking_only_permit(_schema, "generate-summary", db::no_timeout, {}), s, trust_promoted_index::yes,
                     make_file_input_stream(index_file, 0, index_size, std::move(options)), 0, index_size,

@@ -373,6 +373,7 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
     return sstables::sstables_manager::config {
         .available_memory = db_cfg.available_memory,
         .enable_sstable_key_validation = cfg.enable_sstable_key_validation(),
+        .sstable_summary_ratio = cfg.sstable_summary_ratio(),
     };
 }
 

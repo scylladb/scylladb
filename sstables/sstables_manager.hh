@@ -96,6 +96,7 @@ public:
     struct config {
         size_t available_memory;
         bool enable_sstable_key_validation = false;
+        double sstable_summary_ratio = 0.0005;
     };
 
 private:

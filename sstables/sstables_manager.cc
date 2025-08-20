@@ -225,7 +225,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     cfg.validation_level = _config.enable_sstable_key_validation
             ? mutation_fragment_stream_validation_level::clustering_key
             : mutation_fragment_stream_validation_level::token;
-    cfg.summary_byte_cost = summary_byte_cost(_db_config.sstable_summary_ratio());
+    cfg.summary_byte_cost = summary_byte_cost(_config.sstable_summary_ratio);
 
     cfg.origin = std::move(origin);
 
