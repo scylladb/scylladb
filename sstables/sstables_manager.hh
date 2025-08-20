@@ -97,6 +97,7 @@ public:
         size_t available_memory;
         bool enable_sstable_key_validation = false;
         double sstable_summary_ratio = 0.0005;
+        size_t column_index_size = 64 << 10;
     };
 
 private:

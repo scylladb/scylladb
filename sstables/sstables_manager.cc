@@ -217,7 +217,7 @@ shared_sstable sstables_manager::make_sstable(schema_ptr schema,
 sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     sstable_writer_config cfg;
 
-    cfg.promoted_index_block_size = _db_config.column_index_size_in_kb() * 1024;
+    cfg.promoted_index_block_size = _config.column_index_size;
     cfg.promoted_index_auto_scale_threshold = (size_t)_db_config.column_index_auto_scale_threshold_in_kb() * 1024;
     if (!cfg.promoted_index_auto_scale_threshold) {
         cfg.promoted_index_auto_scale_threshold = std::numeric_limits<size_t>::max();
