@@ -104,7 +104,7 @@ For example:
 .. code-block:: cql
 
    CREATE KEYSPACE Excalibur
-   WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1' : 1, 'DC2' : 3}
+   WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1' : ['RAC1', 'RAC2', 'RAC3'], 'DC2' : 3}
    AND durable_writes = true;
 
 The supported ``options`` are:
@@ -157,23 +157,32 @@ factor independently for each data-center. The rest of the sub-options are
 key-value pairs where a key is a data-center name and its value is the
 associated replication factor. Options:
 
-===================================== ====== =============================================
-sub-option                             type  description
-===================================== ====== =============================================
-``'<datacenter>'``                     int   The number of replicas to store per range in
-                                             the provided datacenter.
-``'replication_factor'``               int   The number of replicas to use as a default
-                                             per datacenter if not specifically provided.
-                                             Note that this always defers to existing
-                                             definitions or explicit datacenter settings.
-                                             For example, to have three replicas per
-                                             datacenter, supply this with a value of 3.
+===================================== ========= =============================================
+sub-option                             type      description
+===================================== ========= =============================================
+``'<datacenter>'``                     int|list The number of replicas to store per range in
+                                                the provided datacenter, or a :ref:`list of rack names <rack_list_rf>`
+                                                to place replicas.
 
-                                             The replication factor configured for a DC
-                                             should be equal to or lower than the number
-                                             of nodes in that DC. Configuring a higher RF 
-                                             may prevent creating tables in that keyspace. 
-===================================== ====== =============================================
+                                                :ref:`Rack list <rack_list_rf>` is only allowed
+                                                for tablets-based keyspaces, and recommended.
+
+                                                Altering from a rack list to numerical RF
+                                                is not supported.
+
+``'replication_factor'``               int      The number of replicas to use as a default
+                                                per datacenter if not specifically provided.
+
+                                                Note that this always defers to existing
+                                                definitions or explicit datacenter settings.
+                                                For example, to have three replicas per
+                                                datacenter, supply this with a value of 3.
+
+                                                The replication factor configured for a DC
+                                                should be equal to or lower than the number
+                                                of nodes in that DC. Configuring a higher RF
+                                                may prevent creating tables in that keyspace.
+===================================== ========= =============================================
 
 If no datacenters are specified, and ``replication_factor`` is left unspecified,
 then every rack in every datacenter receives a replica, except for racks comprised
@@ -342,6 +351,59 @@ Modifying a keyspace with tablets enabled is possible and doesn't require any sp
 - The replication strategy cannot be modified, as keyspaces with tablets only support ``NetworkTopologyStrategy``.
 - The ``ALTER`` statement will fail if it would make the keyspace :term:`RF-rack-invalid <RF-rack-valid keyspace>`.
 - After the ``ALTER`` statement that increases the RF finishes, client applications should be restarted. Without a restart, drivers will not know about new replicas, which may cause request imbalance.
+
+.. _rack_list_rf:
+
+Rack-list replication factor
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With tablets, replication factor can be a rack list instead of a number. This will limit placement of replicas to those
+specific racks in a given DC, with exactly one replica per rack. It guarantees that replicas never move across racks
+during load balancing.
+
+This is the recommended way of specifying replication with tablets. Some features will only work with keyspaces which
+are using rack lists for replication factor, and attempt to use them will be rejected otherwise.
+Also, load-balancing is more efficient if keyspaces specify replication like this.
+The numerical replication factor for tablets will be deprecated in the future.
+
+To create a keyspace using rack-list replication factor:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2']};
+
+The rack list can be altered, and it must differ by exactly one rack from the current list, with rack being either removed or added.
+For example:
+
+.. code-block:: cql
+
+  CREATE KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RAC2']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC1', 'RACK2', 'RAC3']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC2', 'RAC3']};
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', 'dc1' : ['RAC2', 'RAC3'], 'dc2': ['RAC4']};
+
+Altering a rack list triggers tablet rebuild in the new rack, and the statement completes when rebuild is finished.
+No need for manual repair afterwards.
+
+An empty list is allowed, and it's equivalent to numeric replication factor of 0:
+
+.. code-block:: cql
+
+  ALTER KEYSPACE Excelsior
+   WITH replication = { 'class' : 'NetworkTopologyStrategy', dc2' : []};
+
+
+Altering from a rack list to a numeric replication factor is not supported.
+
+Keyspaces which use rack lists are :term:`RF-rack-valid <RF-rack-valid keyspace>`.
 
 .. _drop-keyspace-statement:
 
