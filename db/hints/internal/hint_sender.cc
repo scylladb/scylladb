@@ -56,8 +56,8 @@ future<> hint_sender::flush_maybe() noexcept {
     if (current_time >= _next_flush_tp) {
         return _ep_manager.flush_current_hints().then([this, current_time] {
             _next_flush_tp = current_time + manager::hints_flush_period;
-        }).handle_exception([] (auto eptr) {
-            manager_logger.trace("flush_maybe() failed: {}", eptr);
+        }).handle_exception([this] (auto eptr) {
+            manager_logger.debug("hint_sender[{}]:flush_maybe: Failed with {}", _ep_key, eptr);
             return make_ready_future<>();
         });
     }
@@ -115,7 +115,7 @@ const column_mapping& hint_sender::get_column_mapping(lw_shared_ptr<send_one_fil
             throw no_column_mapping(fm.schema_version());
         }
 
-        manager_logger.debug("new schema version {}", fm.schema_version());
+        manager_logger.trace("hint_sender[{}]:get_column_mapping: new schema version {}", _ep_key, fm.schema_version());
         cm_it = ctx_ptr->schema_ver_to_column_mapping.emplace(fm.schema_version(), *hr.get_column_mapping()).first;
     }
 
@@ -175,23 +175,22 @@ future<> hint_sender::stop(drain should_drain) noexcept {
             //
             // The next call for send_hints_maybe() will send the last hints to the current end point and when it is
             // done there is going to be no more pending hints and the corresponding hints directory may be removed.
-            manager_logger.trace("Draining for {}: start", end_point_key());
+            manager_logger.trace("hint_sender[{}]:stop: Draining starts", end_point_key());
             set_draining();
             send_hints_maybe();
-            _ep_manager.flush_current_hints().handle_exception([] (auto e) {
-                manager_logger.error("Failed to flush pending hints: {}. Ignoring...", e);
+            _ep_manager.flush_current_hints().handle_exception([this] (auto e) {
+                manager_logger.error("hint_sender[{}]:stop: Failed to flush pending hints: {}. Ignoring", _ep_key, e);
             }).get();
             send_hints_maybe();
-            manager_logger.trace("Draining for {}: end", end_point_key());
+            manager_logger.trace("hint_sender[{}]:stop: Draining finished", end_point_key());
         }
-        // TODO: Change this log to match the class name, but first make sure no test
-        //       relies on the old one.
-        manager_logger.trace("ep_manager({})::sender: exiting", end_point_key());
+
+        manager_logger.debug("hint_sender[{}]:stop: Finished", end_point_key());
     });
 }
 
 void hint_sender::cancel_draining() {
-    manager_logger.info("Draining of {} has been marked as canceled", _ep_key);
+    manager_logger.info("hint_sender[{}]:cancel_draining: Marking as canceled", _ep_key);
     if (_state.contains(state::draining)) {
         _state.remove(state::draining);
     }
@@ -222,9 +221,8 @@ void hint_sender::start() {
 
     attr.sched_group = _hints_cpu_sched_group;
     _stopped = seastar::async(std::move(attr), [this] {
-        // TODO: Change this log to match the class name, but first make sure no test
-        //       relies on the old one.
-        manager_logger.trace("ep_manager({})::sender: started", end_point_key());
+        manager_logger.debug("hint_sender[{}]:start: Starting", end_point_key());
+
         while (!stopping()) {
             try {
                 flush_maybe().get();
@@ -237,11 +235,11 @@ void hint_sender::start() {
                 break;
             } catch (...) {
                 // log and keep on spinning
-                // TODO: Change this log to match the class name, but first make sure no test
-                //       relies on the old one.
-                manager_logger.trace("sender: got the exception: {}", std::current_exception());
+                manager_logger.debug("hint_sender[{}]:start: Exception in the loop: {}", _ep_key, std::current_exception());
             }
         }
+
+        manager_logger.debug("hint_sender[{}]:start: Exited the loop", _ep_key);
     });
 }
 
@@ -257,14 +255,14 @@ future<> hint_sender::send_one_mutation(frozen_mutation_and_schema m) {
         const auto dst = end_point_key();
 
         if (std::ranges::contains(natural_endpoints, dst) && !tm.is_leaving(dst)) {
-            manager_logger.trace("Sending directly to {}", dst);
+            manager_logger.trace("hint_sender[{}]:send_one_mutation: Sending directly", dst);
             return _proxy.send_hint_to_endpoint(std::move(m), std::move(ermp), dst);
         } else {
             if (manager_logger.is_enabled(log_level::trace)) {
                 if (tm.is_leaving(end_point_key())) {
-                    manager_logger.trace("The original target endpoint {} is leaving. Mutating from scratch...", dst);
+                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Original target is leaving. Mutating from scratch", dst);
                 } else {
-                    manager_logger.trace("Endpoints set has changed and {} is no longer a replica. Mutating from scratch...", dst);
+                    manager_logger.trace("hint_sender[{}]:send_one_mutation: Endpoint set has changed and original target is no longer a replica. Mutating from scratch", dst);
                 }
             }
             return _proxy.send_hint_to_all_replicas(std::move(m));
@@ -288,9 +286,9 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                 // Files are aggregated for at most manager::hints_timer_period therefore the oldest hint there is
                 // (last_modification - manager::hints_timer_period) old.
                 if (const auto now = gc_clock::now().time_since_epoch(); now - secs_since_file_mod > gc_grace_sec - manager::hints_flush_period) {
-                    manager_logger.debug("send_hints(): the hint is too old, skipping it, "
+                    manager_logger.trace("hint_sender[{}]:send_hints: Hint is too old, skipping it, "
                         "secs since file last modification {}, gc_grace_sec {}, hints_flush_period {}",
-                        now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
+                        _ep_key, now - secs_since_file_mod, gc_grace_sec, manager::hints_flush_period);
                     return make_ready_future<>();
                 }
 
@@ -299,24 +297,24 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
                     ++this->shard_stats().sent_total;
                     this->shard_stats().sent_hints_bytes_total += mutation_size;
                 }).handle_exception([this, ctx_ptr] (auto eptr) {
-                    manager_logger.trace("send_one_hint(): failed to send to {}: {}", end_point_key(), eptr);
+                    manager_logger.trace("hint_sender[{}]:send_one_hint: Failed to send: {}", end_point_key(), eptr);
                     ++this->shard_stats().send_errors;
                     return make_exception_future<>(std::move(eptr));
                 });
 
             // ignore these errors and move on - probably this hint is too old and the KS/CF has been deleted...
             } catch (replica::no_such_column_family& e) {
-                manager_logger.debug("send_hints(): no_such_column_family: {}", e.what());
+                manager_logger.debug("hint_sender[{}]:send_one_hint: no_such_column_family: {}", _ep_key, e.what());
                 ++this->shard_stats().discarded;
             } catch (replica::no_such_keyspace& e) {
-                manager_logger.debug("send_hints(): no_such_keyspace: {}", e.what());
+                manager_logger.debug("hint_sender[{}]:send_one_hint: no_such_keyspace: {}", _ep_key, e.what());
                 ++this->shard_stats().discarded;
             } catch (no_column_mapping& e) {
-                manager_logger.debug("send_hints(): {} at {}: {}", fname, rp, e.what());
+                manager_logger.debug("hint_sender[{}]:send_one_hint: no_column_mapping: {} at {}: {}", _ep_key, fname, rp, e.what());
                 ++this->shard_stats().discarded;
             } catch (...) {
                 auto eptr = std::current_exception();
-                manager_logger.debug("send_hints(): unexpected error in file {} at {}: {}", fname, rp, eptr);
+                manager_logger.debug("hint_sender[{}]:send_one_hint: Unexpected error in file {} at {}: {}", _ep_key, fname, rp, eptr);
                 ++this->shard_stats().send_errors;
                 return make_exception_future<>(std::move(eptr));
             }
@@ -338,21 +336,24 @@ future<> hint_sender::send_one_hint(lw_shared_ptr<send_one_file_ctx> ctx_ptr, fr
             }
             f.ignore_ready_future();
         });
-    }).handle_exception([ctx_ptr, rp] (auto eptr) {
-        manager_logger.trace("send_one_file(): Hmmm. Something bad had happened: {}", eptr);
+    }).handle_exception([this, ctx_ptr, rp] (auto eptr) {
+        manager_logger.trace("hint_sender[{}]:send_one_hint: Exception occurred: {}", _ep_key, eptr);
         ctx_ptr->on_hint_send_failure(rp);
     });
 }
 
 void hint_sender::notify_replay_waiters() noexcept {
     if (!_foreign_segments_to_replay.empty()) {
-        manager_logger.trace("[{}] notify_replay_waiters(): not notifying because there are still {} foreign segments to replay", end_point_key(), _foreign_segments_to_replay.size());
+        manager_logger.trace("hint_sender[{}]:notify_replay_waiters: Not notifying because there are still {} foreign segments to replay",
+                end_point_key(), _foreign_segments_to_replay.size());
         return;
     }
 
-    manager_logger.trace("[{}] notify_replay_waiters(): replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
+    manager_logger.trace("hint_sender[{}]:notify_replay_waiters: Replay position upper bound was updated to {}", end_point_key(), _sent_upper_bound_rp);
     while (!_replay_waiters.empty() && _replay_waiters.begin()->first < _sent_upper_bound_rp) {
-        manager_logger.trace("[{}] notify_replay_waiters(): notifying one ({} < {})", end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
+        manager_logger.trace("hint_sender[{}]:notify_replay_waiters: Notifying one ({} < {})",
+                end_point_key(), _replay_waiters.begin()->first, _sent_upper_bound_rp);
+
         auto ptr = _replay_waiters.begin()->second;
         (**ptr).set_value();
         (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
@@ -362,7 +363,7 @@ void hint_sender::notify_replay_waiters() noexcept {
 
 void hint_sender::dismiss_replay_waiters() noexcept {
     for (auto& p : _replay_waiters) {
-        manager_logger.debug("[{}] dismiss_replay_waiters(): dismissing one", end_point_key());
+        manager_logger.debug("hint_sender[{}]:dismiss_replay_waiters: Dismissing one", end_point_key());
         auto ptr = p.second;
         (**ptr).set_exception(std::runtime_error(format("Hints manager for {} is stopping", end_point_key())));
         (*ptr) = std::nullopt; // Prevent it from being resolved by abort source subscription
@@ -371,14 +372,15 @@ void hint_sender::dismiss_replay_waiters() noexcept {
 }
 
 future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::replay_position up_to_rp) {
-    manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): entering with target {}", end_point_key(), up_to_rp);
+    manager_logger.debug("hint_sender[{}]:wait_until_hints_are_replayed_up_to: Entering with target {}", end_point_key(), up_to_rp);
     if (_foreign_segments_to_replay.empty() && up_to_rp < _sent_upper_bound_rp) {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): hints were already replayed above the point ({} < {})", end_point_key(), up_to_rp, _sent_upper_bound_rp);
+        manager_logger.debug("hint_sender[{}]:wait_until_hints_are_replayed_up_to: Hints were already replayed above the point ({} < {})",
+                end_point_key(), up_to_rp, _sent_upper_bound_rp);
         return make_ready_future<>();
     }
 
     if (as.abort_requested()) {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): already aborted - stopping", end_point_key());
+        manager_logger.debug("hint_sender[{}]:wait_until_hints_are_replayed_up_to: Already aborted - stopping", end_point_key());
         return make_exception_future<>(abort_requested_exception());
     }
 
@@ -389,7 +391,7 @@ future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::
             // The promise already was resolved by `notify_replay_waiters` and removed from the map
             return;
         }
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): abort requested - stopping", end_point_key());
+        manager_logger.debug("hint_sender[{}]:wait_until_hints_are_replayed_up_to: Abort requested - stopping", end_point_key());
         _replay_waiters.erase(it);
         (**ptr).set_exception(abort_requested_exception());
     });
@@ -398,7 +400,7 @@ future<> hint_sender::wait_until_hints_are_replayed_up_to(abort_source& as, db::
     // therefore we cannot capture `this`
     auto ep = end_point_key();
     return (**ptr).get_future().finally([sub = std::move(sub), ep] {
-        manager_logger.debug("[{}] wait_until_hints_are_replayed_up_to(): returning after the future was satisfied", ep);
+        manager_logger.debug("hint_sender[{}]:wait_until_hints_are_replayed_up_to: Returning after the future was satisfied", ep);
     });
 }
 
@@ -470,7 +472,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
                 }
 
                 if (canceled_draining()) {
-                    manager_logger.debug("[{}] Exiting reading from commitlog because of canceled draining", _ep_key);
+                    manager_logger.debug("hint_sender[{}]:send_one_file: Exiting reading from commitlog because of canceled draining", _ep_key);
                     // We need to throw an exception here to cancel reading the segment.
                     throw canceled_draining_exception{};
                 }
@@ -502,13 +504,15 @@ bool hint_sender::send_one_file(const sstring& fname) {
             };
         }, _last_not_complete_rp.pos, &_db.extensions()).get();
     } catch (db::commitlog::segment_error& ex) {
-        manager_logger.error("{}: {}. Dropping...", fname, ex.what());
+        manager_logger.error("hint_sender[{}]:send_one_file: Segment error in {}: {}. Last not complete position={}",
+                _ep_key, fname, ex.what(), _last_not_complete_rp);
         ctx_ptr->segment_replay_failed = false;
         ++this->shard_stats().corrupted_files;
     } catch  (const canceled_draining_exception&) {
-        manager_logger.debug("[{}] Loop in send_one_file finishes due to canceled draining", _ep_key);
+        manager_logger.debug("hint_sender[{}]:send_one_file: Loop in send_one_file finishes due to canceled draining", _ep_key);
     } catch (...) {
-        manager_logger.trace("sending of {} failed: {}", fname, std::current_exception());
+        manager_logger.debug("hint_sender[{}]:send_one_file: Sending of {} failed: {}. Last not complete position={}",
+                _ep_key, fname, std::current_exception(), _last_not_complete_rp);
         ctx_ptr->segment_replay_failed = true;
     }
 
@@ -523,7 +527,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
 
     // If we are draining ignore failures and drop the segment even if we failed to send it.
     if (draining() && ctx_ptr->segment_replay_failed) {
-        manager_logger.trace("send_one_file(): we are draining so we are going to delete the segment anyway");
+        manager_logger.debug("hint_sender[{}]:send_one_file: We are draining, so we are going to delete the segment anyway", _ep_key);
         ctx_ptr->segment_replay_failed = false;
     }
 
@@ -533,7 +537,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
         // If there was an error thrown by read_log_file function itself, we will retry sending from
         // the last hint that was successfully sent (last_succeeded_rp).
         _last_not_complete_rp = ctx_ptr->first_failed_rp.value_or(ctx_ptr->last_succeeded_rp.value_or(_last_not_complete_rp));
-        manager_logger.trace("send_one_file(): error while sending hints from {}, last RP is {}", fname, _last_not_complete_rp);
+        manager_logger.debug("hint_sender[{}]:send_one_file: Error while sending hints from {}, last RP is {}", _ep_key, fname, _last_not_complete_rp);
         return false;
     }
 
@@ -546,7 +550,7 @@ bool hint_sender::send_one_file(const sstring& fname) {
     // clear the replay position - we are going to send the next segment...
     _last_not_complete_rp = replay_position();
     _last_schema_ver_to_column_mapping.clear();
-    manager_logger.trace("send_one_file(): segment {} was sent in full and deleted", fname);
+    manager_logger.debug("hint_sender[{}]:send_one_file: Segment {} has been sent in full and deleted", _ep_key, fname);
     return true;
 }
 
@@ -572,14 +576,15 @@ void hint_sender::pop_current_segment() {
 // Runs in the seastar::async context
 void hint_sender::send_hints_maybe() noexcept {
     using namespace std::literals::chrono_literals;
-    manager_logger.trace("send_hints(): going to send hints to {}, we have {} segment to replay", end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
+    manager_logger.trace("hint_sender[{}]:send_hints_maybe: Going to send hints. We have {} segment to replay",
+            end_point_key(), _segments_to_replay.size() + _foreign_segments_to_replay.size());
 
     int replayed_segments_count = 0;
 
     try {
         while (true) {
             if (canceled_draining()) {
-                manager_logger.debug("[{}] Exiting loop in send_hints_maybe because of canceled draining", _ep_key);
+                manager_logger.debug("hint_sender[{}]:send_hints_maybe: Exiting loop in send_hints_maybe because of canceled draining", _ep_key);
                 break;
             }
             const sstring* seg_name = name_of_current_segment();
@@ -598,7 +603,7 @@ void hint_sender::send_hints_maybe() noexcept {
     // Ignore exceptions, we will retry sending this file from where we left off the next time.
     // Exceptions are not expected here during the regular operation, so just log them.
     } catch (...) {
-        manager_logger.trace("send_hints(): got the exception: {}", std::current_exception());
+        manager_logger.debug("hint_sender[{}]:send_hints_maybe: Exception occurred while sending: {}", _ep_key, std::current_exception());
     }
 
     if (have_segments()) {
@@ -609,7 +614,7 @@ void hint_sender::send_hints_maybe() noexcept {
         _next_send_retry_tp = _next_flush_tp;
     }
 
-    manager_logger.trace("send_hints(): we handled {} segments", replayed_segments_count);
+    manager_logger.debug("hint_sender[{}]:send_hints_maybe: We handled {} segments", _ep_key, replayed_segments_count);
 }
 
 hint_stats& hint_sender::shard_stats() {
