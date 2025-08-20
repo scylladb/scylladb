@@ -2758,6 +2758,8 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         sstables::directory_semaphore dir_sem(1);
         abort_source abort;
 
+        sstables::sstables_manager::config sm_cfg {
+        };
         sstables::storage_manager::config stm_cfg;
         stm_cfg.object_storage_clients_memory = 100_MiB;
         stm_cfg.skip_metrics_registration = true;
@@ -2774,6 +2776,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             large_data_handler,
             corrupt_data_handler,
             dbcfg,
+            sm_cfg,
             feature_service,
             tracker,
             1_GiB,

@@ -92,6 +92,10 @@ class sstables_manager {
             boost::intrusive::constant_time_size<false>,
             boost::intrusive::compare<sstable::lesser_reclaimed_memory>>;
 
+public:
+    struct config {
+    };
+
 private:
     enum class notification_event_type {
         // Note: other event types like "added" may be needed in the future
@@ -104,6 +108,7 @@ private:
     db::large_data_handler& _large_data_handler;
     db::corrupt_data_handler& _corrupt_data_handler;
     const db::config& _db_config;
+    config _config;
     gms::feature_service& _features;
 
     // _active and _undergoing_close are used in scylla-gdb.py to fetch all sstables
@@ -149,6 +154,7 @@ public:
             db::large_data_handler& large_data_handler,
             db::corrupt_data_handler& corrupt_data_handler,
             const db::config& dbcfg,
+            config cfg,
             gms::feature_service& feat,
             cache_tracker&,
             size_t available_memory,
@@ -182,6 +188,7 @@ public:
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
     const db::config& db_config() const { return _db_config; }
+    const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
 
     // Get the highest supported sstable version, according to cluster features.

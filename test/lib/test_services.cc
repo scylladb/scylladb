@@ -251,6 +251,8 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler,
             cfg.corrupt_data_handler == nullptr ? nop_cd_handler : *cfg.corrupt_data_handler,
             *db_config,
+            sstables::sstables_manager::config{
+            },
             feature_service,
             cache_tracker,
             cfg.available_memory,

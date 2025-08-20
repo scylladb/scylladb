@@ -19,7 +19,10 @@ sstable_manager_service::sstable_manager_service(const db::config& dbcfg, sstabl
     : corrupt_data_handler(db::corrupt_data_handler::register_metrics::no)
     , feature_service_impl(std::make_unique<gms::feature_service>(gms::feature_config{get_disabled_features_from_db_config(dbcfg)}))
     , dir_sem(1)
-    , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg, feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
+    , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg,
+        sstables::sstables_manager::config {
+        },
+        feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
 }
 
 sstable_manager_service::~sstable_manager_service() = default;
