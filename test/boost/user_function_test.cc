@@ -24,6 +24,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "boost/date_time/gregorian/gregorian_types.hpp"
 
 BOOST_AUTO_TEST_SUITE(user_function_test)
 
