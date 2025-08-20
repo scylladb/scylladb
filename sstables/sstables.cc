@@ -167,7 +167,7 @@ read_monitor_generator& default_read_monitor_generator() {
 
 future<file> sstable::new_sstable_component_file(const io_error_handler& error_handler, component_type type, open_flags flags, file_open_options options) const noexcept {
   try {
-    auto f = _storage->open_component(*this, type, flags, options, _manager.db_config().enable_sstable_data_integrity_check());
+    auto f = _storage->open_component(*this, type, flags, options, _manager.get_config().enable_data_integrity_check);
 
     f = with_file_close_on_failure(std::move(f), [&error_handler] (file f) {
         return make_checked_file(error_handler, std::move(f));
