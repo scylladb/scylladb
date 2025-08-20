@@ -2759,6 +2759,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         abort_source abort;
 
         sstables::sstables_manager::config sm_cfg {
+            .available_memory = 1_GiB,
         };
         sstables::storage_manager::config stm_cfg;
         stm_cfg.object_storage_clients_memory = 100_MiB;
@@ -2779,7 +2780,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             sm_cfg,
             feature_service,
             tracker,
-            1_GiB,
             dir_sem,
             [host_id = locator::host_id::create_random_id()] { return host_id; },
             *scf,

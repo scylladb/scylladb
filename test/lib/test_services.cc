@@ -252,10 +252,10 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             cfg.corrupt_data_handler == nullptr ? nop_cd_handler : *cfg.corrupt_data_handler,
             *db_config,
             sstables::sstables_manager::config{
+                .available_memory = cfg.available_memory,
             },
             feature_service,
             cache_tracker,
-            cfg.available_memory,
             dir_sem,
             [host_id = locator::host_id::create_random_id()]{ return host_id; },
             scf,

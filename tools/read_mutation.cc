@@ -21,8 +21,9 @@ sstable_manager_service::sstable_manager_service(const db::config& dbcfg, sstabl
     , dir_sem(1)
     , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg,
         sstables::sstables_manager::config {
+            .available_memory = memory::stats().total_memory(),
         },
-        feature_service, tracker, memory::stats().total_memory(), dir_sem, []{ return locator::host_id{}; }, scf, abort) {
+        feature_service, tracker, dir_sem, []{ return locator::host_id{}; }, scf, abort) {
 }
 
 sstable_manager_service::~sstable_manager_service() = default;

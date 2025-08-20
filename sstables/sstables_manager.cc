@@ -27,10 +27,9 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, const db::config& dbcfg, struct config cfg, gms::feature_service& feat, cache_tracker& ct, size_t available_memory, directory_semaphore& dir_sem,
+    sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, const db::config& dbcfg, struct config cfg, gms::feature_service& feat, cache_tracker& ct, directory_semaphore& dir_sem,
     noncopyable_function<locator::host_id()>&& resolve_host_id, sstable_compressor_factory& compressor_factory, const abort_source& abort, scheduling_group maintenance_sg, storage_manager* shared)
     : _storage(shared)
-    , _available_memory(available_memory)
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
     , _db_config(dbcfg)
@@ -39,7 +38,7 @@ sstables_manager::sstables_manager(
     , _cache_tracker(ct)
     , _sstable_metadata_concurrency_sem(
         max_count_sstable_metadata_concurrent_reads,
-        max_memory_sstable_metadata_concurrent_reads(available_memory),
+        max_memory_sstable_metadata_concurrent_reads(_config.available_memory),
         fmt::format("sstables_manager_{}", name),
         std::numeric_limits<size_t>::max(),
         utils::updateable_value(std::numeric_limits<uint32_t>::max()),
@@ -259,7 +258,7 @@ future<> sstables_manager::maybe_reclaim_components() {
 }
 
 size_t sstables_manager::get_components_memory_reclaim_threshold() const {
-    return _available_memory * _db_config.components_memory_reclaim_threshold();
+    return _config.available_memory * _db_config.components_memory_reclaim_threshold();
 }
 
 size_t sstables_manager::get_memory_available_for_reclaimable_components() const {

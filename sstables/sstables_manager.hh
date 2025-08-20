@@ -94,6 +94,7 @@ class sstables_manager {
 
 public:
     struct config {
+        size_t available_memory;
     };
 
 private:
@@ -104,7 +105,6 @@ private:
     using signal_type = boost::signals2::signal_type<void (sstables::generation_type, notification_event_type), boost::signals2::keywords::mutex_type<boost::signals2::dummy_mutex>>::type;
 
     storage_manager* _storage;
-    size_t _available_memory;
     db::large_data_handler& _large_data_handler;
     db::corrupt_data_handler& _corrupt_data_handler;
     const db::config& _db_config;
@@ -157,7 +157,6 @@ public:
             config cfg,
             gms::feature_service& feat,
             cache_tracker&,
-            size_t available_memory,
             directory_semaphore& dir_sem,
             noncopyable_function<locator::host_id()>&& resolve_host_id,
             sstable_compressor_factory&,
