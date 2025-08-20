@@ -683,6 +683,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     running = true;
 #endif
 
+    co_await utils::get_local_injector().inject("topology_state_load_error", [] {
+        return std::make_exception_ptr(std::runtime_error("topology_state_load_error"));
+    });
+
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = _topology_state_machine._topology.normal_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
 
@@ -944,9 +948,6 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
 
         // If id maps to different ip in peers table it needs to be updated which is done by sync_raft_topology_nodes below
         std::optional<gms::inet_address> prev_ip = co_await _ss.get_ip_from_peers_table(id);
-        if (prev_ip == endpoint) {
-            co_return;
-        }
         if (_address_map.find(id) != endpoint) {
             // Address map refused to update IP for the host_id,
             // this means prev_ip has higher generation than endpoint.
@@ -957,7 +958,7 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
         // If the host_id <-> IP mapping has changed, we need to update system tables, token_metadat and erm.
         if (_ss.raft_topology_change_enabled()) {
             rslog.debug("ip_address_updater::on_endpoint_change({}), host_id {}, "
-                        "ip changed from [{}] to [{}], "
+                        "old ip [{}], new ip [{}], "
                         "waiting for group 0 read/apply mutex before reloading Raft topology state...",
                 ev, id, prev_ip, endpoint);
 
@@ -967,12 +968,31 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
             // If we call sync_raft_topology_nodes here directly, a gossiper lock and
             // the _group0.read_apply_mutex could be taken in cross-order leading to a deadlock.
             // To avoid this, we don't wait for sync_raft_topology_nodes to finish.
-            (void)futurize_invoke(ensure_alive([this, id, endpoint, h = _ss._async_gate.hold()]() -> future<> {
+            (void)futurize_invoke(ensure_alive([this, id, prev_ip, endpoint, h = _ss._async_gate.hold()]() -> future<> {
                 auto guard = co_await _ss._group0->client().hold_read_apply_mutex(_ss._abort_source);
                 co_await utils::get_local_injector().inject("ip-change-raft-sync-delay", std::chrono::milliseconds(500));
-                // Set notify_join to true since here we detected address change and drivers have to be notified
+
+                // We need to call raft_topology_update_ip even if ip hasn't changed.
+                // Suppose a bootstrapping node A appears in the system.peers table of
+                // some other node B. Its record has only ID and IP of the node A, due to
+                // the special handling of bootstrapping nodes in raft_topology_update_ip.
+                // Suppose node B gets temporarily isolated from the topology coordinator.
+                // The topology coordinator fences out node B and succesfully finishes
+                // bootstrapping of the node A. Later, when the connectivity is restored,
+                // topology_state_load runs on the node B, node A is already in
+                // normal state, but the gossiper on B might not yet have any state for
+                // it. In this case, raft_topology_update_ip would not update
+                // system.peers because the gossiper state is missing. Subsequently,
+                // on_join/on_restart/on_alive events would skip updates because the IP
+                // in gossiper matches the IP for that node in system.peers.
+                //
+                // If ip hasn't changed we set nodes_to_notify to nullptr since
+                // we don't need join events in this case.
+
                 nodes_to_notify_after_sync nodes_to_notify;
-                co_await _ss.raft_topology_update_ip(id, endpoint, co_await _ss.get_host_id_to_ip_map(), &nodes_to_notify);
+                co_await _ss.raft_topology_update_ip(id, endpoint, 
+                    co_await _ss.get_host_id_to_ip_map(), 
+                    prev_ip == endpoint ? nullptr : &nodes_to_notify);
                 co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
         }
@@ -5829,6 +5849,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
+                utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail_before", [] {
+                    throw std::runtime_error("raft_topology_barrier_and_drain_fail_before injected exception");
+                });
                 co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
                 if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
                     for (auto& n : _topology_state_machine._topology.transition_nodes) {
