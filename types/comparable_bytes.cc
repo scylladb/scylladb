@@ -1068,6 +1068,63 @@ static void decode_vector(const vector_type_impl& type, managed_bytes_view& comp
     }
 }
 
+// Flip all the bits from the input and write to the flipped stream.
+static void flip_all_bits(const bytes_view& input, bytes_ostream& flipped) {
+    // Process word by word and write the flipped output to buffer
+    uint64_t word;
+    size_t buffer_pos = 0, input_pos = 0;
+    // Use an intermediate buffer to store the flipped output to reduce the
+    // number of writes to the output stream.
+    std::array<uint8_t, sizeof(word) * 128> buffer; // 1K buffer
+    while (input_pos + sizeof(word) <= input.size())
+    {
+        std::memcpy(&word, input.data() + input_pos, sizeof(word));
+        word = ~word;
+        std::memcpy(buffer.data() + buffer_pos, &word, sizeof(word));
+        input_pos += sizeof(word);
+        buffer_pos += sizeof(word);
+        if (buffer_pos == buffer.size()) {
+            // Buffer full. Flush it to out and reset write pos.
+            write_native_int_array(flipped, buffer);
+            buffer_pos = 0;
+        }
+    }
+
+    // Flip the remaining bytes in input, if any, and write to buffer.
+    // (Buffer is guaranteed to have atleast 8 bytes remaining at this point).
+    while (input_pos < input.size()) {
+        buffer[buffer_pos++] = ~input[input_pos++];
+    }
+
+    // Flush remaining data in buffer to out
+    if (buffer_pos > 0) {
+        write_native_int_array(flipped, buffer, buffer_pos);
+    }
+}
+
+// Encodes a serialized value into its reversed type, byte comparable format.
+// The serialized bytes of the underlying type is transformed into its standard byte comparable representation.
+// Then, all the bits are flipped to ensure that the lexicographical sort order is reversed.
+static void encode_reversed(const reversed_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    bytes_ostream encoded_bytes_bo;
+    to_comparable_bytes(*type.underlying_type(), serialized_bytes_view, encoded_bytes_bo);
+    for (const auto& fragment : encoded_bytes_bo.fragments()) {
+        flip_all_bits(fragment, out);
+    }
+}
+
+// Decode a reversed type byte comparable representation into its serialized format.
+static void decode_reversed(const reversed_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    bytes_ostream encoded_bytes_bo;
+    while (!comparable_bytes_view.empty()) {
+        flip_all_bits(comparable_bytes_view.current_fragment(), encoded_bytes_bo);
+        comparable_bytes_view.remove_current();;
+    }
+    auto encoded_bytes_mb = std::move(encoded_bytes_bo).to_managed_bytes();
+    auto encoded_bytes_mbv = managed_bytes_view(encoded_bytes_mb);
+    from_comparable_bytes(*type.underlying_type(), encoded_bytes_mbv, out);
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -1160,6 +1217,10 @@ struct to_comparable_bytes_visitor {
 
     void operator()(const vector_type_impl& type) {
         encode_vector(type, serialized_bytes_view, out);
+    }
+
+    void operator()(const reversed_type_impl& type) {
+        encode_reversed(type, serialized_bytes_view, out);
     }
 
     // TODO: Handle other types
@@ -1278,6 +1339,10 @@ struct from_comparable_bytes_visitor {
 
     void operator()(const vector_type_impl& type) {
         decode_vector(type, comparable_bytes_view, out);
+    }
+
+    void operator()(const reversed_type_impl& type) {
+        decode_reversed(type, comparable_bytes_view, out);
     }
 
     // TODO: Handle other types
