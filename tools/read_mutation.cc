@@ -22,6 +22,7 @@ sstable_manager_service::sstable_manager_service(const db::config& dbcfg, sstabl
     , sst_man("schema_loader", large_data_handler, corrupt_data_handler, dbcfg,
         sstables::sstables_manager::config {
             .available_memory = memory::stats().total_memory(),
+            .data_file_directories = dbcfg.data_file_directories(),
         },
         feature_service, tracker, dir_sem, []{ return locator::host_id{}; }, scf, abort) {
 }

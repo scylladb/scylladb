@@ -439,7 +439,7 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
 }
 
 std::vector<std::filesystem::path> sstables_manager::get_local_directories(const data_dictionary::storage_options::local& so) const {
-    return sstables::get_local_directories(_db_config.data_file_directories(), so);
+    return sstables::get_local_directories(_config.data_file_directories, so);
 }
 
 void sstables_manager::on_unlink(sstable* sst) {

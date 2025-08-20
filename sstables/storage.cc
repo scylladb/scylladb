@@ -848,7 +848,7 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
 
 static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
     std::vector<sstring> dirs;
-    for (const auto& dd : mgr.db_config().data_file_directories()) {
+    for (const auto& dd : mgr.get_config().data_file_directories) {
         auto uuid_sstring = s.id().to_sstring();
         boost::erase_all(uuid_sstring, "-");
         auto dir = format("{}/{}/{}-{}", dd, s.ks_name(), s.cf_name(), uuid_sstring);
@@ -895,7 +895,7 @@ future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage
 future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionary::storage_options& so, sstring ks_name) {
     co_await std::visit(overloaded_functor {
         [&mgr, &ks_name] (const data_dictionary::storage_options::local&) -> future<> {
-            const auto& data_dirs = mgr.db_config().data_file_directories();
+            const auto& data_dirs = mgr.get_config().data_file_directories;
             if (data_dirs.size() > 0) {
                 auto dir = format("{}/{}", data_dirs[0], ks_name);
                 co_await io_check([&dir] { return touch_directory(dir); });

@@ -601,6 +601,7 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
     auto scf = make_sstable_compressor_factory_for_tests_in_thread();
     sstables::sstables_manager::config sm_cfg {
         .available_memory = memory::stats().total_memory(),
+        .data_file_directories = dbcfg.data_file_directories(),
     };
     sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, corrupt_data_handler, dbcfg, sm_cfg, feature_service, tracker,
         dir_sem,

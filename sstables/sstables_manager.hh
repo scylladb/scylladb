@@ -100,6 +100,7 @@ public:
         size_t column_index_size = 64 << 10;
         utils::updateable_value<uint32_t> column_index_auto_scale_threshold_in_kb = utils::updateable_value<uint32_t>(10240);
         utils::updateable_value<double> memory_reclaim_threshold = utils::updateable_value<double>(0.2);
+        const std::vector<sstring>& data_file_directories;
     };
 
 private:
