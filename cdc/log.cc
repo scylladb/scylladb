@@ -177,6 +177,13 @@ public:
     }
 
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
+        bool has_vector_index = secondary_index::vector_index::has_vector_index(new_schema);
+        if (has_vector_index) {
+            // If we have a vector index, we need to ensure that the CDC log is created
+            // satisfying the minimal requirements of Vector Search.
+            secondary_index::vector_index::check_cdc_options(new_schema);
+        }
+
         bool is_cdc = cdc_enabled(new_schema);
         bool was_cdc = cdc_enabled(old_schema);
 

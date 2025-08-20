@@ -9,6 +9,7 @@
  */
 
 #include "cdc/log.hh"
+#include "index/vector_index.hh"
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
 #include "cql3/query_options.hh"
@@ -408,6 +409,12 @@ std::pair<schema_ptr, std::vector<view_ptr>> alter_table_statement::prepare_sche
                 if (!cdc_opts.is_enabled_set()) {
                     // "enabled" flag not specified
                     throw exceptions::invalid_request_exception("Altering CDC options requires specifying \"enabled\" flag");
+                }
+                if (!cdc_opts.enabled() && secondary_index::vector_index::has_vector_index(*s)) {
+                    // If we are disabling CDC, we need to ensure that the vector index
+                    // is not left without a CDC log.
+                    throw exceptions::invalid_request_exception("Cannot disable CDC when Vector Search is enabled on the table.\n"
+                                                                "Please drop the vector index first, then disable CDC.");
                 }
             }
 
