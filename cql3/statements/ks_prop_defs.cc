@@ -149,8 +149,8 @@ static locator::replication_strategy_config_options prepare_options(
     return options;
 }
 
-ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
-    std::map<sstring, sstring> replication_opts, storage_opts, tablets_opts, durable_writes_opts;
+ks_prop_defs::ks_prop_defs(property_definitions::map_type options) {
+    map_type replication_opts, storage_opts, tablets_opts, durable_writes_opts;
 
     auto read_property_into = [] (auto& map, const sstring& name, const sstring& value, const sstring& tag) {
         auto prefix = sstring(tag) + ":";
@@ -316,6 +316,41 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
 
+namespace {
+
+void add_prefixed_key(const sstring& prefix, const property_definitions::map_type& in, property_definitions::map_type& out) {
+    for (const auto& [in_key, in_value]: in) {
+        out[fmt::format("{}:{}", prefix, in_key)] = in_value;
+    }
+}
+
+void add_prefixed_key(const sstring& prefix, const property_definitions::extended_map_type& in, property_definitions::map_type& out) {
+    add_prefixed_key(prefix, to_flattened_map(in), out);
+}
+
+} // namespace
+
+property_definitions::map_type ks_prop_defs::flattened() const {
+    map_type result;
+
+    for (auto kw : {
+            ks_prop_defs::KW_REPLICATION,
+            ks_prop_defs::KW_STORAGE,
+            ks_prop_defs::KW_TABLETS}) {
+        if (auto val_opt = get_extended_map(kw)) {
+            add_prefixed_key(kw, *val_opt, result);
+        }
+    }
+
+    for (auto kw : {ks_prop_defs::KW_DURABLE_WRITES}) {
+        if (auto val_opt = get_simple(kw)) {
+            // Use nested map for backwards compatibility, ks_prop_defs() constructor expects this.
+            add_prefixed_key(kw, std::map<sstring, sstring>({{sstring(kw), to_sstring(*val_opt)}}), result);
+        }
+    }
+
+    return {result};
+}
 
 }
 
