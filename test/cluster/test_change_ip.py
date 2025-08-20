@@ -108,7 +108,7 @@ async def test_change_two(manager, random_tables, build_mode):
     # see s1_new_ip.
     if build_mode != 'release':
         await manager.api.enable_injection(servers[0].ip_addr, 'crash-before-prev-ip-removed', one_shot=True)
-        # There is a code in raft_ip_address_updater::on_endpoint_change which
+        # There is a code in raft_raft_system_peers_updater::on_endpoint_change which
         # calls gossiper.force_remove_endpoint for an endpoint if it sees
         # that the current generation of host_id -> ip mapping in raft_address_map
         # is greater than the generation of the endpoint.

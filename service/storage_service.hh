@@ -430,9 +430,9 @@ public:
 
     void set_group0(service::raft_group0&);
 
-    future<> init_address_map(gms::gossip_address_map& address_map);
+    future<> init_system_peers_updater();
+    future<> uninit_system_peers_updater();
 
-    future<> uninit_address_map();
     bool is_topology_coordinator_enabled() const;
 
     future<> drain_on_shutdown();
@@ -563,9 +563,9 @@ public:
     virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {}
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {}
 private:
-    std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint);
+    std::optional<db::system_keyspace::peer_info> get_gossiper_peer_info_for_update(locator::host_id endpoint);
     // return an engaged value iff app_state_map has changes to the peer info
-    std::optional<db::system_keyspace::peer_info> get_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map);
+    std::optional<db::system_keyspace::peer_info> get_gossiper_peer_info_for_update(locator::host_id endpoint, const gms::application_state_map& app_state_map);
 
     std::unordered_set<token> get_tokens_for(locator::host_id endpoint);
     std::optional<locator::endpoint_dc_rack> get_dc_rack_for(const gms::endpoint_state& ep_state);
@@ -898,12 +898,13 @@ private:
         raft::term_t term{0};
         uint64_t last_index{0};
     } _raft_topology_cmd_handler_state;
-    class ip_address_updater;
+
+    class raft_system_peers_updater;
     // Represents a subscription to gossiper on_change events,
     // updating the raft data structures that depend on
     // IP addresses (token_metadata.topology, erm-s),
     // as well as the system.peers table.
-    shared_ptr<ip_address_updater> _ip_address_updater;
+    shared_ptr<raft_system_peers_updater> _raft_system_peers_updater;
 
     std::unordered_set<raft::server_id> find_raft_nodes_from_hoeps(const locator::host_id_or_endpoint_list& hoeps) const;
 
@@ -1014,22 +1015,11 @@ private:
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(schema_ptr schema);
     future<utils::chunked_vector<canonical_mutation>> get_system_mutations(const sstring& ks_name, const sstring& cf_name);
 
-    struct nodes_to_notify_after_sync {
-        std::vector<std::pair<gms::inet_address, locator::host_id>> left;
-        std::vector<std::pair<gms::inet_address, locator::host_id>> joined;
-    };
-
     using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
     future<host_id_to_ip_map_t> get_host_id_to_ip_map();
-    future<> raft_topology_update_ip(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& map, nodes_to_notify_after_sync* nodes_to_notify);
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
-    // Optional target_node can be provided to restrict the synchronization to the specified node.
-    // Returns a structure that describes which notifications to trigger after token metadata is updated.
-    future<nodes_to_notify_after_sync> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr, std::unordered_set<raft::server_id> prev_normal);
-    // Triggers notifications (on_joined, on_left) based on the recent changes to token metadata, as described by the passed in structure.
-    // This function should be called on the result of `sync_raft_topology_nodes`, after the global token metadata is updated.
-    future<> notify_nodes_after_sync(nodes_to_notify_after_sync&& nodes_to_notify);
+    future<> sync_raft_topology_nodes(mutable_token_metadata_ptr tmptr);
     // load topology state machine snapshot into memory
     // raft_group0_client::_read_apply_mutex must be held
     future<> topology_state_load(state_change_hint hint = {});
