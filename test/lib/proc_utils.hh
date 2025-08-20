@@ -49,6 +49,8 @@ namespace tests::proc {
 
         static line_handler create_copy_handler(std::ostream&);
 
+        using wait_exited = seastar::experimental::process::wait_exited;
+        using wait_signaled = seastar::experimental::process::wait_signaled;
         using wait_status = seastar::experimental::process::wait_status;
 
         future<wait_status> wait();
