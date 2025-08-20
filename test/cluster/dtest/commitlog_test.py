@@ -8,13 +8,12 @@
 import glob
 import logging
 import os
-import stat
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from cassandra.cluster import NoHostAvailable, Session
+from cassandra.cluster import Session
 from ccmlib.scylla_cluster import ScyllaCluster
 from ccmlib.scylla_node import ScyllaNode
 
@@ -23,12 +22,12 @@ from tools.assertions import (
     assert_all,
     assert_almost_equal,
     assert_lists_equal_ignoring_order,
-    assert_one,
     assert_row_count,
     assert_row_count_in_select_less,
 )
 from tools.data import insert_c1c2, rows_to_list
 from tools.files import corrupt_file
+from tools.metrics import get_node_metrics
 
 
 logger = logging.getLogger(__name__)
@@ -720,3 +719,111 @@ class TestCommitLog(Tester):
         in_table = rows_to_list(session.execute(f"SELECT * FROM {self.ks}.{self.cf};"))
         assert not node1.grep_log(f"large_data - Writing large row {self.ks}/{self.cf}")
         assert in_table == []
+
+    def test_pinned_cl_segment_doesnt_resurrect_data(self):
+        """
+        The tested scenario is as follows:
+        * Two tables, ks1.tbl1 and ks2.tbl2.
+        * A commitlog segment contains writes for both tables.
+        * ks1.tbl1 has very low write traffix, memtables are very rarely
+          flushed, this results in ks1.tbl1 "pinning" any commitlog segment
+          which has writes, that are still in the memtable.
+        * ks2.tbl2 deletes the data, some of which is still in the segment
+          pinned by ks1.tbl1.
+        * ks2.tbl2 flushes the memtable, data gets to sstables, commitlog
+          segments containing writes for both tables are still pinned.
+        * ks2.tbl2 compacts and purges away both the data and the tombstone.
+        * The node has an unclean restart, the pinned segments are replayed and
+          data is resurrected, as the tombstone is already purged.
+
+        This test uses gc_grace_seconds=0 to make the test fast.
+
+        See https://github.com/scylladb/scylladb/issues/14870
+        """
+        node1 = self.node1
+        node1.set_configuration_options(batch_commitlog=True, values={"commitlog_segment_size_in_mb": 1, "enable_cache": False})
+        node1.start()
+
+        session = self.patient_cql_connection(node1)
+
+        logger.debug("Create keyspace")
+        create_ks(session, "ks1", 1)
+        create_ks(session, "ks2", 1)
+
+        logger.debug("Create table")
+        session.execute("CREATE TABLE ks1.tbl1 (pk int, ck int, PRIMARY KEY (pk, ck))")
+        session.execute("CREATE TABLE ks2.tbl2 (pk int, ck int, v text, PRIMARY KEY (pk, ck)) WITH gc_grace_seconds = 0")
+
+        def get_segments_num():
+            metrics_res = get_node_metrics(node_ip=self.cluster.get_node_ip(1), metrics=["scylla_commitlog_segments"])
+            return int(metrics_res["scylla_commitlog_segments"])
+
+        def get_cl_segments():
+            cl_path = self._get_commitlog_path()
+            return {os.path.basename(s) for s in glob.glob(os.path.join(cl_path, "CommitLog-*"))}
+
+        segments_before_writes = get_segments_num()
+        segments_after_writes = segments_before_writes
+
+        logger.debug(f"Have {segments_after_writes} segments before writing data")
+
+        insert_id_tbl1 = session.prepare("INSERT INTO ks1.tbl1 (pk, ck) VALUES (?, ?)")
+        insert_id_tbl2 = session.prepare("INSERT INTO ks2.tbl2 (pk, ck, v) VALUES (?, ?, ?)")
+        pk1 = 0
+        pk2 = 1
+        ck = 0
+        value = "v" * 1024
+
+        logger.debug(f"Filling segment with mixed data from ks1.tbl1 and ks2.tbl2")
+
+        # Ensure at least one segment with writes from both tables
+        while segments_after_writes < segments_before_writes + 1:
+            session.execute(insert_id_tbl1, (pk1, ck))
+            session.execute(insert_id_tbl2, (pk1, ck, value))
+            ck = ck + 1
+            segments_after_writes = get_segments_num()
+
+        logger.debug(f"Filling segment(s) with ks2.tbl2 only")
+
+        while segments_after_writes < segments_before_writes + 3:
+            session.execute(insert_id_tbl2, (pk1, ck, value))
+            ck = ck + 1
+            segments_after_writes = get_segments_num()
+
+        session.execute(f"DELETE FROM ks2.tbl2 WHERE pk = {pk1}")
+
+        # We need to make sure the segment in which the above delete landed in
+        # is full, otherwise the memtable flush will not be able to destroy it.
+        logger.debug(f"Filling another segment with ks2.tbl2 (pk={pk2})")
+
+        while segments_after_writes < segments_before_writes + 4:
+            session.execute(insert_id_tbl2, (pk2, ck, value))
+            ck = ck + 1
+            segments_after_writes = get_segments_num()
+
+        segments_before = get_cl_segments()
+        logger.debug(f"Wrote {ck} rows, now have {segments_after_writes} segments ({segments_before}")
+
+        logger.debug("Flush ks2.tbl2")
+        node1.flush(ks="ks2", table="tbl2")
+        node1.compact(keyspace="ks2", tables=["tbl2"])
+
+        segments_after = get_cl_segments()
+        logger.debug(f"After flush+compact, now have {get_segments_num()} segments ({segments_after})")
+
+        assert len(list(session.execute(f"SELECT * FROM ks2.tbl2 WHERE pk = {pk1}"))) == 0
+        # Need to ensure at least one segment was freed.
+        # We assume the last segment, containing the tombstone, was among the freed ones.
+        removed_segments = segments_before - segments_after
+        assert len(removed_segments) > 0
+
+        logger.debug(f"The following segments were removed: {removed_segments}")
+
+        logger.debug("Kill + restart the node")
+        node1.stop(gently=False)
+        node1.start(wait_for_binary_proto=True)
+
+        session = self.patient_cql_connection(node1)
+
+        # CL replay should not have resurrected the data
+        assert len(list(session.execute(f"SELECT * FROM ks2.tbl2 WHERE pk = {pk1}"))) == 0

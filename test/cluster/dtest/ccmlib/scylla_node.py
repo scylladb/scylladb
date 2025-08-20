@@ -557,6 +557,13 @@ class ScyllaNode:
             cmd.append(table)
         self.nodetool(" ".join(cmd), **kwargs)
 
+    def compact(self, keyspace: str = "", tables: str | None = ()) -> None:
+        compact_cmd = ["compact"]
+        if keyspace:
+            compact_cmd.append(keyspace)
+        compact_cmd += tables
+        self.nodetool(" ".join(compact_cmd))
+
     def drain(self, block_on_log: bool = False) -> None:
         mark = self.mark_log()
         self.nodetool("drain")
