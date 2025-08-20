@@ -8,7 +8,6 @@
 
 #pragma once
 #include "aws_credentials_provider.hh"
-#include "utils/s3/retry_strategy.hh"
 
 namespace aws {
 
@@ -28,7 +27,6 @@ private:
     seastar::future<> update_credentials();
     s3::aws_credentials parse_creds(const seastar::sstring& creds);
 
-    default_retry_strategy retry_strategy;
     std::string ec2_metadata_ip{"169.254.169.254"};
     unsigned port{80};
     static constexpr unsigned session_duration{21600};
