@@ -361,7 +361,7 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
 
         if (!is_fqn.empty()) {
             auto type = is_fqn.front();
-            auto endpoints = sst_man.config().object_storage_endpoints() 
+            auto endpoints = sst_man.db_config().object_storage_endpoints() 
                 | std::views::filter(std::bind_back(&osp::is_storage_of_type, type)) 
                 ;
             if (endpoints.empty()) {
@@ -1948,7 +1948,7 @@ void shard_of_with_tablets(schema_ptr schema,
                            std::filesystem::path data_dir_path,
                            sstables::sstables_manager& sstable_manager,
                            reader_permit permit) {
-    auto& dbcfg = sstable_manager.config();
+    auto& dbcfg = sstable_manager.db_config();
     auto tablets = tools::load_system_tablets(dbcfg, data_dir_path,
                                               schema->ks_name(), schema->cf_name(),
                                               permit).get();
