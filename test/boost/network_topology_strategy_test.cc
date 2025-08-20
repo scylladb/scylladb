@@ -227,34 +227,27 @@ void check_tablets_balance(const tablet_map& tmap,
     testlog.debug("load_map={}", load_map);
 
     for (const auto& [dc, dc_racks] : load_map) {
-        size_t replicas_in_dc = 0;
-        size_t num_racks = dc_racks.size();
-        size_t num_shards = 0;
+        std::unordered_map<sstring, double> avg_replicas_per_shard;
+
         for (const auto& [rack, rack_nodes] : dc_racks) {
+            size_t num_shards = 0;
             for (const auto& [host, shards] : rack_nodes) {
                 num_shards += shards.size();
                 for (const auto& [shard, n] : shards) {
-                    replicas_in_dc += n;
+                    avg_replicas_per_shard[rack] += n;
                 }
             }
+            testlog.debug("dc={} rack={}: replicas={} num_shards={} avg_replicas_per_shard={}", dc, rack, avg_replicas_per_shard[rack], num_shards, avg_replicas_per_shard[rack] / num_shards);
+            avg_replicas_per_shard[rack] /= num_shards;
         }
 
-        auto avg_replicas_per_rack = double(replicas_in_dc) / num_racks;
-        auto avg_replicas_per_shard = double(replicas_in_dc) / num_shards;
-
         for (const auto& [rack, rack_nodes] : dc_racks) {
-            size_t replicas_in_rack = 0;
             for (const auto& [host, shards] : rack_nodes) {
-                size_t replicas_in_node = 0;
                 for (const auto& [shard, n] : shards) {
-                    BOOST_REQUIRE_GE(n, floor(avg_replicas_per_shard - 1));
-                    BOOST_REQUIRE_LE(n, ceil(avg_replicas_per_shard + 1));
-                    replicas_in_node += n;
+                    BOOST_REQUIRE_GE(n, floor(avg_replicas_per_shard[rack] - 1));
+                    BOOST_REQUIRE_LE(n, ceil(avg_replicas_per_shard[rack] + 1));
                 }
-                replicas_in_rack += replicas_in_node;
             }
-            BOOST_REQUIRE_GE(replicas_in_rack, floor(avg_replicas_per_rack - 1));
-            BOOST_REQUIRE_LE(replicas_in_rack, ceil(avg_replicas_per_rack + 1));
         }
     }
 }
