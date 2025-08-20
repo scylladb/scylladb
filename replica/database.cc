@@ -372,6 +372,7 @@ database::view_update_read_concurrency_sem() {
 static auto configure_sstables_manager(const db::config& cfg, const database_config& db_cfg) {
     return sstables::sstables_manager::config {
         .available_memory = db_cfg.available_memory,
+        .enable_sstable_key_validation = cfg.enable_sstable_key_validation(),
     };
 }
 

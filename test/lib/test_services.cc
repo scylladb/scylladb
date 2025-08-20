@@ -253,6 +253,7 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             *db_config,
             sstables::sstables_manager::config{
                 .available_memory = cfg.available_memory,
+                .enable_sstable_key_validation = db_config->enable_sstable_key_validation(),
             },
             feature_service,
             cache_tracker,

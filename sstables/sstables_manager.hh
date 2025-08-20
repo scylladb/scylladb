@@ -95,6 +95,7 @@ class sstables_manager {
 public:
     struct config {
         size_t available_memory;
+        bool enable_sstable_key_validation = false;
     };
 
 private:

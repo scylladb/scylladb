@@ -222,7 +222,7 @@ sstable_writer_config sstables_manager::configure_writer(sstring origin) const {
     if (!cfg.promoted_index_auto_scale_threshold) {
         cfg.promoted_index_auto_scale_threshold = std::numeric_limits<size_t>::max();
     }
-    cfg.validation_level = _db_config.enable_sstable_key_validation()
+    cfg.validation_level = _config.enable_sstable_key_validation
             ? mutation_fragment_stream_validation_level::clustering_key
             : mutation_fragment_stream_validation_level::token;
     cfg.summary_byte_cost = summary_byte_cost(_db_config.sstable_summary_ratio());
