@@ -89,6 +89,10 @@ def test_count_opened_cql_connections(cql):
     user = f"test_user_{unique_name()}"
     sl = f"sl_{unique_name()}"
 
+    # Drop 'driver' service level, to enable legacy behavior where
+    # all connections start using user service level after user auth
+    cql.execute(f"DROP SERVICE LEVEL driver")
+
     cql.execute(f"CREATE ROLE {user} WITH login = true AND password='{user}'")
     cql.execute(f"CREATE SERVICE LEVEL {sl} WITH shares = 100")
     cql.execute(f"ATTACH SERVICE LEVEL {sl} TO {user}")
