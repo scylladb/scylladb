@@ -1229,7 +1229,7 @@ struct to_comparable_bytes_visitor {
         encode_reversed(type, serialized_bytes_view, out);
     }
 
-    // TODO: Handle other types
+    void operator()(const empty_type_impl&) {}
 
     void operator()(const abstract_type& type) {
         // Unimplemented
@@ -1351,7 +1351,7 @@ struct from_comparable_bytes_visitor {
         decode_reversed(type, comparable_bytes_view, out);
     }
 
-    // TODO: Handle other types
+    void operator()(const empty_type_impl&) {}
 
     void operator()(const abstract_type& type) {
         // Unimplemented
@@ -1364,7 +1364,7 @@ void from_comparable_bytes(const abstract_type& type, managed_bytes_view& compar
 }
 
 managed_bytes_opt comparable_bytes::to_serialized_bytes(const abstract_type& type) const {
-    if (_encoded_bytes.empty()) {
+    if (_encoded_bytes.empty() && type != *empty_type) {
         return managed_bytes_opt();
     }
 
