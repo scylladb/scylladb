@@ -1224,7 +1224,7 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
 
     auto map = keyspace->strategy_options();
     map["class"] = keyspace->strategy_name();
-    store_map(m, ckey, "replication", timestamp, map);
+    store_map(m, ckey, "replication", timestamp, cql3::statements::to_flattened_map(map));
 
     if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
         schema_ptr scylla_keyspaces_s = scylla_keyspaces();
@@ -1295,11 +1295,12 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
     // (or screw up shared pointers)
     const auto& replication = row.get_nonnull<map_type_impl::native_type>("replication");
 
-    cql3::statements::property_definitions::map_type strategy_options;
+    cql3::statements::property_definitions::map_type flat_strategy_options;
     for (auto& p : replication) {
-        strategy_options.emplace(value_cast<sstring>(p.first), value_cast<sstring>(p.second));
+        flat_strategy_options.emplace(value_cast<sstring>(p.first), value_cast<sstring>(p.second));
     }
-    auto strategy_name = strategy_options["class"];
+    auto strategy_options = cql3::statements::from_flattened_map(flat_strategy_options);
+    auto strategy_name = std::get<sstring>(strategy_options["class"]);
     strategy_options.erase("class");
     bool durable_writes = row.get_nonnull<bool>("durable_writes");
 

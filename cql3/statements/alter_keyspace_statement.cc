@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <vector>
 #include "alter_keyspace_statement.hh"
+#include "cql3/statements/property_definitions.hh"
 #include "locator/tablets.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "mutation/canonical_mutation.hh"
@@ -145,7 +146,13 @@ void add_prefixed_key(const sstring& prefix,
     for (const auto& [in_key, in_value]: in) {
         out[prefix + ":" + in_key] = in_value;
     }
-};
+}
+
+void add_prefixed_key(const sstring& prefix,
+                      const cql3::statements::property_definitions::extended_map_type& in,
+                      cql3::statements::property_definitions::map_type& out) {
+    add_prefixed_key(prefix, cql3::statements::to_flattened_map(in), out);
+}
 
 cql3::statements::property_definitions::map_type get_current_options_flattened(
         const shared_ptr<cql3::statements::ks_prop_defs>& ks,

@@ -435,6 +435,9 @@ using error_sink_fn = std::function<void(const std::string&)>;
 
 std::map<sstring, sstring> convert_property_map(const collection_constructor&, error_sink_fn);
 
+std::map<sstring, std::variant<sstring, std::vector<sstring>>>
+convert_extended_property_map(const collection_constructor&, error_sink_fn);
+
 // Constructs an object of a user-defined type
 // For example: "{field1: 23343, field2: ?}"
 // During preparation usertype constructors with constant values are converted to expr::constant.
