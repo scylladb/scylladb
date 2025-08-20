@@ -11,14 +11,16 @@ import requests
 import re
 
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
+from cassandra.policies import WhiteListRoundRobinPolicy
 from cassandra.query import SimpleStatement, ConsistencyLevel
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
-from test.pylib.util import wait_for
+from test.pylib.tablets import get_tablet_replicas
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 
-from test.topology.conftest import skip_mode
+from test.topology.conftest import cluster_con, skip_mode
 from test.topology.util import get_topology_coordinator, find_server_by_host_id, new_test_keyspace
 
 
@@ -321,3 +323,61 @@ async def test_canceling_hint_draining(manager: ManagerClient):
         # Make sure draining finishes successfully.
         assert await_sync_point(s1, sync_point, 60)
         await s1_log.wait_for(f"Removed hint directory for {host_id2}")
+
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_hint_to_pending(manager: ManagerClient):
+    """
+    This test reproduces the scenario where sending a hint to a pending replica is needed
+    for consistency as in https://github.com/scylladb/scylladb/issues/19835.
+    In the test, we have 2 servers and a table with RF=1. One server is stopped, and we
+    perform a write generating a hint to it. Then, we start the stopped server again and
+    immediately request a tablet migration from that server. The hint is sent after the
+    tablet migration performs streaming but before it completes. The order of operations
+    is induced using error injections.
+    At the end, we verify that the hint was successfully applied.
+    """
+    servers = await manager.servers_add(2, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+    ])
+    cql = cluster_con([servers[0].ip_addr], 9042, False, load_balancing_policy=
+                                 WhiteListRoundRobinPolicy([servers[0].ip_addr])).connect()
+    await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await manager.api.disable_tablet_balancing(servers[1].ip_addr)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        table = f"{ks}.t"
+        await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
+        replica = (await get_tablet_replicas(manager, servers[0], ks, "t", 0))[0]
+        host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+        if replica[0] != host_ids[1]:
+            # We'll use server 0 as the source of the hint, so the tablet replica needs to be on server 1
+            await manager.api.move_tablet(servers[0].ip_addr, ks, "t", replica[0], replica[1], host_ids[1], 0, 0)
+
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.others_not_see_server(servers[1].ip_addr)
+
+        await cql.run_async(SimpleStatement(f"INSERT INTO {table} (pk, v) VALUES (0, 0)", consistency_level=ConsistencyLevel.ANY))
+
+        await manager.api.enable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay", False)
+        await manager.server_start(servers[1].server_id)
+        sync_point = create_sync_point(servers[0])
+
+        await manager.api.enable_injection(servers[0].ip_addr, "pause_after_streaming_tablet", False)
+        tablet_migration = asyncio.create_task(manager.api.move_tablet(servers[0].ip_addr, ks, "t", host_ids[1], 0, host_ids[0], 0, 0))
+
+        async def migration_reached_streaming():
+            stages = await cql.run_async(f"SELECT stage FROM system.tablets WHERE keyspace_name='{ks}' ALLOW FILTERING")
+            logger.info(f"Current stages: {[row.stage for row in stages]}")
+            return set(["streaming"]) == set([row.stage for row in stages]) or None
+        await wait_for(migration_reached_streaming, time.time() + 60)
+
+        await manager.api.disable_injection(servers[0].ip_addr, "hinted_handoff_pause_hint_replay")
+        assert await_sync_point(servers[0], sync_point, 30)
+
+        await manager.api.message_injection(servers[0].ip_addr, "pause_after_streaming_tablet")
+        await asyncio.wait([tablet_migration])
+
+        assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
