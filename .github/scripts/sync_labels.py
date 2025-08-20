@@ -30,8 +30,13 @@ def copy_labels_from_linked_issues(repo, pr_number):
             try:
                 issue = repo.get_issue(int(issue_number))
                 for label in issue.labels:
+                    # Copy ALL labels from issues to PR when PR is opened
                     pr.add_to_labels(label.name)
-                print(f"Labels from issue #{issue_number} copied to PR #{pr_number}")
+                    print(f"Copied label '{label.name}' from issue #{issue_number} to PR #{pr_number}")
+                    if label.name in ['P0', 'P1']:
+                        pr.add_to_labels('force_on_cloud')
+                        print(f"Added force_on_cloud label to PR #{pr_number} due to {label.name} label")
+                print(f"All labels from issue #{issue_number} copied to PR #{pr_number}")
             except Exception as e:
                 print(f"Error processing issue #{issue_number}: {e}")
 
@@ -74,9 +79,22 @@ def sync_labels(repo, number, label, action, is_issue=False):
             target = repo.get_issue(int(pr_or_issue_number))
         if action == 'labeled':
             target.add_to_labels(label)
+            if label in ['P0', 'P1'] and is_issue:
+                # Only add force_on_cloud to PRs when P0/P1 is added to an issue
+                target.add_to_labels('force_on_cloud')
+                print(f"Added 'force_on_cloud' label to PR #{pr_or_issue_number} due to {label} label")
             print(f"Label '{label}' successfully added.")
         elif action == 'unlabeled':
             target.remove_from_labels(label)
+            if label in ['P0', 'P1'] and is_issue:
+                # Check if any other P0/P1 labels remain before removing force_on_cloud
+                remaining_priority_labels = [l.name for l in target.labels if l.name in ['P0', 'P1']]
+                if not remaining_priority_labels:
+                    try:
+                        target.remove_from_labels('force_on_cloud')
+                        print(f"Removed 'force_on_cloud' label from PR #{pr_or_issue_number} as no P0/P1 labels remain")
+                    except Exception as e:
+                        print(f"Warning: Could not remove force_on_cloud label: {e}")
             print(f"Label '{label}' successfully removed.")
         elif action == 'opened':
             copy_labels_from_linked_issues(repo, number)
