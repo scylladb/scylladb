@@ -254,6 +254,7 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             sstables::sstables_manager::config{
                 .available_memory = cfg.available_memory,
                 .enable_sstable_key_validation = db_config->enable_sstable_key_validation(),
+                .memory_reclaim_threshold = db_config->components_memory_reclaim_threshold,
             },
             feature_service,
             cache_tracker,

@@ -258,7 +258,7 @@ future<> sstables_manager::maybe_reclaim_components() {
 }
 
 size_t sstables_manager::get_components_memory_reclaim_threshold() const {
-    return _config.available_memory * _db_config.components_memory_reclaim_threshold();
+    return _config.available_memory * _config.memory_reclaim_threshold();
 }
 
 size_t sstables_manager::get_memory_available_for_reclaimable_components() const {
@@ -266,7 +266,7 @@ size_t sstables_manager::get_memory_available_for_reclaimable_components() const
 }
 
 future<> sstables_manager::components_reclaim_reload_fiber() {
-    auto components_memory_reclaim_threshold_observer = _db_config.components_memory_reclaim_threshold.observe([&] (double) {
+    auto components_memory_reclaim_threshold_observer = _config.memory_reclaim_threshold.observe([&] (double) {
         // any change to the components_memory_reclaim_threshold config should trigger reload/reclaim
         _components_memory_change_event.signal();
     });
