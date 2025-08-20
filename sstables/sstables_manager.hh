@@ -98,6 +98,7 @@ public:
         bool enable_sstable_key_validation = false;
         double sstable_summary_ratio = 0.0005;
         size_t column_index_size = 64 << 10;
+        utils::updateable_value<uint32_t> column_index_auto_scale_threshold_in_kb = utils::updateable_value<uint32_t>(10240);
     };
 
 private:

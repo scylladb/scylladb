@@ -375,6 +375,7 @@ static auto configure_sstables_manager(const db::config& cfg, const database_con
         .enable_sstable_key_validation = cfg.enable_sstable_key_validation(),
         .sstable_summary_ratio = cfg.sstable_summary_ratio(),
         .column_index_size = cfg.column_index_size_in_kb() * 1024,
+        .column_index_auto_scale_threshold_in_kb = cfg.column_index_auto_scale_threshold_in_kb,
     };
 }
 
