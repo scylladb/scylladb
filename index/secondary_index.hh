@@ -23,7 +23,8 @@ namespace index {
  */
 class secondary_index {
 public:
-    static const sstring custom_index_option_name;
+    static const sstring custom_class_option_name;
+    static const sstring index_version_option_name;
 
 };
 

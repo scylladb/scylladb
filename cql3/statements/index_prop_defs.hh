@@ -31,7 +31,7 @@ public:
 
     void validate();
     index_options_map get_raw_options();
-    index_options_map get_options();
+    index_options_map get_options(const schema_ptr& schema);
 };
 
 }

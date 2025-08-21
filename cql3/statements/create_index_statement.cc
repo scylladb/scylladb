@@ -359,7 +359,7 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     index_metadata_kind kind;
     index_options_map index_options;
     if (_properties->custom_class) {
-        index_options = _properties->get_options();
+        index_options = _properties->get_options(schema);
         kind = index_metadata_kind::custom;
     } else {
         kind = schema->is_compound() ? index_metadata_kind::composites : index_metadata_kind::keys;
