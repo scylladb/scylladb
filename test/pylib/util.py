@@ -345,3 +345,59 @@ def execute_with_tracing(cql : Session, statement : str | Statement, log : bool 
         logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
 
     return ret
+
+
+class DictWithMaxSize[KT, VT](dict[KT, VT]):
+    """A dictionary that tracks statistics about its maximum number of items."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Initialize max size to current length after initialization
+        self._max_size = len(self)
+
+        # By default, just collect statistics, but if max_size property is set than check the boundary.
+        self._check_max_size = False
+
+    @property
+    def max_size(self) -> int:
+        return self._max_size
+
+    @max_size.setter
+    def max_size(self, value: int) -> None:
+        """Set the upper boundary for number of items in the dict and enable the check."""
+
+        self._max_size = value
+        self._check_max_size = True
+        self._update_max_size()
+
+    @max_size.deleter
+    def max_size(self) -> None:
+        """Reset the statistics to the current count."""
+
+        self._max_size = len(self)
+        self._check_max_size = False
+
+    def _update_max_size(self) -> None:
+        """Update the maximum item count if current count is larger."""
+
+        actual_size = len(self)
+        if self._max_size < actual_size:
+            if self._check_max_size:
+                raise ValueError(
+                    f"Actual number of elements in the dict ({actual_size}) is greater than expected: {self._max_size}"
+                )
+            self._max_size = actual_size
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._update_max_size()
+
+    def update(self, other=(), /, **kwds):
+        super().update(other, **kwds)
+        self._update_max_size()
+
+    def setdefault(self, key, default=None):
+        result = super().setdefault(key, default)
+        self._update_max_size()
+        return result

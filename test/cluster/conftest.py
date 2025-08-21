@@ -13,6 +13,7 @@ import ssl
 import tempfile
 import platform
 import urllib.parse
+from argparse import BooleanOptionalAction
 from multiprocessing import Event, Process
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,6 +25,8 @@ from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster import ScyllaClusterManager
 from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_cql_connection_options
+from test.pylib.db.model import ClusterMetric
+from test.pylib.db.writer import DEFAULT_DB_NAME, CLUSTER_METRICS_TABLE, SQLiteWriter
 import logging
 import pytest
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
@@ -64,6 +67,8 @@ def pytest_addoption(parser):
     parser.addoption('--artifacts_dir_url', action='store', type=str, default=None, dest='artifacts_dir_url',
                      help='Provide the URL to artifacts directory to generate the link to failed tests directory '
                           'with logs')
+    parser.addoption('--gather-cluster-metrics', action=BooleanOptionalAction, default=False,
+                     help='Collect metrics for clusters, e.g., maximum number of running servers')
 
 
 # This is a constant used in `pytest_runtest_makereport` below to store the full report for the test case
@@ -327,3 +332,34 @@ async def prepare_3_nodes_cluster(request, manager):
 async def prepare_3_racks_cluster(request, manager):
     if request.node.get_closest_marker("prepare_3_racks_cluster"):
         await manager.servers_add(3, auto_rack_dc="dc1")
+
+
+@pytest.fixture(scope="session")
+def sqlite_writer(request: pytest.FixtureRequest) -> SQLiteWriter | None:
+    if request.config.getoption("--gather-cluster-metrics"):
+        return SQLiteWriter(Path(request.config.getoption("--tmpdir")) / DEFAULT_DB_NAME)
+    return None
+
+
+@pytest.fixture(autouse=True)
+async def handle_max_running_servers(request: pytest.FixtureRequest,
+                                     manager: ManagerClient,
+                                     build_mode: str,
+                                     sqlite_writer: SQLiteWriter | None) -> AsyncGenerator[None]:
+    if not sqlite_writer:
+        if marker := request.node.get_closest_marker("max_running_servers"):
+            await manager.set_max_running_servers(value=int(marker.kwargs["amount"]))
+        # else:
+        #     pytest.fail(f"Marker 'max_running_servers' need to be set for {request.node.name}")
+
+    yield
+
+    if sqlite_writer:
+        record = ClusterMetric(
+            test_name=request.node.nodeid,
+            mode=build_mode,
+            max_running_servers=await manager.get_max_running_servers(),
+        )
+        sqlite_writer.write_row(record, CLUSTER_METRICS_TABLE)
+
+    await manager.reset_max_running_servers()
