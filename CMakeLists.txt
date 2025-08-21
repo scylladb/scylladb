@@ -271,7 +271,6 @@ add_subdirectory(mutation)
 add_subdirectory(mutation_writer)
 add_subdirectory(node_ops)
 add_subdirectory(readers)
-add_subdirectory(redis)
 add_subdirectory(replica)
 add_subdirectory(raft)
 add_subdirectory(repair)
@@ -315,7 +314,6 @@ set(scylla_libs
     mutation_writer
     raft
     readers
-    redis
     repair
     replica
     schema
