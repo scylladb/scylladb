@@ -4,6 +4,17 @@ import yaml
 import os
 import socket
 
+def is_bind_mount(path):
+    # Check if the file or its parent is a mount point (bind mount or otherwise)
+    path = os.path.abspath(path)
+    with open("/proc/self/mountinfo") as f:
+        for line in f:
+            mount_point = line.split()[4]
+            if path == mount_point or path.startswith(mount_point + "/"):
+                # If the mount point is not the root filesystem, it's a mount
+                if mount_point != "/":
+                    return True
+    return False
 
 class ScyllaSetup:
     def __init__(self, arguments, extra_arguments):
@@ -33,6 +44,8 @@ class ScyllaSetup:
         self._replaceNodeFirstBoot = arguments.replaceNodeFirstBoot
         self._io_setup = arguments.io_setup
         self._extra_args = extra_arguments
+        self._dc = arguments.dc
+        self._rack = arguments.rack
 
     def _run(self, *args, **kwargs):
         logging.info('running: {}'.format(args))
@@ -87,6 +100,36 @@ class ScyllaSetup:
                 f.write("True\n")
             else:
                 f.write("False\n")
+
+    def write_rackdc_properties(self):
+        if self._dc is None and self._rack is None:
+            return
+
+        if self._endpointSnitch is None:
+            self._endpointSnitch = "GossipingPropertyFileSnitch"
+
+        if self._endpointSnitch != "GossipingPropertyFileSnitch":
+            raise RuntimeError(
+                f"Cannot use dc and rack parameters together with endpoint snitch '{self._endpointSnitch}'. "
+                "The dc and rack parameters are only supported with the endpoint snitch 'GossipingPropertyFileSnitch'."
+            )
+
+        conf_dir = "/etc/scylla"
+        rackdc_path = os.path.join(conf_dir, "cassandra-rackdc.properties")
+
+        if is_bind_mount(rackdc_path):
+            raise RuntimeError(
+                f"Cannot write {rackdc_path}: file is a bind mount. "
+                "The dc and rack parameters cannot be used when this file is mounted from the host."
+            )
+
+        # We must specify both dc and rack in the file.
+        # If only one of them is set, write a default value for the other.
+        dc = self._dc if self._dc is not None else "datacenter1"
+        rack = self._rack if self._rack is not None else "rack1"
+        with open(rackdc_path, "w") as f:
+            f.write(f"dc={dc}\n")
+            f.write(f"rack={rack}\n")
 
     def arguments(self):
         args = []
