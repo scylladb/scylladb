@@ -176,6 +176,8 @@ class PythonTest(Test):
         ]
         if options.gather_metrics:
             self.args.append("--gather-metrics")
+        if options.gather_cluster_metrics:
+            self.args.append("--gather-cluster-metrics")
         self.args.append(f"--alluredir={self.allure_dir}")
         if not options.save_log_on_success:
             self.args.append("--allure-no-capture")
