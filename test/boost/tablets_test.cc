@@ -2637,12 +2637,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         auto host1 = topo.add_node(node_state::normal);
         auto host2 = topo.add_node(node_state::normal);
         auto host3 = topo.add_node(node_state::normal);
-        topo.start_new_rack();
+        auto rack2 = topo.start_new_rack();
         racks.push_back(topo.rack());
-        auto host4 = topo.add_node(node_state::decommissioning);
+        auto host4 = topo.add_node(node_state::normal);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto ks_name = add_keyspace_racks(e, {{rack2.dc, {rack2.rack}}}, 4);
         auto table1 = add_table(e, ks_name).get();
+
+        topo.set_node_state(host4, node_state::decommissioning);
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
             tablet_map tmap(4);
