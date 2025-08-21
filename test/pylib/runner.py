@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 TEST_CONFIG_FILENAME = "test_config.yaml"
 
-REPEATED_FILES = pytest.StashKey[set[pathlib.Path]]()
+REPEATING_FILES = pytest.StashKey[set[pathlib.Path]]()
 BUILD_MODE = pytest.StashKey[str]()
 RUN_ID = pytest.StashKey[int]()
 
@@ -205,8 +205,8 @@ def pytest_collect_file(file_path: pathlib.Path,
                         parent: pytest.Collector) -> Generator[None, list[pytest.Collector], list[pytest.Collector]]:
     collectors = yield
 
-    if len(collectors) == 1 and file_path not in parent.stash.setdefault(REPEATED_FILES, set()):
-        parent.stash[REPEATED_FILES].add(file_path)
+    if len(collectors) == 1 and file_path not in parent.stash.setdefault(REPEATING_FILES, set()):
+        parent.stash[REPEATING_FILES].add(file_path)
 
         build_modes = parent.config.build_modes
         if suite_config := TestSuiteConfig.from_pytest_node(node=collectors[0]):
@@ -227,6 +227,8 @@ def pytest_collect_file(file_path: pathlib.Path,
             collector.stash[BUILD_MODE] = build_mode
             collector.stash[RUN_ID] = run_id
             collector.stash[TEST_SUITE] = suite_config
+
+        parent.stash[REPEATING_FILES].remove(file_path)
 
     return collectors
 
