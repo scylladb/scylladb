@@ -6,7 +6,7 @@ SPHINXBUILD   := $(POETRY) run sphinx-build
 PAPER         :=
 BUILDDIR      := _build
 SOURCEDIR     := .
-PREVIEW_HOST  := 127.0.0.1
+PREVIEW_HOST  := 192.168.0.104
 FLAG          := manual
 CONF_PATH     := ./
 
