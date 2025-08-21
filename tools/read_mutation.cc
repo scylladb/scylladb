@@ -11,6 +11,7 @@
 #include "replica/database.hh"
 #include "partition_slice_builder.hh"
 #include "gms/feature_service.hh"
+#include "db/extensions.hh"
 
 #include <algorithm>
 #include <seastar/util/closeable.hh>
@@ -24,7 +25,9 @@ sstable_manager_service::sstable_manager_service(const db::config& dbcfg, sstabl
             .available_memory = memory::stats().total_memory(),
             .data_file_directories = dbcfg.data_file_directories(),
         },
-        feature_service, tracker, dir_sem, []{ return locator::host_id{}; }, scf, abort) {
+        feature_service, tracker, dir_sem, []{ return locator::host_id{}; }, scf, abort,
+        dbcfg.extensions().sstable_file_io_extensions())
+{
 }
 
 sstable_manager_service::~sstable_manager_service() = default;

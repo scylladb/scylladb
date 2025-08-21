@@ -264,6 +264,7 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             [host_id = locator::host_id::create_random_id()]{ return host_id; },
             scf,
             abort,
+            {}, // extensions
             current_scheduling_group(),
             sstm)
     , semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::test_env", reader_concurrency_semaphore::register_metrics::no)

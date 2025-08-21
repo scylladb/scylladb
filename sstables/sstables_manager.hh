@@ -117,6 +117,7 @@ private:
     db::corrupt_data_handler& _corrupt_data_handler;
     const db::config& _db_config;
     config _config;
+    std::vector<sstables::file_io_extension*> _file_io_extensions;
     gms::feature_service& _features;
 
     // _active and _undergoing_close are used in scylla-gdb.py to fetch all sstables
@@ -169,6 +170,7 @@ public:
             noncopyable_function<locator::host_id()>&& resolve_host_id,
             sstable_compressor_factory&,
             const abort_source& abort,
+            std::vector<file_io_extension*> file_io_extension = {},
             scheduling_group maintenance_sg = current_scheduling_group(),
             storage_manager* shared = nullptr);
     virtual ~sstables_manager();
@@ -197,7 +199,7 @@ public:
     const db::config& db_config() const { return _db_config; }
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
-    std::vector<sstables::file_io_extension*> file_io_extensions() const;
+    const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }
 
     // Get the highest supported sstable version, according to cluster features.
     sstables::sstable::version_types get_highest_supported_format() const noexcept;

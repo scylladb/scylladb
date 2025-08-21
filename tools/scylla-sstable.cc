@@ -25,6 +25,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/select_statement.hh"
 #include "db/config.hh"
+#include "db/extensions.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
 #include "db/object_storage_endpoint_param.hh"
@@ -2787,6 +2788,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             [host_id = locator::host_id::create_random_id()] { return host_id; },
             *scf,
             abort,
+            dbcfg.extensions().sstable_file_io_extensions(),
             current_scheduling_group(),
             &sstm.local());
         auto close_sst_man = deferred_close(sst_man);
