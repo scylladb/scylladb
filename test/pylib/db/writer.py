@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
-import asyncio
+
 import datetime
 import sqlite3
 import os
@@ -13,17 +13,21 @@ from contextlib import contextmanager
 
 from attr import AttrsInstance, asdict
 
+from test import HOST_ID
+
+
 TESTS_TABLE = 'tests'
 METRICS_TABLE = 'test_metrics'
 SYSTEM_RESOURCE_METRICS_TABLE = 'system_resource_metrics'
 CGROUP_MEMORY_METRICS_TABLE = 'cgroup_memory_metrics'
-DEFAULT_DB_NAME = 'sqlite.db'
+DEFAULT_DB_NAME = f'sqlite_{HOST_ID}.db'
 DATE_TIME_TEMPLATE = '%Y-%m-%d %H:%M:%S.%f'
 
 create_table = [
     f'''
     CREATE TABLE IF NOT EXISTS {TESTS_TABLE} (
         id INTEGER PRIMARY KEY,
+        host_id VARCHAR(5) NOT NULL,
         architecture VARCHAR(15) NOT NULL,
         directory VARCHAR(255),
         mode VARCHAR(15) NOT NULL,
@@ -36,6 +40,7 @@ create_table = [
     CREATE TABLE IF NOT EXISTS {METRICS_TABLE} (
         id INTEGER PRIMARY KEY,
         test_id INT NOT NULL,
+        host_id VARCHAR(5) NOT NULL,
         user_sec REAL,
         system_sec REAL,
         usage_sec REAL,
@@ -51,6 +56,7 @@ create_table = [
     f'''
     CREATE TABLE IF NOT EXISTS {SYSTEM_RESOURCE_METRICS_TABLE} (
         id INTEGER PRIMARY KEY,
+        host_id VARCHAR(5) NOT NULL,
         memory REAL,
         cpu REAL,
         timestamp DATETIME
@@ -61,6 +67,7 @@ create_table = [
     CREATE TABLE IF NOT EXISTS {CGROUP_MEMORY_METRICS_TABLE} (
         id INTEGER PRIMARY KEY,
         test_id INT NOT NULL,
+        host_id VARCHAR(5) NOT NULL,
         memory REAL,
         timestamp DATETIME,
         FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id)

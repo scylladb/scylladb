@@ -4,10 +4,13 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
+import hashlib
+import socket
+import time
 import os
 from pathlib import Path
 
-__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR", "path_to"]
+__all__ = ["ALL_MODES", "BUILD_DIR", "DEBUG_MODES", "HOST_ID", "TEST_DIR", "TEST_RUNNER", "TOP_SRC_DIR", "path_to"]
 
 
 TEST_RUNNER = os.environ.get("SCYLLA_TEST_RUNNER", "pytest")
@@ -24,6 +27,11 @@ ALL_MODES = {
     "coverage": "Coverage",
 }
 DEBUG_MODES = {"debug", "sanitize"}
+
+HOST_ID = os.environ.get("SCYLLA_TEST_HOST_ID")
+if HOST_ID is None:
+    HOST_ID = hashlib.sha3_224((socket.gethostname() + str(time.time())).encode("utf-8")).hexdigest()[:5]
+    os.environ["SCYLLA_TEST_HOST_ID"] = HOST_ID
 
 
 def path_to(mode: str, *components: str) -> str:

@@ -15,7 +15,7 @@ from pathlib import Path
 from subprocess import CalledProcessError
 from tempfile import TemporaryDirectory
 
-from test import TOP_SRC_DIR
+from test import HOST_ID, TOP_SRC_DIR
 from test.pylib.host_registry import Host
 
 LDAP_SERVER_CONFIGURATION_FILE = Path('test', 'resource', 'slapd.conf')
@@ -109,7 +109,7 @@ def make_saslauthd_conf(ip, port, instance_path):
 def start_ldap(host: Host, port: int, instance_root: Path, toxiproxy_byte_limit: int):
     tp_port = 8474
 
-    tp_log_file = open(instance_root.parent / 'toxiproxy_server.log', 'w')
+    tp_log_file = open(instance_root.parent / f'toxiproxy_server_{HOST_ID}.log', 'w')
     tp_server = subprocess.Popen(
         ['toxiproxy-server', '-host', host, '-port', str(tp_port)],
         stdout=tp_log_file,
