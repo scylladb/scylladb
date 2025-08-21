@@ -1786,6 +1786,7 @@ get_view_natural_endpoint(
         bool use_tablets_rack_aware_view_pairing,
         replica::cf_stats& cf_stats) {
     auto& topology = base_erm->get_token_metadata_ptr()->get_topology();
+    auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     auto& my_location = topology.get_location(me);
     auto& my_datacenter = my_location.dc;
     auto* network_topology = dynamic_cast<const locator::network_topology_strategy*>(&replication_strategy);
@@ -1799,51 +1800,55 @@ get_view_natural_endpoint(
         if (auto* np = topology.find_node(ep)) {
             return *np;
         }
-        throw std::runtime_error(format("get_view_natural_endpoint: {} replica {} not found in topology", is_view ? "view" : "base", ep));
+        throw std::runtime_error(format("get_view_natural_endpoint: base replica {} not found in topology", ep));
     };
+
+    // We need to use get_replicas() for pairing to be stable in case base or view tablet
+    // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
+    auto base_nodes = base_erm->get_replicas(base_token) | std::views::transform([&] (const locator::host_id& ep) -> const locator::node& {
+        return resolve(topology, ep, false);
+    }) | std::ranges::to<node_vector>();
+    auto view_nodes = view_erm->get_replicas(view_token) | std::views::transform([&] (const locator::host_id& ep) -> const locator::node& {
+        return resolve(view_topology, ep, true);
+    }) | std::ranges::to<node_vector>();
+
     std::function<bool(const locator::node&)> is_candidate;
     if (network_topology) {
         is_candidate = [&] (const locator::node& node) { return node.dc() == my_datacenter; };
     } else {
         is_candidate = [&] (const locator::node&) { return true; };
     }
-    auto process_candidate = [&] (node_vector& nodes, const locator::topology& topology, const locator::host_id& ep, bool is_view) {
-        auto& node = resolve(topology, ep, is_view);
+    auto process_candidate = [&] (node_vector& nodes, std::reference_wrapper<const locator::node> node) {
         if (is_candidate(node)) {
             nodes.emplace_back(node);
         }
     };
 
-    // We need to use get_replicas() for pairing to be stable in case base or view tablet
-    // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
-    for (auto&& base_endpoint : base_erm->get_replicas(base_token)) {
-        process_candidate(base_endpoints, topology, base_endpoint, false);
+    for (auto&& base_node : base_nodes) {
+        process_candidate(base_endpoints, base_node);
     }
 
-    auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
     if (use_legacy_self_pairing) {
-        for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
-            auto it = std::ranges::find(base_endpoints, view_endpoint, std::mem_fn(&locator::node::host_id));
+        for (auto&& view_node : view_nodes) {
+            auto it = std::ranges::find(base_endpoints, view_node.get().host_id(), std::mem_fn(&locator::node::host_id));
             // If this base replica is also one of the view replicas, we use
             // ourselves as the view replica.
-            if (view_endpoint == me && it != base_endpoints.end()) {
+            if (view_node.get().host_id() == me && it != base_endpoints.end()) {
                 return me;
             }
+
             // We have to remove any endpoint which is shared between the base
             // and the view, as it will select itself and throw off the counts
             // otherwise.
             if (it != base_endpoints.end()) {
                 base_endpoints.erase(it);
-            } else {
-                auto& node = resolve(view_topology, view_endpoint, true);
-                if (!network_topology || node.dc() == my_datacenter) {
-                    view_endpoints.push_back(node);
-                }
+            } else if (is_candidate(view_node)) {
+                view_endpoints.push_back(view_node);
             }
         }
     } else {
-        for (auto&& view_endpoint : view_erm->get_replicas(view_token)) {
-            process_candidate(view_endpoints, view_topology, view_endpoint, true);
+        for (auto&& view_node : view_nodes) {
+            process_candidate(view_endpoints, view_node);
         }
     }
 
