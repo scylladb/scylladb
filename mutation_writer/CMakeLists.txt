@@ -15,7 +15,8 @@ target_link_libraries(mutation_writer
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    schema)
+    schema
+    scylla-precompiled-header)
 
 check_headers(check-headers mutation_writer
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

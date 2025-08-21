@@ -19,7 +19,8 @@ target_link_libraries(compaction
     xxHash::xxhash
   PRIVATE
     mutation_writer
-    replica)
+    replica
+    scylla-precompiled-header)
 
 check_headers(check-headers compaction
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

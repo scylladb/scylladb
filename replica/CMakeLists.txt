@@ -22,7 +22,8 @@ target_link_libraries(replica
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    absl::raw_hash_set)
+    absl::raw_hash_set
+    scylla-precompiled-header)
 
 check_headers(check-headers replica
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

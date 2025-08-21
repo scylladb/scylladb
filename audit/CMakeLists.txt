@@ -14,6 +14,7 @@ target_link_libraries(scylla_audit
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    cql3)
+    cql3
+    scylla-precompiled-header)
 
 add_whole_archive(audit scylla_audit)
