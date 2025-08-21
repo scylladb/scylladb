@@ -13,7 +13,7 @@
 #include "utils/managed_bytes.hh"
 #include "bytes_ostream.hh"
 #include <seastar/core/simple-stream.hh>
-#include "boost/variant/variant.hpp"
+#include <boost/variant/variant.hpp>
 #include "bytes_ostream.hh"
 #include "utils/fragment_range.hh"
 #include <variant>
