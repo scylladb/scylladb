@@ -38,10 +38,15 @@ struct hash<locator::endpoint_dc_rack> {
 
 namespace locator {
 
+static logging::logger logger("network_topology_strategy");
+
 network_topology_strategy::network_topology_strategy(replication_strategy_params params, const topology* topo) :
         abstract_replication_strategy(params,
                                       replication_strategy_type::network_topology) {
     auto opts = _config_options;
+
+    logger.debug("options={}", opts);
+
     process_tablet_options(*this, opts, params);
 
     size_t rep_factor = 0;
