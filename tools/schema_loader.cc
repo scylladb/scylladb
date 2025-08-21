@@ -603,7 +603,7 @@ schema_ptr do_load_schema_from_sstable(const db::config& dbcfg, std::filesystem:
         .available_memory = memory::stats().total_memory(),
         .data_file_directories = dbcfg.data_file_directories(),
     };
-    sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, corrupt_data_handler, dbcfg, sm_cfg, feature_service, tracker,
+    sstables::sstables_manager sst_man("tools::load_schema_from_sstable", large_data_handler, corrupt_data_handler, sm_cfg, feature_service, tracker,
         dir_sem,
         [host_id = locator::host_id::create_random_id()] { return host_id; }, *scf, abort, dbcfg.extensions().sstable_file_io_extensions());
     auto close_sst_man = deferred_close(sst_man);

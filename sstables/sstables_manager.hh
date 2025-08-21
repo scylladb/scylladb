@@ -116,7 +116,6 @@ private:
     storage_manager* _storage;
     db::large_data_handler& _large_data_handler;
     db::corrupt_data_handler& _corrupt_data_handler;
-    const db::config& _db_config;
     config _config;
     std::vector<sstables::file_io_extension*> _file_io_extensions;
     gms::feature_service& _features;
@@ -163,7 +162,6 @@ public:
             sstring name,
             db::large_data_handler& large_data_handler,
             db::corrupt_data_handler& corrupt_data_handler,
-            const db::config& dbcfg,
             config cfg,
             gms::feature_service& feat,
             cache_tracker&,
@@ -197,7 +195,6 @@ public:
     }
 
     virtual sstable_writer_config configure_writer(sstring origin) const;
-    const db::config& db_config() const { return _db_config; }
     const config& get_config() const noexcept { return _config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
     const std::vector<sstables::file_io_extension*>& file_io_extensions() const { return _file_io_extensions; }

@@ -2778,7 +2778,6 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
             "scylla_sstable",
             large_data_handler,
             corrupt_data_handler,
-            dbcfg,
             sm_cfg,
             feature_service,
             tracker,

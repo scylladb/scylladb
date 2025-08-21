@@ -27,12 +27,11 @@ namespace sstables {
 logging::logger smlogger("sstables_manager");
 
 sstables_manager::sstables_manager(
-    sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, const db::config& dbcfg, struct config cfg, gms::feature_service& feat, cache_tracker& ct, directory_semaphore& dir_sem,
+    sstring name, db::large_data_handler& large_data_handler, db::corrupt_data_handler& corrupt_data_handler, struct config cfg, gms::feature_service& feat, cache_tracker& ct, directory_semaphore& dir_sem,
     noncopyable_function<locator::host_id()>&& resolve_host_id, sstable_compressor_factory& compressor_factory, const abort_source& abort, std::vector<file_io_extension*> file_io_extensions, scheduling_group maintenance_sg, storage_manager* shared)
     : _storage(shared)
     , _large_data_handler(large_data_handler)
     , _corrupt_data_handler(corrupt_data_handler)
-    , _db_config(dbcfg)
     , _config(std::move(cfg))
     , _file_io_extensions(std::move(file_io_extensions))
     , _features(feat)

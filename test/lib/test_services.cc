@@ -250,7 +250,6 @@ test_env::impl::impl(test_env_config cfg, sstable_compressor_factory& scfarg, ss
             "test_env",
             cfg.large_data_handler == nullptr ? nop_ld_handler : *cfg.large_data_handler,
             cfg.corrupt_data_handler == nullptr ? nop_cd_handler : *cfg.corrupt_data_handler,
-            *db_config,
             sstables::sstables_manager::config{
                 .available_memory = cfg.available_memory,
                 .enable_sstable_key_validation = db_config->enable_sstable_key_validation(),
