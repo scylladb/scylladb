@@ -29,4 +29,6 @@ def parse():
     parser.add_argument('--endpoint-snitch', default=None, dest='endpointSnitch', help="Set endpoint snitch")
     parser.add_argument('--replace-node-first-boot', default=None, dest='replaceNodeFirstBoot', help="Host ID of a dead node to replace.")
     parser.add_argument('--replace-address-first-boot', default=None, dest='replaceAddressFirstBoot', help="[[deprecated]] IP address of a dead node to replace.")
+    parser.add_argument('--dc', default=None, dest='dc', help="The datacenter name for this node, for use with the snitch GossipingPropertyFileSnitch.")
+    parser.add_argument('--rack', default=None, dest='rack', help="The rack name for this node, for use with the snitch GossipingPropertyFileSnitch.")
     return parser.parse_known_args()

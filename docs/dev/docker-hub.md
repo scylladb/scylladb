@@ -356,6 +356,20 @@ The `--authenticator` command lines option allows to provide the authenticator c
 
 The `--authorizer` command lines option allows to provide the authorizer class ScyllaDB will use. By default ScyllaDB uses the `AllowAllAuthorizer` which allows any action to any user. The second option is using the `CassandraAuthorizer` parameter, which stores permissions in `system.permissions` table.
 
+**Since: 2025.4**
+
+#### `--dc NAME`
+
+The `--dc` command line option sets the datacenter name for the ScyllaDB node.
+When specified, ScyllaDB sets the endpoint snitch to `GossipingPropertyFileSnitch` and uses it to assign the provided datacenter name.
+
+#### `--rack NAME`
+
+The `--rack` command line option sets the rack name for the ScyllaDB node.
+When specified, ScyllaDB sets the endpoint snitch to `GossipingPropertyFileSnitch` and uses it to assign the provided rack name.
+
+For example, to make a ScyllaDB cluster with nodes in different racks, assign a unique rack name to each node.
+
 ### Related Links
 
 * [Best practices for running ScyllaDB on docker](http://docs.scylladb.com/procedures/best_practices_scylla_on_docker/)

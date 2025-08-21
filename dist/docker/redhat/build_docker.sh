@@ -106,6 +106,7 @@ bcp dist/common/supervisor/scylla_util.sh /opt/scylladb/supervisor/scylla_util.s
 
 # XXX: This is required to run setup scripts in root-mode with non-root user
 run chown -R scylla:scylla /etc/scylla.d
+run chown -R scylla:scylla /etc/scylla
 
 bconfig --user scylla:scylla
 bconfig --env PATH=/opt/scylladb/python3/bin:/usr/bin:/usr/sbin
