@@ -16,6 +16,7 @@
 #include "service/migration_listener.hh"
 #include "auth/authenticator.hh"
 #include <seastar/core/distributed.hh>
+#include "service/qos/effective_service_level_controller.hh"
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "timeout_config.hh"
 #include <seastar/core/semaphore.hh>
@@ -229,6 +230,7 @@ public:
     service::endpoint_lifecycle_subscriber* get_lifecycle_listener() const noexcept;
     service::migration_listener* get_migration_listener() const noexcept;
     qos::qos_configuration_change_subscriber* get_qos_configuration_listener() const noexcept;
+    qos::effective_service_level_event_subscriber* get_effective_service_level_event_subscriber() const noexcept;
     cql_sg_stats::request_kind_stats& get_cql_opcode_stats(cql_binary_opcode op) {
         return scheduling_group_get_specific<cql_sg_stats>(_stats_key).get_cql_opcode_stats(op);
     }
@@ -373,7 +375,8 @@ private:
 
 class cql_server::event_notifier : public service::migration_listener,
                                    public service::endpoint_lifecycle_subscriber,
-                                   public qos::qos_configuration_change_subscriber
+                                   public qos::qos_configuration_change_subscriber,
+                                   public qos::effective_service_level_event_subscriber
 {
     cql_server& _server;
     std::set<cql_server::connection*> _topology_change_listeners;
@@ -426,4 +429,6 @@ public:
 inline service::endpoint_lifecycle_subscriber* cql_server::get_lifecycle_listener() const noexcept { return _notifier.get(); }
 inline service::migration_listener* cql_server::get_migration_listener() const noexcept { return _notifier.get(); }
 inline qos::qos_configuration_change_subscriber* cql_server::get_qos_configuration_listener() const noexcept { return _notifier.get(); }
+inline qos::effective_service_level_event_subscriber* cql_server::get_effective_service_level_event_subscriber() const noexcept { return _notifier.get(); }
+
 }
