@@ -673,7 +673,14 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
         locator::host_id hid = it->second.get_host_id();
         if (hid == locator::host_id::create_null_id()) {
             // If there is no host id in the new state there should be one locally
-            hid = get_host_id(ep);
+            try {
+                hid = get_host_id(ep);
+            } catch (const std::runtime_error& e) {
+                // If we can't find the host id, it means that the endpoint is not in the topology and we will skip it, logging the warning
+                // Note that this can happen e.g. after the node has been removed (`force_remove_endpoint()` called) and the gossip message handling is delayed
+                logger.warn("Failed to get host id for {}: {}", ep, e.what());
+                return make_ready_future<>();
+            }
         }
         if (hid == my_host_id()) {
             logger.trace("Ignoring gossip for {} because it maps to local id, but is not local address", ep);
