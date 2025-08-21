@@ -25,6 +25,7 @@
 #include "test/lib/test_utils.hh"
 #include "test/lib/topology_builder.hh"
 #include "db/config.hh"
+#include "cql3/util.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
 
@@ -114,17 +115,47 @@ future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "", std::map<
 
 // Run in a seastar thread
 static
-sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
+sstring do_add_keyspace(cql_test_env& e, std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf, int initial_tablets = 0) {
     static std::atomic<int> ks_id = 0;
     auto ks_name = fmt::format("keyspace{}", ks_id.fetch_add(1));
+
     sstring rf_options;
     for (auto& [dc, rf] : dc_rf) {
-        rf_options += format(", '{}': {}", dc, rf);
+        auto rf_fmt = std::visit(overloaded_functor(
+            [] (int rf) { return fmt::format("{}", rf); },
+            [] (const std::vector<sstring>& racks) {
+                return fmt::format("[{}]", fmt::join(racks | std::views::transform(&cql3::util::single_quote), ", "));
+            }), rf);
+        rf_options += fmt::format(", '{}': {}", dc, rf_fmt);
     }
+
+    testlog.info("Adding keyspace {} with replication factor options: {}", ks_name, rf_options);
+
     e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy'{}}}"
                               " and tablets = {{'enabled': true, 'initial': {}}}",
                               ks_name, rf_options, initial_tablets)).get();
+
     return ks_name;
+}
+
+// Run in a seastar thread
+static
+sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
+    std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf_expanded;
+    for (auto& [dc, rf] : dc_rf) {
+        dc_rf_expanded[dc] = rf;
+    }
+    return do_add_keyspace(e, std::move(dc_rf_expanded), initial_tablets);
+}
+
+// Run in a seastar thread
+static
+sstring add_keyspace_racks(cql_test_env& e, std::unordered_map<sstring, std::vector<sstring>> dc_rf, int initial_tablets = 0) {
+    std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf_expanded;
+    for (auto& [dc, rf] : dc_rf) {
+        dc_rf_expanded[dc] = rf;
+    }
+    return do_add_keyspace(e, std::move(dc_rf_expanded), initial_tablets);
 }
 
 // Run in a seastar thread
@@ -2231,12 +2262,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         auto host1 = topo.add_node(node_state::normal);
         auto host2 = topo.add_node(node_state::normal);
         auto host3 = topo.add_node(node_state::normal);
-        topo.start_new_rack();
+        auto rack2 = topo.start_new_rack();
         racks.push_back(topo.rack());
-        auto host4 = topo.add_node(node_state::decommissioning);
+        auto host4 = topo.add_node(node_state::normal);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto ks_name = add_keyspace_racks(e, {{rack2.dc, {rack2.rack}}}, 4);
         auto table1 = add_table(e, ks_name).get();
+
+        topo.set_node_state(host4, node_state::decommissioning);
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
             tablet_map tmap(4);
