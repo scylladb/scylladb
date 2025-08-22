@@ -13,9 +13,8 @@ import pytest
 
 from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
 from test.pylib.cql_repl import CQL_TEST_SUFFIX, CqlFile
-from test.pylib.runner import testpy_test_fixture_scope
+from test.pylib.runner import testpy_test_fixture_scope, add_host_option, add_cql_connection_options
 from test.pylib.suite.base import get_testpy_test
-from test.pylib.suite.python import add_host_option, add_cql_connection_options
 
 if TYPE_CHECKING:
     from collections.abc import Generator

@@ -12,7 +12,6 @@ import os
 import pathlib
 import shlex
 from contextlib import asynccontextmanager
-from functools import cache
 from typing import TYPE_CHECKING
 
 from scripts import coverage
@@ -26,8 +25,6 @@ if TYPE_CHECKING:
     import argparse
     from collections.abc import Callable, Awaitable, AsyncGenerator
     from typing import Optional, Union
-
-    from pytest import Parser
 
 
 class PythonTestSuite(TestSuite):
@@ -263,40 +260,3 @@ class PythonTest(Test):
         async with self.run_ctx(options=options):
             self.success = await run_test(test=self, options=options, env=self.suite.scylla_env)
         return self
-
-
-# Use cache to execute this function once per pytest session.
-@cache
-def add_host_option(parser: Parser) -> None:
-    parser.addoption("--host", default="localhost",
-                     help="a DB server host to connect to")
-
-
-# Use cache to execute this function once per pytest session.
-@cache
-def add_cql_connection_options(parser: Parser) -> None:
-    """Add pytest options for a CQL connection."""
-
-    cql_options = parser.getgroup("CQL connection options")
-    cql_options.addoption("--port", default="9042",
-                          help="CQL port to connect to")
-    cql_options.addoption("--ssl", action="store_true",
-                          help="Connect to CQL via an encrypted TLSv1.2 connection")
-    cql_options.addoption("--auth_username",
-                          help="username for authentication")
-    cql_options.addoption("--auth_password",
-                          help="password for authentication")
-
-
-# Use cache to execute this function once per pytest session.
-@cache
-def add_s3_options(parser: Parser) -> None:
-    """Options for tests which use S3 server (i.e., cluster/object_store and cqlpy/test_tools.py)"""
-
-    s3_options = parser.getgroup("S3 server settings")
-    s3_options.addoption('--s3-server-address')
-    s3_options.addoption('--s3-server-port', type=int)
-    s3_options.addoption('--aws-access-key')
-    s3_options.addoption('--aws-secret-key')
-    s3_options.addoption('--aws-region')
-    s3_options.addoption('--s3-server-bucket')

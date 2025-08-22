@@ -14,7 +14,6 @@ import logging
 import os
 import pathlib
 import re
-import shutil
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -22,19 +21,13 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 import colorama
-import universalasync
 import yaml
 
-from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, TEST_DIR, TEST_RUNNER
+from test import ALL_MODES, DEBUG_MODES, TOP_SRC_DIR, TEST_DIR
 from test.pylib.artifact_registry import ArtifactRegistry
 from test.pylib.host_registry import HostRegistry
-from test.pylib.ldap_server import start_ldap
-from test.pylib.minio_server import MinioServer
-from test.pylib.resource_gather import get_resource_gather, setup_cgroup
-from test.pylib.s3_proxy import S3ProxyServer
-from test.pylib.s3_server_mock import MockS3Server
-from test.pylib.azure_vault_server_mock import MockAzureVaultServer
-from test.pylib.util import LogPrefixAdapter, get_xdist_worker_id
+from test.pylib.resource_gather import get_resource_gather
+from test.pylib.util import get_xdist_worker_id
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -368,13 +361,6 @@ class Test:
         pass
 
 
-def init_testsuite_globals() -> None:
-    """Create global objects required for a test run."""
-
-    TestSuite.artifacts = ArtifactRegistry()
-    TestSuite.hosts = HostRegistry()
-
-
 def read_log(log_filename: pathlib.Path) -> str:
     """Intelligently read test log output"""
     try:
@@ -385,9 +371,6 @@ def read_log(log_filename: pathlib.Path) -> str:
         return "===Log {} not found===".format(log_filename)
     except OSError as e:
         return "===Error reading log {}===".format(e)
-
-
-toxiproxy_id_gen = 0
 
 
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
@@ -502,87 +485,6 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
         except Exception as e:
             report_error("Failed to run the test:\n{e}".format(e=e))
     return False
-
-
-def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) -> None:
-    # Ensure the dir exists.
-    dirname.mkdir(parents=True, exist_ok=True)
-
-    if not save_log_on_success:
-        # Remove old artifacts.
-        if pattern == '*':
-            shutil.rmtree(dirname, ignore_errors=True)
-        else:
-            for p in dirname.glob(pattern):
-                p.unlink()
-
-
-def prepare_dirs(tempdir_base: pathlib.Path, modes: list[str], gather_metrics: bool, save_log_on_success: bool = False) -> None:
-    setup_cgroup(gather_metrics)
-    prepare_dir(tempdir_base, "*.log", save_log_on_success)
-    for directory in ['report', 'ldap_instances']:
-        full_path_directory = tempdir_base / directory
-        prepare_dir(full_path_directory, '*', save_log_on_success)
-    for mode in modes:
-        prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
-        prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
-        prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
-        if TEST_RUNNER != "pytest":
-            prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
-
-
-@universalasync.async_to_sync_wraps
-async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
-    hosts = HostRegistry()
-
-    finalize = start_ldap(
-        host=await hosts.lease_host(),
-        port=5000,
-        instance_root=tempdir_base / 'ldap_instances',
-        toxiproxy_byte_limit=toxiproxy_byte_limit)
-    async def make_async_finalize():
-        finalize()
-
-    TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
-    ms = MinioServer(
-        tempdir_base=str(tempdir_base),
-        address=await hosts.lease_host(),
-        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
-    )
-    await ms.start()
-    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
-
-    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
-
-    mock_s3_server = MockS3Server(
-        host=await hosts.lease_host(),
-        port=2012,
-        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
-    )
-    await mock_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
-
-    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
-    proxy_s3_server = S3ProxyServer(
-        host=await hosts.lease_host(),
-        port=9002,
-        minio_uri=minio_uri,
-        max_retries=3,
-        seed=int(time.time()),
-        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
-    )
-    await proxy_s3_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
-
-    azure_vault_server = MockAzureVaultServer(
-        host=await hosts.lease_host(),
-        port=5467,
-        logger=LogPrefixAdapter(logger=logging.getLogger("azure_vault"), extra={"prefix": "azure_vault"}),
-    )
-    await azure_vault_server.start()
-    TestSuite.artifacts.add_exit_artifact(None, azure_vault_server.stop)
 
 
 def find_suite_config(path: pathlib.Path) -> pathlib.Path:

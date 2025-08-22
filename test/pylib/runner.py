@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
+import shutil
 import sys
+import time
 from argparse import BooleanOptionalAction
 from collections import defaultdict
 from itertools import chain, count, product
@@ -18,18 +21,24 @@ from random import randint
 from typing import TYPE_CHECKING
 
 import pytest
+import universalasync
 import yaml
 
 from test import ALL_MODES, DEBUG_MODES, TEST_RUNNER, TOP_SRC_DIR
+from test.pylib.artifact_registry import ArtifactRegistry
+from test.pylib.azure_vault_server_mock import MockAzureVaultServer
+from test.pylib.host_registry import HostRegistry
+from test.pylib.ldap_server import start_ldap
+from test.pylib.minio_server import MinioServer
+from test.pylib.resource_gather import setup_cgroup
+from test.pylib.s3_proxy import S3ProxyServer
+from test.pylib.s3_server_mock import MockS3Server
 from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     TestSuite,
     get_testpy_test,
-    init_testsuite_globals,
-    prepare_dirs,
-    start_3rd_party_services,
 )
-from test.pylib.util import get_modes_to_run
+from test.pylib.util import get_modes_to_run, LogPrefixAdapter
 
 if TYPE_CHECKING:
     from asyncio import AbstractEventLoop
@@ -97,6 +106,43 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     # Pass information about Scylla node from test.py to pytest.
     parser.addoption("--scylla-log-filename",
                      help="Path to a log file of a ScyllaDB node (for suites with type: Python)")
+
+
+# Use cache to execute this function once per pytest session.
+@cache
+def add_host_option(parser: pytest.Parser) -> None:
+    parser.addoption("--host", default="localhost",
+                     help="a DB server host to connect to")
+
+
+# Use cache to execute this function once per pytest session.
+@cache
+def add_cql_connection_options(parser: pytest.Parser) -> None:
+    """Add pytest options for a CQL connection."""
+
+    cql_options = parser.getgroup("CQL connection options")
+    cql_options.addoption("--port", default="9042",
+                          help="CQL port to connect to")
+    cql_options.addoption("--ssl", action="store_true",
+                          help="Connect to CQL via an encrypted TLSv1.2 connection")
+    cql_options.addoption("--auth_username",
+                          help="username for authentication")
+    cql_options.addoption("--auth_password",
+                          help="password for authentication")
+
+
+# Use cache to execute this function once per pytest session.
+@cache
+def add_s3_options(parser: pytest.Parser) -> None:
+    """Options for tests which use S3 server (i.e., cluster/object_store and cqlpy/test_tools.py)"""
+
+    s3_options = parser.getgroup("S3 server settings")
+    s3_options.addoption('--s3-server-address')
+    s3_options.addoption('--s3-server-port', type=int)
+    s3_options.addoption('--aws-access-key')
+    s3_options.addoption('--aws-secret-key')
+    s3_options.addoption('--aws-region')
+    s3_options.addoption('--s3-server-bucket')
 
 
 @pytest.fixture(autouse=True)
@@ -298,3 +344,94 @@ def modify_pytest_item(item: pytest.Item) -> None:
 
     item._nodeid = f"{item._nodeid}{suffix}"
     item.name = f"{item.name}{suffix}"
+
+
+def init_testsuite_globals() -> None:
+    """Create global objects required for a test run."""
+
+    TestSuite.artifacts = ArtifactRegistry()
+    TestSuite.hosts = HostRegistry()
+
+
+def prepare_dir(dirname: pathlib.Path, pattern: str, save_log_on_success: bool) -> None:
+    # Ensure the dir exists.
+    dirname.mkdir(parents=True, exist_ok=True)
+
+    if not save_log_on_success:
+        # Remove old artifacts.
+        if pattern == '*':
+            shutil.rmtree(dirname, ignore_errors=True)
+        else:
+            for p in dirname.glob(pattern):
+                p.unlink()
+
+
+def prepare_dirs(tempdir_base: pathlib.Path,
+                 modes: list[str],
+                 gather_metrics: bool,
+                 save_log_on_success: bool = False) -> None:
+    setup_cgroup(gather_metrics)
+    prepare_dir(tempdir_base, "*.log", save_log_on_success)
+    for directory in ['report', 'ldap_instances']:
+        full_path_directory = tempdir_base / directory
+        prepare_dir(full_path_directory, '*', save_log_on_success)
+    for mode in modes:
+        prepare_dir(tempdir_base / mode, "*.log", save_log_on_success)
+        prepare_dir(tempdir_base / mode, "*.reject", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "xml", "*.xml", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "failed_test", "*", save_log_on_success)
+        prepare_dir(tempdir_base / mode / "allure", "*.xml", save_log_on_success)
+        if TEST_RUNNER != "pytest":
+            prepare_dir(tempdir_base / mode / "pytest", "*", save_log_on_success)
+
+
+@universalasync.async_to_sync_wraps
+async def start_3rd_party_services(tempdir_base: pathlib.Path, toxiproxy_byte_limit: int):
+    hosts = HostRegistry()
+
+    finalize = start_ldap(
+        host=await hosts.lease_host(),
+        port=5000,
+        instance_root=tempdir_base / 'ldap_instances',
+        toxiproxy_byte_limit=toxiproxy_byte_limit)
+    async def make_async_finalize():
+        finalize()
+
+    TestSuite.artifacts.add_exit_artifact(None, make_async_finalize)
+    ms = MinioServer(
+        tempdir_base=str(tempdir_base),
+        address=await hosts.lease_host(),
+        logger=LogPrefixAdapter(logger=logging.getLogger("minio"), extra={"prefix": "minio"}),
+    )
+    await ms.start()
+    TestSuite.artifacts.add_exit_artifact(None, ms.stop)
+
+    TestSuite.artifacts.add_exit_artifact(None, hosts.cleanup)
+
+    mock_s3_server = MockS3Server(
+        host=await hosts.lease_host(),
+        port=2012,
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_mock"), extra={"prefix": "s3_mock"}),
+    )
+    await mock_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, mock_s3_server.stop)
+
+    minio_uri = f"http://{os.environ[ms.ENV_ADDRESS]}:{os.environ[ms.ENV_PORT]}"
+    proxy_s3_server = S3ProxyServer(
+        host=await hosts.lease_host(),
+        port=9002,
+        minio_uri=minio_uri,
+        max_retries=3,
+        seed=int(time.time()),
+        logger=LogPrefixAdapter(logger=logging.getLogger("s3_proxy"), extra={"prefix": "s3_proxy"}),
+    )
+    await proxy_s3_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, proxy_s3_server.stop)
+
+    azure_vault_server = MockAzureVaultServer(
+        host=await hosts.lease_host(),
+        port=5467,
+        logger=LogPrefixAdapter(logger=logging.getLogger("azure_vault"), extra={"prefix": "azure_vault"}),
+    )
+    await azure_vault_server.start()
+    TestSuite.artifacts.add_exit_artifact(None, azure_vault_server.stop)

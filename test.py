@@ -41,12 +41,10 @@ from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     Test,
     TestSuite,
-    init_testsuite_globals,
     output_is_a_tty,
     palette,
-    prepare_dirs,
-    start_3rd_party_services,
 )
+from test.pylib.runner import prepare_dirs, start_3rd_party_services, init_testsuite_globals
 from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
