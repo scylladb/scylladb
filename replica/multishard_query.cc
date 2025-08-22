@@ -18,6 +18,7 @@
 #include <fmt/core.h>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/try_future.hh>
 
 #include <fmt/ostream.h>
 
@@ -276,7 +277,7 @@ public:
             rm.rparts->permit.set_max_result_size(get_max_result_size());
             co_return rm.rparts->permit;
         }
-        auto permit = co_await _db.local().obtain_reader_permit(std::move(schema), description, timeout, std::move(trace_ptr));
+        auto permit = co_await coroutine::try_future(_db.local().obtain_reader_permit(std::move(schema), description, timeout, std::move(trace_ptr)));
         permit.set_max_result_size(get_max_result_size());
         co_return permit;
     }
@@ -859,22 +860,22 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     const auto& keyspace = local_db.find_keyspace(s->ks_name());
     auto query_method = keyspace.get_replication_strategy().uses_tablets() ? do_query_tablets<ResultBuilder> : do_query_vnodes<ResultBuilder>;
 
-    try {
+    auto account_failed_read = defer([&stats] {
+        ++stats.total_reads_failed;
+    });
+
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result = co_await query_method(db, s, cmd, ranges, std::move(trace_state), timeout, tombstone_gc_enabled,
+        auto result = co_await coroutine::try_future(query_method(db, s, cmd, ranges, std::move(trace_state), timeout, tombstone_gc_enabled,
                 [result_builder_factory, accounter = std::move(accounter)] () mutable {
 			return result_builder_factory(std::move(accounter));
-		});
+		}));
 
-        ++stats.total_reads;
         stats.short_mutation_queries += bool(result->is_short_read());
         auto hit_rate = local_db.find_column_family(s).get_global_cache_hit_rate();
+        account_failed_read.cancel();
+        ++stats.total_reads;
         co_return std::tuple(std::move(result), hit_rate);
-    } catch (...) {
-        ++stats.total_reads_failed;
-        throw;
-    }
 }
 
 namespace {
