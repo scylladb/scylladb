@@ -24,7 +24,7 @@ static logger test_logger("test_server");
 
 class test_server : public server {
 public:
-    test_server() : server("test_server", test_logger) {};
+    test_server() : server("test_server", test_logger, 30) {};
 protected:
     [[noreturn]] shared_ptr<connection> make_connection(socket_address, connected_socket&&, socket_address) {
         SCYLLA_ASSERT(false);

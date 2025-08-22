@@ -36,6 +36,7 @@ class server;
 // member function to perform request processing. This base class provides a
 // `_read_buf` and a `_write_buf` for reading requests and writing responses.
 class connection : public boost::intrusive::list_base_hook<> {
+    friend class server;
 public:
     using connection_process_loop = noncopyable_function<future<> ()>;
     using execute_under_tenant_type = noncopyable_function<future<> (connection_process_loop)>;
@@ -52,6 +53,8 @@ protected:
 
 private:
     future<> process_until_tenant_switch();
+    bool shutdown_input();
+    bool shutdown_output();
 public:
     connection(server& server, connected_socket&& fd);
     virtual ~connection();
@@ -70,6 +73,7 @@ public:
 
     static execute_under_tenant_type no_tenant();
 };
+
 
 // A generic TCP socket server.
 //
@@ -104,11 +108,12 @@ protected:
     };
     std::list<gentle_iterator> _gentle_iterators;
     std::vector<server_socket> _listeners;
+    std::chrono::seconds _shutdown_timeout;
 
 public:
-    server(const sstring& server_name, logging::logger& logger);
+    server(const sstring& server_name, logging::logger& logger, uint32_t shutdown_request_timeout);
 
-    virtual ~server();
+    virtual ~server() = default;
 
     // Makes sure listening sockets no longer generate new connections and aborts the
     // connected sockets, so that new requests are not served and existing requests don't

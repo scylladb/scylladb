@@ -59,6 +59,7 @@ future<> controller::listen(seastar::sharded<auth::service>& auth_service, db::c
                 ._read_consistency_level = make_consistency_level(cfg.redis_read_consistency_level()),
                 ._write_consistency_level = make_consistency_level(cfg.redis_write_consistency_level()),
                 ._total_redis_db_count = cfg.redis_database_count(),
+                ._request_timeout_on_shutdown_in_seconds = cfg.request_timeout_on_shutdown_in_seconds,
             };
         });
         return server->start(std::ref(_query_processor), std::ref(auth_service), std::move(get_config)).then([this, server, &cfg, ip, ceo, keepalive]() {
