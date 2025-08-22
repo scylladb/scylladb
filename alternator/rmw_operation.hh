@@ -51,6 +51,13 @@ public:
     enum class write_isolation {
         FORBID_RMW, LWT_ALWAYS, LWT_RMW_ONLY, UNSAFE_RMW
     };
+
+    struct execute_result {
+        executor::request_return_type result;
+        // WCUs consumed by the operation.
+        uint64_t wcu_cost;
+    };
+
     static constexpr auto WRITE_ISOLATION_TAG_KEY = "system:write_isolation";
 
     static write_isolation get_write_isolation_for_schema(schema_ptr schema);
@@ -114,15 +121,14 @@ public:
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
-    future<executor::request_return_type> execute(service::storage_proxy& proxy,
+    future<execute_result> execute(service::storage_proxy& proxy,
             std::optional<service::cas_shard> cas_shard,
             service::client_state& client_state,
             tracing::trace_state_ptr trace_state,
             service_permit permit,
             bool needs_read_before_write,
             stats& global_stats,
-            stats& per_table_stats,
-            uint64_t& wcu_total);
+            stats& per_table_stats);
     std::optional<service::cas_shard> shard_for_execute(bool needs_read_before_write);
 };
 
