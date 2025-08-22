@@ -589,6 +589,16 @@ class ScyllaServer:
         if self.cmd:
             self.cmd.send_signal(signal.SIGHUP)
 
+    def remove_config_option(self, key: str) -> None:
+        """Remove an option from conf/scylla.yaml.
+
+        If we're running, reload the config with a SIGHUP.
+        """
+        self.config.pop(key, None)  # don't fail if there is no such option in the config
+        self._write_config_file()
+        if self.cmd:
+            self.cmd.send_signal(signal.SIGHUP)
+
     def update_cmdline(self, cmdline_options: List[str]) -> None:
         """Update the command-line options by merging the new options into the existing ones.
            Takes effect only after the node is restarted."""
@@ -1393,6 +1403,17 @@ class ScyllaCluster:
         self.is_dirty = True
         self.servers[server_id].update_config(config_options=config_options)
 
+    def remove_config_option(self, server_id: ServerNum, key: str) -> None:
+        """Remove an option from conf/scylla.yaml of the given server.
+
+        If the server is running, reload the config with a SIGHUP.
+        Mark the cluster as dirty.
+        Fail if the server cannot be found.
+        """
+        assert server_id in self.servers, f"Server {server_id} unknown"
+        self.is_dirty = True
+        self.servers[server_id].remove_config_option(key=key)
+
     def update_cmdline(self, server_id: ServerNum, cmdline_options: List[str]) -> None:
         """Update the command-line options of the given server by merging the new options into the existing ones.
            The update only takes effect after restart.
@@ -1625,6 +1646,7 @@ class ScyllaClusterManager:
         add_put('/cluster/rebuild-node/{server_id}', self._cluster_rebuild_node)
         add_get('/cluster/server/{server_id}/get_config', self._server_get_config)
         add_put('/cluster/server/{server_id}/update_config', self._server_update_config)
+        add_put('/cluster/server/{server_id}/remove_config_option', self._server_remove_config_option)
         add_put('/cluster/server/{server_id}/update_cmdline', self._server_update_cmdline)
         add_put('/cluster/server/{server_id}/switch_executable', self._server_switch_executable)
         add_put('/cluster/server/{server_id}/change_ip', self._server_change_ip)
@@ -1937,6 +1959,19 @@ class ScyllaClusterManager:
         self.cluster.update_config(
             server_id=ServerNum(int(request.match_info["server_id"])),
             config_options=data["config_options"],
+        )
+
+    async def _server_remove_config_option(self, request: aiohttp.web.Request) -> None:
+        """Remove an option from conf/scylla.yaml of the given server.
+
+        If the server is running, reload the config with a SIGHUP.
+        Mark the cluster as dirty.
+        """
+        assert self.cluster
+        data = await request.json()
+        self.cluster.remove_config_option(
+            server_id=ServerNum(int(request.match_info["server_id"])),
+            key=data["key"],
         )
 
     async def _server_update_cmdline(self, request: aiohttp.web.Request) -> None:
