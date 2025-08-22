@@ -2057,11 +2057,16 @@ public:
 
     // Verify that the existing keyspaces are all RF-rack-valid.
     //
+    // Result:
+    // * If `enforce_rf_rack_valid_keyspaces`, throws an exception with a relevant message
+    //   if there is a keyspace that violates RF-rack-validity.
+    // * If not `enforce_rf_rack_valid_keyspaces`, a warning will be printed for each keyspace
+    //   that is not RF-rack-valid, but no exception should be produced.
+    //
     // Preconditions:
-    // * the option `rf_rack_valid_keyspaces` in enabled,
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`
     //   must contain a complete list of racks and data centers in the cluster.
-    void check_rf_rack_validity(const locator::token_metadata_ptr) const;
+    void check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr) const;
 private:
     // SSTable sampling might require considerable amounts of memory,
     // so we want to limit the number of concurrent sampling operations.
