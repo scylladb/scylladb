@@ -35,11 +35,12 @@ private:
             return bo::failure(std::make_exception_ptr(exceptions::protocol_exception(format("truncated frame: expected {:d} bytes, length is {:d}", attempted_read, actual_left))));
         }
     };
-    static void validate_utf8(std::string_view s) {
+    static utils::result_with_exception_ptr<void> validate_utf8(std::string_view s) {
         auto error_pos = utils::utf8::validate_with_error_position(to_bytes_view(s));
         if (error_pos) {
-            throw exceptions::protocol_exception(format("Cannot decode string as UTF8, invalid character at byte offset {}", *error_pos));
+            return bo::failure(exceptions::protocol_exception(format("Cannot decode string as UTF8, invalid character at byte offset {}", *error_pos)));
         }
+        return bo::success();
     }
 
     static utils::result_with_exception_ptr<db::consistency_level> wire_to_consistency(int16_t v) {
@@ -118,7 +119,10 @@ public:
         if (!output) [[unlikely]] {
             return bo::failure(std::move(output).assume_error());
         }
-        validate_utf8(s);
+        utils::result_with_exception_ptr<void> check = validate_utf8(s);
+        if (!check) [[unlikely]] {
+            return bo::failure(std::move(check).assume_error());
+        }
         return s;
     }
 
@@ -132,7 +136,10 @@ public:
             return bo::failure(std::move(bv).assume_error());
         }
         auto s = std::string_view(reinterpret_cast<const char*>(bv.assume_value().data()), bv.assume_value().size());
-        validate_utf8(s);
+        utils::result_with_exception_ptr<void> check = validate_utf8(s);
+        if (!check) [[unlikely]] {
+            return bo::failure(std::move(check).assume_error());
+        }
         return s;
     }
 
@@ -146,7 +153,10 @@ public:
             return bo::failure(std::move(bv).assume_error());
         }
         auto s = std::string_view(reinterpret_cast<const char*>(bv.assume_value().data()), bv.assume_value().size());
-        validate_utf8(s);
+        utils::result_with_exception_ptr<void> check = validate_utf8(s);
+        if (!check) [[unlikely]] {
+            return bo::failure(std::move(check).assume_error());
+        }
         return s;
     }
 
