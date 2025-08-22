@@ -2400,6 +2400,7 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
             _consumed_capacity._total_bytes = item_length;
         }
         if (previous_item) {
+            _old_item_size.emplace(item_length);
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
         }
     }
@@ -2451,26 +2452,32 @@ static future<rmw_operation::execute_result> rmw_operation_return(rjson::value&&
     return make_ready_future<rmw_operation::execute_result>(rjson::print(std::move(ret)), consumed_wcu);
 }
 
-static future<std::unique_ptr<rjson::value>> get_previous_item(
+// Holds an item and its size. This 
+struct item_with_size {
+    std::unique_ptr<rjson::value> item;
+    uint64_t size;
+};
+
+static future<item_with_size> get_previous_item(
             service::storage_proxy& proxy,
             service::client_state& client_state,
             schema_ptr schema,
             const partition_key& pk,
             const clustering_key& ck,
             service_permit permit,
-            db::consistency_level cl,
-            uint64_t& item_length)
+            db::consistency_level cl)
     {
         auto selection = cql3::selection::selection::wildcard(schema);
         auto command = previous_item_read_command(proxy, schema, ck, selection);
         command->allow_limit = db::allow_per_partition_rate_limit::yes;
         return proxy.query(schema, command, to_partition_ranges(*schema, pk), cl, service::storage_proxy::coordinator_query_options(executor::default_timeout(), std::move(permit), client_state)).then(
-            [schema, command, selection = std::move(selection), &item_length] (service::storage_proxy::coordinator_query_result qr) {
+            [schema, command, selection = std::move(selection)] (service::storage_proxy::coordinator_query_result qr) {
+        uint64_t item_length = 0;
         auto previous_item = executor::describe_single_item(schema, command->slice, *selection, *qr.query_result, {}, &item_length);
         if (previous_item) {
-            return make_ready_future<std::unique_ptr<rjson::value>>(std::make_unique<rjson::value>(std::move(*previous_item)));
+            return make_ready_future<item_with_size>(std::make_unique<rjson::value>(std::move(*previous_item)), item_length);
         } else {
-            return make_ready_future<std::unique_ptr<rjson::value>>();
+            return make_ready_future<item_with_size>();
         }
     });
 }
@@ -2497,7 +2504,6 @@ static future<uint64_t> get_previous_item_size(
             const partition_key& pk,
             const clustering_key& ck,
             service_permit permit) {
-    uint64_t item_length = 0;
     // The use of get_previous_item here is for DynamoDB calculation compatibility mode,
     // and the actual value is ignored. For performance reasons, we use CL_LOCAL_ONE.
     return get_previous_item(proxy, client_state, schema, pk, ck, permit, db::consistency_level::LOCAL_ONE).then([] (item_with_size&& item) {
@@ -2523,6 +2529,7 @@ future<rmw_operation::execute_result> rmw_operation::execute(service::storage_pr
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats).then([this, &proxy, trace_state, permit = std::move(permit)] (item_with_size&& previous_item) mutable {
+                _old_item_size.emplace(previous_item.size);
                 std::optional<mutation> m = apply(std::move(previous_item.item), api::new_timestamp());
                 if (!m) {
                     return make_ready_future<rmw_operation::execute_result>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)), 0);
@@ -2643,6 +2650,9 @@ public:
                check_needs_read_before_write(_condition_expression) ||
                _returnvalues == returnvalues::ALL_OLD;
     }
+    uint64_t item_length() const {
+        return _mutation_builder.length_in_bytes();
+    }
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
@@ -2696,6 +2706,8 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
     per_table_stats->api_operations.put_item++;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats);
+    // WCU is based on the maximum of the old and new item sizes, but we add the new size to the histogram.
+    per_table_stats->operation_sizes.put_item_op_size_kb.add(bytes_to_kib_ceil(op->item_length()));
     per_table_stats->wcu_total[stats::wcu_types::PUT_ITEM] += res.wcu_cost;
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += res.wcu_cost;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -2798,6 +2810,9 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     }
     per_table_stats->api_operations.delete_item++;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats);
+    if (op->old_item_size().has_value()) {
+        per_table_stats->operation_sizes.delete_item_op_size_kb.add(bytes_to_kib_ceil(*op->old_item_size()));
+    }
     per_table_stats->wcu_total[stats::wcu_types::DELETE_ITEM] += res.wcu_cost;
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += res.wcu_cost;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);

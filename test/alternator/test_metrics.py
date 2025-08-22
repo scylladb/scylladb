@@ -472,6 +472,54 @@ def test_get_item_size_split_item_falls_into_appropriate_bucket(test_table_s, me
     check_histogram_metric_increases('GetItem', 'get_item_op_size_kib', metrics, do_test, [(0, '17.000000'), (1, '20.000000'), (1, '+Inf')])
 
 @pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_put_item_size_no_items_is_zero(metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
+    check_histogram_metric_increases('PutItem', 'put_item_op_size_kib', metrics, lambda: None, [(0, '+Inf')])
+
+def test_put_item_many_items_fall_into_appropriate_buckets(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 1 * KB, 'b': 'b' * 5 * KB})
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 6 * KB})
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 401 * KB})
+    check_histogram_metric_increases('PutItem', 'put_item_op_size_kib', metrics, do_test, [(0, '6.000000'), (2, '7.000000'), (2, '372.000000'), (3, '446.000000'), (3, '+Inf')])
+
+# Verify that only the new item size is counted in the histogram. The WCU is
+# calculated as the maximum of the old and new item sizes, but the histogram
+# should log only the new item size.
+def test_put_item_increases_metrics_for_new_item_size_only(test_table_s, metrics):
+    pk = random_string()
+    points = [[value, {'op': 'PutItem', 'le': le}] for value, le in [(0, '6.000000'), (1, '7.000000'), (1, '+Inf')]]
+
+    test_table_s.put_item(Item={'p': pk, 'a': 'a', 'b': 'b' * 3 * KB})
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_put_item_op_size_kib_bucket', points):
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 6 * KB})
+
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_delete_item_is_zero_for_nonexistent_item(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
+    def do_test():
+        test_table_s.delete_item(Key={'p': random_string()})
+    check_histogram_metric_increases('DeleteItem', 'delete_item_op_size_kib', metrics, do_test, [(0, '+Inf')])
+
+@pytest.mark.parametrize("rbw_enabled", [True, False])
+def test_delete_item_many_items_fall_into_appropriate_buckets(test_table_s, metrics, cql, rbw_enabled):
+    set_rbw_enabled(rbw_enabled, cql)
+    if rbw_enabled:
+        points = [[value, {'op': 'DeleteItem', 'le': le}] for value, le in [(0, '24.000000'), (1, '29.000000'), (1, '372.000000'), (2, '446.000000'), (3, '+Inf')]]
+    else:
+        points = [[0, {'op': 'DeleteItem', 'le': '+Inf'}]]
+
+    # ~378KiB, ~24KiB, ~401KiB
+    pks = [random_string() for _ in range(3)]
+    test_table_s.put_item(Item={'p': pks[0], 'a': 'a' * 128 * KB, 'b': 'b' * 250 * KB})
+    test_table_s.put_item(Item={'p': pks[1], 'a': 'a' * 24 * KB})
+    test_table_s.put_item(Item={'p': pks[2], 'a': 'a' * 447 * KB})
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_delete_item_op_size_kib_bucket', points):
+        for pk in pks:
+            test_table_s.delete_item(Key={'p': pk})
+
+@pytest.mark.parametrize("rbw_enabled", [True, False])
 def test_batch_get_item_size_no_items_increases_zero_interval(test_table_s, metrics, cql, rbw_enabled):
     set_rbw_enabled(rbw_enabled, cql)
     def do_test():

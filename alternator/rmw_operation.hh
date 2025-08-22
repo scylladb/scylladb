@@ -76,6 +76,8 @@ protected:
     partition_key _pk = partition_key::make_empty();
     clustering_key _ck = clustering_key::make_empty();
     write_isolation _write_isolation;
+    // The length of the previous item in bytes, if it was read.
+    mutable std::optional<uint64_t> _old_item_size;
     mutable wcu_consumed_capacity_counter _consumed_capacity;
     // All RMW operations can have a ReturnValues parameter from the following
     // choices. But note that only UpdateItem actually supports all of them:
@@ -118,6 +120,7 @@ public:
     // Convert the above apply() into the signature needed by cas_request:
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override;
     virtual ~rmw_operation() = default;
+    const std::optional<uint64_t>& old_item_size() const { return _old_item_size; }
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
