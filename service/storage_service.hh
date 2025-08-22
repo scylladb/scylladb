@@ -615,8 +615,6 @@ private:
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip);
 
-    // Return ip of the peers table entry with given host id
-    future<std::optional<gms::inet_address>> get_ip_from_peers_table(locator::host_id id);
 public:
 
     sstring get_release_version();
