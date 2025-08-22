@@ -1061,11 +1061,8 @@ private:
                 throw;
             }
 
-            if (cfg->rf_rack_valid_keyspaces()) {
-                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
-                _db.local().check_rf_rack_validity(_token_metadata.local().get());
-                startlog.info("All keyspaces are RF-rack-valid");
-            }
+            startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+            _db.local().check_rf_rack_validity(cfg->rf_rack_valid_keyspaces(), _token_metadata.local().get());
 
             utils::loading_cache_config perm_cache_config;
             perm_cache_config.max_size = cfg->permissions_cache_max_entries();
