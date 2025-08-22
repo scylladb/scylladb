@@ -67,5 +67,6 @@
         "_queue_name + \"_tx_frags\"": ["queue"]
         "_queue_name + \"_rx_frags\"": ["queue"]
 "alternator/stats.cc":
+  allowmismatch: true
   params:
-    group_name:  "alternator"
+    group_name: "alternator"
