@@ -319,6 +319,9 @@ public:
 
     future<> update_peer_info(gms::inet_address ep, locator::host_id hid, const peer_info& info);
 
+    // Return ip of the peers table entry with given host id
+    future<std::optional<gms::inet_address>> get_ip_from_peers_table(locator::host_id id);
+
     future<> remove_endpoint(gms::inet_address ep);
 
     // Saves the key-value pair into system.scylla_local table.

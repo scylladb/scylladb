@@ -2149,6 +2149,14 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_i
     co_await _qp.execute_internal(query, db::consistency_level::ONE, values, cql3::query_processor::cache_internal::yes);
 }
 
+future<std::optional<gms::inet_address>> system_keyspace::get_ip_from_peers_table(locator::host_id id) {
+    auto peers = co_await load_host_ids();
+    if (auto it = std::ranges::find_if(peers, [&id] (const auto& e) { return e.second == id; }); it != peers.end()) {
+        co_return it->first;
+    }
+    co_return std::nullopt;
+}
+
 template <typename T>
 future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T& value, bool visible_before_cl_replay) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
