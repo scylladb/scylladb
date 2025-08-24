@@ -264,7 +264,7 @@ frozen_schema schema_registry_entry::frozen() const {
     return *_frozen_schema;
 }
 
-future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
+future<> schema_registry_entry::maybe_sync(seastar::noncopyable_function<future<>()> syncer) {
     switch (_sync_state) {
         case schema_registry_entry::sync_state::SYNCED:
             return make_ready_future<>();
