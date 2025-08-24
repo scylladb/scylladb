@@ -1461,7 +1461,7 @@ public:
     // Steps of the Paxos protocol
     future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
-    future<bool> accept_proposal(lw_shared_ptr<paxos::proposal> proposal, bool timeout_if_partially_accepted = true);
+    future<bool> accept_proposal(lw_shared_ptr<paxos::proposal> proposal, bool timeout_if_partially_accepted);
     future<> learn_decision(lw_shared_ptr<paxos::proposal> proposal, bool allow_hints = false);
     void prune(utils::UUID ballot);
     uint64_t id() const {
@@ -6679,7 +6679,19 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
 
             auto proposal = make_lw_shared<paxos::proposal>(ballot, freeze(*mutation));
 
-            bool is_accepted = co_await handler->accept_proposal(proposal);
+            // We pass timeout_if_partially_accepted := write to accept_proposal()
+            // for the following reasons:
+            //   * Write requests cannot be safely retried if some replicas respond with
+            //     accepts and others with rejects. In this case, the coordinator is
+            //     uncertain about the outcome of the LWT: a subsequent LWT may either
+            //     complete the Paxos round (if a quorum observed the accept) or overwrite it
+            //     (if a quorum did not). If the original LWT was actually completed by
+            //     later rounds and the coordinator retried it, the write could be applied
+            //     twice, potentially overwriting effects of other LWTs that slipped in
+            //     between.
+            //   * Read requests do not have this problem, so they can be safely retried.
+            bool is_accepted = co_await handler->accept_proposal(proposal, write);
+
             if (is_accepted) {
                 // The majority (aka a QUORUM) has promised the coordinator to
                 // accept the action associated with the computed ballot.
