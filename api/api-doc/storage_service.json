@@ -3313,11 +3313,11 @@
          "properties":{
             "start_token":{
                "type":"string",
-               "description":"The range start token"
+               "description":"The range start token (exclusive)"
             },
             "end_token":{
                "type":"string",
-               "description":"The range start token"
+               "description":"The range end token (inclusive)"
             },
             "endpoints":{
                "type":"array",
