@@ -381,6 +381,7 @@ public:
     named_value<string_map> server_encryption_options;
     named_value<string_map> client_encryption_options;
     named_value<string_map> alternator_encryption_options;
+    named_value<bool> alternator_force_read_before_write;
     named_value<uint32_t> ssl_storage_port;
     named_value<bool> enable_in_memory_data_store;
     named_value<bool> enable_cache;
