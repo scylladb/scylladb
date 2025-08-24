@@ -906,6 +906,14 @@ void schema_applier::commit_tables_and_views() {
     const auto& tables = diff.tables_and_views.local().tables;
     const auto& views = diff.tables_and_views.local().views;
 
+    // syncer function for marking a schema as synced after it's committed on all shards
+    auto syncer = [&diff] {
+        auto f = diff.tables_and_views.local().committed_on_all_shards.get_shared_future();
+        return [f = std::move(f)] () mutable -> future<> {
+            return std::move(f);
+        };
+    };
+
     for (auto& dropped_view : views.dropped) {
         auto s = dropped_view.get();
         replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
@@ -917,17 +925,17 @@ void schema_applier::commit_tables_and_views() {
 
     for (auto& schema : tables.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local(), syncer());
     }
 
     for (auto& schema : views.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, diff.new_token_metadata.local(), syncer());
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
     for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
-        bool changed = db.update_column_family(altered.new_schema);
+        bool changed = db.update_column_family(altered.new_schema, syncer());
         diff.tables_and_views.local().columns_changed.push_back(changed);
     }
 }
@@ -1017,6 +1025,22 @@ future<> schema_applier::finalize_tables_and_views() {
         for (auto& created_view : views.created) {
             co_await db.make_column_family_directory(created_view);
         }
+
+        // for the schemas that we added previously with a syncer function - signal and wait for them to be marked synced.
+        diff.tables_and_views.local().committed_on_all_shards.set_value();
+
+        co_await coroutine::parallel_for_each(tables.created, [] (const schema_ptr& s) {
+            return local_schema_registry().get(s->version())->registry_entry()->maybe_sync([] { return make_ready_future(); });
+        });
+        co_await coroutine::parallel_for_each(views.created, [] (const schema_ptr& s) {
+            return local_schema_registry().get(s->version())->registry_entry()->maybe_sync([] { return make_ready_future(); });
+        });
+        co_await coroutine::parallel_for_each(tables.altered, [] (const auto& altered) {
+            return local_schema_registry().get(altered.new_schema->version())->registry_entry()->maybe_sync([] { return make_ready_future(); });
+        });
+        co_await coroutine::parallel_for_each(views.altered, [] (const auto& altered) {
+            return local_schema_registry().get(altered.new_schema->version())->registry_entry()->maybe_sync([] { return make_ready_future(); });
+        });
     });
 
     // Insert column_mapping into history table for altered and created tables.
