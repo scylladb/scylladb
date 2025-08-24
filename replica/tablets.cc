@@ -551,7 +551,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
         auto& info = map.get_tablet_info(tid);
         for (auto r : info.replicas) {
             if (r.host == myid) {
-                auto& gc_state = db->get_compaction_manager().get_tombstone_gc_state();
+                auto& gc_state = db->get_compaction_manager().get_shared_tombstone_gc_state();
                 gc_state.insert_pending_repair_time_update(table, range, to_gc_clock(repair_time), r.shard);
                 tablet_logger.debug("Insert pending repair time for tombstone gc: table={} tablet={} range={} repair_time={}",
                         table, tid, range, repair_time);

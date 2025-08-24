@@ -121,7 +121,9 @@ void memtable::memtable_encoding_stats_collector::update(const ::schema& s, cons
 memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
     memtable_table_shared_data& table_shared_data,
     replica::table_stats& table_stats,
-    memtable_list* memtable_list, seastar::scheduling_group compaction_scheduling_group)
+    memtable_list* memtable_list,
+    seastar::scheduling_group compaction_scheduling_group,
+    shared_tombstone_gc_state* shared_gc_state)
         : dirty_memory_manager_logalloc::size_tracked_region()
         , _dirty_mgr(dmm)
         , _cleaner(*this, no_cache_tracker, table_stats.memtable_app_stats, compaction_scheduling_group)
@@ -130,6 +132,9 @@ memtable::memtable(schema_ptr schema, dirty_memory_manager& dmm,
         , _table_shared_data(table_shared_data)
         , partitions(dht::raw_token_less_comparator{})
         , _table_stats(table_stats) {
+    if (shared_gc_state) {
+        _tombstone_gc_snapshot.emplace(shared_gc_state->snapshot());
+    }
     logalloc::region::listen(this);
 }
 
