@@ -141,7 +141,7 @@ future<> table_helper::insert(cql3::query_processor& qp, service::migration_mana
 }
 
 future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migration_manager& mm, std::string_view keyspace_name, sstring replication_strategy_name,
-                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables) {
+                                      sstring replication_factor, service::query_state& qs, std::vector<table_helper*> tables, std::optional<unsigned int> init_tablets) {
     if (this_shard_id() != 0) {
         co_return;
     }
@@ -175,7 +175,7 @@ future<> table_helper::setup_keyspace(cql3::query_processor& qp, service::migrat
             else {
                 opts["replication_factor"] = replication_factor;
             }
-            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), std::nullopt, true);
+            auto ksm = keyspace_metadata::new_keyspace(keyspace_name, replication_strategy_name, std::move(opts), init_tablets, true);
             try {
                 co_await mm.announce(service::prepare_new_keyspace_announcement(db.real_database(), ksm, ts),
                         std::move(group0_guard), seastar::format("table_helper: create {} keyspace", keyspace_name));
