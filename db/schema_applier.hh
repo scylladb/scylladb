@@ -142,6 +142,7 @@ struct affected_tables_and_views_per_shard {
     schema_diff_per_shard tables;
     schema_diff_per_shard views;
     std::vector<bool> columns_changed;
+    shared_promise<> committed_on_all_shards;
 };
 
 struct affected_tables_and_views {
