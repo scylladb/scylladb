@@ -91,7 +91,7 @@ public:
     // Can be called from other shards
     bool is_synced() const;
     // Initiates asynchronous schema sync or returns ready future when is already synced.
-    future<> maybe_sync(std::function<future<>()> sync);
+    future<> maybe_sync(seastar::noncopyable_function<future<>()> sync);
     // Marks this schema version as synced. Syncing cannot be in progress.
     void mark_synced();
     // Can be called from other shards
