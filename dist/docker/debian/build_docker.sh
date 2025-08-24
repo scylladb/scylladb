@@ -12,6 +12,15 @@ product="$(<build/SCYLLA-PRODUCT-FILE)"
 version="$(sed 's/-/~/' <build/SCYLLA-VERSION-FILE)"
 release="$(<build/SCYLLA-RELEASE-FILE)"
 
+original_version="$(<build/SCYLLA-VERSION-FILE)"
+if [[ "$original_version" == *"-dev"* ]]; then
+    repo_file_url="https://downloads.scylladb.com/unstable/scylla/master/deb/unified/latest/scylladb-master/scylla.list"
+else
+    # Remove the last dot-separated component
+    repo_version="${original_version%.*}"
+    repo_file_url="https://downloads.scylladb.com/deb/ubuntu/scylla-$repo_version.list"
+fi
+
 mode="release"
 type="ubuntu"
 
@@ -73,6 +82,7 @@ bconfig() { buildah config "$@" "$container"; }
 if [ "$type" == "pro" ]; then
   container="$(buildah from docker.io/ubuntu:20.04)"
   bcp dist/docker/pro-attach-config.yaml /pro-attach-config.yaml
+  run mkdir -p /etc/apt/keyrings
 elif [ "$type" == "ubuntu" ]; then
   container="$(buildah from docker.io/ubuntu:24.04)"
 else
@@ -106,7 +116,9 @@ run apt-get -y update
 run apt-get -y upgrade
 run apt-get -y --no-install-suggests install dialog apt-utils
 run bash -ec "echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections"
-run apt-get -y --no-install-suggests install hostname supervisor python3 python3-yaml curl sudo systemd
+run apt-get -y --no-install-suggests install hostname supervisor python3 python3-yaml curl sudo systemd gnupg2
+run gpg --homedir /tmp --no-default-keyring --keyring /etc/apt/keyrings/scylladb.gpg --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys a43e06657bac99e3
+run curl -L --output /etc/apt/sources.list.d/scylla.list ${repo_file_url}
 run bash -ec "echo LANG=C.UTF-8 > /etc/default/locale"
 run bash -ec "dpkg -i packages/*.deb"
 run apt-get -y clean all
