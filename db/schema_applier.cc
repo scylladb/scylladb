@@ -946,6 +946,14 @@ void schema_applier::commit_tables_and_views() {
     const auto& tables = diff.tables_and_views.local().tables;
     const auto& views = diff.tables_and_views.local().views;
 
+    // syncer function for marking a schema as synced after it's committed on all shards
+    auto syncer = [&diff] {
+        auto f = diff.tables_and_views.local().committed_on_all_shards.get_shared_future();
+        return [f = std::move(f)] () mutable -> future<> {
+            return std::move(f);
+        };
+    };
+
     for (auto& dropped_view : views.dropped) {
         auto s = dropped_view.get();
         replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
@@ -957,17 +965,17 @@ void schema_applier::commit_tables_and_views() {
 
     for (auto& schema : tables.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local(), syncer());
     }
 
     for (auto& schema : views.created) {
         auto& ks = db.find_keyspace(schema->ks_name());
-        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local(), syncer());
     }
 
     diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
     for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
-        bool changed = db.update_column_family(altered.new_schema);
+        bool changed = db.update_column_family(altered.new_schema, syncer());
         diff.tables_and_views.local().columns_changed.push_back(changed);
     }
 }
@@ -1040,6 +1048,10 @@ future<> schema_applier::commit() {
 future<> schema_applier::finalize_tables_and_views() {
     auto& sharded_db = _proxy.local().get_db();
     auto& diff = _affected_tables_and_views;
+
+    co_await sharded_db.invoke_on_all([&diff] (replica::database& db) {
+        diff.tables_and_views.local().committed_on_all_shards.set_value();
+    });
 
     // first drop views and *only then* the tables, if interleaved it can lead
     // to a mv not finding its schema when snapshotting since the main table
