@@ -14,6 +14,15 @@ product="$(<build/SCYLLA-PRODUCT-FILE)"
 version="$(sed 's/-/~/' <build/SCYLLA-VERSION-FILE)"
 release="$(<build/SCYLLA-RELEASE-FILE)"
 
+original_version="$(<build/SCYLLA-VERSION-FILE)"
+if [[ "$original_version" == *"-dev"* ]]; then
+    repo_file_url="https://downloads.scylladb.com/unstable/scylla/master/rpm/centos/latest/scylla.repo"
+else
+    # Remove the last dot-separated component
+    repo_version="${original_version%.*}"
+    repo_file_url="https://downloads.scylladb.com/rpm/centos/scylla-$repo_version.repo"
+fi
+
 mode="release"
 
 arch="$(uname -m)"
@@ -89,7 +98,7 @@ bcp LICENSE-ScyllaDB-Source-Available.md /licenses/
 run microdnf clean all
 run microdnf --setopt=tsflags=nodocs -y update
 run microdnf --setopt=tsflags=nodocs -y install hostname kmod procps-ng python3 python3-pip
-run microdnf clean all
+run curl -L --output /etc/yum.repos.d/scylla.repo ${repo_file_url}
 run pip3 install --no-cache-dir --prefix /usr supervisor
 run bash -ec "echo LANG=C.UTF-8 > /etc/locale.conf"
 run bash -ec "rpm -ivh packages/*.rpm"
