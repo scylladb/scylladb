@@ -1241,6 +1241,12 @@ future<schema_ptr> migration_manager::get_schema_for_write(table_schema_version 
     }
 
     auto s = local_schema_registry().get_or_null(v);
+
+    // if syncing is in progress, wait for it first.
+    if (s) {
+        co_await s->registry_entry()->maybe_wait_for_sync();
+    }
+
     // `_enable_schema_pulls` may change concurrently with this function (but only from `true` to `false`).
     bool use_raft = !_enable_schema_pulls;
     if ((!s || !s->is_synced()) && use_raft) {

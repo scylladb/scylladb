@@ -156,6 +156,7 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
         co_await e.db().invoke_on_all([gs = global_schema_ptr(gen.schema())](replica::database& db) -> future<> {
             co_await db.add_column_family_and_make_directory(gs.get(), replica::database::is_new_cf::yes);
         });
+        gen.set_schema(local_schema_registry().get(gen.schema()->version()));
         auto& cf = e.local_db().find_column_family(gen.schema());
         const auto& local_sharder = cf.schema()->get_sharder();
 

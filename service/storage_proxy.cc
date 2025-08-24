@@ -3354,16 +3354,21 @@ future<> apply_on_shards(const locator::effective_replication_map_ptr& erm, cons
 
 future<>
 storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout, smp_service_group smp_grp, db::per_partition_rate_limit::info rate_limit_info) {
-    auto erm = _db.local().find_column_family(m.schema()).get_effective_replication_map();
-    auto apply = [this, erm, &m, tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
+    // `m` may not live after we yield - extract what we need from it now
+    schema_ptr s = m.schema();
+    auto tk = m.token();
+    auto fm = freeze(m);
+
+    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
+    auto apply = [this, erm, s, fm = std::move(fm), tr_state, sync, timeout, smp_grp, rate_limit_info] (shard_id shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         auto shard_rate_limit = rate_limit_info;
         if (shard == this_shard_id()) {
             shard_rate_limit = adjust_rate_limit_for_local_operation(shard_rate_limit);
         }
         return _db.invoke_on(shard, {smp_grp, timeout},
-                [s = global_schema_ptr(m.schema()),
-                 m = freeze(m),
+                [s = global_schema_ptr(s),
+                 m = fm,
                  gtr = tracing::global_trace_state_ptr(std::move(tr_state)),
                  erm,
                  timeout,
@@ -3372,7 +3377,9 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
             return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
-    return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
+    return s->registry_entry()->maybe_wait_for_sync().then([erm, s, tk, apply = std::move(apply)] () mutable {
+        return apply_on_shards(erm, *s, tk, std::move(apply));
+    });
 }
 
 future<>
@@ -3390,7 +3397,9 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
             return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
-    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    return s->registry_entry()->maybe_wait_for_sync().then([erm, s, &m, apply = std::move(apply)] () mutable {
+        return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    });
 }
 
 future<>
@@ -3415,13 +3424,15 @@ storage_proxy::mutate_locally(utils::chunked_vector<frozen_mutation_and_schema> 
 future<>
 storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracing::trace_state_ptr tr_state, clock_type::time_point timeout) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
-    auto apply = [&, erm] (unsigned shard) {
+    auto apply = [this, erm, s, &m, timeout, tr_state] (unsigned shard) {
         get_stats().replica_cross_shard_ops += shard != this_shard_id();
         return _db.invoke_on(shard, {_hints_write_smp_service_group, timeout}, [&m, gs = global_schema_ptr(s), tr_state, timeout, erm] (replica::database& db) mutable -> future<> {
             return db.apply_hint(gs, m, tr_state, timeout);
         });
     };
-    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    return s->registry_entry()->maybe_wait_for_sync().then([erm, s, &m, apply = std::move(apply)] () mutable {
+        return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    });
 }
 
 std::optional<replica::stale_topology_exception>
@@ -3587,9 +3598,11 @@ storage_proxy::mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_a
             bool local = shard == this_shard_id();
             get_stats().replica_cross_shard_ops += !local;
 
-            return container().invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(fm_a_s.s), &fm = fm_a_s.fm, cl, timeout, gt = tracing::global_trace_state_ptr(trace_state), permit, local, fence, caller] (storage_proxy& sp) mutable -> future<> {
-                auto p = local ? std::move(permit) : empty_service_permit(); // FIXME: either obtain a real permit on this shard or hold original one across shard
-                return sp.mutate_counter_on_leader_and_replicate(gs, fm, cl, timeout, gt.get(), std::move(p), fence, caller);
+            return fm_a_s.s->registry_entry()->maybe_wait_for_sync().then([this, shard, &fm_a_s, cl, timeout, trace_state, permit = std::move(permit), local, fence, caller] () mutable -> future<> {
+                return container().invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(fm_a_s.s), &fm = fm_a_s.fm, cl, timeout, gt = tracing::global_trace_state_ptr(trace_state), permit, local, fence, caller] (storage_proxy& sp) mutable -> future<> {
+                    auto p = local ? std::move(permit) : empty_service_permit(); // FIXME: either obtain a real permit on this shard or hold original one across shard
+                    return sp.mutate_counter_on_leader_and_replicate(gs, fm, cl, timeout, gt.get(), std::move(p), fence, caller);
+                });
             });
         });
     }
@@ -3631,7 +3644,8 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, const frozen
                 return db.apply_counter_update(s, std::move(fm), timeout, gtr.get());
             });
         };
-        co_await apply_on_shards(erm, *s, m.token(), std::move(apply));
+        co_await m.schema()->registry_entry()->maybe_wait_for_sync();
+        co_await apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
 
         co_return std::move(m);
     }).then([this, cl, timeout, trace_state, permit = std::move(permit)] (mutation m) mutable {
@@ -5742,7 +5756,7 @@ protected:
                         for (auto&& [token, diff] : diffs) {
                             for (auto&& [address, opt_mut] : diff) {
                                 if (opt_mut) {
-                                    opt_mut = reverse(std::move(opt_mut.value()));
+                                    opt_mut = reverse_with_load(std::move(opt_mut.value()));
                                     co_await coroutine::maybe_yield();
                                 }
                             }

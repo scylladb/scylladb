@@ -301,6 +301,13 @@ future<> schema_registry_entry::maybe_sync(seastar::noncopyable_function<future<
     abort();
 }
 
+future<> schema_registry_entry::maybe_wait_for_sync() {
+    if (_sync_state == sync_state::SYNCING) {
+        return _synced_promise.get_shared_future();
+    }
+    return make_ready_future<>();
+}
+
 bool schema_registry_entry::is_synced() const {
     return _sync_state == sync_state::SYNCED;
 }
