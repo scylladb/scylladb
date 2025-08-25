@@ -9,7 +9,7 @@ import pytest
 import asyncio
 from test.pylib.manager_client import ManagerClient
 from test.cluster.conftest import skip_mode
-from test.pylib.rest_client import inject_error_one_shot, InjectionHandler
+from test.pylib.rest_client import inject_error_one_shot, InjectionHandler, read_barrier
 from test.cluster.util import create_new_test_keyspace
 
 logger = logging.getLogger(__name__)
@@ -209,3 +209,42 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
         await manager.get_cql().run_async(f'drop table {ks}.test_table', timeout=60)
 
     logger.info("done")
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'dev mode is sufficient for this test')
+@skip_mode('debug', 'dev mode is sufficient for this test')
+async def test_can_restart(manager: ManagerClient, raft_op_timeout: int) -> None:
+    """
+    Test that restarts work without group 0 quorum. Stop all five nodes and restart them one by one.
+
+    The purpose of this test is to catch regressions that introduce a group 0 quorum requirement on the restart path.
+    This could happen if we added code that, for example, adds a group 0 command or executes a group 0 read barrier.
+
+    Note that a restarting node can add a group 0 command if it's upgrading (see e.g.
+    system_distributed_keyspace::create_tables that can add a new table). However, we can safely assume that nodes never
+    upgrade in quorum loss scenarios.
+    """
+    logger.info("Adding servers")
+    servers = await manager.servers_add(5)
+
+    logger.info(f"Stopping {servers}")
+    await asyncio.gather(*(manager.server_stop(srv.server_id) for srv in servers))
+
+    # This ensures the read barriers below fail quickly without group 0 quorum.
+    logger.info(f"Decreasing group0_raft_op_timeout_in_ms on {servers}")
+    await asyncio.gather(*(manager.server_update_config(srv.server_id, 'group0_raft_op_timeout_in_ms', raft_op_timeout)
+                           for srv in servers))
+
+    logger.info(f"Restarting {servers}")
+    for idx, srv in enumerate(servers):
+        await manager.server_start(srv.server_id)
+
+        # Make sure that the first two nodes restart without group 0 quorum.
+        if idx < 2:
+            with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, "
+                                                "there is no raft quorum, total voters count 5, "
+                                                f"alive voters count {idx + 1}"):
+                await read_barrier(manager.api, srv.ip_addr)
+        else:
+            await read_barrier(manager.api, srv.ip_addr)
