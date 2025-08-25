@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
+
 from datetime import datetime
 
 from attr import define
@@ -46,3 +47,10 @@ class Test:
     mode: str
     run_id: int
     test_name: str
+
+
+@define
+class ClusterMetric:
+    test_name: str
+    mode: str
+    max_running_servers: int

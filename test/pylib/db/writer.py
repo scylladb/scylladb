@@ -20,6 +20,7 @@ TESTS_TABLE = 'tests'
 METRICS_TABLE = 'test_metrics'
 SYSTEM_RESOURCE_METRICS_TABLE = 'system_resource_metrics'
 CGROUP_MEMORY_METRICS_TABLE = 'cgroup_memory_metrics'
+CLUSTER_METRICS_TABLE = 'cluster_metrics'
 DEFAULT_DB_NAME = f'sqlite_{HOST_ID}.db'
 DATE_TIME_TEMPLATE = '%Y-%m-%d %H:%M:%S.%f'
 
@@ -72,7 +73,16 @@ create_table = [
         timestamp DATETIME,
         FOREIGN KEY(test_id) REFERENCES {TESTS_TABLE}(id)
     );
-    '''
+    ''',
+
+    f'''
+    CREATE TABLE IF NOT EXISTS {CLUSTER_METRICS_TABLE} (
+        id INTEGER PRIMARY KEY,
+        test_name VARCHAR(255) NOT NULL,
+        mode VARCHAR(15) NOT NULL,
+        max_running_servers INT NOT NULL
+    );
+    ''',
 ]
 
 def adapt_datetime_iso(val):
