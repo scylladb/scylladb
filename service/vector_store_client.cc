@@ -258,7 +258,7 @@ auto get_host_port(std::string_view uri) -> std::optional<host_port> {
     }
     auto parsed = parse_service_uri(uri);
     if (!parsed) {
-        throw configuration_exception(format("Invalid Vector Store service URI: {}", uri));
+        throw configuration_exception(fmt::format("Invalid Vector Store service URI: {}", uri));
     }
     vslogger.info("Vector Store service URI is set to '{}'", uri);
     return *parsed;
