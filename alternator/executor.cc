@@ -860,6 +860,8 @@ future<> verify_permission(
                 }
                 stats.authorization_failures++;
                 if (enforce_authorization == db::tri_mode_restriction_t::mode::WARN) {
+                    elogger.warn("alternator_enforce_authorization=warn: Write access denied on internal table {}.{} to role {} because it is not a superuser",
+                        schema->ks_name(), schema->cf_name(), username);
                     co_return;
                 }
                 throw api_error::access_denied(fmt::format(
@@ -876,6 +878,9 @@ future<> verify_permission(
         }
         stats.authorization_failures++;
         if (enforce_authorization == db::tri_mode_restriction_t::mode::WARN) {
+            elogger.warn("alternator_enforce_authorization=warn: {} access on table {}.{} is denied to role {}, client address {}",
+                auth::permissions::to_string(permission_to_check),
+                schema->ks_name(), schema->cf_name(), username, client_state.get_client_address());
             co_return;
         }
         // Using exceptions for errors makes this function faster in the
@@ -902,6 +907,7 @@ static future<> verify_create_permission(db::tri_mode_restriction_t::mode enforc
         }
         stats.authorization_failures++;
         if (enforce_authorization == db::tri_mode_restriction_t::mode::WARN) {
+            elogger.warn("alternator_enforce_authorization=warn: CREATE access on ALL KEYSPACES is denied to role {}", username);
             co_return;
         }
         throw api_error::access_denied(format(
