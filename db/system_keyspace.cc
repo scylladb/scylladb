@@ -2162,12 +2162,52 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_i
     slogger.debug("{}: values={}", query, values);
 
     co_await _qp.execute_internal(query, db::consistency_level::ONE, values, cql3::query_processor::cache_internal::yes);
+
+    if (auto* cache = get_peers_cache()) {
+        cache->id_to_ip[hid] = ep;
+        cache->ip_to_id[ep] = hid;
+    }
+}
+
+system_keyspace::peers_cache* system_keyspace::get_peers_cache() {
+    auto* cache = _peers_cache.get();
+    if (cache && (lowres_clock::now() > cache->expiration_time)) {
+        _peers_cache = nullptr;
+        return nullptr;
+    }
+    return cache;
+}
+
+future<lw_shared_ptr<const system_keyspace::peers_cache>> system_keyspace::get_or_load_peers_cache() {
+    const auto guard = co_await get_units(_peers_cache_lock, 1);
+    if (auto* cache = get_peers_cache()) {
+        co_return cache->shared_from_this();
+    }
+    auto cache = make_lw_shared<peers_cache>();
+    cache->ip_to_id = co_await load_host_ids();
+    cache->expiration_time = lowres_clock::now() + std::chrono::milliseconds(200);
+    for (const auto [ip, id]: cache->ip_to_id) {
+        const auto [it, inserted] = cache->id_to_ip.insert({id, ip});
+        if (!inserted) {
+            // This should never happen: load_host_ids calls peers_table_read_fixup,
+            // which ensures that each host_id is mapped to exactly one IP.
+            // However, a duplicate could still be inserted between
+            // peers_table_read_fixup and execute_cql in load_host_ids.
+            // In that case, we have no better option than to pick one of the IPs;
+            // which one is chosen is unspecified.
+
+            slogger.warn("more than one ips ({} and {}) for the same host_id {}",
+                ip, it->second, id);
+        }
+    }
+    _peers_cache = cache;
+    co_return std::move(cache);
 }
 
 future<std::optional<gms::inet_address>> system_keyspace::get_ip_from_peers_table(locator::host_id id) {
-    auto peers = co_await load_host_ids();
-    if (auto it = std::ranges::find_if(peers, [&id] (const auto& e) { return e.second == id; }); it != peers.end()) {
-        co_return it->first;
+    const auto cache = co_await get_or_load_peers_cache();
+    if (const auto it = cache->id_to_ip.find(id); it != cache->id_to_ip.end()) {
+        co_return it->second;
     }
     co_return std::nullopt;
 }
@@ -2220,6 +2260,15 @@ future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
     const sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
     co_await execute_cql(req, ep.addr()).discard_result();
+
+    if (auto* cache = get_peers_cache()) {
+        const auto it = cache->ip_to_id.find(ep);
+        if (it != cache->ip_to_id.end()) {
+            const auto id = it->second;
+            cache->ip_to_id.erase(it);
+            cache->id_to_ip.erase(id);
+        }
+    }
 }
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
