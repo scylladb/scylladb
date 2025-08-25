@@ -719,7 +719,7 @@ populators["si_dataset"] = populate_si
 
 async def populate_counters(executable: PathLike, workdir: PathLike) -> None:
     async with with_cs_populate(executable=executable, workdir=workdir) as server:
-        await bash(fr"../tools/cqlsh/bin/cqlsh -f conf/counters.yaml {server}")
+        await bash(fr"python3 ./exec_cql.py --file conf/counters.cql --host {server}")
         # Sleeps added in reaction to schema disagreement errors.
         # FIXME: get rid of this sleep and find a sane way to wait for schema
         # agreement.
@@ -731,10 +731,7 @@ async def train_counters(executable: PathLike, workdir: PathLike) -> None:
         await cs(cmd=["counter_write"], n=50000, pop=f"dist=UNIFORM(1..1000000)", cl="local_quorum", node=server, schema="keyspace=counters")
         await cs(cmd=["counter_read"], n=50000, pop=f"dist=UNIFORM(1..1000000)", cl="local_quorum", node=server, schema="keyspace=counters")
 
-# This workload depends on cqlsh, so it's commented out until we merge
-# python3 support in cqlsh (which, at the moment of writing, is supposed
-# to be imminent).
-#trainers["counters"] = ("counters_dataset", train_counters)
+trainers["counters"] = ("counters_dataset", train_counters)
 populators["counters_dataset"] = populate_counters
 
 # REPAIR ==================================================
