@@ -2203,11 +2203,8 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             // At this point, `locator::topology` should be stable, i.e. we should have complete information
             // about the layout of the cluster (= list of nodes along with the racks/DCs).
-            if (cfg->rf_rack_valid_keyspaces()) {
-                startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
-                db.local().check_rf_rack_validity(token_metadata.local().get());
-                startlog.info("All keyspaces are RF-rack-valid");
-            }
+            startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
+            db.local().check_rf_rack_validity(cfg->rf_rack_valid_keyspaces(), token_metadata.local().get());
 
             dictionary_service dict_service(
                 dict_sampler,
