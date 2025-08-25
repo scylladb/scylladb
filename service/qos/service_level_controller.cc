@@ -385,6 +385,36 @@ future<> service_level_controller::update_cache(update_both_cache_levels update_
     co_await update_effective_service_levels_cache();
 }
 
+future<> service_level_controller::create_driver_service_level(service::raft_group0_client& group0_client, db::system_keyspace& sys_ks) {
+    while (!_global_controller_db->group0_aborter.abort_requested()) {
+        try {
+            // Users shouldn't remove sl:driver, but if they do, don't recreate it
+            std::optional<bool> driver_service_level_already_created = co_await sys_ks.get_service_level_driver_created();
+            if (driver_service_level_already_created.has_value() && driver_service_level_already_created.value()) {
+                co_return;
+            }
+
+            service_level_options slo;
+            slo.shares = 200;
+            slo.workload = service_level_options::workload_type::batch;
+
+            auto guard = co_await group0_client.start_operation(_global_controller_db->group0_aborter);
+            auto status_mut = co_await sys_ks.make_service_levels_driver_created_mutation(true, guard.write_timestamp());
+
+            service::group0_batch mc{std::move(guard)};
+            bool if_not_exsists = true;
+            co_await add_distributed_service_level(service_level_controller::driver_service_level_name, slo, if_not_exsists, mc);
+            mc.add_mutation(status_mut, "set service_level_driver_created=true");
+            co_return co_await commit_mutations(std::move(mc));
+        } catch (service::group0_concurrent_modification&) {
+            continue; // Let's retry
+        } catch (...) {
+            sl_logger.error("Failed to create service level for driver: {}", std::current_exception());
+            co_return;
+        }
+    }
+}
+
 void service_level_controller::stop_legacy_update_from_distributed_data() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
 
