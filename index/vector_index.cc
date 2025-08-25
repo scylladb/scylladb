@@ -49,7 +49,7 @@ static void validate_similarity_function(const sstring& value) {
     }
 }
 
-const static std::unordered_map<sstring, std::function<void(const sstring&)>> supported_options = {
+const static std::unordered_map<sstring, std::function<void(const sstring&)>> vector_index_options = {
         {"similarity_function", validate_similarity_function},
         {"maximum_node_connections", validate_unsigned_option<512>},
         {"construction_beam_width", validate_unsigned_option<4096>},
@@ -135,8 +135,8 @@ void vector_index::check_cdc_options(const schema& schema) {
 
 void vector_index::check_index_options(cql3::statements::index_prop_defs& properties) {
     for (auto option: properties.get_raw_options()) {
-        auto it = supported_options.find(option.first);
-        if (it == supported_options.end()) {
+        auto it = vector_index_options.find(option.first);
+        if (it == vector_index_options.end()) {
             throw exceptions::invalid_request_exception(format("Unsupported option {} for vector index", option.first));
         }
         it->second(option.second);
