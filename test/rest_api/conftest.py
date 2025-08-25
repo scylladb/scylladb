@@ -14,8 +14,8 @@ import requests
 
 from test.cqlpy.conftest import host, cql, this_dc  # add required fixtures
 from test.cqlpy.util import unique_name, new_test_keyspace, keyspace_has_tablets, is_scylla
-from test.pylib.runner import testpy_test_fixture_scope
-from test.pylib.suite.python import add_host_option, add_cql_connection_options
+from test.pylib.runner import testpy_test_fixture_scope, add_host_option, add_cql_connection_options
+
 
 # By default, tests run against a Scylla server listening
 # on localhost:9042 for CQL and localhost:10000 for the REST API.

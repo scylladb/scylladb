@@ -23,8 +23,8 @@ import tempfile
 import time
 import random
 
-from test.pylib.runner import testpy_test_fixture_scope
-from test.pylib.suite.python import PythonTest, add_host_option, add_cql_connection_options, add_s3_options
+from test.pylib.runner import testpy_test_fixture_scope, add_host_option, add_cql_connection_options, add_s3_options
+from test.pylib.suite.python import PythonTest
 from .util import unique_name, new_test_keyspace, keyspace_has_tablets, cql_session, local_process_id, is_scylla, config_value_context
 from .nodetool import scylla_log
 

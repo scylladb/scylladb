@@ -17,7 +17,6 @@ from random import randint
 from types import SimpleNamespace
 
 import colorama
-import glob
 import itertools
 import logging
 import multiprocessing
@@ -41,19 +40,48 @@ from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     Test,
     TestSuite,
-    init_testsuite_globals,
     output_is_a_tty,
     palette,
-    prepare_dirs,
-    start_3rd_party_services,
 )
+from test.pylib.runner import prepare_dirs, start_3rd_party_services, init_testsuite_globals
 from test.pylib.resource_gather import run_resource_watcher
 from test.pylib.util import LogPrefixAdapter, get_configured_modes
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import List
 
-PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit']
+
+PYTEST_RUNNER_DIRECTORIES = [
+    {
+        "group": "cpp",
+        "concurrency": lambda jobs: jobs,
+        "dirs": [
+            TEST_DIR / "boost",
+            TEST_DIR / "ldap",
+            TEST_DIR / "raft",
+            TEST_DIR / "unit",
+        ],
+    },
+    {
+        "group": "python",
+        "concurrency": lambda jobs: jobs * 2,
+        "dirs": [
+            TEST_DIR / "alternator",
+            TEST_DIR / "broadcast_tables",
+            TEST_DIR / "cql",
+            TEST_DIR / "cqlpy",
+            TEST_DIR / "rest_api",
+        ],
+    },
+    {
+        "group": "cluster",
+        "concurrency": lambda jobs: jobs // 2,
+        "dirs": [
+            TEST_DIR / "cluster",
+        ],
+    },
+]
 
 launch_time = time.monotonic()
 
@@ -155,6 +183,9 @@ def parse_cmd_line() -> argparse.Namespace:
                         help='Verbose reporting')
     parser.add_argument('--jobs', '-j', action="store", type=int,
                         help="Number of jobs to use for running the tests")
+    for group in PYTEST_RUNNER_DIRECTORIES:
+        parser.add_argument(f"--pytest-{group['group']}-jobs", type=int,
+                            help=f"Number of jobs to use for running the tests in pytest's {group['group']} group")
     parser.add_argument('--save-log-on-success', "-s", default=False,
                         dest="save_log_on_success", action="store_true",
                         help="Save test log output on success and skip cleanup before the run.")
@@ -281,33 +312,36 @@ def parse_cmd_line() -> argparse.Namespace:
 
 
 async def find_tests(options: argparse.Namespace) -> None:
-
-    for f in glob.glob(os.path.join("test", "*")):
-        if os.path.isdir(f) and os.path.isfile(os.path.join(f, SUITE_CONFIG_FILENAME)):
+    for f in TEST_DIR.glob("*"):
+        config = pathlib.Path(f) / SUITE_CONFIG_FILENAME
+        if config.is_file():
             for mode in options.modes:
-                suite = TestSuite.opt_create(f, options, mode)
+                suite = TestSuite.opt_create(config=config, options=options, mode=mode)
                 await suite.add_test_list()
 
 
-def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]:
+def run_pytest(options: argparse.Namespace,
+               group: str,
+               concurrency: Callable[[int], int],
+               dirs: list[pathlib.Path]) -> tuple[int, list[SimpleNamespace]]:
     # When tests are executed in parallel on different hosts, we need to distinguish results from them.
     # So HOST_ID needed to not overwrite results from different hosts during Jenkins will copy to one directory.
 
     failed_tests = []
     temp_dir = pathlib.Path(options.tmpdir).absolute()
     report_dir =  temp_dir / 'report'
-    junit_output_file = report_dir / f'pytest_cpp_{HOST_ID}.xml'
+    junit_output_file = report_dir / f"pytest_{group}_{HOST_ID}.xml"
     files_to_run = []
     for name in options.name:
         file_name = name
         if '::' in name:
             file_name, _ = name.split('::', maxsplit=1)
-        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in PYTEST_RUNNER_DIRECTORIES):
+        if any((TOP_SRC_DIR / file_name).is_relative_to(x) for x in dirs):
             files_to_run.append(name)
     if not options.name:
-        files_to_run = [str(directory) for directory in PYTEST_RUNNER_DIRECTORIES]
+        files_to_run = [str(directory) for directory in dirs]
     if not files_to_run:
-        logging.info(f'No boost found. Skipping pytest execution for boost tests.')
+        logging.info(f"No {group} found. Skipping pytest execution for boost tests.")
         return 0, []
     args = [
         'pytest',
@@ -323,10 +357,11 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             "--log-level=DEBUG",  # Capture logs
             f'--junit-xml={junit_output_file}',
             "-rf",
-            f'-n{int(options.jobs)}',
+            f'-n{getattr(options, f"pytest_{group}_jobs") or concurrency(options.jobs)}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
+            '--test-py-init',
             '-v' if options.verbose else '-q',
         ])
     if options.pytest_arg:
@@ -443,9 +478,10 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
     deadline = time.perf_counter() + options.session_timeout
     try:
         await start_3rd_party_services(tempdir_base=pathlib.Path(options.tmpdir), toxiproxy_byte_limit=options.byte_limit)
-        result = run_pytest(options)
-        total_tests += result[0]
-        failed_tests.extend(result[1])
+        for group in PYTEST_RUNNER_DIRECTORIES:
+            result = run_pytest(options, **group)
+            total_tests += result[0]
+            failed_tests.extend(result[1])
         console.print_start_blurb()
         TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
         for test in TestSuite.all_tests():
@@ -495,10 +531,11 @@ def print_summary(failed_tests: List["Test"], cancelled_tests: int, options: arg
         else:
             print(f"Summary: {len(all_fails)} of the total {total_tests} tests failed")
     if total_tests == 0:
+        pytest_dirs = itertools.chain.from_iterable(group["dirs"] for group in PYTEST_RUNNER_DIRECTORIES)
         print( palette.warn(f"No tests were run, nothing to report. Please check your test selection criteria. "
                             f"Due to the recent changes in the test.py, if you want to run a test from one of the "
                             f"following directories: \n"
-                            f"{'\n'.join([f'{str(item.relative_to(TOP_SRC_DIR))}' for item in PYTEST_RUNNER_DIRECTORIES])}\nPlease use the path "
+                            f"{'\n'.join([f'{str(item.relative_to(TOP_SRC_DIR))}' for item in pytest_dirs])}\nPlease use the path "
                             f"to the test file with extension, e.g. 'test/boost/memtable_test.cc' instead of "
                             f"'boost/memtable_test'"))
 

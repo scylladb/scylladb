@@ -16,14 +16,13 @@ import urllib.parse
 from multiprocessing import Event, Process
 from pathlib import Path
 from typing import TYPE_CHECKING
-from test.pylib.runner import testpy_test_fixture_scope
+from test.pylib.runner import testpy_test_fixture_scope, add_cql_connection_options
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster import ScyllaClusterManager
 from test.pylib.suite.base import get_testpy_test
-from test.pylib.suite.python import add_cql_connection_options
 import logging
 import pytest
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module

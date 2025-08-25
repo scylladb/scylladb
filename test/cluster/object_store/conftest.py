@@ -11,7 +11,7 @@ import pytest
 import pathlib
 # use minio_server
 from test.pylib.minio_server import MinioServer
-from test.pylib.suite.python import add_s3_options
+from test.pylib.runner import add_s3_options
 
 
 def pytest_addoption(parser):
