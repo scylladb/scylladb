@@ -320,6 +320,11 @@ async def test_saved_readers_tablet_migration(manager: ManagerClient, build_mode
 
     servers = await manager.servers_add(2, config=cfg)
 
+    # Make sure both nodes see the same disk capacity, so that the tablet moved by the move_tablet API
+    # is still on the host we attempt to move it from. Without this, the load balancer might move
+    # the tablet after we query the tablet location and before we attempt to move it.
+    cfg['data_file_capacity'] = 100 * 1024 * 1024 * 1024
+
     cql = manager.get_cql()
 
     async with new_test_keyspace(manager, "WITH"
@@ -863,7 +868,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
 
         logger.info("Attempting removenode - expected to fail")
         await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id,
-                                expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+                                expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (There are nodes with tablets to drain but no candidate nodes in rack")
 
         logger.info(f"Replacing {node_to_remove} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
