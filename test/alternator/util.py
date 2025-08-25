@@ -224,6 +224,16 @@ def client_no_transform(client):
 def is_aws(dynamodb):
     return dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com')
 
+# Return the AWS region name, or the Scylla data center name.
+def get_region(dynamodb):
+    if is_aws(dynamodb):
+        dc_name = dynamodb.meta.client.meta.region_name
+        # Make sure we got a non-empty region name.
+        assert len(dc_name) > 0
+        return dc_name
+    system_local = dynamodb.Table('.scylla.alternator.system.local')
+    return system_local.scan(AttributesToGet=['data_center'])['Items'][0]['data_center']
+
 # Tries to inject an error via Scylla REST API. It only works on Scylla,
 # and only in specific build modes (dev, debug, sanitize), so this function
 # will trigger a test to be skipped if it cannot be executed.
