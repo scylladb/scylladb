@@ -122,6 +122,11 @@ authentication and authorization errors in the two metrics:
 
 When you see both metrics are not increasing, you can be sure the application
 is properly set up and `alternator_enforce_authorization` can be set to `true`.
+`warn` mode also generates a WARN-level log message on each authentication
+or authorization failure. These log messages each includes the string
+`alternator_enforce_authorization=warn`, and information that can help
+pinpoint the source of the error - such as the username involved in the
+attempt, and the address of the client sending the request.
 
 Alternator implements the same [signature protocol](https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html)
 as DynamoDB and the rest of AWS. Clients use, as usual, an access key ID and
