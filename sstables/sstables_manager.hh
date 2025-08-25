@@ -12,6 +12,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sharded.hh>
 #include <seastar/core/gate.hh>
+#include <seastar/core/metrics.hh>
 
 #include "utils/assert.hh"
 #include "utils/disk-error-handler.hh"
@@ -65,12 +66,14 @@ class storage_manager : public peering_sharded_service<storage_manager> {
     semaphore _s3_clients_memory;
     std::unordered_map<sstring, s3_endpoint> _s3_endpoints;
     std::unique_ptr<config_updater> _config_updater;
+    seastar::metrics::metric_groups metrics;
 
     future<> update_config(const db::config&);
 
 public:
     struct config {
         size_t s3_clients_memory = 16 << 20; // 16M by default
+        bool skip_metrics_registration = false;
     };
 
     storage_manager(const db::config&, config cfg);
