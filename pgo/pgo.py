@@ -661,6 +661,33 @@ async def train_decommission(executable: PathLike, workdir: PathLike) -> None:
 trainers["decommission"] = ("decommission_dataset", train_decommission)
 populators["decommission_dataset"] = populate_decommission
 
+# AUTH CONNECTIONS STRESS ==================================================
+
+async def populate_auth_conns(executable: PathLike, workdir: PathLike) -> None:
+    # Create roles, table and permissions via CQL script.
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await bash(fr"python3 ./exec_cql.py --file conf/auth.cql --host {server}")
+
+async def train_auth_conns(executable: PathLike, workdir: PathLike) -> None:
+    # Repeatedly connect as the reader user and perform simple reads to stress
+    # authentication, authorization and connection setup paths.
+    async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
+        await asyncio.sleep(5) # FIXME: artificial gossip sleep, get rid of it.
+        # Run 30k connection requests.
+        await run_checked([
+            "python3", "./auth_conns_stress.py",
+            "--host", addrs[0],
+            "--user", "reader_role",
+            "--password", "password1",
+            "--processes", "30",
+            "--threads", "10",
+            "--iterations", "100"
+        ], cpuset=CS_CPUSET.get())
+    await merge_profraw(workdir)
+
+trainers["auth_conns"] = ("auth_conns_dataset", train_auth_conns)
+populators["auth_conns_dataset"] = populate_auth_conns
+
 # LWT ==================================================
 
 async def populate_lwt(executable: PathLike, workdir: PathLike) -> None:
