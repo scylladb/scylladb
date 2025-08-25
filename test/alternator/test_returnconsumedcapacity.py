@@ -292,6 +292,19 @@ def test_update_item_long_attr(test_table_sb):
     assert 'ConsumedCapacity' in response
     assert 3 == response['ConsumedCapacity']["CapacityUnits"]
 
+@pytest.mark.xfail(reason="Updates should consider the larger of the old item size and the new item size. This will be fixed in a next PR.")
+def test_update_item_considers_old_and_new_item(test_table_sb):
+    p = random_string()
+    c = random_bytes()
+    test_table_sb.put_item(Item={'p': p, 'c': c, 'a': 'a' * 5 * KB})
+
+    response = test_table_sb.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET b = :b_value',
+        ExpressionAttributeValues={':b_value': 'b' * 2 * KB},
+        ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 8 == response['ConsumedCapacity']["CapacityUnits"]
+
 # Validates that when the old value is returned the WCU takes
 # Its size into account in the WCU calculation.
 # WCU is calculated based on 1KB block size.
