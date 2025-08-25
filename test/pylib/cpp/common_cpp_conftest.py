@@ -105,13 +105,18 @@ def collect_items(file_path: PosixPath, parent: Collector, facade: CppTestFacade
     args = copy(DEFAULT_ARGS)
     custom_args_config = suite_config.get('custom_args', {})
     extra_scylla_cmdline_options = suite_config.get('extra_scylla_cmdline_options', [])
+    x_log2_compaction_groups = pytest_config.getoption('x_log2_compaction_groups', None)
+    all_can_run_compaction_groups_except = suite_config.get('all_can_run_compaction_groups_except', None)
     test_name = file_path.stem
+    allows_compaction_groups = all_can_run_compaction_groups_except and test_name not in all_can_run_compaction_groups_except
     no_parallel_run = True if test_name in no_parallel_cases else False
     coverage_config = coverage(pytest_config.getoption('coverage'), suite_config.get('coverage', True),
                                pytest_config.getoption('coverage_modes'))
 
     custom_args = custom_args_config.get(file_path.stem, ['-c2 -m2G'])
     args.extend(extra_scylla_cmdline_options)
+    if allows_compaction_groups and x_log2_compaction_groups:
+        args.append(f'--x-log2-compaction-groups {x_log2_compaction_groups}')
     if len(custom_args) > 1:
         return CppFile.from_parent(parent=parent, path=file_path, arguments=args, parameters=custom_args,
                                    no_parallel_run=no_parallel_run, modes=modes, disabled_tests=disabled_tests,
