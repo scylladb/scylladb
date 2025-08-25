@@ -75,6 +75,14 @@ storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     for (auto& e : cfg.object_storage_endpoints()) {
         _s3_endpoints.emplace(std::make_pair(std::move(e.endpoint), make_lw_shared<s3::endpoint_config>(std::move(e.config))));
     }
+
+    if (!stm_cfg.skip_metrics_registration) {
+        namespace sm = seastar::metrics;
+        metrics.add_group("s3", {
+            sm::make_gauge("memory_usage", [this, limit = stm_cfg.s3_clients_memory] { return limit - _s3_clients_memory.available_units(); },
+                    sm::description("Total number of bytes consumed by S3 client"), {}),
+        });
+    }
 }
 
 future<> storage_manager::stop() {

@@ -3572,6 +3572,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         sstables::storage_manager::config stm_cfg;
         stm_cfg.s3_clients_memory = 100_MiB;
+        stm_cfg.skip_metrics_registration = true;
         sharded<sstables::storage_manager> sstm;
         sstm.start(std::ref(dbcfg), stm_cfg).get();
         auto stop_sstm = defer([&sstm] { sstm.stop().get(); });
