@@ -332,6 +332,9 @@ public:
     // Return ip of the peers table entry with given host id
     future<std::optional<gms::inet_address>> get_ip_from_peers_table(locator::host_id id);
 
+    using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
+    future<host_id_to_ip_map_t> get_host_id_to_ip_map();
+
     future<> remove_endpoint(gms::inet_address ep);
 
     // Saves the key-value pair into system.scylla_local table.
