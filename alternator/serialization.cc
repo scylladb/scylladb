@@ -9,11 +9,13 @@
 #include "utils/base64.hh"
 #include "utils/rjson.hh"
 #include "utils/log.hh"
+#include "utils/on_internal_error.hh"
 #include "serialization.hh"
 #include "error.hh"
 #include "concrete_types.hh"
 #include "cql3/type_json.hh"
 #include "mutation/position_in_partition.hh"
+#include <climits>
 
 static logging::logger slogger("alternator-serialization");
 
@@ -66,6 +68,13 @@ type_representation represent_type(alternator_type atype) {
 
 
 internal::magnitude_and_precision internal::get_magnitude_and_precision(std::string_view s) {
+    // Check for empty string - this should never happen as the caller
+    // parse_and_validate_number() should fail on empty strings when
+    // parsing as big_decimal before calling this function.
+    if (s.empty()) {
+        utils::on_internal_error("get_magnitude_and_precision called with empty string");
+    }
+    
     size_t e_or_end = s.find_first_of("eE");
     std::string_view base = s.substr(0, e_or_end);
     if (s[0]=='-' || s[0]=='+') {
@@ -78,6 +87,11 @@ internal::magnitude_and_precision internal::get_magnitude_and_precision(std::str
     if (dot_or_end != std::string_view::npos) {
         if (nonzero == dot_or_end) {
             // 0.000031 => magnitude = -5 (like 3.1e-5), precision = 2.
+            // Check bounds before accessing fraction - this should never happen
+            // as the caller should validate the string format first
+            if (dot_or_end + 1 >= base.size()) {
+                utils::on_internal_error("get_magnitude_and_precision: decimal point at end with no fraction");
+            }
             std::string_view fraction = base.substr(dot_or_end + 1);
             size_t nonzero2 = fraction.find_first_not_of("0");
             if (nonzero2 != std::string_view::npos) {
@@ -121,11 +135,16 @@ internal::magnitude_and_precision internal::get_magnitude_and_precision(std::str
     if (precision && e_or_end != std::string_view::npos) {
         std::string_view exponent = s.substr(e_or_end + 1);
         if (exponent.size() > 4) {
-            // don't even bother atoi(), exponent is too large
+            // Check if exponent is not empty before accessing [0] - this should never
+            // happen as the caller should validate the string format first
+            if (exponent.empty()) {
+                utils::on_internal_error("get_magnitude_and_precision: exponent marker with no exponent");
+            }
             magnitude = exponent[0]=='-' ? -9999 : 9999;
         } else {
             try {
-                magnitude += boost::lexical_cast<int32_t>(exponent);
+                int32_t exp_val = boost::lexical_cast<int32_t>(exponent);
+                magnitude += exp_val;
             } catch (...) {
                 magnitude = 9999;
             }
