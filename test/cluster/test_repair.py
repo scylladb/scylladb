@@ -9,6 +9,7 @@ import pytest
 import time
 import asyncio
 import json
+import random
 
 from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -248,6 +249,15 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
     servers = await manager.servers_add(2, config=cfg)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        keys = dict()
+        cql = manager.get_cql()
+        await cql.run_async(f"CREATE TABLE {ks}.tbl (pk int PRIMARY KEY)")
+        for i in range(100):
+            key = random.randint(-1000000000, 1000000000)
+            await cql.run_async(f"INSERT into {ks}.tbl (pk) VALUES({key})")
+            token = (await cql.run_async(f"SELECT token(pk) from {ks}.tbl WHERE pk = {key}"))[0].system_token_pk
+            keys[key] = token
+
         res = await manager.api.describe_ring(servers[0].ip_addr, ks)
         end_tokens = dict()
         for item in res:
@@ -259,3 +269,18 @@ async def test_vnode_keyspace_describe_ring(manager: ManagerClient):
         for i in range(1, len(sorted_tokens)):
             assert end_tokens[sorted_tokens[i-1]] == sorted_tokens[i]
         assert end_tokens[sorted_tokens[-1]] == sorted_tokens[0]
+
+        def get_ring_endpoints(token):
+            for item in res:
+                if int(item['start_token']) < int(item['end_token']):
+                    if int(item['start_token']) < token <= int(item['end_token']):
+                        return item['endpoints']
+                elif token > int(item['start_token']) or token <= int(item['end_token']):
+                    return item['endpoints']
+            pytest.fail(f"Token {token} not found in describe_ring result")
+
+        cql = manager.get_cql()
+        for key, token in keys.items():
+            natural_endpoints = await manager.api.natural_endpoints(servers[0].ip_addr, ks, "tbl", key)
+            ring_endpoints = get_ring_endpoints(token)
+            assert natural_endpoints == ring_endpoints, f"natural_endpoint mismatch describe_ring for {key=} {token=} {natural_endpoints=} {ring_endpoints=}"
