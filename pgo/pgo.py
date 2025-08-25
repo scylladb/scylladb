@@ -386,6 +386,8 @@ async def start_node(executable: PathLike, cluster_workdir: PathLike, addr: str,
         f"--cas-contention-timeout-in-ms=60000",
         f"--alternator-port=8000",
         f"--alternator-write-isolation=only_rmw_uses_lwt",
+        f"--authenticator=PasswordAuthenticator",
+        f"--authorizer=CassandraAuthorizer",
     ] + list(extra_opts)
     return await run(['bash', '-c', fr"""exec {shlex.join(command)} >{q(logfile)} 2>&1"""], cwd=cluster_workdir)
 
@@ -514,7 +516,7 @@ def cs_command(cmd: list[str], n: int, node: str, cl: str, pop: Optional[str] = 
         f"cl={cl}",
     ] + (["no-warmup"] if not warmup else []) + [
     ] + (["-pop", pop] if pop else []) + [
-        "-mode", "native", "cql3", "protocolVersion=4",
+        "-mode", "native", "cql3", "protocolVersion=4", "user=cassandra", "password=cassandra",
         "-node", node,
         "-rate", rate,
     ] + (["-schema", schema] if schema else []) + [
