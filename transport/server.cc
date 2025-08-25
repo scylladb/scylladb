@@ -1751,21 +1751,27 @@ cql_server::connection::make_schema_change_event(const event::schema_change& eve
 void cql_server::connection::write_response(foreign_ptr<std::unique_ptr<cql_server::response>>&& response, service_permit permit, cql_compression compression)
 {
     _ready_to_respond = _ready_to_respond.then([this, compression, response = std::move(response), permit = std::move(permit)] () mutable {
-        auto message = response->make_message(_version, compression);
-        message.on_delete([response = std::move(response)] { });
-        return _write_buf.write(std::move(message)).then([this] {
+        utils::result_with_exception_ptr<scattered_message<char>> message = response->make_message(_version, compression);
+        if (!message) [[unlikely]] {
+            return make_exception_future<>(std::move(message).assume_error());
+        }
+        message.assume_value().on_delete([response = std::move(response)] { });
+        return _write_buf.write(std::move(message).assume_value()).then([this] {
             return _write_buf.flush();
         });
     });
 }
 
-scattered_message<char> cql_server::response::make_message(uint8_t version, cql_compression compression) {
+utils::result_with_exception_ptr<scattered_message<char>> cql_server::response::make_message(uint8_t version, cql_compression compression) {
     if (compression != cql_compression::none) {
         compress(compression);
     }
     scattered_message<char> msg;
-    auto frame = make_frame(version, _body.size());
-    msg.append(std::move(frame));
+    utils::result_with_exception_ptr<sstring> frame = make_frame(version, _body.size());
+    if (!frame) [[unlikely]] {
+        return bo::failure(std::move(frame).assume_error());
+    }
+    msg.append(std::move(frame).assume_value());
     for (auto&& fragment : _body.fragments()) {
         msg.append_static(reinterpret_cast<const char*>(fragment.data()), fragment.size());
     }
