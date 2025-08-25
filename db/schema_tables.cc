@@ -1849,15 +1849,17 @@ bool view_should_exist(const index_metadata & index) {
 }
 
 static void make_update_indices_mutations(
-        replica::database& db,
+        service::storage_proxy& sp,
         schema_ptr old_table,
         schema_ptr new_table,
         api::timestamp_type timestamp,
         utils::chunked_vector<mutation>& mutations)
 {
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
+    std::vector<mutation> view_building_muts;
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
+    auto& db = sp.local_db();
 
     // indices that are no longer needed
     for (auto&& name : diff.entries_only_on_left) {
@@ -1875,6 +1877,31 @@ static void make_update_indices_mutations(
                     old_table->ks_name(), secondary_index::index_table_name(name)));
         }
         make_drop_table_or_view_mutations(views(), view, timestamp, mutations);
+
+        auto ksm = db.find_keyspace(old_table->ks_name()).metadata();
+        if (sp.features().view_building_coordinator && ksm->uses_tablets()) {
+            auto& sys_ks = sp.system_keyspace();
+            auto& vb_state_machine = sp.view_building_state_machine();
+            auto base_id = old_table->id();
+
+            if (vb_state_machine.building_state.tasks_state.contains(base_id)) {
+                for (auto& [_, replica_tasks]: vb_state_machine.building_state.tasks_state.at(base_id)) {
+                    if (!replica_tasks.view_tasks.contains(view->id())) {
+                        continue;
+                    }
+
+                    for (auto& [id, _]: replica_tasks.view_tasks.at(view->id())) {
+                        auto mut = sys_ks.make_remove_view_building_task_mutation(timestamp, id).get();
+                        view_building_muts.push_back(std::move(mut));
+                        slogger.trace("Aborting view building task with ID: {} because the index is being dropped", id);
+                    }
+                }
+            }
+
+            // Remove entries from `system.view_build_status_v2`
+            auto build_status_mut = sys_ks.make_remove_view_build_status_mutation(timestamp, {view->ks_name(), view->cf_name()}).get();
+            view_building_muts.push_back(std::move(build_status_mut));
+        }
     }
 
     auto add_index = [&](const sstring& name) -> view_ptr {
@@ -1907,10 +1934,33 @@ static void make_update_indices_mutations(
             continue;
         }
         auto ksm = db.find_keyspace(new_table->ks_name()).metadata();
+
+        if (sp.features().view_building_coordinator && ksm->uses_tablets()) {
+            auto& sys_ks = sp.system_keyspace();
+            auto& cf = db.find_column_family(new_table);
+            auto& tablet_map = cf.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(new_table->id());
+
+            for (const auto& tid: tablet_map.tablet_ids()) {
+                auto last_token = tablet_map.get_last_token(tid);
+                for (auto& replica: tablet_map.get_tablet_info(tid).replicas) {
+                    auto id = utils::UUID_gen::get_time_UUID();
+                    view::view_building_task task {
+                        id, view::view_building_task::task_type::build_range, view::view_building_task::task_state::idle,
+                        new_table->id(), view->id(), replica, last_token
+                    };
+
+                    auto task_mut = sys_ks.make_view_building_task_mutation(timestamp, task).get();
+                    view_building_muts.push_back(std::move(task_mut));
+                    slogger.trace("Creating view building task: {} with ID: {} for replica: {}", task, id, replica);
+                }
+            }
+        }
+
         db.get_notifier().before_create_column_family(*ksm, *view, mutations, timestamp);
     }
 
     mutations.emplace_back(std::move(indices_mutation));
+    mutations.insert(mutations.end(), std::make_move_iterator(view_building_muts.begin()), std::make_move_iterator(view_building_muts.end()));
 }
 
 static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, const schema::dropped_column& dc, api::timestamp_type timestamp, utils::chunked_vector<mutation>& mutations) {
@@ -1974,7 +2024,7 @@ static void make_update_columns_mutations(schema_ptr old_table,
     }
 }
 
-utils::chunked_vector<mutation> make_update_table_mutations(replica::database& db,
+utils::chunked_vector<mutation> make_update_table_mutations(service::storage_proxy& sp,
     lw_shared_ptr<keyspace_metadata> keyspace,
     schema_ptr old_table,
     schema_ptr new_table,
@@ -1982,7 +2032,7 @@ utils::chunked_vector<mutation> make_update_table_mutations(replica::database& d
 {
     utils::chunked_vector<mutation> mutations;
     add_table_or_view_to_schema_mutation(new_table, timestamp, false, mutations);
-    make_update_indices_mutations(db, old_table, new_table, timestamp, mutations);
+    make_update_indices_mutations(sp, old_table, new_table, timestamp, mutations);
     make_update_columns_mutations(std::move(old_table), std::move(new_table), timestamp, mutations);
 
     warn(unimplemented::cause::TRIGGERS);

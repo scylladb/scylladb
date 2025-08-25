@@ -25,6 +25,8 @@
 #include "service/migration_listener.hh"
 #include "message/messaging_service.hh"
 #include "gms/feature_service.hh"
+#include "db/view/view_building_state.hh"
+#include "utils/UUID_gen.hh"
 #include "utils/assert.hh"
 #include "utils/runtime.hh"
 #include "gms/gossiper.hh"
@@ -715,7 +717,7 @@ future<utils::chunked_vector<mutation>> prepare_column_family_update_announcemen
 
         auto mutations = co_await seastar::async([&] {
             // Can call notifier when it creates new indexes, so needs to run in Seastar thread
-            return db::schema_tables::make_update_table_mutations(db, keyspace, old_schema, cfm, ts);
+            return db::schema_tables::make_update_table_mutations(sp, keyspace, old_schema, cfm, ts);
         });
         for (auto&& view : view_updates) {
             auto& old_view = keyspace->cf_meta_data().at(view->cf_name());
@@ -780,14 +782,56 @@ future<utils::chunked_vector<mutation>> prepare_aggregate_drop_announcement(stor
     return include_keyspace(sp, *keyspace.metadata(), std::move(mutations));
 }
 
-future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(replica::database& db, const sstring& ks_name, api::timestamp_type ts) {
+static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_proxy& sp, lw_shared_ptr<keyspace_metadata> ks_meta, utils::chunked_vector<mutation>& out, api::timestamp_type ts) {
+    using namespace db::view;
+    mlogger.info("Cleaning view building state for all views in keyspace {} ", ks_meta->name());
+
+    auto& sys_ks = sp.system_keyspace();
+    auto& vb_state_machine = sp.view_building_state_machine();
+
+    auto drop_all_tasks_in_task_map = [&] (const task_map& task_map) -> future<> {
+        for (auto& [id, _]: task_map) {
+            auto mut = co_await sys_ks.make_remove_view_building_task_mutation(ts, id);
+            out.push_back(std::move(mut));
+            mlogger.trace("Aborting view building task with ID: {} because the keyspace is being dropped", id);
+        }
+    };
+
+    // Drop view building tasks - this operation will also automatically abort them if any is already started
+    for (auto& table: ks_meta->tables()) {
+        auto tid = table->id();
+        if (!vb_state_machine.building_state.tasks_state.contains(tid)) {
+            continue;
+        }
+
+        for (auto [_, replica_tasks]: vb_state_machine.building_state.tasks_state.at(tid)) {
+            for (auto& [_, views_tasks]: replica_tasks.view_tasks) {
+                co_await drop_all_tasks_in_task_map(views_tasks);
+            }
+            co_await drop_all_tasks_in_task_map(replica_tasks.staging_tasks);
+        }
+    }
+
+    for (auto& view: ks_meta->views()) {
+        // Remove entries from `system.view_build_status_v2`
+        auto build_status_mut = co_await sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()});
+        out.push_back(std::move(build_status_mut));
+    }
+}
+
+future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& sp, const sstring& ks_name, api::timestamp_type ts) {
+    auto& db = sp.local_db();
     if (!db.has_keyspace(ks_name)) {
         throw exceptions::configuration_exception(format("Cannot drop non existing keyspace '{}'.", ks_name));
     }
     auto& keyspace = db.find_keyspace(ks_name);
     mlogger.info("Drop Keyspace '{}'", ks_name);
-    return seastar::async([&db, &keyspace, ts, ks_name] {
+    return seastar::async([&sp, &keyspace, ts, ks_name] {
+        auto& db = sp.local_db();
         auto mutations = db::schema_tables::make_drop_keyspace_mutations(db.features().cluster_schema_features(), keyspace.metadata(), ts);
+        if (sp.features().view_building_coordinator && keyspace.uses_tablets()) {
+            add_cleanup_view_building_state_drop_keyspace_mutations(sp, keyspace.metadata(), mutations, ts).get();
+        }
         db.get_notifier().before_drop_keyspace(ks_name, mutations, ts);
         return mutations;
     });
@@ -820,7 +864,9 @@ future<utils::chunked_vector<mutation>> prepare_column_family_drop_announcement(
         utils::chunked_vector<mutation> drop_si_mutations;
         if (!schema->all_indices().empty()) {
             auto builder = schema_builder(schema).without_indexes();
-            drop_si_mutations = db::schema_tables::make_update_table_mutations(db, keyspace, schema, builder.build(), ts);
+            drop_si_mutations = co_await seastar::async([&] {
+                return db::schema_tables::make_update_table_mutations(sp, keyspace, schema, builder.build(), ts);
+            });
         }
         auto mutations = db::schema_tables::make_drop_table_mutations(keyspace, schema, ts);
         mutations.insert(mutations.end(), std::make_move_iterator(drop_si_mutations.begin()), std::make_move_iterator(drop_si_mutations.end()));
@@ -855,17 +901,48 @@ future<utils::chunked_vector<mutation>> prepare_type_drop_announcement(storage_p
     return include_keyspace(sp, *keyspace.metadata(), std::move(mutations));
 }
 
-future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
-  return validate(view).then([&sp, view = std::move(view), ts] {
+static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr view, utils::chunked_vector<mutation>& out, api::timestamp_type ts) {
+    using namespace db::view;
+
     auto& db = sp.local_db();
+    auto& sys_ks = sp.system_keyspace();
+
+    auto base_id = view->view_info()->base_id();
+    auto& base_cf = db.find_column_family(base_id);
+    auto erm = base_cf.get_effective_replication_map();
+    auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(base_id);
+
+    co_await tablet_map.for_each_tablet([&] (auto tid, const auto& tablet_info) -> future<> {
+        auto last_token = tablet_map.get_last_token(tid);
+        for (auto& replica: tablet_info.replicas) {
+            auto id = utils::UUID_gen::get_time_UUID();
+            view_building_task task {
+                id, view_building_task::task_type::build_range, view_building_task::task_state::idle,
+                base_id, view->id(), replica, last_token
+            };
+
+            auto mut = co_await sys_ks.make_view_building_task_mutation(ts, task);
+            out.push_back(std::move(mut));
+            mlogger.trace("Creating view building task: {} with ID: {} for replica: {}", task, id, replica);
+        }
+    });
+}
+
+future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
+    co_await validate(view);
+    auto& db = sp.local_db();
+
     try {
         auto keyspace = db.find_keyspace(view->ks_name()).metadata();
         if (keyspace->cf_meta_data().contains(view->cf_name())) {
             throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
         }
         mlogger.info("Create new view: {}", view);
-        return seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
+        co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
             auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
+            if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+                add_view_building_tasks_mutations(sp, view, mutations, ts).get();
+            }
             // We don't have a separate on_before_create_view() listener to
             // call. But a view is also a column family, and we need to call
             // the on_before_create_column_family listener - notably, to
@@ -874,10 +951,10 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
             return include_keyspace(sp, *keyspace, std::move(mutations)).get();
         });
     } catch (const replica::no_such_keyspace& e) {
-        return make_exception_future<utils::chunked_vector<mutation>>(
-            exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.", view->cf_name(), view->ks_name())));
+        auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot add view '{}' to non existing keyspace '{}'.",
+                view->cf_name(), view->ks_name())));
+        co_return coroutine::exception(std::move(ex));
     }
-  });
 }
 
 future<utils::chunked_vector<mutation>> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
@@ -899,6 +976,35 @@ future<utils::chunked_vector<mutation>> prepare_view_update_announcement(storage
     }
 }
 
+static future<> add_cleanup_view_building_state_drop_view_mutations(storage_proxy& sp, schema_ptr view, utils::chunked_vector<mutation>& out, api::timestamp_type ts) {
+    using namespace db::view;
+    mlogger.info("Cleaning view building state for view {} ({}.{})", view->id(), view->ks_name(), view->cf_name());
+
+    auto& sys_ks = sp.system_keyspace();
+    auto& vb_state_machine = sp.view_building_state_machine();
+
+    // Drop view building tasks - this operation will also automatically abort them if any is already started
+    auto base_id = view->view_info()->base_id();
+    if (vb_state_machine.building_state.tasks_state.contains(base_id)) {
+        for (auto& [_, replica_tasks]: vb_state_machine.building_state.tasks_state.at(base_id)) {
+            if (!replica_tasks.view_tasks.contains(view->id())) {
+                continue;
+            }
+
+            // Abort all view building tasks for this view
+            for (auto& [id, _]: replica_tasks.view_tasks.at(view->id())) {
+                auto mut = co_await sys_ks.make_remove_view_building_task_mutation(ts, id);
+                out.push_back(std::move(mut));
+                mlogger.trace("Aborting view building task with ID: {} because the view is being dropped", id);
+            }
+        }
+    }
+
+    // Remove entries from `system.view_build_status_v2`
+    auto build_status_mut = co_await sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()});
+    out.push_back(std::move(build_status_mut));
+}
+
 future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts) {
     auto& db = sp.local_db();
     try {
@@ -912,6 +1018,9 @@ future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_p
         auto keyspace = db.find_keyspace(ks_name).metadata();
         mlogger.info("Drop view '{}.{}'", view->ks_name(), view->cf_name());
         auto mutations = db::schema_tables::make_drop_view_mutations(keyspace, view_ptr(std::move(view)), ts);
+        if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
+            co_await add_cleanup_view_building_state_drop_view_mutations(sp, view, mutations, ts);
+        }
         // notifiers must run in seastar thread
         co_await seastar::async([&] {
             db.get_notifier().before_drop_column_family(*view, mutations, ts);

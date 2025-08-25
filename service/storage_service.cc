@@ -11,6 +11,8 @@
 
 #include "storage_service.hh"
 #include "utils/chunked_vector.hh"
+#include <seastar/core/shard_id.hh>
+#include "db/view/view_building_coordinator.hh"
 #include "utils/disk_space_monitor.hh"
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
@@ -117,6 +119,7 @@
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include <csignal>
 #include "utils/labels.hh"
+#include "view_info.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -197,6 +200,7 @@ storage_service::storage_service(abort_source& abort_source,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
     topology_state_machine& topology_state_machine,
+    db::view::view_building_state_machine& view_building_state_machine,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
     std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
@@ -234,6 +238,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _cdc_gens(cdc_gens)
         , _view_builder(view_builder)
         , _topology_state_machine(topology_state_machine)
+        , _view_building_state_machine(view_building_state_machine)
         , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
         , _disk_space_monitor(disk_space_monitor)
 {
@@ -840,6 +845,50 @@ future<> storage_service::topology_transition(state_change_hint hint) {
     _topology_state_machine.event.broadcast();
 }
 
+future<> storage_service::view_building_state_load() {
+    rtlogger.debug("reload view building state");
+
+    auto filter_vnode_keyspace = [this] (std::string_view ks_name) {
+        // If the keyspace doesn't exist, also filter it out.
+        // It should be entry from vnode view, which hasn't been cleaned up yet.
+        // Entries from tablet-views should be removed in the same batch as drop keyspace/view mutations.
+        return _db.local().has_keyspace(ks_name) && _db.local().find_keyspace(ks_name).uses_tablets();
+    };
+
+
+    auto vb_tasks = co_await _sys_ks.local().get_view_building_tasks();
+    auto processing_base_table = co_await _sys_ks.local().get_view_building_processing_base_id();
+
+    std::map<table_id, std::vector<table_id>> views_per_base;
+    auto views = _db.local().get_views()
+        | std::views::filter([&] (const view_ptr& v) { return filter_vnode_keyspace(v->ks_name()); })
+        | std::views::transform([] (const view_ptr& v) { return std::make_pair(v->view_info()->base_id(), v->id()); });
+    for (const auto& [base_id, view_id]: views) {
+        views_per_base[base_id].push_back(view_id);
+    }
+
+    auto status_map = co_await _sys_ks.local().get_view_build_status_map()
+        | std::views::filter([&] (const auto& e) { return filter_vnode_keyspace(e.first.first); })
+        | std::views::transform([this] (const auto& e) {        // convert (ks_name, view_name) to table_id
+            auto id = _db.local().find_schema(e.first.first, e.first.second)->id();
+            return std::make_pair(id, std::move(e.second));
+        })
+        | std::ranges::to<db::view::views_state::view_build_status_map>();
+
+    db::view::view_building_state building_state {std::move(vb_tasks), std::move(processing_base_table)};
+    db::view::views_state views_state {std::move(views_per_base), std::move(status_map)};
+
+    _view_building_state_machine.building_state = std::move(building_state);
+    _view_building_state_machine.views_state = std::move(views_state);
+}
+
+future<> storage_service::view_building_transition() {
+    SCYLLA_ASSERT(this_shard_id() == 0);
+    co_await view_building_state_load();
+
+    _view_building_state_machine.event.broadcast();
+}
+
 future<> storage_service::reload_raft_topology_state(service::raft_group0_client& group0_client) {
     slogger.info("Waiting for group 0 read/apply mutex before reloading Raft topology state...");
     auto holder = co_await group0_client.hold_read_apply_mutex(_abort_source);
@@ -1145,7 +1194,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
             // start topology change coordinator in the background
             _topology_change_coordinator = run_topology_coordinator(
                     _sys_dist_ks, _gossiper, _messaging.local(), _shared_token_metadata,
-                    _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, *as, raft,
+                    _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, _view_building_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
                     get_ring_delay(),
@@ -3327,6 +3376,7 @@ future<> storage_service::wait_for_group0_stop() {
     if (!_group0_as.abort_requested()) {
         _group0_as.request_abort();
         _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
+        _view_building_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
         co_await when_all(std::move(_raft_state_monitor), std::move(_sstable_cleanup_fiber), std::move(_upgrade_to_topology_coordinator_fiber));
     }
 }
@@ -6787,6 +6837,9 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
                                                              : locator::tablet_transition_kind::migration)
             .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
             .build());
+        if (_feature_service.view_building_coordinator) {
+            db::view::abort_view_building_tasks(_view_building_state_machine, updates, write_timestamp, table, src, last_token);
+        }
 
         sstring reason = format("Moving tablet {} from {} to {}", gid, src, dst);
 
@@ -6876,6 +6929,9 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
             .build());
+        if (_feature_service.view_building_coordinator) {
+            db::view::abort_view_building_tasks(_view_building_state_machine, updates, write_timestamp, table, dst, last_token);
+        }
 
         sstring reason = format("Removing replica from tablet {}, node {}", gid, dst);
 
@@ -7457,6 +7513,9 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.compression_dicts) {
                     additional_tables.push_back(db::system_keyspace::dicts()->id());
                 }
+                if (ss._feature_service.view_building_coordinator) {
+                    additional_tables.push_back(db::system_keyspace::view_building_tasks()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
@@ -7501,6 +7560,11 @@ void storage_service::init_messaging_service() {
             auto view_builder_version_mut = co_await ss._sys_ks.local().get_view_builder_version_mutation();
             if (view_builder_version_mut) {
                 mutations.emplace_back(*view_builder_version_mut);
+            }
+
+            auto vb_processing_base_mut = co_await ss._sys_ks.local().get_view_building_processing_base_id_mutation();
+            if (vb_processing_base_mut) {
+                mutations.emplace_back(*vb_processing_base_mut);
             }
 
             co_return raft_snapshot{
