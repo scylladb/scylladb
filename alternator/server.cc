@@ -269,7 +269,7 @@ protected:
 future<std::string> server::verify_signature(const request& req, const chunked_content& content) {
     if (!_enforce_authorization) {
         slogger.debug("Skipping authorization");
-        return make_ready_future<std::string>();
+        co_return std::string();
     }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
@@ -342,29 +342,20 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     auto cache_getter = [&proxy = _proxy, &as = _auth_service] (std::string username) {
         return get_key_from_roles(proxy, as, std::move(username));
     };
-    return _key_cache.get_ptr(user, cache_getter).then([this, &req, &content,
-                                                    user = std::move(user),
-                                                    host = std::move(host),
-                                                    datestamp = std::move(datestamp),
-                                                    signed_headers_str = std::move(signed_headers_str),
-                                                    signed_headers_map = std::move(signed_headers_map),
-                                                    region = std::move(region),
-                                                    service = std::move(service),
-                                                    user_signature = std::move(user_signature)] (key_cache::value_ptr key_ptr) {
-        std::string signature;
-        try {
-            signature = utils::aws::get_signature(user, *key_ptr, std::string_view(host), "/", req._method,
-                datestamp, signed_headers_str, signed_headers_map, &content, region, service, "");
-        } catch (const std::exception& e) {
-            throw api_error::invalid_signature(e.what());
-        }
+    key_cache::value_ptr key_ptr = co_await _key_cache.get_ptr(user, cache_getter);
+    std::string signature;
+    try {
+        signature = utils::aws::get_signature(user, *key_ptr, std::string_view(host), "/", req._method,
+            datestamp, signed_headers_str, signed_headers_map, &content, region, service, "");
+    } catch (const std::exception& e) {
+        throw api_error::invalid_signature(e.what());
+    }
 
-        if (signature != std::string_view(user_signature)) {
-            _key_cache.remove(user);
-            throw api_error::unrecognized_client("The security token included in the request is invalid.");
+    if (signature != std::string_view(user_signature)) {
+        _key_cache.remove(user);
+        throw api_error::unrecognized_client("The security token included in the request is invalid.");
         }
-        return user;
-    });
+    co_return user;
 }
 
 static tracing::trace_state_ptr create_tracing_session(tracing::tracing& tracing_instance) {
