@@ -20,10 +20,16 @@ using wrapping_partition_range = wrapping_interval<dht::ring_position>;
 
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
-template <typename T, typename Comparator>
-std::vector<interval<T>>
-unwrap(std::vector<wrapping_interval<T>>&& v, Comparator&& cmp) {
-    std::vector<interval<T>> ret;
+template <template <typename> class Container, typename T, typename Comparator>
+requires std::ranges::range<Container<interval<T>>>
+        && requires (Container<interval<T>> c, size_t s, interval<T> i) {
+    { c.reserve(s) };
+    { c.emplace_back(std::move(i)) };
+    { c.insert(c.begin(), std::move(i)) };
+}
+Container<interval<T>>
+unwrap(Container<wrapping_interval<T>>&& v, Comparator&& cmp) {
+    Container<interval<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
@@ -39,10 +45,16 @@ unwrap(std::vector<wrapping_interval<T>>&& v, Comparator&& cmp) {
 
 // unwraps a vector of wrapping ranges into a vector of nonwrapping ranges
 // if the vector happens to be sorted by the left bound, it remains sorted
-template <typename T, typename Comparator>
-std::vector<interval<T>>
-unwrap(const std::vector<wrapping_interval<T>>& v, Comparator&& cmp) {
-    std::vector<interval<T>> ret;
+template <template <typename> class Container, typename T, typename Comparator>
+requires std::ranges::range<Container<interval<T>>>
+        && requires (Container<interval<T>> c, size_t s, interval<T> i) {
+    { c.reserve(s) };
+    { c.emplace_back(std::move(i)) };
+    { c.insert(c.begin(), std::move(i)) };
+}
+Container<interval<T>>
+unwrap(const Container<wrapping_interval<T>>& v, Comparator&& cmp) {
+    Container<interval<T>> ret;
     ret.reserve(v.size() + 1);
     for (auto&& wr : v) {
         if (wr.is_wrap_around(cmp)) {
@@ -56,23 +68,35 @@ unwrap(const std::vector<wrapping_interval<T>>& v, Comparator&& cmp) {
     return ret;
 }
 
-template <typename T>
-std::vector<wrapping_interval<T>>
-wrap(const std::vector<interval<T>>& v) {
+template <template <typename> class Container, typename T>
+requires std::ranges::range<Container<wrapping_interval<T>>>
+        && requires (Container<wrapping_interval<T>> c, size_t s, wrapping_interval<T> i) {
+    { c.reserve(s) };
+    { c.emplace_back(std::move(i)) };
+    { c.push_back(std::move(i)) };
+}
+Container<wrapping_interval<T>>
+wrap(const Container<interval<T>>& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
-        auto ret = std::vector<wrapping_interval<T>>();
+        auto ret = Container<wrapping_interval<T>>();
         ret.reserve(v.size() - 1);
         std::copy(v.begin() + 1, v.end() - 1, std::back_inserter(ret));
         ret.emplace_back(v.back().start(), v.front().end());
         return ret;
     }
-    return v | std::ranges::to<std::vector<wrapping_interval<T>>>();
+    return v | std::ranges::to<Container<wrapping_interval<T>>>();
 }
 
-template <typename T>
-std::vector<wrapping_interval<T>>
-wrap(std::vector<interval<T>>&& v) {
+template <template <typename> class Container, typename T>
+requires std::ranges::range<Container<wrapping_interval<T>>>
+        && requires (Container<wrapping_interval<T>> c, size_t s, wrapping_interval<T> i) {
+    { c.reserve(s) };
+    { c.emplace_back(std::move(i)) };
+    { c.push_back(std::move(i)) };
+}
+Container<wrapping_interval<T>>
+wrap(Container<interval<T>>&& v) {
     // re-wrap (-inf,x) ... (y, +inf) into (y, x):
     if (v.size() >= 2 && !v.front().start() && !v.back().end()) {
         auto ret = std::vector<wrapping_interval<T>>();
@@ -81,18 +105,18 @@ wrap(std::vector<interval<T>>&& v) {
         ret.emplace_back(std::move(v.back()).start(), std::move(v.front()).end());
         return ret;
     }
-    return std::ranges::owning_view(std::move(v)) | std::ranges::to<std::vector>();
+    return std::ranges::owning_view(std::move(v)) | std::ranges::to<Container>();
 }
 
 inline
 dht::token_range_vector
-unwrap(const std::vector<wrapping_interval<dht::token>>& v) {
+unwrap(const utils::chunked_vector<wrapping_interval<dht::token>>& v) {
     return unwrap(v, dht::token_comparator());
 }
 
 inline
 dht::token_range_vector
-unwrap(std::vector<wrapping_interval<dht::token>>&& v) {
+unwrap(utils::chunked_vector<wrapping_interval<dht::token>>&& v) {
     return unwrap(std::move(v), dht::token_comparator());
 }
 
