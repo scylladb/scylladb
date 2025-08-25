@@ -74,8 +74,12 @@ struct deletion_time {
     }
 
     bool operator==(const deletion_time& d) const = default;
-    explicit operator tombstone() {
+    explicit operator tombstone() const {
         return !live() ? tombstone(marked_for_delete_at, gc_clock::time_point(gc_clock::duration(local_deletion_time))) : tombstone();
+    }
+
+    static deletion_time make_live() {
+        return {std::numeric_limits<int32_t>::max(), std::numeric_limits<int64_t>::min()};
     }
 };
 

@@ -27,6 +27,12 @@ void write_unaligned(void* dst, const From& src) {
     std::memcpy(dst, &src, sizeof(From));
 }
 
+template <TriviallyCopyable From>
+std::byte* write_unaligned(std::byte* dst, const From& src) {
+    std::memcpy(dst, &src, sizeof(From));
+    return dst + sizeof(From);
+}
+
 std::span<const std::byte> object_representation(const TriviallyCopyable auto& x) {
     return {reinterpret_cast<const std::byte*>(&x), sizeof(x)};
 }
