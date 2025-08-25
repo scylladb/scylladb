@@ -14,6 +14,8 @@
 #include "schema/schema_fwd.hh"
 #include "dht/i_partitioner_fwd.hh"
 
+class tombstone_gc_state;
+
 using is_shadowable = bool_class<struct is_shadowable_tag>;
 
 // Determines whether tombstone may be GC-ed.
@@ -110,6 +112,48 @@ using max_purgeable_fn = std::function<max_purgeable(const dht::decorated_key&, 
 
 extern max_purgeable_fn can_always_purge;
 extern max_purgeable_fn can_never_purge;
+
+// Unified interface to check whether a tombstone can be garbage collected.
+//
+// Encapsulates both checks necessariy to determine this:
+// * expiry check - tombstone_gc_state (also abstracted as can_gc_fn)
+// * overlap check - max_purgeable_fn
+//
+// TODO: the encapsulation is incomplete for now, further refactoring is needed
+// to be able to replace the usage of the independent use of the two checks with
+// that of this class.
+//
+// See "Tombstone Garbage Collection" in docs/dev/tombstone_gc.md for more details.
+class tombstone_gc {
+    const tombstone_gc_state* _gc_state;
+    max_purgeable_fn _get_max_purgeable;
+
+private:
+    tombstone_gc(const tombstone_gc_state* gc_state, max_purgeable_fn get_max_purgeable)
+        : _gc_state(gc_state)
+        , _get_max_purgeable(std::move(get_max_purgeable)) {
+    }
+
+public:
+    tombstone_gc(const tombstone_gc_state& gc_state, max_purgeable_fn get_max_purgeable)
+        : tombstone_gc(&gc_state, std::move(get_max_purgeable))
+    { }
+
+    static tombstone_gc disabled() {
+        return tombstone_gc(nullptr, can_never_purge);
+    }
+
+    operator bool () const noexcept {
+        return _gc_state != nullptr;
+    }
+
+    const tombstone_gc_state& get_tombstone_gc_state() const noexcept {
+        return *_gc_state;
+    }
+    max_purgeable_fn get_max_purgeable_fn() const noexcept {
+        return _get_max_purgeable;
+    }
+};
 
 class atomic_cell;
 class row_marker;

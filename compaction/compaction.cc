@@ -28,6 +28,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "compaction/compaction_garbage_collector.hh"
+#include "compaction/sstables_max_purgeable.hh"
 #include "dht/i_partitioner.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
@@ -191,7 +192,7 @@ std::string_view to_string(compaction_type_options::scrub::quarantine_mode quara
     return "(invalid)";
 }
 
-static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& table_s, sstable_set::incremental_selector& selector,
+static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& table_s, sstables_max_purgeable& sst_get_max_purgeable,
         const std::unordered_set<shared_sstable>& compacting_set, const dht::decorated_key& dk, uint64_t& bloom_filter_checks,
         const api::timestamp_type compacting_max_timestamp, const bool gc_check_only_compacting_sstables, const is_shadowable is_shadowable) {
     if (!table_s.tombstone_gc_enabled()) [[unlikely]] {
@@ -238,8 +239,42 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
         timestamp = memtable_min_timestamp;
         source = max_purgeable::timestamp_source::memtable_possibly_shadowing_data;
     }
+
+    auto res = sst_get_max_purgeable(dk, is_shadowable, compacting_set, timestamp);
+    if (res.timestamp < timestamp) {
+        timestamp = res.timestamp;
+        source = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
+    }
+    bloom_filter_checks += res.bloom_filter_checks;
+
+    return max_purgeable(timestamp, source);
+}
+
+} // namespace sstables
+
+namespace compaction {
+
+sstables_max_purgeable::sstables_max_purgeable(const compaction_group_view& table_s, const std::optional<sstables::sstable_set>& sstable_set_snapshot_override)
+    : _table_s(table_s)
+{
+    if (sstable_set_snapshot_override) {
+        _selector.emplace(sstable_set_snapshot_override->make_incremental_selector());
+    } else {
+        _selector.emplace(_table_s.sstable_set_for_tombstone_gc()->make_incremental_selector());
+    }
+}
+
+void sstables_max_purgeable::reset_selector(const sstables::sstable_set& sst_set) {
+    _selector.emplace(sst_set.make_incremental_selector());
+}
+
+sstables_max_purgeable::result sstables_max_purgeable::operator()(const dht::decorated_key& dk, const is_shadowable is_shadowable,
+        const std::unordered_set<sstables::shared_sstable>& compacting_set, api::timestamp_type timestamp) {
+    using namespace sstables; // TODO move all of compaction.cc and friends to compaction namespace
+
+    uint64_t bloom_filter_checks = 0;
     std::optional<utils::hashed_key> hk;
-    for (auto&& sst : boost::range::join(selector.select(dk).sstables, table_s.compacted_undeleted_sstables())) {
+    for (auto&& sst : boost::range::join(_selector->select(dk).sstables, _table_s.compacted_undeleted_sstables())) {
         if (compacting_set.contains(sst)) {
             continue;
         }
@@ -259,7 +294,7 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
         }
         if (clogger.is_enabled(log_level::trace)) {
             if (!hk) {
-                hk = sstables::sstable::make_hashed_key(*table_s.schema(), dk.key());
+                hk = sstables::sstable::make_hashed_key(*_table_s.schema(), dk.key());
             }
             clogger.trace("get_max_purgeable_timestamp={}: min_timestamp={} timestamp={} filter_has_key={} is_shadowable={} stats.min_timestamp={} min_live_timestamp={} min_live_row_marker_timestamp={}: sst={}",
                     min_timestamp >= timestamp || !sst->filter_has_key(*hk) ? timestamp : min_timestamp,
@@ -275,16 +310,24 @@ static max_purgeable get_max_purgeable_timestamp(const compaction_group_view& ta
             continue;
         }
         if (!hk) {
-            hk = sstables::sstable::make_hashed_key(*table_s.schema(), dk.key());
+            hk = sstables::sstable::make_hashed_key(*_table_s.schema(), dk.key());
         }
         if (sst->filter_has_key(*hk)) {
             bloom_filter_checks++;
             timestamp = min_timestamp;
-            source = max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data;
         }
     }
-    return max_purgeable(timestamp, source);
+    return { .timestamp = timestamp, .bloom_filter_checks = bloom_filter_checks };
 }
+
+max_purgeable sstables_max_purgeable::operator()(const dht::decorated_key& dk, const is_shadowable is_shadowable) {
+    auto ret = (*this)(dk, is_shadowable, {}, api::max_timestamp);
+    return max_purgeable(ret.timestamp, max_purgeable::timestamp_source::other_sstables_possibly_shadowing_data);
+}
+
+} // namespace compaction
+
+namespace sstables {
 
 static std::vector<shared_sstable> get_uncompacting_sstables(const compaction_group_view& table_s, std::vector<shared_sstable> sstables) {
     auto sstable_set = table_s.sstable_set_for_tombstone_gc();
@@ -582,8 +625,7 @@ protected:
     const run_id _run_identifier;
     // optional clone of sstable set to be used for expiration purposes, so it will be set if expiration is enabled.
     std::optional<sstable_set> _sstable_set;
-    // used to incrementally calculate max purgeable timestamp, as we iterate through decorated keys.
-    std::optional<sstable_set::incremental_selector> _selector;
+    sstables_max_purgeable _sst_get_max_purgeable;
     std::unordered_set<shared_sstable> _compacting_for_max_purgeable_func;
     // optional owned_ranges vector for cleanup;
     const owned_ranges_ptr _owned_ranges = {};
@@ -641,7 +683,7 @@ protected:
         , _replacer(std::move(descriptor.replacer))
         , _run_identifier(descriptor.run_identifier)
         , _sstable_set(std::move(descriptor.all_sstables_snapshot))
-        , _selector(_sstable_set ? _sstable_set->make_incremental_selector() : std::optional<sstable_set::incremental_selector>{})
+        , _sst_get_max_purgeable(_table_s, _sstable_set)
         , _compacting_for_max_purgeable_func(std::unordered_set<shared_sstable>(_sstables.begin(), _sstables.end()))
         , _owned_ranges(std::move(descriptor.owned_ranges))
         , _sharder(descriptor.sharder)
@@ -1045,7 +1087,8 @@ private:
             return can_never_purge;
         }
         return [this] (const dht::decorated_key& dk, is_shadowable is_shadowable) {
-            return get_max_purgeable_timestamp(_table_s, *_selector, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks, _compacting_max_timestamp, _tombstone_gc_state_with_commitlog_check_disabled.has_value(), is_shadowable);
+            return get_max_purgeable_timestamp(_table_s, _sst_get_max_purgeable, _compacting_for_max_purgeable_func, dk, _bloom_filter_checks,
+                    _compacting_max_timestamp, _tombstone_gc_state_with_commitlog_check_disabled.has_value(), is_shadowable);
         };
     }
 
@@ -1380,7 +1423,7 @@ private:
                 _sstable_set->insert(sst);
             }
         }
-        _selector.emplace(_sstable_set->make_incremental_selector());
+        _sst_get_max_purgeable.reset_selector(*_sstable_set);
     }
 };
 
