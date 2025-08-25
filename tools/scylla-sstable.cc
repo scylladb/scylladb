@@ -3250,6 +3250,23 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         sstables::directory_semaphore dir_sem(1);
         abort_source abort;
 
+<<<<<<< HEAD
+||||||| parent of b26816f80d (s3: Export memory usage gauge (metrics))
+        sstables::storage_manager::config stm_cfg;
+        stm_cfg.s3_clients_memory = 100_MiB;
+        sharded<sstables::storage_manager> sstm;
+        sstm.start(std::ref(dbcfg), stm_cfg).get();
+        auto stop_sstm = defer([&sstm] { sstm.stop().get(); });
+
+=======
+        sstables::storage_manager::config stm_cfg;
+        stm_cfg.s3_clients_memory = 100_MiB;
+        stm_cfg.skip_metrics_registration = true;
+        sharded<sstables::storage_manager> sstm;
+        sstm.start(std::ref(dbcfg), stm_cfg).get();
+        auto stop_sstm = defer([&sstm] { sstm.stop().get(); });
+
+>>>>>>> b26816f80d (s3: Export memory usage gauge (metrics))
         db::nop_large_data_handler large_data_handler;
         db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
 
