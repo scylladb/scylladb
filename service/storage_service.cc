@@ -426,21 +426,6 @@ static locator::node::state to_topology_node_state(node_state ns) {
     on_internal_error(rtlogger, format("unhandled node state: {}", ns));
 }
 
-future<storage_service::host_id_to_ip_map_t> storage_service::get_host_id_to_ip_map() {
-    host_id_to_ip_map_t map;
-    const auto ep_to_id_map = co_await _sys_ks.local().load_host_ids();
-    map.reserve(ep_to_id_map.size());
-    for (const auto& [ep, id]: ep_to_id_map) {
-        const auto [it, inserted] = map.insert({id, ep});
-        if (!inserted) {
-            on_internal_error(slogger, ::format("duplicate IP for host_id {}, first IP {}, second IP {}",
-                id, it->second, ep));
-        }
-    }
-    co_return map;
-};
-
-
 future<> storage_service::raft_topology_update_ip(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& host_id_to_ip_map, nodes_to_notify_after_sync* nodes_to_notify) {
     const auto& t = _topology_state_machine._topology;
     raft::server_id raft_id{id.uuid()};
@@ -623,7 +608,7 @@ future<storage_service::nodes_to_notify_after_sync> storage_service::sync_raft_t
 
     sys_ks_futures.reserve(t.left_nodes.size() + t.normal_nodes.size() + t.transition_nodes.size());
 
-    auto id_to_ip_map = co_await get_host_id_to_ip_map();
+    auto id_to_ip_map = co_await _sys_ks.local().get_host_id_to_ip_map();
     for (const auto& id: t.left_nodes) {
         locator::host_id host_id{id.uuid()};
         auto ip = _address_map.find(host_id);
@@ -987,7 +972,7 @@ class storage_service::ip_address_updater: public gms::i_endpoint_state_change_s
 
                 nodes_to_notify_after_sync nodes_to_notify;
                 co_await _ss.raft_topology_update_ip(id, endpoint,
-                    co_await _ss.get_host_id_to_ip_map(),
+                    co_await _ss._sys_ks.local().get_host_id_to_ip_map(),
                     prev_ip == endpoint ? nullptr : &nodes_to_notify);
                 co_await _ss.notify_nodes_after_sync(std::move(nodes_to_notify));
             }));
@@ -2364,7 +2349,7 @@ future<> storage_service::handle_state_normal(inet_address endpoint, locator::ho
     // Old node in replace-with-same-IP scenario.
     std::optional<locator::host_id> replaced_id;
 
-    auto id_to_ip_map = co_await get_host_id_to_ip_map();
+    auto id_to_ip_map = co_await _sys_ks.local().get_host_id_to_ip_map();
 
     std::optional<inet_address> existing;
 
