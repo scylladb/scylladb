@@ -276,6 +276,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     if (host_it == req._headers.end()) {
         _executor._stats.authentication_failures++;
         if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Host header is mandatory for signature verification");
             return make_ready_future<std::string>();
         }
         throw api_error::invalid_signature("Host header is mandatory for signature verification");
@@ -284,6 +285,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     if (authorization_it == req._headers.end()) {
         _executor._stats.authentication_failures++;
         if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Authorization header is mandatory for signature verification");
             return make_ready_future<std::string>();
         }
         throw api_error::missing_authentication_token("Authorization header is mandatory for signature verification");
@@ -294,6 +296,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     if (pos == std::string_view::npos || authorization_header.substr(0, pos) != "AWS4-HMAC-SHA256") {
         _executor._stats.authentication_failures++;
         if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Authorization header must use AWS4-HMAC-SHA256 algorithm");
             return make_ready_future<std::string>();
         }
         throw api_error::invalid_signature(fmt::format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header));
@@ -333,6 +336,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     if (credential_split.size() != 5) {
         _executor._stats.authentication_failures++;
         if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Incorrect credential information format");
             return make_ready_future<std::string>();
         }
         throw api_error::validation(fmt::format("Incorrect credential information format: {}", credential));
@@ -374,6 +378,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         } catch (const api_error& e) {
             _executor._stats.authentication_failures++;
             if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+                slogger.warn("alternator_enforce_authorization=warn: Failed to retrieve key for user {}, client address {}", user, req.get_client_address());
                 return std::string();
             }
             throw;
@@ -385,6 +390,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         } catch (const std::exception& e) {
             _executor._stats.authentication_failures++;
             if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+                slogger.warn("alternator_enforce_authorization=warn: invalid signature for user {}, client address {}", user, req.get_client_address());
                 return std::string();
             }
             throw api_error::invalid_signature(e.what());
@@ -393,6 +399,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
         if (signature != std::string_view(user_signature)) {
             _key_cache.remove(user);
             if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+                slogger.warn("alternator_enforce_authorization=warn: wrong signature for user {}, client address {}", user, req.get_client_address());
                 return std::string();
             }
             throw api_error::unrecognized_client("The security token included in the request is invalid.");
