@@ -774,6 +774,9 @@ private:
                     } else if constexpr (std::is_same_v<Ex, replica::abort_requested_exception>) {
                         msg = e.what();
                         return error::FAILURE;
+                    } else if constexpr (std::is_same_v<Ex, replica::critical_disk_utilization_exception>) {
+                        msg = e.what();
+                        return error::FAILURE;
                     }
                 }, exception->reason);
             }
@@ -4491,6 +4494,8 @@ void storage_proxy::send_to_live_endpoints(storage_proxy::response_id_type respo
                 err = error::TIMEOUT;
             } else if (auto* e = try_catch<db::virtual_table_update_exception>(eptr)) {
                 msg = e->grab_cause();
+            } else if (auto* e = try_catch<replica::critical_disk_utilization_exception>(eptr)) {
+                msg = e->what();
             } else {
                 slogger.error("exception during mutation write to {}: {}", coordinator, eptr);
             }

@@ -402,7 +402,17 @@ class ScyllaServer:
         self.control_cluster: Optional[Cluster] = None
         self.control_connection: Optional[Session] = None
         shortname = f"scylla-{f'{xdist_worker_id}-' if xdist_worker_id else ''}{self.server_id}"
-        self.workdir = self.vardir / shortname
+
+        workdir = self.vardir / shortname
+        for opt in ("--workdir", "-W"):
+            try:
+                id = self.cmdline_options.index(opt)
+                workdir = pathlib.Path(self.cmdline_options[id+1])
+                break
+            except ValueError:
+                pass
+
+        self.workdir = workdir
         self.log_filename = self.workdir.with_suffix(".log")
         self.config_filename = self.workdir / "conf/scylla.yaml"
         self.property_filename = self.workdir / "conf/cassandra-rackdc.properties"
@@ -928,7 +938,7 @@ class ScyllaServer:
         self.logger.info("Uninstalling server at %s", self.workdir)
 
         try:
-            await async_rmtree(self.workdir)
+            await async_rmtree(self.workdir, ignore_errors=True)
         except FileNotFoundError:
             pass
         self.log_filename.unlink(missing_ok=True)

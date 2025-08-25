@@ -30,6 +30,7 @@
 #include <cfloat>
 #include <filesystem>
 #include <fmt/ranges.h>
+#include "replica/exceptions.hh"
 
 namespace streaming {
 
@@ -178,6 +179,10 @@ future<> stream_blob_handler(replica::database& db,
                 }
                 blogger.info("stream_mutation_fragments: released (tablets)");
             });
+
+            if (db.is_in_critical_disk_utilization_mode()) {
+                throw replica::critical_disk_utilization_exception("rejected streamed file");
+            }
 
             stream_blob_cmd_data& cmd_data = std::get<0>(*opt);
             auto cmd = cmd_data.cmd;
