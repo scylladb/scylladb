@@ -143,6 +143,17 @@ class system_keyspace : public seastar::peering_sharded_service<system_keyspace>
     //  and this node crashes after adding a new IP but before removing the old one. The
     //  record with older timestamp is removed, the warning is written to the log.
     future<> peers_table_read_fixup();
+
+    struct peers_cache: public enable_lw_shared_from_this<peers_cache> {
+        std::unordered_map<gms::inet_address, locator::host_id> inet_ip_to_host_id;
+        std::unordered_map<locator::host_id, gms::inet_address> host_id_to_inet_ip;
+        lowres_clock::time_point expiration_time;
+    };
+    lw_shared_ptr<peers_cache> _peers_cache;
+    semaphore _peers_cache_lock{1};
+    peers_cache* get_peers_cache();
+    future<lw_shared_ptr<const peers_cache>> get_or_load_peers_cache();
+
 public:
     static schema_ptr size_estimates();
 public:
