@@ -372,7 +372,7 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     }
     // Set default tombstone_gc mode.
     if (!schema_extensions.contains(tombstone_gc_extension::NAME)) {
-        auto ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstonesonte_gc_mode(db, ks_name));
+        auto ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(db, ks_name));
         schema_extensions.emplace(tombstone_gc_extension::NAME, std::move(ext));
     }
     builder.set_extensions(std::move(schema_extensions));
