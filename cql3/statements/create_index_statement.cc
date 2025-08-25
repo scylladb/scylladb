@@ -107,7 +107,9 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         if (!custom_index_factory) {
             throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *(_properties->custom_class)));
         }
-        (*custom_index_factory)()->validate(*schema, *_properties, targets, db.features());
+        auto custom_index = (*custom_index_factory)();
+        custom_index->validate(*schema, *_properties, targets, db.features());
+        _properties->index_version = custom_index->index_version(*schema);
     }
 
     if (targets.size() > 1) {

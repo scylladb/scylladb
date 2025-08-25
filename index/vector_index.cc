@@ -162,6 +162,13 @@ bool vector_index::has_vector_index(const schema& s) {
     });
 }
 
+/// Returns the schema version of the base table at which the index was created.
+/// This is used to determine if the index needs to be rebuilt after a schema change.
+/// The CREATE INDEX and DROP INDEX statements does change the schema version.
+table_schema_version vector_index::index_version(const schema& schema) {
+    return schema.version();
+}
+
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {
     return std::make_unique<vector_index>();
 }
