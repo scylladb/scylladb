@@ -27,10 +27,10 @@ void cql3::statements::index_prop_defs::validate() {
         throw exceptions::invalid_request_exception("Cannot specify options for a non-CUSTOM index");
     }
     if (get_raw_options().count(
-            db::index::secondary_index::custom_index_option_name)) {
+            db::index::secondary_index::custom_class_option_name)) {
         throw exceptions::invalid_request_exception(
                 format("Cannot specify {} as a CUSTOM option",
-                        db::index::secondary_index::custom_index_option_name));
+                        db::index::secondary_index::custom_class_option_name));
     }
 
 }
@@ -44,6 +44,6 @@ cql3::statements::index_prop_defs::get_raw_options() {
 index_options_map
 cql3::statements::index_prop_defs::get_options() {
     auto options = get_raw_options();
-    options.emplace(db::index::secondary_index::custom_index_option_name, *custom_class);
+    options.emplace(db::index::secondary_index::custom_class_option_name, *custom_class);
     return options;
 }

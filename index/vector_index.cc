@@ -153,7 +153,7 @@ void vector_index::validate(const schema &schema, cql3::statements::index_prop_d
 bool vector_index::has_vector_index(const schema& s) {
     auto i = s.indices();
     return std::any_of(i.begin(), i.end(), [](const auto& index) {
-        auto it = index.options().find(db::index::secondary_index::custom_index_option_name);
+        auto it = index.options().find(db::index::secondary_index::custom_class_option_name);
         if (it != index.options().end()) {
             auto custom_class = secondary_index_manager::get_custom_class_factory(it->second);
             return (custom_class && dynamic_cast<vector_index*>((*custom_class)().get()));
