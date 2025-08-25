@@ -21,6 +21,7 @@
 #include "cdc/metadata.hh"
 #include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
+#include "index/vector_index.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
@@ -176,8 +177,15 @@ public:
     }
 
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
-        bool is_cdc = new_schema.cdc_options().enabled();
-        bool was_cdc = old_schema.cdc_options().enabled();
+        bool has_vector_index = secondary_index::vector_index::has_vector_index(new_schema);
+        if (has_vector_index) {
+            // If we have a vector index, we need to ensure that the CDC log is created
+            // satisfying the minimal requirements of Vector Search.
+            secondary_index::vector_index::check_cdc_options(new_schema);
+        }
+
+        bool is_cdc = cdc_enabled(new_schema);
+        bool was_cdc = cdc_enabled(old_schema);
 
         // if we are turning off cdc we can skip this, since even if columns change etc,
         // any writer should see cdc -> off together with any actual schema changes to
@@ -419,6 +427,10 @@ static const sstring cdc_meta_column_prefix = "cdc$";
 static const sstring cdc_deleted_column_prefix = cdc_meta_column_prefix + "deleted_";
 static const sstring cdc_deleted_elements_column_prefix = cdc_meta_column_prefix + "deleted_elements_";
 
+bool cdc_enabled(const schema& s) {
+    return s.cdc_options().enabled() || secondary_index::vector_index::has_vector_index(s);
+}
+
 bool is_log_name(const std::string_view& table_name) {
     return table_name.ends_with(cdc_log_suffix);
 }
@@ -432,7 +444,7 @@ bool is_log_for_some_table(const replica::database& db, const sstring& ks_name, 
     if (!base_schema) {
         return false;
     }
-    return base_schema->cdc_options().enabled();
+    return cdc_enabled(*base_schema);
 }
 
 schema_ptr get_base_table(const replica::database& db, const schema& s) {
@@ -1793,7 +1805,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        return cdc_enabled(*m.schema());
     });
 
     if (i == e) {
@@ -1809,7 +1821,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             auto& m = mutations[idx];
             auto s = m.schema();
 
-            if (!s->cdc_options().enabled()) {
+            if (!cdc_enabled(*s)) {
                 return make_ready_future<>();
             }
 
@@ -1874,7 +1886,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
 bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations) const {
     return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
-        return m.schema()->cdc_options().enabled();
+        return cdc_enabled(*m.schema());
     });
 }
 

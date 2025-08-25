@@ -25,6 +25,9 @@ def test_ann_query_without_index(cql, test_keyspace):
             cql.execute(f"SELECT * FROM {table} ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 5")
 
 
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
 def test_ann_query_with_ck_filtering(cql, test_keyspace):
     ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
         SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
@@ -41,6 +44,9 @@ def test_ann_query_with_ck_filtering(cql, test_keyspace):
 
 # Although Cassandra allows for such queries, these queries fail with assertion error.
 # In Scylla, such queries are not allowed, as it is unclear if the filtering should happen pre or post ANN search.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
 def test_ann_query_not_allow_any_filtering(scylla_only, cql, test_keyspace):
     schema = 'p int primary key, c int, v vector<float, 3>'
     with new_test_table(cql, test_keyspace, schema) as table:
