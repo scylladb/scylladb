@@ -256,6 +256,7 @@ private:
         bool _ready = false;
         bool _authenticating = false;
         bool _tenant_switch = false;
+        bool _is_tls = false;
 
         enum class tracing_request_type : uint8_t {
             not_requested,
@@ -274,11 +275,11 @@ private:
                 service_permit>;
         static thread_local execution_stage_type _process_request_stage;
     public:
-        connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units);
+        connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units, bool is_tls);
         virtual ~connection();
         future<> process_request() override;
         void handle_error(future<>&& f) override;
-        client_data make_client_data() const;
+        future<client_data> make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
         void update_scheduling_group();
         service::client_state& get_client_state() { return _client_state; }
@@ -366,7 +367,7 @@ private:
     friend class type_codec;
 
 private:
-    virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
+    virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units, bool is_tls) override;
 
     ::timeout_config timeout_config() const { return _config.timeout_config.current_values(); }
 };
