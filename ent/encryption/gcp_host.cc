@@ -26,9 +26,6 @@
 
 #include <boost/regex.hpp>
 
-#define CPP_JWT_USE_VENDORED_NLOHMANN_JSON
-#include <jwt/jwt.hpp>
-
 #include <fmt/chrono.h>
 #include <fmt/ranges.h>
 #include <fmt/std.h>
@@ -44,6 +41,7 @@
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/rjson.hh"
+#include "utils/gcp/gcp_credentials.hh"
 #include "marshal_exception.hh"
 #include "db/config.hh"
 
@@ -72,6 +70,9 @@ struct std::hash<encryption::gcp_host::credentials_source> {
         return utils::tuple_hash{}(std::tie(a.gcp_credentials_file, a.gcp_impersonate_service_account));
     }
 };
+
+using namespace utils::gcp;
+using namespace rest;
 
 class encryption::gcp_host::impl {
 public:
@@ -141,107 +142,7 @@ private:
     future<key_and_id_type> create_key(const attr_cache_key&);
     future<bytes> find_key(const id_cache_key&);
 
-    using timeout_clock = std::chrono::system_clock;
-    using timestamp_type = typename timeout_clock::time_point;
-
-    struct access_token;
-    struct user_credentials;
-    struct service_account_credentials;
-    struct impersonated_service_account_credentials;
-    struct compute_engine_credentials{};
-
-    struct google_credentials;
-
-
-    struct access_token {
-        access_token() = default;
-        access_token(const rjson::value&);
-
-        std::string token;
-        timestamp_type expiry;
-        scopes_type scopes;
-
-        bool empty() const;
-        bool expired() const;
-    };
-
-    struct user_credentials {
-        user_credentials(const rjson::value&);
-
-        std::string client_id;
-        std::string client_secret;
-        std::string refresh_token;
-        std::string access_token;
-        std::string quota_project_id;
-    };
-
-    using p_key = std::unique_ptr<EVP_PKEY>;
-
-    struct service_account_credentials {
-        service_account_credentials(const rjson::value&);
-
-        std::string client_id;
-        std::string client_email;
-        std::string private_key_id;
-        std::string private_key_pkcs8;
-        std::string token_server_uri;
-        std::string project_id;
-        std::string quota_project_id;
-    };
-
-    struct impersonated_service_account_credentials {
-        impersonated_service_account_credentials(std::string principal, google_credentials&&);
-        impersonated_service_account_credentials(const rjson::value&);
-
-        std::vector<std::string> delegates;
-        std::vector<std::string> scopes;
-        std::string quota_project_id;
-        std::string iam_endpoint_override;
-        std::string target_principal;
-
-        std::unique_ptr<google_credentials> source_credentials;
-        access_token token;
-    };
-
-    using credentials_variant = std::variant<
-        user_credentials,
-        service_account_credentials,
-        impersonated_service_account_credentials,
-        compute_engine_credentials
-    >;
-
-    struct google_credentials {
-        google_credentials(google_credentials&&) = default;
-        google_credentials(credentials_variant&& c)
-            : credentials(std::move(c))
-        {}
-        google_credentials& operator=(google_credentials&&) = default;
-        credentials_variant credentials;
-        access_token token;
-    };
-
-    google_credentials from_data(std::string_view) const;
-    google_credentials from_data(const temporary_buffer<char>& buf) const {
-        return from_data(std::string_view(buf.get(), buf.size()));
-    }
-    future<google_credentials> from_file(const std::string& path) const {
-        auto buf = co_await read_text_file_fully(path);
-        co_return from_data(std::string_view(buf.get(), buf.size()));
-    }
-
-    future<google_credentials> get_default_credentials();
-
-    future<access_token> get_access_token(const google_credentials&, const scopes_type& scopes) const;
-
-    future<> refresh(google_credentials&, const scopes_type&) const;
-
     using key_values = std::initializer_list<std::pair<std::string_view, std::string_view>>;
-
-    static std::string body(key_values kv);
-
-    future<rjson::value> send_request(std::string_view uri, std::string body, std::string_view content_type, httpd::operation_type = httpd::operation_type::GET, key_values headers = {}) const;
-    future<rjson::value> send_request(std::string_view uri, const rjson::value& body, httpd::operation_type = httpd::operation_type::GET, key_values headers = {}) const;
-    future<> send_request(std::string_view uri, std::string body, std::string_view content_type, const std::function<void(const http::reply&, std::string_view)>&, httpd::operation_type = httpd::operation_type::GET, key_values headers = {}) const;
 
     static std::tuple<std::string, std::string> parse_key(std::string_view);
 
@@ -250,6 +151,8 @@ private:
     encryption_context& _ctxt;
     std::string _name;
     host_options _options;
+
+    shared_ptr<tls::certificate_credentials> _certs;
 
     std::unordered_map<credentials_source, google_credentials> _cached_credentials;
 
@@ -260,8 +163,6 @@ private:
     shared_ptr<seastar::tls::certificate_credentials> _creds;
     std::unordered_map<bytes, shared_ptr<symmetric_key>> _cache;
     bool _initialized = false;
-    bool _checked_is_on_gce = false;
-    bool _is_on_gce = false;
 };
 
 template<typename T, typename C>
@@ -323,441 +224,15 @@ future<shared_ptr<encryption::symmetric_key>> encryption::gcp_host::impl::get_ke
     }
 }
 
-static const char CREDENTIAL_ENV_VAR[] = "GOOGLE_APPLICATION_CREDENTIALS";
-static const char WELL_KNOWN_CREDENTIALS_FILE[] = "application_default_credentials.json";
-static const char CLOUDSDK_CONFIG_DIRECTORY[] = "gcloud";
-
-static const char USER_FILE_TYPE[] = "authorized_user";
-static const char SERVICE_ACCOUNT_FILE_TYPE[] = "service_account";
-static const char IMPERSONATED_SERVICE_ACCOUNT_FILE_TYPE[] = "impersonated_service_account";
-
-static const char GCE_METADATA_HOST_ENV_VAR[] = "GCE_METADATA_HOST";
-
-static const char DEFAULT_METADATA_SERVER_URL[] = "http://metadata.google.internal";;
-
-static const char METADATA_FLAVOR[] = "Metadata-Flavor";
-static const char GOOGLE[] = "Google";
-
-static const char TOKEN_SERVER_URI[] = "https://oauth2.googleapis.com/token";
-
-static const char AUTHORIZATION[] = "Authorization";
-
 static const char KMS_SCOPE[] = "https://www.googleapis.com/auth/cloudkms";
-static const char CLOUD_PLATFORM_SCOPE[] = "https://www.googleapis.com/auth/cloud-platform";
-
-//static const char[] CLOUD_SHELL_ENV_VAR = "DEVSHELL_CLIENT_PORT";
-//static const char[] SKIP_APP_ENGINE_ENV_VAR = "GOOGLE_APPLICATION_CREDENTIALS_SKIP_APP_ENGINE";
-//static const char[] NO_GCE_CHECK_ENV_VAR = "NO_GCE_CHECK";
-//static const char[] GCE_METADATA_HOST_ENV_VAR = "GCE_METADATA_HOST";
-
-bool encryption::gcp_host::impl::access_token::empty() const {
-    return token.empty();
-}
-
-bool encryption::gcp_host::impl::access_token::expired() const {
-    if (empty()) {
-        return true;
-    }
-    return timeout_clock::now() >= this->expiry;
-}
-
-encryption::gcp_host::impl::user_credentials::user_credentials(const rjson::value& v) 
-    : client_id(rjson::get<std::string>(v, "client_id"))
-    , client_secret(rjson::get<std::string>(v, "client_secret"))
-    , refresh_token(rjson::get<std::string>(v, "refresh_token"))
-    , quota_project_id(rjson::get_opt<std::string>(v, "refresh_token").value_or(""))
-{}
-
-encryption::gcp_host::impl::service_account_credentials::service_account_credentials(const rjson::value& v)
-    : client_id(rjson::get<std::string>(v, "client_id"))
-    , client_email(rjson::get<std::string>(v, "client_email"))
-    , private_key_id(rjson::get<std::string>(v, "private_key_id"))
-    , private_key_pkcs8(rjson::get<std::string>(v, "private_key"))
-    , token_server_uri([&] {
-        auto token_uri = rjson::get_opt<std::string>(v, "token_uri");
-        if (token_uri) {
-            // TODO: verify uri
-            return *token_uri;
-        }
-        return std::string{};
-    }())
-    , project_id(rjson::get_opt<std::string>(v, "project_id").value_or(""))
-    , quota_project_id(rjson::get_opt<std::string>(v, "refresh_token").value_or(""))
-{}
-
-
-encryption::gcp_host::impl::impersonated_service_account_credentials::impersonated_service_account_credentials(std::string principal, google_credentials&& c)
-    : target_principal(std::move(principal))
-    , source_credentials(std::make_unique<google_credentials>(std::move(c))) 
-{}
-
-encryption::gcp_host::impl::impersonated_service_account_credentials::impersonated_service_account_credentials(const rjson::value& v)
-    : delegates([&] {
-        std::vector<std::string> res;
-        auto tmp = rjson::find(v, "delegates");
-        if (tmp) {
-            if (!tmp->IsArray()) {
-                throw configuration_error("Malformed json");
-            }
-
-            for (const auto& d : tmp->GetArray()) {
-                res.emplace_back(std::string(rjson::to_string_view(d)));
-            }
-        }
-        return res;
-    }())
-    , quota_project_id(rjson::get_opt<std::string>(v, "quota_project_id").value_or(""))
-    , target_principal([&] {
-        auto url = rjson::get<std::string>(v, "service_account_impersonation_url");
-
-        auto si = url.find_last_of('/');
-        auto ei = url.find(":generateAccessToken");
-
-        if (si != std::string::npos && ei != std::string::npos && si < ei) {
-            return url.substr(si + 1, ei - si - 1);
-        }
-        throw configuration_error( "Unable to determine target principal from service account impersonation URL.");
-    }())
-    , source_credentials([&]() -> decltype(source_credentials) {
-        auto& scjson = rjson::get(v, "source_credentials");
-        auto type = rjson::get<std::string>(scjson, "type");
-
-        if (type == USER_FILE_TYPE) {
-            return std::make_unique<google_credentials>(user_credentials(scjson));
-        } else if (type == SERVICE_ACCOUNT_FILE_TYPE) {
-            return std::make_unique<google_credentials>(service_account_credentials(scjson));
-        }
-        throw configuration_error(fmt::format("A credential of type {} is not supported as source credential for impersonation.", type));
-    }())
-{}
-
-encryption::gcp_host::impl::google_credentials
-encryption::gcp_host::impl::from_data(std::string_view content) const {
-    auto json = rjson::parse(content);
-    auto type = rjson::get_opt<std::string>(json, "type");
-
-    if (!type) {
-        throw configuration_error("Error reading credentials from stream, 'type' field not specified.");
-    }
-    if (type == USER_FILE_TYPE) {
-        return google_credentials(user_credentials(json));
-    }
-    if (type == SERVICE_ACCOUNT_FILE_TYPE) {
-        return google_credentials(service_account_credentials(json));
-    }
-    if (type == IMPERSONATED_SERVICE_ACCOUNT_FILE_TYPE) {
-        return google_credentials(impersonated_service_account_credentials(json));
-    }
-    throw configuration_error(fmt::format(
-        "Error reading credentials from stream, 'type' value '{}' not recognized. Expecting '{}', '{}' or '{}'."
-        , type, USER_FILE_TYPE, SERVICE_ACCOUNT_FILE_TYPE, IMPERSONATED_SERVICE_ACCOUNT_FILE_TYPE));
-}
-
-static std::string get_metadata_server_url() {
-    auto meta_host = std::getenv(GCE_METADATA_HOST_ENV_VAR);
-    auto token_uri = meta_host ? std::string("http://") + meta_host : DEFAULT_METADATA_SERVER_URL;
-    return token_uri;
-}
-
-future<encryption::gcp_host::impl::google_credentials>
-encryption::gcp_host::impl::get_default_credentials() {
-    auto credentials_path = std::getenv(CREDENTIAL_ENV_VAR);
-
-    if (credentials_path != nullptr && strlen(credentials_path)) {
-        gcp_log.debug("Attempting to load credentials from file: {}", credentials_path);
-
-        try {
-            co_return co_await from_file(credentials_path);
-        } catch (...) {
-            std::throw_with_nested(configuration_error(fmt::format(
-                "Error reading credential file from environment variable {}, value '{}'"
-                , CREDENTIAL_ENV_VAR
-                , credentials_path
-                ))
-            );
-        }
-    }
-
-    auto home = std::getenv("HOME");
-    if (home) {
-        std::string well_known_file;
-        auto env_path = std::getenv("CLOUDSDK_CONFIG");
-        if (env_path) {
-            well_known_file = fmt::format("{}/{}/{}", home, env_path, WELL_KNOWN_CREDENTIALS_FILE);
-        } else {
-            well_known_file = fmt::format("{}/.config/{}/{}", home, CLOUDSDK_CONFIG_DIRECTORY, WELL_KNOWN_CREDENTIALS_FILE);
-        }
-
-        if (co_await seastar::file_exists(well_known_file)) {
-            gcp_log.debug("Attempting to load credentials from well known file: {}", well_known_file);
-            try {
-                co_return co_await from_file(well_known_file);
-            } catch (...) {
-                std::throw_with_nested(configuration_error(fmt::format(
-                    "Error reading credential file from location {}"
-                    , well_known_file
-                    ))
-                );
-            }
-        }
-    }
-
-    {
-        // Then try Compute Engine and GAE 8 standard environment
-        gcp_log.debug("Attempting to load credentials from GCE");
-
-        auto is_on_gce = [this]() -> future<bool> {
-            if (_checked_is_on_gce) {
-                co_return _is_on_gce;
-            }
-
-            auto token_uri = get_metadata_server_url();
-
-            for (int i = 1; i <= 3; ++i) {
-                try {
-                    co_await send_request(token_uri, std::string{}, "", [&](const http::reply& rep, std::string_view) {
-                        _checked_is_on_gce = true;
-                        _is_on_gce = rep.get_header(METADATA_FLAVOR) == GOOGLE;
-                    }, httpd::operation_type::GET, { { METADATA_FLAVOR, GOOGLE } });
-                    if (_checked_is_on_gce) {
-                        co_return _is_on_gce;;
-                    }
-                } catch (...) {
-                    // TODO: handle timeout
-                    break;
-                }
-            }
-
-            auto linux_path = "/sys/class/dmi/id/product_name";
-            if (co_await seastar::file_exists(linux_path)) {
-                auto f = file_desc::open(linux_path, O_RDONLY | O_CLOEXEC);
-                char buf[128] = {};
-                f.read(buf, 128);
-                _is_on_gce = std::string_view(buf).find(GOOGLE) == 0;
-            }
-
-            _checked_is_on_gce = true;
-            co_return _is_on_gce;
-        };
-
-        if (co_await is_on_gce()) {
-            co_return compute_engine_credentials{};
-        }
-    }
-
-    throw configuration_error("Could not determine initial credentials");
-}
-
-template<typename Func>
-static void for_each_scope(const encryption::gcp_host::impl::scopes_type& s, Func&& f) {
-    size_t i = 0;
-    while(i < s.size()) {
-        auto j = s.find(' ', i + 1);
-        f(s.substr(i, j - i));
-        i = j;
-    }
-}
-
-encryption::gcp_host::impl::access_token::access_token(const rjson::value& json)
-    : token(rjson::get<std::string>(json, "access_token"))
-    , expiry(timeout_clock::now() + std::chrono::seconds(rjson::get<int>(json, "expires_in")))
-    , scopes(rjson::get_opt<std::string>(json, "scope").value_or(""))
-{}
-
-std::string encryption::gcp_host::impl::body(key_values kv) {
-    std::ostringstream ss;
-    std::string_view sep = "";
-    for (auto& [k, v] : kv) {
-        ss << sep << k << "=" << http::internal::url_encode(v);
-        sep = "&";
-    }
-    return ss.str();
-}
-
-future<rjson::value> encryption::gcp_host::impl::send_request(std::string_view uri, const rjson::value& body, httpd::operation_type op, key_values headers) const {
-    return send_request(uri, rjson::print(body), "application/json", op, std::move(headers));
-}
-
-future<rjson::value> encryption::gcp_host::impl::send_request(std::string_view uri, std::string body, std::string_view content_type, httpd::operation_type op, key_values headers) const {
-    rjson::value v;
-    co_await send_request(uri, std::move(body), content_type, [&](const http::reply& rep, std::string_view s) {
-        if (rep._status != http::reply::status_type::ok) {
-            gcp_log.trace("Got unexpected response ({})", rep._status);
-            for (auto& [k, v] : rep._headers) {
-                gcp_log.trace("{}: {}", k, v);
-            }
-            gcp_log.trace("{}", s);
-            throw httpd::unexpected_status_error(rep._status);
-        }
-        v = rjson::parse(s); 
-    }, op, std::move(headers));
-    co_return v;
-}
-
-future<> encryption::gcp_host::impl::send_request(std::string_view uri, std::string body, std::string_view content_type, const std::function<void(const http::reply&, std::string_view)>& handler, httpd::operation_type op, key_values headers) const {
-    // Extremely simplified URI parsing. Does not handle any params etc. But we do not expect such here.
-    static boost::regex simple_url(R"foo((https?):\/\/([^\/:]+)(:\d+)?(\/.*)?)foo");
-
-    boost::smatch m;
-    std::string tmp(uri);
-    if (!boost::regex_match(tmp, m, simple_url)) {
-        throw std::invalid_argument(fmt::format("Could not parse URI {}", uri));
-    }
-
-    auto scheme = m[1].str();
-    auto host = m[2].str();
-    auto port = m[3].str();
-    auto path = m[4].str();
-
-    auto certs = scheme == "https"
-        ? ::make_shared<tls::certificate_credentials>()
-        : shared_ptr<tls::certificate_credentials>()
-        ;
-    if (certs) {
-        if (!_options.priority_string.empty()) {
-            certs->set_priority_string(_options.priority_string);
-        } else {
-            certs->set_priority_string(db::config::default_tls_priority);
-        }
-        if (!_options.certfile.empty()) {
-            co_await certs->set_x509_key_file(_options.certfile, _options.keyfile, seastar::tls::x509_crt_format::PEM);
-        }
-        if (!_options.truststore.empty()) {
-            co_await certs->set_x509_trust_file(_options.truststore, seastar::tls::x509_crt_format::PEM);
-        } else {
-            co_await certs->set_system_trust();
-        }
-    }
-
-    uint16_t pi = port.empty() ? (certs ? 443 : 80) : uint16_t(std::stoi(port.substr(1)));
-
-    httpclient client(host, pi, std::move(certs));
-
-    client.target(path);
-    client.method(op);
-
-    for (auto& [k, v] : headers) {
-        client.add_header(k, v);
-    }
-
-    if (!body.empty()) {
-        if (content_type.empty()) {
-            content_type = "application/x-www-form-urlencoded";
-        }
-        client.content(std::move(body));
-        client.add_header(httpclient::CONTENT_TYPE_HEADER, content_type);
-    }
-
-    gcp_log.trace("Sending {} request to {} ({}): {}", content_type, uri, headers, body);
-
-    co_await client.send([&] (const http::reply& rep, std::string_view result) {
-        gcp_log.trace("Got response {}: {}", int(rep._status), result);
-        handler(rep, result);
-    });
-}
-
-
-future<> encryption::gcp_host::impl::refresh(google_credentials& c, const scopes_type& scopes) const {
-    if (!c.token.expired() && c.token.scopes == scopes) {
-        co_return;
-    }
-    c.token = co_await get_access_token(c, scopes);
-}
-
-future<encryption::gcp_host::impl::access_token> 
-encryption::gcp_host::impl::get_access_token(const google_credentials& creds, const scopes_type& scope) const {
-    co_return co_await std::visit(overloaded_functor {
-        [&](const user_credentials& c) -> future<access_token> {
-            assert(!c.refresh_token.empty());
-            auto json = co_await send_request(TOKEN_SERVER_URI, body({
-                { "client_id", c.client_id },
-                { "client_secret", c.client_secret },
-                { "refresh_token", c.refresh_token },
-                { "grant_type", "refresh_token" },
-            }), "", httpd::operation_type::POST);
-
-            co_return access_token{ json };
-        },
-        [&](const service_account_credentials& c) -> future<access_token> {
-            using namespace jwt::params;
-
-            jwt::jwt_object obj{algorithm("RS256"), secret(c.private_key_pkcs8), headers({{"kid", c.private_key_id }})};
-
-            auto uri = c.token_server_uri.empty() ? TOKEN_SERVER_URI : c.token_server_uri;
-            obj.add_claim("iss", c.client_email)
-                .add_claim("iat", timeout_clock::now())
-                .add_claim("exp", timeout_clock::now() + std::chrono::seconds(3600))
-                .add_claim("scope", scope)
-                .add_claim("aud", uri)
-            ;
-            auto sign = obj.signature();
-
-            auto json = co_await send_request(uri, body({
-                { "grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer" },
-                { "assertion", sign }
-            }), "", httpd::operation_type::POST);
-            co_return access_token{ json };
-        },
-        [&](const impersonated_service_account_credentials& c) -> future<access_token> {
-            auto json_body = rjson::empty_object();
-            auto scopes = rjson::empty_array();
-            for_each_scope(scope, [&](std::string s) {
-                rjson::push_back(scopes, rjson::from_string(s));
-            });
-
-            rjson::add(json_body, "scope", std::move(scopes));
-
-            if (!c.delegates.empty()) {
-                auto delegates = rjson::empty_array();
-                for (auto& d : c.delegates) {
-                    rjson::push_back(delegates, rjson::from_string(d));
-                }
-                rjson::add(json_body, "delegates", std::move(delegates));
-            }
-
-            rjson::add(json_body, "lifetime", "3600s");
-
-            co_await refresh(*c.source_credentials, CLOUD_PLATFORM_SCOPE);
-
-            auto endpoint = c.iam_endpoint_override.empty()
-                ? fmt::format("https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{}:generateAccessToken", c.target_principal)
-                : c.iam_endpoint_override
-                ;
-            auto json = co_await send_request(endpoint, json_body, httpd::operation_type::POST, {
-                { AUTHORIZATION, fmt::format("Bearer {}", c.source_credentials->token.token) },
-            });
-
-            struct tm tmp;
-            ::strptime(rjson::get<std::string>(json, "expireTime").data(), "%FT%TZ", &tmp);
-
-            access_token a;
-
-            a.expiry = timeout_clock::from_time_t(::mktime(&tmp));
-            a.scopes = scope;
-            a.token = rjson::get<std::string>(json, "accessToken");
-
-            co_return a;
-        },
-        [this](const compute_engine_credentials& c) -> future<access_token> {
-            auto meta_uri = get_metadata_server_url();
-            auto token_uri = meta_uri + "/computeMetadata/v1/instance/service-accounts/default/token";
-            try {
-                 auto json = co_await send_request(token_uri, std::string{}, "", httpd::operation_type::GET, { { METADATA_FLAVOR, GOOGLE } });
-                 co_return access_token{ json };
-            } catch (...) {
-                std::throw_with_nested(service_error("Unexpected Error code trying to get security access token from Compute Engine metadata for the default service account"));
-            }
-        }
-    }, creds.credentials);
-}
 
 future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::string_view uri, const rjson::value& body, const credentials_source& src) {
     auto i = _cached_credentials.find(src);
     if (i == _cached_credentials.end()) {
         try {
             auto c = !src.gcp_credentials_file.empty()
-                ? co_await from_file(src.gcp_credentials_file)
-                : co_await get_default_credentials()
+                ? co_await google_credentials::from_file(src.gcp_credentials_file)
+                : co_await google_credentials::get_default_credentials()
                 ;
             if (!src.gcp_credentials_file.empty()) {
                 gcp_log.trace("Loaded credentials from {}", src.gcp_credentials_file);
@@ -780,15 +255,15 @@ future<rjson::value> encryption::gcp_host::impl::gcp_auth_post_with_retry(std::s
 
     for (;;) {
         try {
-            co_await this->refresh(creds, KMS_SCOPE);
+            co_await creds.refresh(KMS_SCOPE, _certs);
         } catch (...) {
             std::throw_with_nested(permission_error("Error refreshing credentials"));
         }
 
         try {
-            auto res = co_await send_request(uri, body, httpd::operation_type::POST, {
-                { AUTHORIZATION, fmt::format("Bearer {}", creds.token.token) },
-            });
+            auto res = co_await send_request(uri, _certs, body, httpd::operation_type::POST, key_values({
+                { utils::gcp::AUTHORIZATION, utils::gcp::format_bearer(creds.token) },
+            }));
             co_return res;
         } catch (httpd::unexpected_status_error& e) {
             gcp_log.debug("{}: Got unexpected response: {}", uri, e.status());
@@ -811,6 +286,23 @@ static constexpr char GCP_KMS_QUERY_TEMPLATE[] = "https://cloudkms.googleapis.co
 future<> encryption::gcp_host::impl::init() {
     if (_initialized) {
         co_return;
+    }
+
+    // will only do network calls on shard 0
+    _certs =::make_shared<tls::certificate_credentials>();
+
+    if (!_options.priority_string.empty()) {
+        _certs->set_priority_string(_options.priority_string);
+    } else {
+        _certs->set_priority_string(db::config::default_tls_priority);
+    }
+    if (!_options.certfile.empty()) {
+        co_await _certs->set_x509_key_file(_options.certfile, _options.keyfile, seastar::tls::x509_crt_format::PEM);
+    }
+    if (!_options.truststore.empty()) {
+        co_await _certs->set_x509_trust_file(_options.truststore, seastar::tls::x509_crt_format::PEM);
+    } else {
+        co_await _certs->set_system_trust();
     }
 
     if (!_options.master_key.empty()) {
