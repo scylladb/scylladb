@@ -33,6 +33,8 @@
 #include "executor.hh"
 #include "data_dictionary/data_dictionary.hh"
 
+extern logging::logger elogger;
+
 /**
  * Base template type to implement  rapidjson::internal::TypeHelper<...>:s
  * for types that are ostreamable/string constructible/castable.
