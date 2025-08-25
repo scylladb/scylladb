@@ -38,7 +38,7 @@ async def test_long_join_drop_entries_on_bootstrapping(manager: ManagerClient) -
     })
     task = asyncio.create_task(manager.server_start(s.server_id))
     log = await manager.server_open_log(s.server_id)
-    await log.wait_for("init - starting gossiper")
+    await log.wait_for("init - gossiper API registered")
     servers.append(s)
     await manager.servers_see_each_other(servers, interval=300)
     await manager.api.enable_injection(s.ip_addr, 'join_node_response_drop_expiring', one_shot=True)
