@@ -637,3 +637,24 @@ def test_query_large_page_small_rows(test_table_sn):
         ConsistentRead=True)['Items']
     n = len(got_items)
     assert n == N
+
+# This test is a less extreme and faster version of the previous test
+# (test_query_large_page_small_rows): We test a query returning a large but
+# not huge number (700) of tiny rows. If Alternator has a special code path
+# for handling a response with that many rows (namely, to work around problems
+# with RapidJSON's contiguous allocation of array objects - see #23535),
+# then this test exercises this case.
+def test_query_many_small_rows(test_table_sn):
+    p = random_string()
+    N = 700
+    with test_table_sn.batch_writer() as batch:
+        for i in range(N):
+            batch.put_item({'p': p, 'c': i})
+    got_items = test_table_sn.query(KeyConditions={
+        'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}},
+        ConsistentRead=True)['Items']
+    i = 0
+    for item in got_items:
+        assert item == {'p': p, 'c': i}
+        i += 1
+    assert N == i
