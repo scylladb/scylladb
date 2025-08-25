@@ -2211,6 +2211,11 @@ future<std::optional<gms::inet_address>> system_keyspace::get_ip_from_peers_tabl
     co_return std::nullopt;
 }
 
+future<system_keyspace::host_id_to_ip_map_t> system_keyspace::get_host_id_to_ip_map() {
+    const auto cache = co_await get_or_load_peers_cache();
+    co_return cache->host_id_to_inet_ip;
+}
+
 template <typename T>
 future<> system_keyspace::set_scylla_local_param_as(const sstring& key, const T& value, bool visible_before_cl_replay) {
     sstring req = format("UPDATE system.{} SET value = ? WHERE key = ?", system_keyspace::SCYLLA_LOCAL);
