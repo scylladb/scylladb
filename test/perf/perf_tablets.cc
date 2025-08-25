@@ -127,10 +127,12 @@ static future<> test_basic_operations(app_template& app) {
 
         utils::chunked_vector<canonical_mutation> muts;
         auto time_to_read_muts = duration_in_seconds([&] {
-            muts = replica::read_tablet_mutations(e.local_qp().proxy().get_db()).get();
+            replica::read_tablet_mutations(e.local_qp().proxy().get_db(), [&] (canonical_mutation m) {
+                muts.emplace_back(m);
+            }).get();
         });
 
-        testlog.info("Read mutations in {:.6f} [ms]", time_to_read_muts.count() * 1000);
+        testlog.info("Read mutations in {:.6f} [ms] {} mutations", time_to_read_muts.count() * 1000, muts.size());
 
         auto time_to_read_hosts = duration_in_seconds([&] {
             replica::read_required_hosts(e.local_qp()).get();
@@ -199,8 +201,8 @@ int scylla_tablets_main(int argc, char** argv) {
     namespace bpo = boost::program_options;
     app_template app;
     app.add_options()
-            ("tables", bpo::value<int>()->default_value(100), "Number of tables to create.")
-            ("tablets-per-table", bpo::value<int>()->default_value(2048), "Number of tablets per table.")
+            ("tables", bpo::value<int>()->default_value(8), "Number of tables to create.")
+            ("tablets-per-table", bpo::value<int>()->default_value(16384), "Number of tablets per table.")
             ("rf", bpo::value<int>()->default_value(3), "Number of replicas per tablet.")
             ("verbose", "Enables standard logging")
             ;
@@ -219,6 +221,8 @@ int scylla_tablets_main(int argc, char** argv) {
                 test_basic_operations(app).get();
             } catch (seastar::abort_requested_exception&) {
                 // Ignore
+            } catch (...) {
+                on_fatal_internal_error(testlog, format("Aborting on unhandled exception: {}", std::current_exception()));
             }
         });
     });

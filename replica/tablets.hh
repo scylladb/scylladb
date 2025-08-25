@@ -50,12 +50,13 @@ std::vector<data_value> replicas_to_data_value(const locator::tablet_replica_set
 /// The mutations will delete any older tablet information for the same table.
 /// The provided timestamp should be strictly monotonically increasing
 /// between calls for the overriding to work correctly.
-future<mutation> tablet_map_to_mutation(const locator::tablet_map&,
+future<> tablet_map_to_mutations(const locator::tablet_map&,
                                         table_id,
                                         const sstring& keyspace_name,
                                         const sstring& table_name,
                                         api::timestamp_type,
-                                        const gms::feature_service& features);
+                                        const gms::feature_service& features,
+                                        std::function<future<>(mutation)> process_mutation);
 
 mutation colocated_tablet_map_to_mutation(table_id,
                                         const sstring& keyspace_name,
@@ -100,7 +101,7 @@ future<std::unordered_set<locator::host_id>> read_required_hosts(cql3::query_pro
 future<> update_tablet_metadata(replica::database& db, cql3::query_processor&, locator::tablet_metadata&, const locator::tablet_metadata_change_hint&);
 
 /// Reads tablet metadata from system.tablets in the form of mutations.
-future<utils::chunked_vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<database>&);
+future<> read_tablet_mutations(seastar::sharded<database>&, std::function<void(canonical_mutation)> process_mutation);
 
 /// Reads tablet transition stage (if any)
 future<std::optional<locator::tablet_transition_stage>> read_tablet_transition_stage(cql3::query_processor& qp, table_id tid, dht::token last_token);

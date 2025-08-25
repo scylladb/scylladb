@@ -43,3 +43,6 @@ future<frozen_mutation> freeze_gently(const mutation& m);
 future<mutation> unfreeze_gently(const frozen_mutation& fm, schema_ptr schema);
 // Caller is responsible for keeping the argument stable in memory
 future<utils::chunked_vector<mutation>> unfreeze_gently(const utils::chunked_vector<frozen_mutation>&);
+// Unfreeze the frozen_mutation, possibly splitting it into a number of mutations
+// based on `max_rows`.  The `process_mutation` function is called for each of the split mutations.
+future<> unfreeze_and_split_gently(const frozen_mutation& fm, schema_ptr s, size_t max_rows, std::function<void(mutation)> process_mutation);

@@ -270,6 +270,8 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
         read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
         co_await coroutine::maybe_yield();
     }
+
+    visitor.accept_end_of_partition();
 }
 
 template <bool is_preemptible>
@@ -387,7 +389,7 @@ void mutation_partition_view::accept(const schema& s, partition_builder& visitor
     do_accept(s.get_column_mapping(), visitor);
 }
 
-future<> mutation_partition_view::accept_gently(const schema& s, partition_builder& visitor) const {
+future<> mutation_partition_view::accept_gently(const schema& s, mutation_partition_visitor& visitor) const {
     return do_accept_gently(s.get_column_mapping(), visitor);
 }
 

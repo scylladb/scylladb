@@ -174,9 +174,9 @@ void migration_manager::init_messaging_service()
             auto cm = co_await db::schema_tables::convert_schema_to_mutations(proxy, features);
             if (options->group0_snapshot_transfer) {
                 cm.emplace_back(co_await db::system_keyspace::get_group0_history(db));
-                for (auto&& m: co_await replica::read_tablet_mutations(db)) {
+                co_await replica::read_tablet_mutations(db, [&] (canonical_mutation m) {
                     cm.emplace_back(std::move(m));
-                }
+                });
             }
 
             // If the schema we're returning was last modified in group 0 mode, we also need to return
