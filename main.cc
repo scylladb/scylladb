@@ -2080,11 +2080,6 @@ sharded<locator::shared_token_metadata> token_metadata;
                 api::unset_server_tasks_compaction_module(ctx).get();
             });
 
-            api::set_server_cache(ctx).get();
-            auto stop_cache_api = defer_verbose_shutdown("cache API", [&ctx] {
-                api::unset_server_cache(ctx).get();
-            });
-
             api::set_server_commitlog(ctx, db).get();
             auto stop_commitlog_api = defer_verbose_shutdown("commitlog API", [&ctx] {
                 api::unset_server_commitlog(ctx).get();
