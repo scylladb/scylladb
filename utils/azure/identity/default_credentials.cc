@@ -139,9 +139,22 @@ future<default_credentials::credentials_opt> default_credentials::get_credential
     auto creds = std::make_unique<managed_identity_credentials>(_imds_endpoint, _logctx);
     try {
         co_await creds->get_access_token(resource_uri);
-    } catch (timed_out_error&) {
-        az_creds_logger.info("[{}] Failed to connect to IMDS.", *this);
+    } catch (timed_out_error& e) {
+        az_creds_logger.info("[{}] Failed to connect to IMDS: timed out", *this);
         co_return std::nullopt;
+    } catch (std::system_error& e) {
+        az_creds_logger.info("[{}] System error while accessing IMDS: {}", *this, e.what());
+        switch (e.code().value()) {
+        case static_cast<int>(std::errc::network_unreachable):
+        case static_cast<int>(std::errc::host_unreachable):
+        case static_cast<int>(std::errc::connection_refused):
+        case static_cast<int>(std::errc::connection_reset):
+        case static_cast<int>(std::errc::connection_aborted):
+        case static_cast<int>(std::errc::timed_out):
+            co_return std::nullopt;
+        default:
+            throw;
+        }
     } catch (auth_error& e) {
         az_creds_logger.info("[{}] Got unexpected return from IMDS: {}", *this, e.what());
         co_return std::nullopt;
