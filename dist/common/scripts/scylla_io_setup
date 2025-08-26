@@ -176,7 +176,7 @@ def run_iotune():
                    "--format", "envfile",
                    "--options-file", etcdir() + "/scylla.d/io.conf",
                    "--properties-file", etcdir() + "/scylla.d/io_properties.yaml",
-                   "--get-best-iops-with-buffer-sizes={512,1024,2048,4096}",
+                   *(f"--get-best-iops-with-buffer-sizes={s}" for s in [512, 1024, 2048, 4096]),
                    f"--sequential_write_buffer_size={128<<10}",
                    f"--sequential_read_buffer_size={128<<10}"] + iotune_args
             try:
