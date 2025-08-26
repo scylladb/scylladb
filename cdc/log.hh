@@ -106,6 +106,8 @@ bool is_log_for_some_table(const replica::database& db, const sstring& ks_name, 
 schema_ptr get_base_table(const replica::database&, const schema&);
 schema_ptr get_base_table(const replica::database&, std::string_view, std::string_view);
 
+bool cdc_enabled(const schema& s);
+
 seastar::sstring base_name(std::string_view log_name);
 seastar::sstring log_name(std::string_view table_name);
 seastar::sstring log_data_column_name(std::string_view column_name);
