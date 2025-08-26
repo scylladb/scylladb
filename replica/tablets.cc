@@ -516,7 +516,7 @@ static void do_validate_tablet_metadata_change(const locator::tablet_metadata& t
         auto token = to_tablet_metadata_row_key(s, row.key());
         auto replicas = maybe_deserialize_replica_set(row, r_cdef);
         if (!replicas) {
-            replicas = tm.get_tablet_map(table_id).get_tablet_info(token).replicas;
+            replicas = tm.get_tablet_map(table_id).get_tablet_info(token).replicas();
         }
 
         std::unordered_set<tablet_replica> pending = substract_sets(*new_replicas, *replicas);
@@ -982,7 +982,7 @@ future<utils::chunked_vector<canonical_mutation>> read_tablet_mutations(seastar:
 // The managed sets cannot be modified through tablet_sstable_set, but only jointly read from, so insert() and erase() are disabled.
 class tablet_sstable_set : public sstables::sstable_set_impl {
     schema_ptr _schema;
-    locator::tablet_map _tablet_map;
+    locator::shared_tablet_map _tablet_map;
     // Keep a single (compound) sstable_set per tablet/storage_group
     absl::flat_hash_map<size_t, lw_shared_ptr<const sstables::sstable_set>, absl::Hash<size_t>> _sstable_sets;
     // Used when ordering is required for correctness, but hot paths will use flat_hash_map
@@ -1001,7 +1001,7 @@ public:
         , _bytes_on_disk(o._bytes_on_disk)
     {}
 
-    tablet_sstable_set(schema_ptr s, const storage_group_manager& sgm, const locator::tablet_map& tmap)
+    tablet_sstable_set(schema_ptr s, const storage_group_manager& sgm, const locator::shared_tablet_map& tmap)
         : _schema(std::move(s))
         , _tablet_map(tmap.tablet_count())
     {
@@ -1014,7 +1014,7 @@ public:
         });
     }
 
-    static lw_shared_ptr<sstables::sstable_set> make(schema_ptr s, const storage_group_manager& sgm, const locator::tablet_map& tmap) {
+    static lw_shared_ptr<sstables::sstable_set> make(schema_ptr s, const storage_group_manager& sgm, const locator::shared_tablet_map& tmap) {
         return make_lw_shared<sstables::sstable_set>(std::make_unique<tablet_sstable_set>(std::move(s), sgm, tmap));
     }
 
@@ -1093,7 +1093,7 @@ private:
     friend class tablet_incremental_selector;
 };
 
-lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr s, const storage_group_manager& sgm, const locator::tablet_map& tmap) {
+lw_shared_ptr<sstables::sstable_set> make_tablet_sstable_set(schema_ptr s, const storage_group_manager& sgm, const locator::shared_tablet_map& tmap) {
     return tablet_sstable_set::make(std::move(s), sgm, tmap);
 }
 
