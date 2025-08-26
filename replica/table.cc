@@ -3151,7 +3151,7 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
     for_each_storage_group([&] (size_t group_id, storage_group& sg) {
         const locator::tablet_id tid = static_cast<locator::tablet_id>(group_id);
         const locator::tablet_info& tinfo = new_tablet_map->get_tablet_info(tid);
-        const bool tombstone_gc_enabled = std::ranges::contains(tinfo.replicas, this_replica);
+        const bool tombstone_gc_enabled = std::ranges::contains(tinfo.replicas(), this_replica);
 
         sg.for_each_compaction_group([tombstone_gc_enabled] (const compaction_group_ptr& cg_ptr) {
             cg_ptr->set_tombstone_gc_enabled(tombstone_gc_enabled);

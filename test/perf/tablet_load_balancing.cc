@@ -97,7 +97,7 @@ size_t get_tablet_count(const tablet_metadata& tm) {
 static
 future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto [table_id, resize_decision] : plan.resize_plan().resize) {
-        co_await tm.tablets().mutate_tablet_map_async(table_id, [&resize_decision] (tablet_map& tmap, per_table_tablet_map&) -> future<> {
+        co_await tm.tablets().mutate_tablet_map_async(table_id, [&resize_decision] (shared_tablet_map& tmap, per_table_tablet_map&) -> future<> {
             resize_decision.sequence_number = tmap.resize_decision().sequence_number + 1;
             tmap.set_resize_decision(resize_decision);
             return make_ready_future();
@@ -106,7 +106,7 @@ future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto table_id : plan.resize_plan().finalize_resize) {
         auto& old_tmap = tm.tablets().get_tablet_map(table_id);
         testlog.info("Setting new tablet map of size {}", old_tmap.tablet_count() * 2);
-        tablet_map tmap(old_tmap.tablet_count() * 2);
+        shared_tablet_map tmap(old_tmap.tablet_count() * 2);
         tm.tablets().set_tablet_map(table_id, std::move(tmap));
     }
 }
@@ -115,7 +115,7 @@ future<> apply_resize_plan(token_metadata& tm, const migration_plan& plan) {
 static
 future<> apply_plan(token_metadata& tm, const migration_plan& plan) {
     for (auto&& mig : plan.migrations()) {
-        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&mig] (tablet_map& tmap, per_table_tablet_map&) {
+        co_await tm.tablets().mutate_tablet_map_async(mig.tablet.table, [&mig] (shared_tablet_map& tmap, per_table_tablet_map&) {
             auto tinfo = tmap.get_tablet_info(mig.tablet.tablet);
             tinfo.replicas = replace_replica(tinfo.replicas, mig.src, mig.dst);
             tmap.set_tablet(mig.tablet.tablet, tinfo);

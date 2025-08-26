@@ -961,7 +961,7 @@ static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr vi
 
     co_await tablet_map.for_each_tablet([&] (auto tid, const auto& tablet_info) -> future<> {
         auto last_token = tablet_map.get_last_token(tid);
-        for (auto& replica: tablet_info.replicas) {
+        for (auto& replica: tablet_info.replicas()) {
             auto id = utils::UUID_gen::get_time_UUID();
             view_building_task task {
                 id, view_building_task::task_type::build_range, false,

@@ -247,8 +247,6 @@ struct shared_tablet_info {
     bool operator==(const shared_tablet_info&) const = default;
 };
 
-using tablet_info = shared_tablet_info; // TODO MICHAEL
-
 // Stores information about a single tablet that is not shared for co-located tables.
 struct per_table_tablet_info {
     db_clock::time_point repair_time;
@@ -280,6 +278,8 @@ struct tablet_info_view {
     const tablet_task_info& repair_task_info() const { return per_table.repair_task_info; }
     int64_t sstables_repaired_at() const { return per_table.sstables_repaired_at; }
 };
+
+using tablet_info = tablet_info_view;
 
 // Merges tablet_info b into a, but with following constraints:
 //  - they cannot have active repair task, since each task has a different id
@@ -558,7 +558,7 @@ struct tablet_desc_view {
     const tablet_transition_info* transition; // null if there's no transition.
 };
 
-using tablet_desc = shared_tablet_desc;
+using tablet_desc = tablet_desc_view;
 
 class no_such_tablet_map : public std::runtime_error {
 public:
@@ -762,8 +762,6 @@ private:
     void check_tablet_id(tablet_id) const;
 };
 
-using tablet_map = shared_tablet_map; // TODO MICHAEL
-
 /// Stores information about tablets of a single table that is not shared for co-located tables.
 ///
 /// Most of the tablet information is stored in the shared tablet map. Other information that for
@@ -961,6 +959,8 @@ struct tablet_map_view {
         return per_table->get_repair_scheduler_config();
     }
 };
+
+using tablet_map = tablet_map_view;
 
 using table_group_set = utils::small_vector<table_id, 2>;
 

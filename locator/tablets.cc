@@ -317,7 +317,7 @@ const tablet_map_view& tablet_metadata::get_tablet_map_view(table_id id) const {
 
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     try {
-        return *_tablets.at(id).shared;
+        return _tablets.at(id);
     } catch (const std::out_of_range&) {
         throw_with_backtrace<no_such_tablet_map>(id);
     }
@@ -1100,7 +1100,7 @@ std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, 
                         tablet_size_opt = get_tablet_size(leaving_replica->host, rb_tid);
                     } else {
                         on_internal_error_noexcept(tablet_logger, ::format("No leaving replica for tablet migration in table {}. ti.replicas: {} trinfo->next: {}",
-                                                rb_tid.table, ti.replicas, trinfo->next));
+                                                rb_tid.table, ti.replicas(), trinfo->next));
                     }
                 }
                 break;
@@ -1110,7 +1110,7 @@ std::optional<uint64_t> load_stats::get_tablet_size_in_transition(host_id host, 
                 // Get the avg tablet size from the available replicas
                 size_t replica_count = 0;
                 uint64_t tablet_size_sum = 0;
-                for (auto& replica : ti.replicas) {
+                for (auto& replica : ti.replicas()) {
                     auto new_tablet_size_opt = get_tablet_size(replica.host, rb_tid);
                     if (new_tablet_size_opt) {
                         tablet_size_sum += *new_tablet_size_opt;
@@ -1152,8 +1152,8 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
             for (size_t i = 0; i < old_tablet_count; i += 2) {
                 range_based_tablet_id rb_tid1 { table, old_tmap.get_token_range(tablet_id(i)) };
                 range_based_tablet_id rb_tid2 { table, old_tmap.get_token_range(tablet_id(i + 1)) };
-                auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
-                for (auto& replica : tinfo.replicas) {
+                const auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
+                for (auto& replica : tinfo.replicas()) {
                     auto tablet_size_opt1 = new_stats.get_tablet_size(replica.host, rb_tid1);
                     auto tablet_size_opt2 = new_stats.get_tablet_size(replica.host, rb_tid2);
                     if (!tablet_size_opt1 || !tablet_size_opt2) {
@@ -1177,8 +1177,8 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
             // Reconcile for split
             for (size_t i = 0; i < old_tablet_count; i++) {
                 range_based_tablet_id rb_tid { table, old_tmap.get_token_range(tablet_id(i)) };
-                auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
-                for (auto& replica : tinfo.replicas) {
+                const auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
+                for (auto& replica : tinfo.replicas()) {
                     auto tablet_size_opt = new_stats.get_tablet_size(replica.host, rb_tid);
                     if (!tablet_size_opt) {
                         tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid, replica.host);
@@ -1230,8 +1230,8 @@ tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map
     for (auto tid = std::optional(tablets.first_tablet()); tid; tid = tablets.next_tablet(*tid)) {
         const auto& tablet_info = tablets.get_tablet_info(*tid);
 
-        auto replica_it = std::ranges::find_if(tablet_info.replicas, [&] (auto&& r) { return r.host == host; });
-        if (replica_it == tablet_info.replicas.end()) {
+        auto replica_it = std::ranges::find_if(tablet_info.replicas(), [&] (auto&& r) { return r.host == host; });
+        if (replica_it == tablet_info.replicas().end()) {
             continue;
         }
 
@@ -1344,13 +1344,13 @@ private:
         auto* info = tablets.get_tablet_transition_info(tablet);
         auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
             if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
+                return tablets.get_tablet_info(tablet).replicas();
             }
             switch (info->writes) {
                 case write_replica_set_selector::previous:
                     [[fallthrough]];
                 case write_replica_set_selector::both:
-                    return tablets.get_tablet_info(tablet).replicas;
+                    return tablets.get_tablet_info(tablet).replicas();
                 case write_replica_set_selector::next: {
                     return info->next;
                 }
@@ -1391,11 +1391,11 @@ private:
         auto&& info = tablets.get_tablet_transition_info(tablet);
         auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
             if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
+                return tablets.get_tablet_info(tablet).replicas();
             }
             switch (info->reads) {
                 case read_replica_set_selector::previous:
-                    return tablets.get_tablet_info(tablet).replicas;
+                    return tablets.get_tablet_info(tablet).replicas();
                 case read_replica_set_selector::next: {
                     return info->next;
                 }
@@ -1467,10 +1467,10 @@ public:
                 first_token = tablets.get_last_token(tablet_id(size_t(tid) - 1));
             }
             auto token_range = std::make_pair(first_token, tablets.get_last_token(tid));
-            return tablet_routing_info{info.replicas, token_range};
+            return tablet_routing_info{info.replicas(), token_range};
         };
 
-        for (auto&& r : info.replicas) {
+        for (auto&& r : info.replicas()) {
             if (r.host == host) {
                 if (r.shard == shard) {
                     return std::nullopt; // routed correctly

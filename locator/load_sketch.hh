@@ -126,7 +126,7 @@ private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
         // optimistically assuming that they will succeed.
-        return trinfo ? trinfo->next : ti.replicas;
+        return trinfo ? trinfo->next : ti.replicas();
     }
 
     std::optional<uint64_t> get_disk_capacity_for_node(host_id node) {

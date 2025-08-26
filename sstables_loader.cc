@@ -273,7 +273,7 @@ bool tablet_sstable_streamer::tablet_in_scope(locator::tablet_id tid) const {
     }
 
     const auto& topo = _erm->get_topology();
-    for (const auto& r : _tablet_map.get_tablet_info(tid).replicas) {
+    for (const auto& r : _tablet_map.get_tablet_info(tid).replicas()) {
         switch (_stream_scope) {
         case stream_scope::node:
             if (topo.is_me(r.host)) {
