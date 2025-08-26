@@ -130,6 +130,13 @@ public:
         // FIXME: Will be extended in an upcoming commit.
         service_level_controller& _sl_controller;
 
+        /// This gate is supposed to synchronize `stop` with other tasks that
+        /// this interface performs. Because of that, EVERY coroutine function
+        /// of this class should hold it throughout its execution.
+        ///
+        /// Failing to do so may result in a segmentation fault and the like.
+        seastar::named_gate _stop_gate;
+
     public:
         auth_integration(service_level_controller&);
 
@@ -146,6 +153,9 @@ public:
         template <typename Func, typename Ret = std::invoke_result_t<Func>>
             requires std::invocable<Func>
         futurize_t<Ret> with_user_service_level(const std::optional<auth::authenticated_user>& user, Func&& func) {
+            // No need to hold `_stop_gate` here. It'll be held during the call to `find_effective_service_level`,
+            // and after that it's not necessary. We do NOT hold it here to avoid postpoing finishing `stop`.
+
             if (user && user->name) {
                 const std::optional<service_level_options> maybe_sl_opts = co_await find_effective_service_level(*user->name);
                 const sstring& sl_name = maybe_sl_opts && maybe_sl_opts->shares_name
