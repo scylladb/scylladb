@@ -16,7 +16,7 @@ using namespace json;
 using namespace seastar::httpd;
 namespace cs = httpd::cache_service_json;
 
-void set_cache_service(http_context& ctx, routes& r) {
+void set_cache_service(http_context& ctx, sharded<replica::database>& db, routes& r) {
     cs::get_row_cache_save_period_in_seconds.set(r, [](std::unique_ptr<http::request> req) {
         // We never save the cache
         // Origin uses 0 for never

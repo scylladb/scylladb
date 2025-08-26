@@ -230,7 +230,9 @@ future<> set_server_column_family(http_context& ctx, sharded<replica::database>&
                     set_column_family(ctx, r, db, sys_ks);
                 });
     co_await register_api(ctx, "cache_service",
-            "The cache service API", set_cache_service);
+            "The cache service API", [&db] (http_context& ctx, routes& r) {
+                    set_cache_service(ctx, db, r);
+                });
 }
 
 future<> unset_server_column_family(http_context& ctx) {
