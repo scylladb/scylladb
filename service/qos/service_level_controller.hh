@@ -129,10 +129,11 @@ public:
         friend class service_level_controller;
 
     private:
-        // FIXME: Will be extended in an upcoming commit.
         service_level_controller& _sl_controller;
         auth::service& _auth_service;
 
+        /// Mappings `role name` -> `service level options`.
+        std::map<sstring, service_level_options> _cache;
         /// This gate is supposed to synchronize `stop` with other tasks that
         /// this interface performs. Because of that, EVERY coroutine function
         /// of this class should hold it throughout its execution.
@@ -210,8 +211,6 @@ private:
 
     // Invariant: Non-null strictly within the lifetime of `auth::service`.
     std::unique_ptr<auth_integration> _auth_integration = nullptr;
-    // role name -> effective service_level_options 
-    std::map<sstring, service_level_options> _effective_service_levels_db;
 
     // Keeps names of effectively dropped service levels. Those service levels exits in the table but are not present in _service_levels_db cache
     std::set<sstring> _effectively_dropped_sls;

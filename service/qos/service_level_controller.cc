@@ -52,7 +52,7 @@ future<> service_level_controller::auth_integration::stop() {
 }
 
 void service_level_controller::auth_integration::clear_cache() {
-    _sl_controller._effective_service_levels_db.clear();
+    _cache.clear();
 }
 
 service_level_controller::service_level_controller(sharded<auth::service>& auth_service, locator::shared_token_metadata& tm, abort_source& as, service_level_options default_service_level_config, scheduling_group default_scheduling_group, bool destroy_default_sg_on_drain)
@@ -385,7 +385,11 @@ future<> service_level_controller::auth_integration::reload_cache() {
     }
 
     co_await _sl_controller.container().invoke_on_all([effective_sl_map] (service_level_controller& sl_controller) -> future<> {
-        sl_controller._effective_service_levels_db = std::move(effective_sl_map);
+        // We probably cannot predict if `auth_integration` is still in place on another shard,
+        // so let's play it safe here.
+        if (sl_controller._auth_integration) {
+            sl_controller._auth_integration->_cache = std::move(effective_sl_map);
+        }
         co_await sl_controller.notify_effective_service_levels_cache_reloaded();
     });
 }
@@ -414,8 +418,8 @@ future<std::optional<service_level_options>> service_level_controller::auth_inte
     const auto _ = _stop_gate.hold();
 
     if (_sl_controller._sl_data_accessor->can_use_effective_service_level_cache()) {
-        auto effective_sl_it = _sl_controller._effective_service_levels_db.find(role_name);
-        co_return effective_sl_it != _sl_controller._effective_service_levels_db.end() 
+        auto effective_sl_it = _cache.find(role_name);
+        co_return effective_sl_it != _cache.end() 
             ? std::optional<service_level_options>(effective_sl_it->second)
             : std::nullopt;
     } else {
@@ -466,8 +470,8 @@ std::optional<service_level_options> service_level_controller::auth_integration:
         return std::nullopt;
     }
 
-    auto effective_sl_it = _sl_controller._effective_service_levels_db.find(role_name);
-    return effective_sl_it != _sl_controller._effective_service_levels_db.end() 
+    auto effective_sl_it = _cache.find(role_name);
+    return effective_sl_it != _cache.end() 
         ? std::optional<service_level_options>(effective_sl_it->second)
         : std::nullopt;
 }
