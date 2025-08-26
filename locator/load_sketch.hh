@@ -82,7 +82,7 @@ private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
         // optimistically assuming that they will succeed.
-        return trinfo ? trinfo->next : ti.replicas;
+        return trinfo ? trinfo->next : ti.replicas();
     }
 
     future<> populate_table(const tablet_map& tmap, std::optional<host_id> host, std::optional<sstring> only_dc) {
@@ -126,7 +126,7 @@ public:
             }
         } else {
             for (const auto& [table, tmap] : _tm->tablets().all_tables_ungrouped()) {
-                co_await populate_table(*tmap.shared, host, only_dc);
+                co_await populate_table(tmap, host, only_dc);
             }
         }
 
