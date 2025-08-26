@@ -2228,6 +2228,14 @@
                      "allowMultiple":false,
                      "type":"double",
                      "paramType":"query"
+                  },
+                  {
+                     "name":"write_on_close",
+                     "description":"traces will be written immediatly after the request is completed",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             },

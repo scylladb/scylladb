@@ -2160,7 +2160,11 @@ void settraceprobability_operation(scylla_rest_client& client, const bpo::variab
     if (value < 0.0 or value > 1.0) {
         throw std::invalid_argument("trace probability must be between 0 and 1");
     }
-    client.post("/storage_service/trace_probability", {{"probability", fmt::to_string(value)}});
+    if (vm.contains("write_on_close") && vm["write_on_close"].as<bool>()) {
+        client.post("/storage_service/trace_probability", {{"probability", fmt::to_string(value)}, {"write_on_close", "true"}});
+    } else {
+        client.post("/storage_service/trace_probability", {{"probability", fmt::to_string(value)}});
+    }
 }
 
 void snapshot_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
@@ -4387,6 +4391,7 @@ For more information, see: {}"
                 { },
                 {
                     typed_option<double>("trace_probability", "trace probability value, must between 0 and 1, e.g. 0.2", 1),
+                    typed_option<bool>("write_on_close", false, "write traces immediatly after session closed"),
                 },
             },
             {

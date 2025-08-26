@@ -1176,11 +1176,14 @@ static
 future<json::json_return_type>
 rest_set_trace_probability(std::unique_ptr<http::request> req) {
         auto probability = req->get_query_param("probability");
-        apilog.info("set_trace_probability: probability={}", probability);
-        return futurize_invoke([probability] {
+        auto write_on_close = req->get_query_param("write_on_close");
+        apilog.info("set_trace_probability: probability={} write_on_close={}", probability, write_on_close);
+        bool write_on_close_value = strcasecmp(write_on_close.c_str(), "true") == 0;
+        return futurize_invoke([probability, write_on_close_value] {
             double real_prob = std::stod(probability.c_str());
-            return tracing::tracing::tracing_instance().invoke_on_all([real_prob] (auto& local_tracing) {
+            return tracing::tracing::tracing_instance().invoke_on_all([real_prob, write_on_close_value] (auto& local_tracing) {
                 local_tracing.set_trace_probability(real_prob);
+                local_tracing.set_write_on_close(write_on_close_value);
             }).then([] {
                 return make_ready_future<json::json_return_type>(json_void());
             });
