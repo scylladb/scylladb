@@ -284,22 +284,6 @@ const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
     }
 }
 
-const shared_tablet_map& tablet_metadata::get_shared_tablet_map(table_id id) const {
-    try {
-        return *_tablets.at(id).shared;
-    } catch (const std::out_of_range&) {
-        throw_with_backtrace<no_such_tablet_map>(id);
-    }
-}
-
-const per_table_tablet_map& tablet_metadata::get_per_table_tablet_map(table_id id) const {
-    try {
-        return *_tablets.at(id).per_table;
-    } catch (const std::out_of_range&) {
-        throw_with_backtrace<no_such_tablet_map>(id);
-    }
-}
-
 future<locator::shared_tablet_map_ptr> tablet_metadata::get_tablet_map_ptr(table_id id) const {
     try {
         // lightweight since it only copies the shared ptr, not the map itself.
