@@ -176,11 +176,11 @@ def run_iotune():
                    "--format", "envfile",
                    "--options-file", etcdir() + "/scylla.d/io.conf",
                    "--properties-file", etcdir() + "/scylla.d/io_properties.yaml",
-                   "--get-best-iops-with-buffer-sizes", "{512,1024,2048,4096}",
-                   "--sequential_write_buffer_size", f"{128<<10}",
-                   "--sequential_read_buffer_size", f"{128<<10}"] + iotune_args
+                   "--get-best-iops-with-buffer-sizes={512,1024,2048,4096}",
+                   f"--sequential_write_buffer_size={128<<10}",
+                   f"--sequential_read_buffer_size={128<<10}"] + iotune_args
             try:
-                subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                subprocess.run(cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             except subprocess.CalledProcessError as e:
                 logging.error("iotune failed with exit code %s", e.returncode)
                 if e.stdout:
