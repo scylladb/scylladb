@@ -707,12 +707,6 @@ rest_describe_ring(http_context& ctx, sharded<service::storage_service>& ss, std
 
 static
 future<json::json_return_type>
-rest_get_load(http_context& ctx, std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, &replica::column_family_stats::live_disk_space_used);
-}
-
-static
-future<json::json_return_type>
 rest_get_current_generation_number(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto ep = ss.local().get_token_metadata().get_topology().my_host_id();
         return ss.local().gossiper().get_current_generation_number(ep).then([](gms::generation_type res) {
@@ -1325,12 +1319,6 @@ rest_set_hinted_handoff_throttle_in_kb(std::unique_ptr<http::request> req) {
 }
 
 static
-future<json::json_return_type>
-rest_get_metrics_load(http_context& ctx, std::unique_ptr<http::request> req) {
-        return get_cf_stats(ctx.db, &replica::column_family_stats::live_disk_space_used);
-}
-
-static
 json::json_return_type
 rest_get_exceptions(sharded<service::storage_service>& ss, const_req req) {
         return ss.local().get_exception_count();
@@ -1847,7 +1835,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_range_to_endpoint_map.set(r, rest_bind(rest_get_range_to_endpoint_map, ctx, ss));
     ss::get_pending_range_to_endpoint_map.set(r, rest_bind(rest_get_pending_range_to_endpoint_map, ctx));
     ss::describe_ring.set(r, rest_bind(rest_describe_ring, ctx, ss));
-    ss::get_load.set(r, rest_bind(rest_get_load, ctx));
     ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
     ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
@@ -1900,7 +1887,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_batch_size_failure_threshold.set(r, rest_bind(rest_get_batch_size_failure_threshold));
     ss::set_batch_size_failure_threshold.set(r, rest_bind(rest_set_batch_size_failure_threshold));
     ss::set_hinted_handoff_throttle_in_kb.set(r, rest_bind(rest_set_hinted_handoff_throttle_in_kb));
-    ss::get_metrics_load.set(r, rest_bind(rest_get_metrics_load, ctx));
     ss::get_exceptions.set(r, rest_bind(rest_get_exceptions, ss));
     ss::get_total_hints_in_progress.set(r, rest_bind(rest_get_total_hints_in_progress));
     ss::get_total_hints.set(r, rest_bind(rest_get_total_hints));
@@ -1932,7 +1918,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_range_to_endpoint_map.unset(r);
     ss::get_pending_range_to_endpoint_map.unset(r);
     ss::describe_ring.unset(r);
-    ss::get_load.unset(r);
     ss::get_current_generation_number.unset(r);
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
@@ -1985,7 +1970,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_batch_size_failure_threshold.unset(r);
     ss::set_batch_size_failure_threshold.unset(r);
     ss::set_hinted_handoff_throttle_in_kb.unset(r);
-    ss::get_metrics_load.unset(r);
     ss::get_exceptions.unset(r);
     ss::get_total_hints_in_progress.unset(r);
     ss::get_total_hints.unset(r);
