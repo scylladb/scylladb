@@ -315,7 +315,7 @@ future<rack_list_colocation_state> find_required_rack_list_colocations(
                     auto gid = locator::global_tablet_id{table_or_mv->id(), tid};
 
                     // Current replicas in this DC. There might be multiple replicas in the same rack.
-                    auto dc_replicas = ti.replicas | std::views::filter([&] (const tablet_replica& r) {
+                    auto dc_replicas = ti.replicas() | std::views::filter([&] (const tablet_replica& r) {
                         return get_node(r.host).dc_rack().dc == dc;
                     }) | std::ranges::to<std::vector<tablet_replica>>();
 
@@ -1059,7 +1059,6 @@ public:
 
         struct repair_plan {
             locator::global_tablet_id gid;
-            locator::tablet_info tinfo;
             dht::token_range range;
             dht::token last_token;
             db_clock::duration repair_time_diff;
@@ -1117,7 +1116,7 @@ public:
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info.shared, range, last_token, diff});
+                plans.push_back(repair_plan{gid, range, last_token, diff});
 
                 // don't schedule repairs of colocated tablets together.
                 // currently there are some technical limitations that prevent us from scheduling repairs
@@ -1140,7 +1139,7 @@ public:
         for (auto& plan : plans) {
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
-            tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
+            tmsi = get_migration_streaming_info(topo, _tm->tablets().get_tablet_map(plan.gid.table).get_tablet_info(plan.gid.tablet), trinfo);
             if (can_accept_load(nodes, tmsi)) {
                 apply_load(nodes, tmsi);
                 ret.add(plan.gid);
@@ -1860,9 +1859,9 @@ public:
             }
 
             // shard presence of a table across the cluster
-            size_t shard_count = std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
-                [] (size_t shard_count, const locator::tablet_info& info) {
-                    return shard_count + info.replicas.size();
+            size_t shard_count = std::ranges::fold_left(tmap.tablets(), size_t(0),
+                [] (size_t shard_count, const auto& p) {
+                    return shard_count + p.second.replicas().size();
                 });
 
             resize_decision new_resize_decision;
@@ -2222,7 +2221,7 @@ public:
     void erase_candidates(node_load_map& nodes, const shared_tablet_map& tmap, const migration_tablet_set& tablets) {
       // FIXME: indentation.
       for (auto tablet : tablets.tablets()) {
-        auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
+        const auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
         for (auto&& r : src_tinfo.replicas) {
             if (nodes.contains(r.host)) {
                 lblogger.trace("Erasing tablet {} from {}", tablet, r);
@@ -3103,7 +3102,7 @@ public:
                 auto process_skip_info = [&] (migration_tablet_set tablets, skip_info skip) {
                     if (src_node_info.drained && skip.viable_targets.empty()) {
                         auto tablet = tablets.tablets().front();
-                        auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
+                        const auto& replicas = tmap.get_tablet_info(tablet.tablet).replicas;
                         throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
                                                         tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
@@ -3656,7 +3655,7 @@ public:
                 };
 
                 if (tm->tablets().has_tablet_map(base_id)) {
-                    const auto& base_map = tm->tablets().get_tablet_map(base_id);
+                    const auto& base_map = tm->tablets().get_shared_tablet_map(base_id);
                     create_colocated_tablet_maps(base_map);
                 } else {
                     const auto& s = *new_cfms_map[base_id];
