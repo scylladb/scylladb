@@ -47,7 +47,7 @@ service_level_controller::auth_integration::auth_integration(service_level_contr
 {}
 
 future<> service_level_controller::auth_integration::stop() {
-    co_return;
+    co_await _stop_gate.close();
 }
 
 void service_level_controller::auth_integration::clear_cache() {
@@ -314,6 +314,7 @@ future<> service_level_controller::update_service_levels_cache(qos::query_contex
 
 future<> service_level_controller::auth_integration::reload_cache() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
+    const auto _ = _stop_gate.hold();
     
     if (!_sl_controller._auth_service.local_is_initialized()) {
         // Auth service might be not initialized yet.
@@ -406,6 +407,8 @@ void service_level_controller::stop_legacy_update_from_distributed_data() {
 }
 
 future<std::optional<service_level_options>> service_level_controller::auth_integration::find_effective_service_level(const sstring& role_name) {
+    const auto _ = _stop_gate.hold();
+
     if (_sl_controller._sl_data_accessor->can_use_effective_service_level_cache()) {
         auto effective_sl_it = _sl_controller._effective_service_levels_db.find(role_name);
         co_return effective_sl_it != _sl_controller._effective_service_levels_db.end() 
@@ -567,6 +570,8 @@ scheduling_group service_level_controller::get_scheduling_group(sstring service_
 }
 
 future<scheduling_group> service_level_controller::auth_integration::get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr) {
+    const auto _ = _stop_gate.hold();
+
     if (usr && usr->name) {
         auto sl_opt = co_await find_effective_service_level(*usr->name);
         auto& sl_name = (sl_opt && sl_opt->shares_name) ? *sl_opt->shares_name : default_service_level_name;
@@ -1026,6 +1031,8 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
 }
 
 future<std::vector<cql3::description>> service_level_controller::auth_integration::describe_attached_service_levels() {
+    const auto _ = _stop_gate.hold();
+
     const auto attached_service_levels = co_await _sl_controller._auth_service.local().underlying_role_manager().query_attribute_for_all("service_level");
 
     std::vector<cql3::description> result{};
