@@ -1,0 +1,21 @@
+name: Trigger Scylla CI Route
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  trigger-jenkins:
+    if: contains(github.event.comment.body, '@scylladbbot') && contains(github.event.comment.body, 'trigger-ci')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Scylla-CI-Route Jenkins Job
+        env:
+          JENKINS_USER: ${{ secrets.JENKINS_USERNAME }}
+          JENKINS_API_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+          JENKINS_URL: "https://jenkins.scylladb.com"
+        run: |
+          PR_NUMBER=${{ github.event.issue.number }}
+          PR_REPO_NAME=${{ github.event.repository.full_name }}
+          curl -X POST "$JENKINS_URL/job/releng/job/Scylla-CI-Route/buildWithParameters?PR_NUMBER=$PR_NUMBER&PR_REPO_NAME=$PR_REPO_NAME" \
+          --user "$JENKINS_USER:$JENKINS_API_TOKEN" --fail -i -v
