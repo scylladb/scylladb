@@ -713,7 +713,6 @@ static constexpr unsigned do_get_rpc_client_idx(messaging_verb verb) {
     case messaging_verb::TABLET_STREAM_DATA:
     case messaging_verb::TABLET_CLEANUP:
     case messaging_verb::TABLET_REPAIR:
-    case messaging_verb::TABLET_REPAIR_COLOCATED:
     case messaging_verb::TABLE_LOAD_STATS_V1:
     case messaging_verb::TABLE_LOAD_STATS:
     case messaging_verb::WORK_ON_VIEW_BUILDING_TASKS:
