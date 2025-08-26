@@ -14,7 +14,7 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/restrictions/statement_restrictions.hh"
 #include "cql3/attributes.hh"
-#include "db/config.hh"
+#include "db/tri_mode_restriction.hh"
 #include <seastar/core/shared_ptr.hh>
 
 namespace cql3 {

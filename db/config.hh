@@ -25,6 +25,7 @@
 #include "utils/error_injection.hh"
 #include "utils/dict_trainer.hh"
 #include "utils/advanced_rpc_compressor.hh"
+#include "db/tri_mode_restriction.hh"
 
 namespace boost::program_options {
 
@@ -140,15 +141,6 @@ struct experimental_features_t {
     static std::map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();
 };
-
-/// A restriction that can be in three modes: true (the operation is disabled),
-/// false (the operation is allowed), or warn (the operation is allowed but
-/// produces a warning in the log).
-struct tri_mode_restriction_t {
-    enum class mode { FALSE, TRUE, WARN };
-    static std::unordered_map<sstring, mode> map(); // for enum_option<>
-};
-using tri_mode_restriction = enum_option<tri_mode_restriction_t>;
 
 struct replication_strategy_restriction_t {
     static std::unordered_map<sstring, locator::replication_strategy_type> map(); // for enum_option<>

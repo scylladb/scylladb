@@ -32,6 +32,7 @@
 #include "db/view/view.hh"
 #include "service/migration_manager.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 
 namespace cql3 {
 
