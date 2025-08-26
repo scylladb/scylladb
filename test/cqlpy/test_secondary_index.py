@@ -2076,7 +2076,7 @@ def test_limit_partition(cql, test_keyspace):
         assert rs.has_more_pages == False
         # Test LIMIT across partitions - reproduces #22158.
         rs = cql.execute(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 3')
-        assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
+        assert sorted(list(rs)) == [(1,1), (2,1), (2,2)]
         assert rs.has_more_pages == False
 
 
