@@ -1964,7 +1964,7 @@ static void make_update_indices_mutations(
 
             for (const auto& tid: tablet_map.tablet_ids()) {
                 auto last_token = tablet_map.get_last_token(tid);
-                for (auto& replica: tablet_map.get_tablet_info(tid).replicas) {
+                for (auto& replica: tablet_map.get_tablet_info(tid).replicas()) {
                     auto id = utils::UUID_gen::get_time_UUID();
                     view::view_building_task task {
                         id, view::view_building_task::task_type::build_range, view::view_building_task::task_state::idle,

@@ -677,7 +677,7 @@ private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
         // optimistically assuming that they will succeed.
-        return trinfo ? trinfo->next : ti.replicas;
+        return trinfo ? trinfo->next : ti.replicas();
     }
 
     tablet_replica_set sorted_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
@@ -736,7 +736,7 @@ private:
     get_migration_streaming_infos(const locator::topology& topology, const tablet_map& tmap, const migration_vector& infos) {
         migration_streaming_info_vector streaming_infos;
         for (auto& info : infos) {
-            auto& ti = tmap.get_tablet_info(info.tablet.tablet);
+            auto&& ti = tmap.get_tablet_info(info.tablet.tablet);
             streaming_infos.push_back(get_migration_streaming_info(topology, ti, info));
         }
         return streaming_infos;
@@ -860,7 +860,7 @@ public:
             for (auto&& [tid, trinfo]: tmap.transitions()) {
                 co_await coroutine::maybe_yield();
                 if (is_streaming(&trinfo)) {
-                    auto& tinfo = tmap.get_tablet_info(tid);
+                    const auto& tinfo = tmap.get_tablet_info(tid);
                     apply_load(nodes, get_migration_streaming_info(topo, tinfo, trinfo));
                 }
             }
@@ -871,14 +871,13 @@ public:
         for (const tablet_migration_info& tmi : mplan.migrations()) {
             co_await coroutine::maybe_yield();
             auto& tmap = tablet_meta.get_tablet_map(tmi.tablet.table);
-            auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
+            const auto& tinfo = tmap.get_tablet_info(tmi.tablet.tablet);
             auto streaming_info = get_migration_streaming_info(topo, tinfo, tmi);
             apply_load(nodes, streaming_info);
         }
 
         struct repair_plan {
             locator::global_tablet_id gid;
-            locator::tablet_info tinfo;
             dht::token_range range;
             dht::token last_token;
             db_clock::duration repair_time_diff;
@@ -930,7 +929,7 @@ public:
                 }
                 auto range = tmap.get_token_range(id);
                 auto last_token = tmap.get_last_token(id);
-                plans.push_back(repair_plan{gid, info.shared, range, last_token, diff});
+                plans.push_back(repair_plan{gid, range, last_token, diff});
 
                 // don't schedule repairs of colocated tablets together.
                 // currently there are some technical limitations that prevent us from scheduling repairs
@@ -953,7 +952,7 @@ public:
         for (auto& plan : plans) {
             co_await coroutine::maybe_yield();
             tablet_migration_streaming_info tmsi;
-            tmsi = get_migration_streaming_info(topo, plan.tinfo, trinfo);
+            tmsi = get_migration_streaming_info(topo, _tm->tablets().get_tablet_map(plan.gid.table).get_tablet_info(plan.gid.tablet), trinfo);
             if (can_accept_load(nodes, tmsi)) {
                 apply_load(nodes, tmsi);
                 ret.add(plan.gid);
@@ -1014,7 +1013,7 @@ public:
 
             // Also filter out replicas that don't belong to the DC being worked on.
             auto get_replicas = [this, &nodes] (const tablet_desc& t) {
-                auto ret = sorted_replicas_for_tablet_load(*t.info, t.transition);
+                auto ret = sorted_replicas_for_tablet_load(t.info, t.transition);
                 const auto [first, last] = std::ranges::remove_if(ret, [&] (tablet_replica r) { return !nodes.contains(r.host); });
                 ret.erase(first, last);
                 return ret;
@@ -1176,7 +1175,7 @@ public:
                 }
 
                 auto mig = create_migration_info(t2_id, src, dst);
-                auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), *t2.info, mig);
+                auto mig_streaming_info = get_migration_streaming_info(_tm->get_topology(), t2.info, mig);
                 if (!can_accept_load(nodes, mig_streaming_info)) {
                     // FIXME: we can try another pair of non-colocated replicas of same sibling tablets.
                     lblogger.debug("Load limit reached, unable to emit migration for replica ({}, {}) to co-habit the replica ({}, {})",
@@ -1565,10 +1564,11 @@ public:
             }
 
             // shard presence of a table across the cluster
-            size_t shard_count = std::accumulate(tmap.tablets().begin(), tmap.tablets().end(), size_t(0),
-                [] (size_t shard_count, const locator::tablet_info& info) {
-                    return shard_count + info.replicas.size();
-                });
+
+            size_t shard_count = 0;
+            for (const auto& [tid, tinfo] : tmap.tablets()) {
+                shard_count += tinfo.replicas().size();
+            }
 
             resize_decision new_resize_decision;
             new_resize_decision.way = table_plan.resize_decision;
@@ -1918,8 +1918,8 @@ public:
     void erase_candidates(node_load_map& nodes, const tablet_map& tmap, const migration_tablet_set& tablets) {
       // FIXME: indentation.
       for (auto tablet : tablets.tablets()) {
-        auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
-        for (auto&& r : src_tinfo.replicas) {
+        const auto& src_tinfo = tmap.get_tablet_info(tablet.tablet);
+        for (auto&& r : src_tinfo.replicas()) {
             if (nodes.contains(r.host)) {
                 lblogger.trace("Erasing tablet {} from {}", tablet, r);
                 // Not necessarily all replicas of sibling tablets are co-located, and so we need to
@@ -2217,7 +2217,7 @@ public:
                 viable_targets.emplace(id);
             }
 
-            for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
+            for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas()) {
                 viable_targets.erase(r.host);
             }
 
@@ -2229,7 +2229,7 @@ public:
                 return viable_targets;
             }
 
-            for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
+            for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas()) {
                 auto* node = _tm->get_topology().find_node(r.host);
                 if (!node) {
                     on_internal_error(lblogger, format("Node {} not found in topology", r.host));
@@ -2275,7 +2275,7 @@ public:
             }
         }
 
-        for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
+        for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas()) {
             if (r.host == dst_info.id) {
                 _stats.for_dc(src_info.dc()).tablets_skipped_node++;
                 lblogger.debug("candidate tablet {} skipped because it has a replica on target node", tablet);
@@ -2799,7 +2799,7 @@ public:
                 auto process_skip_info = [&] (migration_tablet_set tablets, skip_info skip) {
                     if (src_node_info.drained && skip.viable_targets.empty()) {
                         auto tablet = tablets.tablets().front();
-                        auto replicas = tmap.get_tablet_info(tablet.tablet).replicas;
+                        auto replicas = tmap.get_tablet_info(tablet.tablet).replicas();
                         throw std::runtime_error(fmt::format("Unable to find new replica for tablet {} on {} when draining {}. Consider adding new nodes or reducing replication factor. (nodes {}, replicas {})",
                                                         tablet, src, nodes_to_drain, nodes_by_load_dst, replicas));
                     }
@@ -3031,7 +3031,7 @@ public:
 
                 // Check if any replica is on a node which has left.
                 // When node is replaced we don't rebuild as part of topology request.
-                for (auto&& r : ti.replicas) {
+                for (auto&& r : ti.replicas()) {
                     auto* node = topo.find_node(r.host);
                     if (!node) {
                         on_internal_error(lblogger, format("Replica {} of tablet {} not found in topology",
@@ -3163,14 +3163,14 @@ public:
             uint64_t total_load = 0;
 
             auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
-                return t ? sorted_replicas_for_tablet_load(*t->info, t->transition) : tablet_replica_set{};
+                return t ? sorted_replicas_for_tablet_load(t->info, t->transition) : tablet_replica_set{};
             };
             auto migrating = [&] (std::optional<tablet_desc> t) {
                 return t && (bool(t->transition) || _scheduled_tablets.contains(global_tablet_id{table, t->tid}));
             };
             auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
                 if (t && is_streaming(t->transition)) {
-                    apply_load(nodes, get_migration_streaming_info(topo, *t->info, *t->transition));
+                    apply_load(nodes, get_migration_streaming_info(topo, t->info, *t->transition));
                 }
             };
 
@@ -3374,7 +3374,7 @@ public:
 
                 if (tm->tablets().has_tablet_map(base_id)) {
                     const auto& base_map = tm->tablets().get_tablet_map(base_id);
-                    create_colocated_tablet_maps(base_map);
+                    create_colocated_tablet_maps(*base_map.shared);
                 } else {
                     const auto& s = *new_cfms_map[base_id];
                     lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
