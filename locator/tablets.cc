@@ -670,24 +670,6 @@ future<> shared_tablet_map::for_each_tablet(seastar::noncopyable_function<future
     }
 }
 
-future<> shared_tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<future<>(shared_tablet_desc, std::optional<shared_tablet_desc>)> func) const {
-    auto make_desc = [this] (tablet_id tid) {
-        return shared_tablet_desc{tid, &get_tablet_info(tid), get_tablet_transition_info(tid)};
-    };
-    if (_tablets.size() == 1) {
-        co_return co_await func(make_desc(first_tablet()), std::nullopt);
-    }
-    for (std::optional<tablet_id> tid = first_tablet(); tid; tid = next_tablet(*tid)) {
-        auto tid1 = tid;
-        auto tid2 = tid = next_tablet(*tid);
-        if (!tid2) {
-            // Cannot happen with power-of-two invariant.
-            throw std::logic_error(format("Cannot retrieve sibling tablet with tablet count {}", tablet_count()));
-        }
-        co_await func(make_desc(*tid1), make_desc(*tid2));
-    }
-}
-
 void shared_tablet_map::clear_transitions() {
     _transitions.clear();
 }
