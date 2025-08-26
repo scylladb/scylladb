@@ -37,7 +37,7 @@
  *                                                (u >> 6) & 1,
  *                                                (u >> 7) & 1)
  */
-extern std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_0;
-extern std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_8;
-extern std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_16;
-extern std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_24;
+extern const std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_0;
+extern const std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_8;
+extern const std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_16;
+extern const std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_24;

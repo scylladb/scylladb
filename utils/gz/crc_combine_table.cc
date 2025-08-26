@@ -53,10 +53,10 @@ static constexpr int radix_bits = 8;
 static constexpr uint32_t one = 0x80000000; // x^0
 static constexpr auto pows = make_crc32_power_table<bits>(); // pows[i] = x^(2^i*8) mod G(x)
 
-constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_0 = make_crc32_table(0, radix_bits, one, pows);
-constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_8 = make_crc32_table(8, radix_bits, one, pows);
-constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_16 = make_crc32_table(16, radix_bits, one, pows);
-constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_24 = make_crc32_table(24, radix_bits, one, pows);
+const constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_0 = make_crc32_table(0, radix_bits, one, pows);
+const constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_8 = make_crc32_table(8, radix_bits, one, pows);
+const constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_16 = make_crc32_table(16, radix_bits, one, pows);
+const constinit std::array<uint32_t, 256> crc32_x_pow_radix_8_table_base_24 = make_crc32_table(24, radix_bits, one, pows);
 
 #else
 
