@@ -3200,7 +3200,7 @@ public:
     }
 
     // Allocates new tablets for a table which is not co-located with another table.
-    tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
+    shared_tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
         auto lb = make_load_balancer(tm, nullptr, {});
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
@@ -3243,7 +3243,7 @@ public:
             // for the other tables in the group, create a co-located tablet map.
             for (const auto& [base_id, group_schemas] : table_groups) {
 
-                auto create_colocated_tablet_maps = [&] (const tablet_map& base_map) {
+                auto create_colocated_tablet_maps = [&] (const shared_tablet_map& base_map) {
                     for (auto sp : group_schemas) {
                         const auto& s = *sp;
                         if (s.id() != base_id) {
@@ -3311,10 +3311,10 @@ private:
     // (x << 1) + 1.
     // So a tablet of id 0 is remapped into ids 0 and 1. Another of id 1 is remapped
     // into ids 2 and 3, and so on.
-    future<std::pair<tablet_map, per_table_tablet_map>> split_tablets(token_metadata_ptr tm, table_id table) {
+    future<std::pair<shared_tablet_map, per_table_tablet_map>> split_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map_view(table);
 
-        tablet_map new_tablets(tablets.tablet_count() * 2);
+        shared_tablet_map new_tablets(tablets.tablet_count() * 2);
         per_table_tablet_map new_per_table_tablets;
 
         for (tablet_id tid : tablets.tablet_ids()) {
@@ -3339,10 +3339,10 @@ private:
 
     // The merging of tablet is completely based on the power-of-two constraint.
     // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
-    future<std::pair<tablet_map, per_table_tablet_map>> merge_tablets(token_metadata_ptr tm, table_id table) {
+    future<std::pair<shared_tablet_map, per_table_tablet_map>> merge_tablets(token_metadata_ptr tm, table_id table) {
         auto& tablets = tm->tablets().get_tablet_map_view(table);
 
-        tablet_map new_tablets(tablets.tablet_count() / 2);
+        shared_tablet_map new_tablets(tablets.tablet_count() / 2);
         per_table_tablet_map new_per_table_tablets;
 
         for (tablet_id tid : new_tablets.tablet_ids()) {
@@ -3380,7 +3380,7 @@ private:
         co_return std::make_pair(std::move(new_tablets), std::move(new_per_table_tablets));
     }
 public:
-    future<std::pair<tablet_map, per_table_tablet_map>> resize_tablets(token_metadata_ptr tm, table_id table) {
+    future<std::pair<shared_tablet_map, per_table_tablet_map>> resize_tablets(token_metadata_ptr tm, table_id table) {
         auto& tmap = tm->tablets().get_tablet_map(table);
         if (tmap.needs_split()) {
             return split_tablets(std::move(tm), table);
@@ -3430,7 +3430,7 @@ void tablet_allocator::set_use_table_aware_balancing(bool use_tablet_aware_balan
     impl().set_use_tablet_aware_balancing(use_tablet_aware_balancing);
 }
 
-future<std::pair<locator::tablet_map, locator::per_table_tablet_map>> tablet_allocator::resize_tablets(locator::token_metadata_ptr tm, table_id table) {
+future<std::pair<locator::shared_tablet_map, locator::per_table_tablet_map>> tablet_allocator::resize_tablets(locator::token_metadata_ptr tm, table_id table) {
     return impl().resize_tablets(std::move(tm), table);
 }
 
