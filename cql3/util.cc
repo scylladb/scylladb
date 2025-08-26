@@ -7,6 +7,7 @@
 #include "utils/assert.hh"
 #include "util.hh"
 #include "cql3/expr/expr-utils.hh"
+#include "db/config.hh"
 
 #ifdef DEBUG
 

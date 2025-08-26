@@ -57,6 +57,7 @@
 #include "utils/result_loop.hh"
 #include "replica/database.hh"
 #include "replica/mutation_dump.hh"
+#include "db/config.hh"
 
 
 template<typename T = void>
