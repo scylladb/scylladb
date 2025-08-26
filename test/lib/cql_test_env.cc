@@ -142,6 +142,7 @@ private:
     sharded<db::view::view_update_generator> _view_update_generator;
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
+    sharded<qos::service_level_controller::auth_integration> _sl_controller_auth_integration;
     sharded<service::topology_state_machine> _topology_state_machine;
     sharded<utils::walltime_compressor_tracker> _compressor_tracker;
     sharded<service::migration_manager> _mm;
@@ -1061,6 +1062,16 @@ private:
                 // double execution of the shutdown method, which causes waiting for 
                 // an invalid future if we're unlucky.
                 _auth_service.stop().get();
+            });
+
+            _sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+                controller.register_auth_integration();
+            }).get();
+
+            auto unregister_sl_controller_integration = defer([this] {
+                _sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+                    return controller.unregister_auth_integration();
+                }).get();
             });
 
             db::batchlog_manager_config bmcfg;
