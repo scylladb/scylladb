@@ -49,7 +49,7 @@ struct shared_load_stats {
 
     void set_default_tablet_sizes(locator::token_metadata_ptr tmptr) {
         for (auto&& [table, tmap] : tmptr->tablets().all_tables_ungrouped()) {
-            tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& tinfo) -> future<> {
+            tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
                 locator::range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
                 for (auto& replica : tinfo.replicas()) {
                     if (!stats.get_tablet_size(replica.host, rb_tid)) {

@@ -1241,7 +1241,7 @@ public:
         auto set_type = set_type_impl::get_instance(uuid_type, false);
         for (auto&& [table, tmap] : tm->tablets().all_tables_ungrouped()) {
             mutation m(schema(), make_partition_key(table));
-            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& tinfo) -> future<> {
+            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
                 auto trange = tmap.get_token_range(tid);
                 int64_t last_token = trange.end()->value().raw();
                 auto& r = m.partition().clustered_row(*schema(), clustering_key::from_single_value(*schema(), data_value(last_token).serialize_nonnull()));

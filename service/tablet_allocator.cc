@@ -1052,7 +1052,7 @@ public:
         return _db.get_config().auto_repair_enabled_default();
     }
 
-    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info_view& info,
+    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
             const std::optional<locator::repair_scheduler_config>& config, const db_clock::time_point& now,
             db_clock::duration& diff, service::auto_repair_stats& stats) {
         if (utils::get_local_injector().enter("tablet_keep_repairing")) {
@@ -1182,7 +1182,7 @@ public:
             auto now = db_clock::now();
             auto skip = utils::get_local_injector().inject_parameter<std::string_view>("tablet_repair_skip_sched");
             auto skip_tablets = skip ? split_string_to_tablet_id(*skip, ',') : std::unordered_set<locator::tablet_id>();
-            co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info_view& info) -> future<> {
+            co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
                 auto gid = locator::global_tablet_id{table, id};
                 if (auto_repair_enabled) {
                     auto_repair_stats.enabled_nr++;
@@ -1385,9 +1385,9 @@ public:
     // Returns true if a table has replicas of all its sibling tablets co-located.
     // This is used for determining whether merge can be finalized, since co-location
     // is a strict requirement for sibling tablets to be merged.
-    future<bool> all_sibling_tablet_replicas_colocated(table_id table, const tablet_map_view& tmap) {
+    future<bool> all_sibling_tablet_replicas_colocated(table_id table, const tablet_map& tmap) {
         bool all_colocated = true;
-        co_await tmap.for_each_sibling_tablets([&] (tablet_desc_view t1, std::optional<tablet_desc_view> t2_opt) -> future<> {
+        co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
             // FIXME: introduce variant of for_each_sibling_tablets() that accepts stop_iteration.
             if (!all_colocated) {
                 return make_ready_future<>();
@@ -2082,7 +2082,7 @@ public:
             } else if (tmap.needs_merge()) {
                 bool all_siblings_colocated = true;
                 for (auto table : table_group) {
-                    if (!co_await all_sibling_tablet_replicas_colocated(table, _tm->tablets().get_tablet_map_view(table))) {
+                    if (!co_await all_sibling_tablet_replicas_colocated(table, _tm->tablets().get_tablet_map(table))) {
                         all_siblings_colocated = false;
                         break;
                     }
@@ -3949,7 +3949,7 @@ private:
     // So a tablet of id 0 is remapped into ids 0 and 1. Another of id 1 is remapped
     // into ids 2 and 3, and so on.
     future<std::pair<shared_tablet_map, per_table_tablet_map>> split_tablets(token_metadata_ptr tm, table_id table) {
-        auto& tablets = tm->tablets().get_tablet_map_view(table);
+        auto& tablets = tm->tablets().get_tablet_map(table);
 
         shared_tablet_map new_tablets(tablets.tablet_count() * 2);
         per_table_tablet_map new_per_table_tablets;
@@ -3977,7 +3977,7 @@ private:
     // The merging of tablet is completely based on the power-of-two constraint.
     // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
     future<std::pair<shared_tablet_map, per_table_tablet_map>> merge_tablets(token_metadata_ptr tm, table_id table) {
-        auto& tablets = tm->tablets().get_tablet_map_view(table);
+        auto& tablets = tm->tablets().get_tablet_map(table);
 
         shared_tablet_map new_tablets(tablets.tablet_count() / 2);
         per_table_tablet_map new_per_table_tablets;

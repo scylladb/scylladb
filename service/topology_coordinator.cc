@@ -1354,7 +1354,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     void generate_repair_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
-        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map_view(gid.table);
+        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
         auto base_table = get_token_metadata_ptr()->tablets().get_base_table(gid.table);
         auto last_token = tmap.get_last_token(gid.tablet);
         if (tmap.get_tablet_transition_info(gid.tablet)) {
@@ -1788,8 +1788,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     auto repair_table =
                         (tables.size() == 1 || !_feature_service.tablet_map_per_colocated_table) ? base_table :
                             *std::max_element(tables.begin(), tables.end(), [&](auto t1, auto t2) {
-                                auto& info1 = get_token_metadata_ptr()->tablets().get_tablet_map_view(t1).get_tablet_info(gid.tablet).repair_task_info();
-                                auto& info2 = get_token_metadata_ptr()->tablets().get_tablet_map_view(t2).get_tablet_info(gid.tablet).repair_task_info();
+                                auto& info1 = get_token_metadata_ptr()->tablets().get_tablet_map(t1).get_tablet_info(gid.tablet).repair_task_info();
+                                auto& info2 = get_token_metadata_ptr()->tablets().get_tablet_map(t2).get_tablet_info(gid.tablet).repair_task_info();
                                 if (!info1.is_valid())
                                     return true;
                                 if (!info2.is_valid())
@@ -1800,7 +1800,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     bool fail_repair = utils::get_local_injector().enter("handle_tablet_migration_repair_fail");
                     if (fail_repair || action_failed(tablet_state.repair)) {
                         if (do_barrier()) {
-                            auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map_view(repair_table);
+                            auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(repair_table);
                             const auto& tinfo = tmap.get_tablet_info(gid.tablet);
                             _tablet_ops_metrics.inc_failed(tinfo.repair_task_info().request_type);
                             updates.emplace_back(get_mutation_builder()
@@ -1814,7 +1814,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     if (advance_in_background(gid, tablet_state.repair, "repair", [&] () -> future<> {
                         auto base_gid = gid;
                         auto gid = locator::global_tablet_id{repair_table, tid};
-                        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map_view(repair_table);
+                        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(repair_table);
                         auto& repair_task_info = tmap.get_tablet_info(gid.tablet).repair_task_info();
                         bool valid = repair_task_info.is_valid();
                         if (!valid) {
@@ -1869,7 +1869,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                         auto base_gid = gid;
                         auto gid = locator::global_tablet_id{repair_table, tid};
-                        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map_view(gid.table);
+                        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
                         const auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         const auto& repair_task_info = tinfo.repair_task_info();
                         bool valid = repair_task_info.is_valid();

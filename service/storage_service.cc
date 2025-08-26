@@ -6523,7 +6523,7 @@ future<tablet_operation_result> storage_service::do_tablet_operation(locator::gl
 future<service::tablet_operation_repair_result> storage_service::repair_tablet(locator::global_tablet_id tablet, service::session_id session_id) {
     auto result = co_await do_tablet_operation(tablet, "Repair", [this, tablet, session_id] (locator::tablet_metadata_guard& guard) -> future<tablet_operation_result> {
         slogger.debug("Executing repair for tablet={}", tablet);
-        auto& tmap = guard.get_tablet_map_view();
+        auto& tmap = guard.get_tablet_map();
         auto* trinfo = tmap.get_tablet_transition_info(tablet.tablet);
 
         // Check if the request is still valid.
@@ -6941,12 +6941,12 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
                 table_schema->ks_name(), table_schema->cf_name(), base_schema->ks_name(), base_schema->cf_name()));
         }
 
-        auto& tmap = get_token_metadata().tablets().get_tablet_map_view(table);
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         utils::chunked_vector<canonical_mutation> updates;
 
         if (all_tokens) {
             tokens.clear();
-            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& info) -> future<> {
+            co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
                 auto last_token = tmap.get_last_token(tid);
                 tokens.push_back(last_token);
                 co_return;
@@ -6997,7 +6997,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     }
 
     co_await _topology_state_machine.event.wait([&] {
-        auto& tmap = get_token_metadata().tablets().get_tablet_map_view(table);
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return std::all_of(tokens.begin(), tokens.end(), [&] (const dht::token& token) {
             auto id = tmap.get_tablet_id(token);
             return tmap.get_tablet_info(id).repair_task_info().tablet_task_id != repair_task_info.tablet_task_id;
@@ -7042,10 +7042,10 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
                 table_schema->ks_name(), table_schema->cf_name(), base_schema->ks_name(), base_schema->cf_name()));
         }
 
-        auto& tmap = get_token_metadata().tablets().get_tablet_map_view(table);
+        auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         utils::chunked_vector<canonical_mutation> updates;
 
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& tinfo) -> future<> {
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
             auto& req_id = tinfo.repair_task_info().tablet_task_id;
             if (req_id != tablet_task_id) {
                 co_return;

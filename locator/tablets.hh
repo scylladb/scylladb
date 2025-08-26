@@ -263,11 +263,11 @@ struct per_table_tablet_info {
 
 /// Provides an interface for reading the tablet information for a specific table that spans
 /// both the shared and per-table tablet info components.
-struct tablet_info_view {
+struct tablet_info {
     const shared_tablet_info& shared;
     const per_table_tablet_info& per_table;
 
-    tablet_info_view(const shared_tablet_info& tinfo, const per_table_tablet_info& per_table_info)
+    tablet_info(const shared_tablet_info& tinfo, const per_table_tablet_info& per_table_info)
         : shared(tinfo), per_table(per_table_info) {}
 
     operator const shared_tablet_info&() const { return shared; }
@@ -279,13 +279,11 @@ struct tablet_info_view {
     int64_t sstables_repaired_at() const { return per_table.sstables_repaired_at; }
 };
 
-using tablet_info = tablet_info_view;
-
 // Merges tablet_info b into a, but with following constraints:
 //  - they cannot have active repair task, since each task has a different id
 //  - their replicas must be all co-located.
 // If tablet infos are mergeable, merged info is returned. Otherwise, nullopt.
-std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet_info(tablet_info_view a, tablet_info_view b);
+std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet_info(tablet_info a, tablet_info b);
 
 /// Represents states of the tablet migration state machine.
 ///
@@ -399,7 +397,7 @@ struct tablet_migration_streaming_info {
 
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const shared_tablet_info&, const tablet_transition_info&);
 tablet_migration_streaming_info get_migration_streaming_info(const locator::topology&, const shared_tablet_info&, const tablet_migration_info&);
-bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info_view& tinfo);
+bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info& tinfo);
 
 // Describes if a given token is located at either left or right side of a tablet's range
 enum tablet_range_side {
@@ -552,13 +550,11 @@ struct shared_tablet_desc {
     const tablet_transition_info* transition; // null if there's no transition.
 };
 
-struct tablet_desc_view {
+struct tablet_desc {
     tablet_id tid;
-    const tablet_info_view info;
+    const tablet_info info;
     const tablet_transition_info* transition; // null if there's no transition.
 };
-
-using tablet_desc = tablet_desc_view;
 
 class no_such_tablet_map : public std::runtime_error {
 public:
@@ -757,7 +753,7 @@ public:
     // The tablet map is not usable after this call and should be destroyed.
     future<> clear_gently();
     friend fmt::formatter<shared_tablet_map>;
-    friend class tablet_map_view;
+    friend class tablet_map;
 private:
     void check_tablet_id(tablet_id) const;
 };
@@ -812,7 +808,7 @@ public:
     void clear_tablet(tablet_id);
 
     future<> clear_gently();
-    friend class tablet_map_view;
+    friend class tablet_map;
 };
 
 using shared_tablet_map_ptr = foreign_ptr<lw_shared_ptr<const shared_tablet_map>>;
@@ -824,18 +820,18 @@ using per_table_tablet_map_ptr = foreign_ptr<lw_shared_ptr<const per_table_table
 /// the shared tablet map (containing replicas, transitions, and resize decisions shared
 /// across co-located tables) and the per-table tablet map (containing table-specific
 /// information like repair times and sstables_repaired_at).
-struct tablet_map_view {
+struct tablet_map {
     shared_tablet_map_ptr shared;
     per_table_tablet_map_ptr per_table;
 
-    tablet_map_view(shared_tablet_map_ptr shared, per_table_tablet_map_ptr per_table)
+    tablet_map(shared_tablet_map_ptr shared, per_table_tablet_map_ptr per_table)
         : shared(std::move(shared)), per_table(std::move(per_table)) {}
 
     operator const shared_tablet_map&() const {
         return *shared;
     }
 
-    future<tablet_map_view> clone_gently() const;
+    future<tablet_map> clone_gently() const;
 
     tablet_id get_tablet_id(token t) const {
         return shared->get_tablet_id(t);
@@ -845,9 +841,9 @@ struct tablet_map_view {
         return shared->get_tablet_id_and_range_side(t);
     }
 
-    tablet_info_view get_tablet_info(tablet_id id) const;
+    tablet_info get_tablet_info(tablet_id id) const;
 
-    tablet_info_view get_tablet_info(token t) const {
+    tablet_info get_tablet_info(token t) const {
         return get_tablet_info(get_tablet_id(t));
     }
 
@@ -911,9 +907,9 @@ struct tablet_map_view {
         });
     }
 
-    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, tablet_info_view)> func) const;
+    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, tablet_info)> func) const;
 
-    future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc_view, std::optional<tablet_desc_view>)> func) const;
+    future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const;
 
     const auto& transitions() const {
         return shared->transitions();
@@ -933,7 +929,7 @@ struct tablet_map_view {
 
     size_t external_memory_usage() const;
 
-    bool operator==(const tablet_map_view&) const;
+    bool operator==(const tablet_map&) const;
 
     bool needs_split() const {
         return shared->needs_split();
@@ -960,8 +956,6 @@ struct tablet_map_view {
     }
 };
 
-using tablet_map = tablet_map_view;
-
 using table_group_set = utils::small_vector<table_id, 2>;
 
 /// Holds information about all tablets in the cluster.
@@ -980,7 +974,7 @@ public:
     // using shared pointers. We should change that and use a foreign_ptr<> to
     // hold immutable tablet_metadata which lives on shard 0 only.
     // See storage_service::replicate_to_all_cores().
-    using table_to_tablet_map = std::unordered_map<table_id, tablet_map_view>;
+    using table_to_tablet_map = std::unordered_map<table_id, tablet_map>;
     using table_group_map = std::unordered_map<table_id, table_group_set>;
 private:
     table_to_tablet_map _tablets;
@@ -999,8 +993,7 @@ public:
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
     // Gets shared ownership of tablet map
-    future<tablet_map_view> get_tablet_map_ptr(table_id id) const;
-    const tablet_map_view& get_tablet_map_view(table_id id) const;
+    future<tablet_map> get_tablet_map_ptr(table_id id) const;
     const shared_tablet_map& get_shared_tablet_map(table_id id) const;
     bool has_tablet_map(table_id id) const;
     size_t external_memory_usage() const;
@@ -1216,8 +1209,8 @@ struct fmt::formatter<locator::per_table_tablet_map> : fmt::formatter<string_vie
 };
 
 template <>
-struct fmt::formatter<locator::tablet_map_view> : fmt::formatter<string_view> {
-    auto format(const locator::tablet_map_view&, fmt::format_context& ctx) const -> decltype(ctx.out());
+struct fmt::formatter<locator::tablet_map> : fmt::formatter<string_view> {
+    auto format(const locator::tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>

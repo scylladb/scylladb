@@ -1182,7 +1182,7 @@ private:
         auto& table = _db.local().find_column_family(_schema->id());
         table_id tid = table.schema()->id();
         auto erm = table.get_effective_replication_map();
-        auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map_view(tid);
+        auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(tid);
         auto last_token = _range.end() ? _range.end()->value() : dht::maximum_token();
         auto id = tmap.get_tablet_id(last_token);
         auto range = tmap.get_token_range(id);
@@ -3379,7 +3379,7 @@ public:
             if (enable_incremental_repair) {
                 auto& table = _shard_task.db.local().find_column_family(_table_id);
                 auto erm = table.get_effective_replication_map();
-                auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map_view(_table_id);
+                auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_table_id);
                 auto last_token = _range.end() ? _range.end()->value() : dht::maximum_token();
                 const auto& tinfo = tmap.get_tablet_info(last_token);
                 auto sstables_repaired_at = tinfo.sstables_repaired_at();

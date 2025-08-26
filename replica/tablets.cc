@@ -470,10 +470,10 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
     muts.reserve(tm.all_tables_ungrouped().size());
     for (auto&& [base_id, tables] : tm.all_table_groups()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
-        const auto& shared_map = *tm.get_tablet_map_view(base_id).shared;
+        const auto& shared_map = *tm.get_tablet_map(base_id).shared;
         for (auto id : tables) {
             auto s = db.find_schema(id);
-            const auto& per_table_map = *tm.get_tablet_map_view(id).per_table;
+            const auto& per_table_map = *tm.get_tablet_map(id).per_table;
             if (id == base_id) {
                 co_await tablet_map_to_mutations(shared_map, per_table_map, id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
                     muts.emplace_back(co_await freeze_gently(m));
@@ -837,13 +837,13 @@ struct tablet_metadata_builder {
         // Set co-located tables after setting all other tablet maps to ensure the tablet map
         // of the base table is found.
         for (auto&& [table, cinfo] : colocated_table_info) {
-            const auto& base_map = *tm.get_tablet_map_view(cinfo.base_table).shared;
+            const auto& base_map = *tm.get_tablet_map(cinfo.base_table).shared;
             auto per_table_map = construct_per_table_map_from_raw(base_map, std::move(cinfo.raw_map));
             co_await tm.set_colocated_table(table, cinfo.base_table, std::move(per_table_map));
         }
 
         for (auto& [table, tablet_token] : pending_update_repair_time) {
-            const auto& map = tm.get_tablet_map_view(table);
+            const auto& map = tm.get_tablet_map(table);
             auto tid = map.get_tablet_id(tablet_token);
             auto myid = db.get_token_metadata().get_my_id();
             auto range = map.get_token_range(tid);
