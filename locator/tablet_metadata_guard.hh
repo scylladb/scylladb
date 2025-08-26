@@ -65,10 +65,6 @@ public:
     const locator::tablet_map& get_tablet_map() {
         return get_token_metadata()->tablets().get_tablet_map(_tablet.table);
     }
-
-    const locator::tablet_map_view& get_tablet_map_view() {
-        return get_token_metadata()->tablets().get_tablet_map_view(_tablet.table);
-    }
 };
 
 // A topology guard for a single token.
