@@ -53,14 +53,14 @@ table_info parse_table_info(const sstring& name, const replica::database& db) {
     return table_info{ .name = cf, .id = validate_table(db, ks, cf) };
 }
 
-future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db, const sstring& name,
+static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db, const sstring& name,
         int64_t replica::column_family_stats::*f) {
     return map_reduce_cf(db, name, int64_t(0), [f](const replica::column_family& cf) {
         return cf.get_stats().*f;
     }, std::plus<int64_t>());
 }
 
-future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db,
+static future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db,
         int64_t replica::column_family_stats::*f) {
     return map_reduce_cf(db, int64_t(0), [f](const replica::column_family& cf) {
         return cf.get_stats().*f;
@@ -1089,6 +1089,13 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         co_await task->done();
         co_return json_void();
     });
+
+    ss::get_load.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, &replica::column_family_stats::live_disk_space_used);
+    });
+    ss::get_metrics_load.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return get_cf_stats(db, &replica::column_family_stats::live_disk_space_used);
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1202,5 +1209,7 @@ void unset_column_family(http_context& ctx, routes& r) {
     cf::get_sstables_for_key.unset(r);
     cf::toppartitions.unset(r);
     cf::force_major_compaction.unset(r);
+    ss::get_load.unset(r);
+    ss::get_metrics_load.unset(r);
 }
 }
