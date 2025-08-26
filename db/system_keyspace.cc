@@ -14,6 +14,7 @@
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
+#include <seastar/core/loop.hh>
 #include <seastar/core/on_internal_error.hh>
 #include "system_keyspace.hh"
 #include "cql3/untyped_result_set.hh"
@@ -1748,7 +1749,8 @@ future<> system_keyspace::drop_truncation_rp_records() {
     auto rs = co_await execute_cql(req);
 
     bool any = false;
-    co_await coroutine::parallel_for_each(*rs, [&] (const cql3::untyped_result_set_row& row) -> future<> {
+    auto max_concurrency = std::min(1024u, smp::count * 8);
+    co_await seastar::max_concurrent_for_each(*rs, max_concurrency, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
         auto shard = row.get_as<int32_t>("shard");
         auto segment_id = row.get_as<int64_t>("segment_id");
