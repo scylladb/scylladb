@@ -2285,6 +2285,16 @@ sharded<locator::shared_token_metadata> token_metadata;
                 api::unset_server_authorization_cache(ctx).get();
             });
 
+            sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+                controller.register_auth_integration();
+            }).get();
+
+            auto unregister_sl_controller_integration = defer([] {
+                sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+                    return controller.unregister_auth_integration();
+                }).get();
+            });
+
             // update the service level cache after the SL data accessor and auth service are initialized.
             if (sl_controller.local().is_v2()) {
                 sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
