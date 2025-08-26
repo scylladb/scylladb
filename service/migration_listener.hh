@@ -32,7 +32,7 @@ class function_name;
 }
 namespace locator {
 class tablet_metadata_change_hint;
-class tablet_map;
+class shared_tablet_map;
 }
 
 #include "mutation/timestamp.hh"
@@ -88,7 +88,7 @@ public:
     virtual void on_before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type) {}
 
-    virtual void on_before_allocate_tablet_map(const locator::tablet_map&, const schema& s, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_allocate_tablet_map(const locator::shared_tablet_map&, const schema& s, utils::chunked_vector<mutation>&, api::timestamp_type) {}
 
     class only_view_notifications;
     class empty_listener;
@@ -166,8 +166,8 @@ public:
     // Called when creating a tablet map for a new table.
     // When in the context of a notification callback, call `before_allocate_tablet_map_in_notification`,
     // and otherwise call 'before_allocate_tablet_map'.
-    void before_allocate_tablet_map(const locator::tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
-    void before_allocate_tablet_map_in_notification(const locator::tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_allocate_tablet_map(const locator::shared_tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_allocate_tablet_map_in_notification(const locator::shared_tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
 };
 
 }
