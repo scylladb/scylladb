@@ -3324,7 +3324,7 @@ public:
     }
 
     // Allocates new tablets for a table which is not co-located with another table.
-    tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
+    shared_tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
         auto lb = make_load_balancer(tm, nullptr, {});
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
@@ -3375,7 +3375,7 @@ public:
             // for the other tables in the group, create a co-located tablet map.
             for (const auto& [base_id, group_schemas] : table_groups) {
 
-                auto create_colocated_tablet_maps = [&] (const tablet_map& base_map) {
+                auto create_colocated_tablet_maps = [&] (const shared_tablet_map& base_map) {
                     for (auto sp : group_schemas) {
                         const auto& s = *sp;
                         if (s.id() != base_id) {
