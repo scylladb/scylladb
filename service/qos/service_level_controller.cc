@@ -42,8 +42,9 @@ constexpr const char* scheduling_group_name_pattern = "sl:{}";
 constexpr const char* deleted_scheduling_group_name_pattern = "sl_deleted:{}";
 constexpr const char* temp_scheduling_group_name_pattern = "sl_temp:{}";
 
-service_level_controller::auth_integration::auth_integration(service_level_controller& sl_controller)
+service_level_controller::auth_integration::auth_integration(service_level_controller& sl_controller, auth::service& auth_service)
     : _sl_controller(sl_controller)
+    , _auth_service(auth_service)
     , _stop_gate("service_level_controller_auth_integration_stop_gate")
 {}
 
@@ -320,11 +321,7 @@ future<> service_level_controller::update_service_levels_cache(qos::query_contex
 future<> service_level_controller::auth_integration::reload_cache() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
     const auto _ = _stop_gate.hold();
-    
-    if (!_sl_controller._auth_service.local_is_initialized()) {
-        // Auth service might be not initialized yet.
-        co_return;
-    }
+
     if (!_sl_controller._sl_data_accessor || !_sl_controller._sl_data_accessor->can_use_effective_service_level_cache()) {
         // Don't populate the effective service level cache until auth is migrated to raft.
         // Otherwise, executing the code that follows would read roles data
@@ -338,7 +335,7 @@ future<> service_level_controller::auth_integration::reload_cache() {
     }
     auto units = co_await get_units(_sl_controller._global_controller_db->notifications_serializer, 1);
 
-    auto& role_manager = _sl_controller._auth_service.local().underlying_role_manager();
+    auto& role_manager = _auth_service.underlying_role_manager();
     const auto all_roles = co_await role_manager.query_all();
     const auto hierarchy = co_await role_manager.query_all_directly_granted();
     // includes only roles with attached service level
@@ -423,7 +420,7 @@ future<std::optional<service_level_options>> service_level_controller::auth_inte
             ? std::optional<service_level_options>(effective_sl_it->second)
             : std::nullopt;
     } else {
-        auto& role_manager = _sl_controller._auth_service.local().underlying_role_manager();
+        auto& role_manager = _auth_service.underlying_role_manager();
         auto roles = co_await role_manager.query_granted(role_name, auth::recursive_role_query::yes);
 
         // converts a list of roles into the chosen service level.
@@ -1035,7 +1032,7 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
 future<std::vector<cql3::description>> service_level_controller::auth_integration::describe_attached_service_levels() {
     const auto _ = _stop_gate.hold();
 
-    const auto attached_service_levels = co_await _sl_controller._auth_service.local().underlying_role_manager().query_attribute_for_all("service_level");
+    const auto attached_service_levels = co_await _auth_service.underlying_role_manager().query_attribute_for_all("service_level");
 
     std::vector<cql3::description> result{};
     result.reserve(attached_service_levels.size());
@@ -1075,9 +1072,9 @@ future<std::vector<cql3::description>> service_level_controller::describe_servic
     co_return created_service_levels_descs;
 }
 
-void service_level_controller::register_auth_integration() {
+void service_level_controller::register_auth_integration(auth::service& auth_service) {
     SCYLLA_ASSERT(_auth_integration == nullptr);
-    _auth_integration = std::make_unique<auth_integration>(*this);
+    _auth_integration = std::make_unique<auth_integration>(*this, auth_service);
 }
 
 future<> service_level_controller::unregister_auth_integration() {
