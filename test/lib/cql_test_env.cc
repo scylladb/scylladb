@@ -1109,8 +1109,9 @@ private:
                 _auth_service.stop().get();
             });
 
-            _sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
-                controller.register_auth_integration();
+            // Precondition: we can only call this after `auth::service` has been initialized and started on all shards.
+            _sl_controller.invoke_on_all([&auth_service = _auth_service] (qos::service_level_controller& controller) {
+                controller.register_auth_integration(auth_service.local());
             }).get();
 
             auto unregister_sl_controller_integration = defer([this] {
