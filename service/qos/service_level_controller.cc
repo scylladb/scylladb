@@ -280,7 +280,11 @@ future<> service_level_controller::update_service_levels_cache(qos::query_contex
                 sl_logger.info("service level \"{}\" was updated. New values: (timeout: {}, workload_type: {}, shares: {})",
                         sl.first, sl.second.timeout, sl.second.workload, sl.second.shares);
             }
-            _auth_integration->clear_cache();
+
+            if (_auth_integration) {
+                _auth_integration->clear_cache();
+            }
+
             for (auto&& sl : service_levels_for_add) {
                 bool make_room = false;
                 std::map<sstring, service_level>::reverse_iterator it;
@@ -394,7 +398,10 @@ future<> service_level_controller::update_cache(update_both_cache_levels update_
     if (update_both_cache_levels) {
         co_await update_service_levels_cache(ctx);
     }
-    co_await _auth_integration->reload_cache();
+
+    if (_auth_integration) {
+        co_await _auth_integration->reload_cache();
+    }
 }
 
 void service_level_controller::stop_legacy_update_from_distributed_data() {

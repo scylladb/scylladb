@@ -2257,6 +2257,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
             const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
 
+            // Reproducer of scylladb/scylladb#24792.
+            auto i24792_reproducer = defer([] {
+                if (utils::get_local_injector().enter("reload_service_level_cache_after_auth_service_is_stopped")) {
+                    sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
+                }
+            });
+
             checkpoint(stop_signal, "starting auth service");
             auth::service_config auth_config;
             auth_config.authorizer_java_name = qualified_authorizer_name;
