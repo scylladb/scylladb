@@ -2267,7 +2267,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     if (!t) {
         co_return gc_clock::now();
     }
-    auto& tmap = guard.get_tablet_map_view();
+    auto& tmap = guard.get_tablet_map();
     auto s = t->schema();
     auto keyspace_name = s->ks_name();
     auto table_name = s->cf_name();
