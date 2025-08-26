@@ -89,7 +89,7 @@ auto migration_tasks(locator::token_metadata_ptr tmptr) {
 
     auto tasks_view = tables
         | std::views::transform([&](table_id table) {
-            auto& tmap = tmptr->tablets().get_tablet_map_view(table);
+            auto& tmap = tmptr->tablets().get_tablet_map(table);
             return tmap.tablets()
                 | std::views::filter([](const auto& pair) {
                     return pair.second.migration_task_info().is_valid();
@@ -113,8 +113,8 @@ auto repair_tasks(locator::token_metadata_ptr tmptr) {
     auto tasks_view = tables
         | std::views::transform([](const auto& table_pair) {
             table_id table = table_pair.first;
-            const auto& tmap_view = table_pair.second;
-            return tmap_view.tablets()
+            const auto& tmap = table_pair.second;
+            return tmap.tablets()
                 | std::views::filter([](const auto& pair) {
                     return pair.second.repair_task_info().is_valid();
                 })
@@ -133,12 +133,12 @@ auto resize_tasks(locator::token_metadata_ptr tmptr) {
     // resize tasks are shared for co-located tables, therefore we iterate over table groups.
     auto table_groups = tmptr->tablets().all_table_groups()
         | std::views::filter([&tmptr](const auto& group_pair) {
-            auto& tmap_view = tmptr->tablets().get_tablet_map_view(group_pair.first);
-            return tmap_view.resize_task_info().is_valid();
+            auto& tmap = tmptr->tablets().get_tablet_map(group_pair.first);
+            return tmap.resize_task_info().is_valid();
         })
         | std::views::transform([&tmptr](const auto& group_pair) {
-            auto& tmap_view = tmptr->tablets().get_tablet_map_view(group_pair.first);
-            return std::make_tuple(group_pair.first, tmap_view.resize_task_info());
+            auto& tmap = tmptr->tablets().get_tablet_map(group_pair.first);
+            return std::make_tuple(group_pair.first, tmap.resize_task_info());
         });
 
     return table_groups;
@@ -207,7 +207,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 
     tasks::tmlogger.info("tablet_virtual_task: wait until tablet operation is finished");
     co_await _ss._topology_state_machine.event.wait([&] {
-        auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map_view(table);
+        auto& tmap = _ss.get_token_metadata().tablets().get_tablet_map(table);
         if (is_resize_task(task_type)) {    // Resize task.
             return tmap.resize_task_info().tablet_task_id.uuid() != id.uuid();
         } else if (tablet_id_opt.has_value()) {    // Migration task.
@@ -313,9 +313,9 @@ future<std::optional<status_helper>> tablet_virtual_task::get_status_helper(task
     };
     size_t sched_nr = 0;
     auto tmptr = _ss.get_token_metadata_ptr();
-    auto& tmap = tmptr->tablets().get_tablet_map_view(table);
+    auto& tmap = tmptr->tablets().get_tablet_map(table);
     if (is_repair_task(task_type)) {
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info_view& info) {
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) {
             auto& task_info = info.repair_task_info();
             if (task_info.tablet_task_id.uuid() == id.uuid()) {
                 update_status(task_info, res.status, sched_nr);
