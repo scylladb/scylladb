@@ -236,18 +236,18 @@ struct tablet_task_info {
 };
 
 /// Stores information about a single tablet that is shared for co-located tables.
-struct tablet_info {
+struct shared_tablet_info {
     tablet_replica_set replicas;
     locator::tablet_task_info migration_task_info;
 
-    tablet_info() = default;
-    tablet_info(tablet_replica_set, tablet_task_info);
-    tablet_info(tablet_replica_set);
+    shared_tablet_info() = default;
+    shared_tablet_info(tablet_replica_set, tablet_task_info);
+    shared_tablet_info(tablet_replica_set);
 
-    bool operator==(const tablet_info&) const = default;
+    bool operator==(const shared_tablet_info&) const = default;
 };
 
-using shared_tablet_info = tablet_info;
+using tablet_info = shared_tablet_info; // TODO MICHAEL
 
 // Stores information about a single tablet that is not shared for co-located tables.
 struct per_table_tablet_info {
@@ -384,8 +384,6 @@ struct tablet_migration_info {
     locator::tablet_replica src;
     locator::tablet_replica dst;
 };
-
-class tablet_map;
 
 /// Describes streaming required for a given tablet transition.
 constexpr int tablet_migration_stream_weight_default = 1;
@@ -548,19 +546,19 @@ struct repair_scheduler_config {
 
 using load_stats_ptr = lw_shared_ptr<const load_stats>;
 
-struct tablet_desc {
+struct shared_tablet_desc {
     tablet_id tid;
-    const tablet_info* info; // cannot be null.
+    const shared_tablet_info* info; // cannot be null.
     const tablet_transition_info* transition; // null if there's no transition.
 };
-
-using shared_tablet_desc = tablet_desc;
 
 struct tablet_desc_view {
     tablet_id tid;
     const tablet_info_view info;
     const tablet_transition_info* transition; // null if there's no transition.
 };
+
+using tablet_desc = shared_tablet_desc;
 
 class no_such_tablet_map : public std::runtime_error {
 public:
@@ -570,25 +568,25 @@ public:
 /// Stores information about tablets of a single table that is shared for co-located tables.
 ///
 /// The map contains a constant number of tablets, tablet_count().
-/// Each tablet has an associated tablet_info, and an optional tablet_transition_info.
+/// Each tablet has an associated shared_tablet_info, and an optional tablet_transition_info.
 /// Any given token is owned by exactly one tablet in this map.
 ///
 /// A tablet map describes the whole ring, it cannot contain a partial mapping.
 /// This means that the following sequence is always valid:
 ///
-///    tablet_map& tmap = ...;
+///    shared_tablet_map& tmap = ...;
 ///    dht::token t = ...;
 ///    tablet_id id = tmap.get_tablet_id(t);
-///    tablet_info& info = tmap.get_tablet_info(id);
+///    shared_tablet_info& info = tmap.get_tablet_info(id);
 ///
-/// A tablet_id obtained from an instance of tablet_map is valid for that instance only.
+/// A tablet_id obtained from an instance of shared_tablet_map is valid for that instance only.
 ///
-/// Tables that are co-located share the same tablet_map. They always have the same number of tablets
+/// Tables that are co-located share the same shared_tablet_map. They always have the same number of tablets
 /// with the same token mapping and replica sets, and always transition together. Other information
 /// that is per-table is stored separately in the per-table tablet map.
-class tablet_map {
+class shared_tablet_map {
 public:
-    using tablet_container = utils::chunked_vector<tablet_info>;
+    using tablet_container = utils::chunked_vector<shared_tablet_info>;
 private:
     using transitions_map = std::unordered_map<tablet_id, tablet_transition_info>;
     // The implementation assumes that _tablets.size() is a power of 2:
@@ -602,7 +600,7 @@ private:
     tablet_task_info _resize_task_info;
 
     // Internal constructor, used by clone() and clone_gently().
-    tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
+    shared_tablet_map(tablet_container tablets, size_t log2_tablets, transitions_map transitions,
         resize_decision resize_decision, tablet_task_info resize_task_info)
         : _tablets(std::move(tablets))
         , _log2_tablets(log2_tablets)
@@ -621,16 +619,16 @@ public:
     /// Constructs a tablet map.
     ///
     /// \param tablet_count The desired tablets to allocate. Must be a power of two.
-    explicit tablet_map(size_t tablet_count);
+    explicit shared_tablet_map(size_t tablet_count);
 
-    tablet_map(tablet_map&&) = default;
-    tablet_map(const tablet_map&) = delete;
+    shared_tablet_map(shared_tablet_map&&) = default;
+    shared_tablet_map(const shared_tablet_map&) = delete;
 
-    tablet_map& operator=(tablet_map&&) = default;
-    tablet_map& operator=(const tablet_map&) = delete;
+    shared_tablet_map& operator=(shared_tablet_map&&) = default;
+    shared_tablet_map& operator=(const shared_tablet_map&) = delete;
 
-    tablet_map clone() const;
-    future<tablet_map> clone_gently() const;
+    shared_tablet_map clone() const;
+    future<shared_tablet_map> clone_gently() const;
 
     /// Returns tablet_id of a tablet which owns a given token.
     tablet_id get_tablet_id(token) const;
@@ -640,7 +638,7 @@ public:
 
     /// Returns tablet_info associated with a given tablet.
     /// The given id must belong to this instance.
-    const tablet_info& get_tablet_info(tablet_id) const;
+    const shared_tablet_info& get_tablet_info(tablet_id) const;
 
     /// Returns a pointer to tablet_transition_info associated with a given tablet.
     /// If there is no transition for a given tablet, returns nullptr.
@@ -705,11 +703,11 @@ public:
     }
 
     /// Calls a given function for each tablet in the map in token ownership order.
-    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const;
+    future<> for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const shared_tablet_info&)> func) const;
 
     /// Calls a given function for each sibling tablet in the map in token ownership order.
     /// If tablet count == 1, then there will be only one call and 2nd tablet_desc is disengaged.
-    future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const;
+    future<> for_each_sibling_tablets(seastar::noncopyable_function<future<>(shared_tablet_desc, std::optional<shared_tablet_desc>)> func) const;
 
     const auto& transitions() const {
         return _transitions;
@@ -731,13 +729,13 @@ public:
     }
 
     /// Returns tablet_info associated with the tablet which owns a given token.
-    const tablet_info& get_tablet_info(token t) const {
+    const shared_tablet_info& get_tablet_info(token t) const {
         return get_tablet_info(get_tablet_id(t));
     }
 
     size_t external_memory_usage() const;
 
-    bool operator==(const tablet_map&) const = default;
+    bool operator==(const shared_tablet_map&) const = default;
 
     bool needs_split() const;
     bool needs_merge() const;
@@ -748,7 +746,7 @@ public:
     const locator::resize_decision& resize_decision() const;
     const tablet_task_info& resize_task_info() const;
 public:
-    void set_tablet(tablet_id, tablet_info);
+    void set_tablet(tablet_id, shared_tablet_info);
     void set_tablet_transition_info(tablet_id, tablet_transition_info);
     void set_resize_decision(locator::resize_decision);
     void set_resize_task_info(tablet_task_info);
@@ -758,21 +756,22 @@ public:
     // Destroys gently.
     // The tablet map is not usable after this call and should be destroyed.
     future<> clear_gently();
-    friend fmt::formatter<tablet_map>;
+    friend fmt::formatter<shared_tablet_map>;
     friend class tablet_map_view;
 private:
     void check_tablet_id(tablet_id) const;
 };
 
-using shared_tablet_map = tablet_map;
+using tablet_map = shared_tablet_map; // TODO MICHAEL
 
 /// Stores information about tablets of a single table that is not shared for co-located tables.
 ///
 /// Most of the tablet information is stored in the shared tablet map. Other information that for
 /// co-located tables should be per-table is stored here in the per-table tablet map.
 ///
-/// This class complements tablet_map. The tablet_map is required for getting the description of the tablets,
-/// and this class contains additional tablet information that can be retrieved by tablet_id.
+/// This class complements shared_tablet_map. The shared_tablet_map is required for getting the
+/// description of the tablets, and this class contains additional tablet information that can be
+/// retrieved by tablet_id.
 class per_table_tablet_map {
 
     using tablet_container = std::unordered_map<tablet_id, per_table_tablet_info>;
@@ -815,7 +814,6 @@ public:
     void clear_tablet(tablet_id);
 
     future<> clear_gently();
-    friend fmt::formatter<tablet_map>;
     friend class tablet_map_view;
 };
 
@@ -1208,8 +1206,8 @@ struct fmt::formatter<locator::range_based_tablet_id> : fmt::formatter<string_vi
 };
 
 template <>
-struct fmt::formatter<locator::tablet_map> : fmt::formatter<string_view> {
-    auto format(const locator::tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
+struct fmt::formatter<locator::shared_tablet_map> : fmt::formatter<string_view> {
+    auto format(const locator::shared_tablet_map&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 template <>

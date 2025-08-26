@@ -641,14 +641,14 @@ void migration_notifier::before_drop_keyspace(const sstring& keyspace_name,
     });
 }
 
-void migration_notifier::before_allocate_tablet_map(const locator::tablet_map& map,
+void migration_notifier::before_allocate_tablet_map(const locator::shared_tablet_map& map,
         const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
     _listeners.thread_for_each([&map, &s, &mutations, ts] (migration_listener* listener) {
         listener->on_before_allocate_tablet_map(map, s, mutations, ts);
     });
 }
 
-void migration_notifier::before_allocate_tablet_map_in_notification(const locator::tablet_map& map,
+void migration_notifier::before_allocate_tablet_map_in_notification(const locator::shared_tablet_map& map,
         const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
     _listeners.thread_for_each_nested([&map, &s, &mutations, ts] (migration_listener* listener) {
         listener->on_before_allocate_tablet_map(map, s, mutations, ts);

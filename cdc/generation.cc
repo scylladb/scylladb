@@ -1191,7 +1191,7 @@ db_clock::time_point get_ts(const generation_id& gen_id) {
     return std::visit([] (auto& id) { return id.ts; }, gen_id);
 }
 
-future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const locator::tablet_map& map, api::timestamp_type ts) {
+future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const locator::shared_tablet_map& map, api::timestamp_type ts) {
     auto s = db::system_keyspace::cdc_streams_state();
 
     mutation m(s, partition_key::from_single_value(*s,
@@ -1396,7 +1396,7 @@ future<mutation> get_switch_streams_mutation(table_id table, db_clock::time_poin
     co_return std::move(m);
 }
 
-future<> generation_service::generate_tablet_resize_update(utils::chunked_vector<canonical_mutation>& muts, table_id table, const locator::tablet_map& new_tablet_map, api::timestamp_type ts) {
+future<> generation_service::generate_tablet_resize_update(utils::chunked_vector<canonical_mutation>& muts, table_id table, const locator::shared_tablet_map& new_tablet_map, api::timestamp_type ts) {
     if (!_cdc_metadata.get_all_tablet_streams().contains(table)) {
         // not a CDC table
         co_return;

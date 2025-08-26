@@ -179,7 +179,7 @@ public:
         });
     }
 
-    virtual void on_before_allocate_tablet_map(const locator::tablet_map& map, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+    virtual void on_before_allocate_tablet_map(const locator::shared_tablet_map& map, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
         if (!is_log_schema(s)) {
             return;
         }

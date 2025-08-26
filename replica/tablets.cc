@@ -705,7 +705,7 @@ tablet_id process_one_row(table_id table, shared_tablet_map& map, per_table_tabl
     auto row_per_table_info = process_row_per_table_tablet_info(table, row, map.get_last_token(tid), pending_update_repair_time);
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", row_per_table_info.sstables_repaired_at, table, tid);
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), migration_task_info});
+    map.set_tablet(tid, shared_tablet_info{std::move(tablet_replicas), migration_task_info});
     per_table_map.set_tablet(tid, std::move(row_per_table_info));
 
     auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
