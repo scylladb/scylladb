@@ -55,7 +55,7 @@ using namespace replica;
 using namespace service;
 
 static inline
-future<mutation> tablet_map_to_mutation(const tablet_map& tablets, const locator::per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
+future<mutation> tablet_map_to_mutation(const shared_tablet_map& tablets, const locator::per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
                        api::timestamp_type ts, const gms::feature_service& features) {
     std::optional<mutation> ret;
     co_await tablet_map_to_mutations(tablets, per_table_map, id, keyspace_name, table_name, ts, features, [&] (mutation m) {
