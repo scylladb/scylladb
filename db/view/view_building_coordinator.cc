@@ -525,7 +525,7 @@ void view_building_coordinator::generate_tablet_migration_updates(utils::chunked
         return;
     }
 
-    auto& tinfo = tmap.get_tablet_info(gid.tablet);
+    const auto& tinfo = tmap.get_tablet_info(gid.tablet);
     auto leaving_replica = locator::get_leaving_replica(tinfo, trinfo);
 
     if (!leaving_replica && !trinfo.pending_replica) {

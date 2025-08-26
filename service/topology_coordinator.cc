@@ -1005,7 +1005,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     new_ks_props.validate();
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
-                    locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
+                    locator::shared_tablet_map new_tablet_map{unimportant_init_tablet_count};
 
                     auto tables_with_mvs = ks.metadata()->tables();
                     auto views = ks.metadata()->views();
@@ -1017,13 +1017,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             // the base table will coordinate the transition for the entire group.
                             continue;
                         }
-                        auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
+                        auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).shared->clone_gently();
                         locator::replication_strategy_params params{ks_md->strategy_options(), old_tablets.tablet_count(), ks.metadata()->consistency_option()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
 
                         replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
-                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::shared_tablet_info& tablet_info) -> future<> {
                             auto last_token = new_tablet_map.get_last_token(tablet_id);
                             updates.emplace_back(co_await make_canonical_mutation_gently(
                                     replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
@@ -1034,7 +1034,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             ));
 
                             // Calculate abandoning replica and abort view building tasks on them
-                            auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                            const auto& old_tablet_info = old_tablets.get_tablet_info(last_token);
                             auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
                             if (!abandoning_replicas.empty()) {
                                 if (abandoning_replicas.size() != 1) {
@@ -1595,9 +1595,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     auto next_stage = locator::tablet_transition_stage::use_new;
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
-                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        const auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         unsigned excluded_old = 0;
-                        for (auto r : tinfo.replicas) {
+                        for (auto r : tinfo.replicas()) {
                             if (is_excluded(raft::server_id(r.host.uuid()))) {
                                 excluded_old++;
                             }
@@ -1843,7 +1843,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         bool feature = _feature_service.tablet_incremental_repair;
                         if (advance_in_background(gid, tablet_state.repair_update_compaction_ctrl, "repair_update_compaction_ctrl", [ms = &_messaging,
-                                    gid = gid, sid = tablet_state.session_id, _replicas = tmap.get_tablet_info(gid.tablet).replicas, feature] () -> future<> {
+                                    gid = gid, sid = tablet_state.session_id, _replicas = tmap.get_tablet_info(gid.tablet).replicas(), feature] () -> future<> {
                             if (feature) {
                                 auto replicas = std::move(_replicas);
                                 co_await coroutine::parallel_for_each(replicas, [replicas, ms, gid, sid] (locator::tablet_replica& r) -> future<> {
@@ -1958,7 +1958,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     void update_load_stats_on_end_migration(locator::global_tablet_id gid, const locator::tablet_map& tmap, const locator::tablet_transition_info& trinfo) {
         if (auto old_load_stats = _tablet_allocator.get_load_stats()) {
             lw_shared_ptr<locator::load_stats> new_load_stats;
-            auto& tinfo = tmap.get_tablet_info(gid.tablet);
+            const auto& tinfo = tmap.get_tablet_info(gid.tablet);
             auto leaving = locator::get_leaving_replica(tinfo, trinfo);
             auto pending = trinfo.pending_replica;
             const dht::token_range trange {tmap.get_token_range(gid.tablet)};
@@ -1971,7 +1971,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 uint64_t tablet_size_sum = 0;
                 size_t replica_count = 0;
                 const locator::range_based_tablet_id rb_tid {gid.table, trange};
-                for (auto r : tinfo.replicas) {
+                for (auto r : tinfo.replicas()) {
                     auto tablet_size_opt = new_load_stats->get_tablet_size(r.host, rb_tid);
                     if (tablet_size_opt) {
                         tablet_size_sum += *tablet_size_opt;
@@ -2057,8 +2057,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             auto new_cnt = new_tablet_map.tablet_count();
             if (old_cnt > new_cnt) {
                 std::unordered_set<locator::host_id> replicas;
-                for (auto& tinfo : tmap.tablets()) {
-                    for (auto& r : tinfo.replicas) {
+                for (const auto& [tid, tinfo] : tmap.tablets()) {
+                    for (auto& r : tinfo.replicas()) {
                         if (!is_excluded(raft::server_id(r.host.uuid()))) {
                             replicas.insert(r.host);
                         }
@@ -2121,7 +2121,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 std::unordered_set<locator::host_id> replica_hosts;
                 const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
                 co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                    for (const locator::tablet_replica& replica: tinfo.replicas) {
+                    for (const locator::tablet_replica& replica: tinfo.replicas()) {
                         if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
                             replica_hosts.insert(replica.host);
                         }

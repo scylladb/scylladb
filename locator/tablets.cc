@@ -128,8 +128,8 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
         case tablet_transition_kind::intranode_migration:
             [[fallthrough]];
         case tablet_transition_kind::migration:
-            result.read_from = substract_sets(tinfo.replicas, trinfo.next);
-            result.written_to = substract_sets(trinfo.next, tinfo.replicas);
+            result.read_from = substract_sets(tinfo.replicas(), trinfo.next);
+            result.written_to = substract_sets(trinfo.next, tinfo.replicas());
             return result;
         case tablet_transition_kind::rebuild:
             if (!trinfo.pending_replica.has_value()) {
@@ -151,7 +151,7 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
                 return result; // No nodes to stream to -> no nodes to stream from
             }
 
-            auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
+            auto s = std::unordered_set<tablet_replica>(tinfo.replicas().begin(), tinfo.replicas().end());
             erase_if(s, [&] (const tablet_replica& r) {
                 auto* n = topo.find_node(r.host);
                 return !n || n->is_excluded();
@@ -164,7 +164,7 @@ tablet_migration_streaming_info get_migration_streaming_info(const locator::topo
             return result;
         }
         case tablet_transition_kind::repair:
-            auto s = std::unordered_set<tablet_replica>(tinfo.replicas.begin(), tinfo.replicas.end());
+            auto s = std::unordered_set<tablet_replica>(tinfo.replicas().begin(), tinfo.replicas().end());
             result.stream_weight = locator::tablet_migration_stream_weight_repair;
             result.read_from = s;
             result.written_to = std::move(s);
@@ -216,7 +216,7 @@ std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet
 }
 
 std::optional<tablet_replica> get_leaving_replica(const tablet_info& tinfo, const tablet_transition_info& trinfo) {
-    auto leaving = substract_sets(tinfo.replicas, trinfo.next);
+    auto leaving = substract_sets(tinfo.replicas(), trinfo.next);
     if (leaving.empty()) {
         return {};
     }
@@ -239,7 +239,7 @@ bool is_post_cleanup(tablet_replica replica, const tablet_info& tinfo, const tab
 }
 
 tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migration_info& mig) {
-    return replace_replica(tinfo.replicas, mig.src, mig.dst);
+    return replace_replica(tinfo.replicas(), mig.src, mig.dst);
 }
 
 tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, tablet_id tid, const locator::topology& topo, std::function<bool(const tablet_replica&)> filter) {
@@ -262,11 +262,11 @@ tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, t
 
     switch (write_selector()) {
         case write_replica_set_selector::previous: {
-            auto primary_opt = primary(info.replicas);
+            auto primary_opt = primary(info.replicas());
             return primary_opt.has_value() ? tablet_replica_set{primary_opt.value()} : tablet_replica_set{};
         }
         case write_replica_set_selector::both: {
-            auto previous_primary = primary(info.replicas);
+            auto previous_primary = primary(info.replicas());
             auto next_primary = primary(transition->next);
             if (previous_primary.has_value() && next_primary.has_value()) {
                 return add(previous_primary.value(), next_primary.value());
@@ -315,11 +315,7 @@ const tablet_map_view& tablet_metadata::get_tablet_map_view(table_id id) const {
 }
 
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
-    try {
-        return *_tablets.at(id).shared;
-    } catch (const std::out_of_range&) {
-        throw_with_backtrace<no_such_tablet_map>(id);
-    }
+    return get_tablet_map_view(id);
 }
 
 future<locator::tablet_map_view> tablet_metadata::get_tablet_map_ptr(table_id id) const {
@@ -1093,8 +1089,8 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
             for (size_t i = 0; i < old_tablet_count; i += 2) {
                 range_based_tablet_id rb_tid1 { table, old_tmap.get_token_range(tablet_id(i)) };
                 range_based_tablet_id rb_tid2 { table, old_tmap.get_token_range(tablet_id(i + 1)) };
-                auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
-                for (auto& replica : tinfo.replicas) {
+                const auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
+                for (auto& replica : tinfo.replicas()) {
                     auto tablet_size_opt1 = new_stats.get_tablet_size(replica.host, rb_tid1);
                     auto tablet_size_opt2 = new_stats.get_tablet_size(replica.host, rb_tid2);
                     if (!tablet_size_opt1 || !tablet_size_opt2) {
@@ -1118,8 +1114,8 @@ lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unorde
             // Reconcile for split
             for (size_t i = 0; i < old_tablet_count; i++) {
                 range_based_tablet_id rb_tid { table, old_tmap.get_token_range(tablet_id(i)) };
-                auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
-                for (auto& replica : tinfo.replicas) {
+                const auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
+                for (auto& replica : tinfo.replicas()) {
                     auto tablet_size_opt = new_stats.get_tablet_size(replica.host, rb_tid);
                     if (!tablet_size_opt) {
                         tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid, replica.host);
@@ -1171,8 +1167,8 @@ tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map
     for (auto tid = std::optional(tablets.first_tablet()); tid; tid = tablets.next_tablet(*tid)) {
         const auto& tablet_info = tablets.get_tablet_info(*tid);
 
-        auto replica_it = std::ranges::find_if(tablet_info.replicas, [&] (auto&& r) { return r.host == host; });
-        if (replica_it == tablet_info.replicas.end()) {
+        auto replica_it = std::ranges::find_if(tablet_info.replicas(), [&] (auto&& r) { return r.host == host; });
+        if (replica_it == tablet_info.replicas().end()) {
             continue;
         }
 
@@ -1285,13 +1281,13 @@ private:
         auto* info = tablets.get_tablet_transition_info(tablet);
         auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
             if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
+                return tablets.get_tablet_info(tablet).replicas();
             }
             switch (info->writes) {
                 case write_replica_set_selector::previous:
                     [[fallthrough]];
                 case write_replica_set_selector::both:
-                    return tablets.get_tablet_info(tablet).replicas;
+                    return tablets.get_tablet_info(tablet).replicas();
                 case write_replica_set_selector::next: {
                     return info->next;
                 }
@@ -1332,11 +1328,11 @@ private:
         auto&& info = tablets.get_tablet_transition_info(tablet);
         auto&& replicas = std::invoke([&] () -> const tablet_replica_set& {
             if (!info) {
-                return tablets.get_tablet_info(tablet).replicas;
+                return tablets.get_tablet_info(tablet).replicas();
             }
             switch (info->reads) {
                 case read_replica_set_selector::previous:
-                    return tablets.get_tablet_info(tablet).replicas;
+                    return tablets.get_tablet_info(tablet).replicas();
                 case read_replica_set_selector::next: {
                     return info->next;
                 }
@@ -1408,10 +1404,10 @@ public:
                 first_token = tablets.get_last_token(tablet_id(size_t(tid) - 1));
             }
             auto token_range = std::make_pair(first_token, tablets.get_last_token(tid));
-            return tablet_routing_info{info.replicas, token_range};
+            return tablet_routing_info{info.replicas(), token_range};
         };
 
-        for (auto&& r : info.replicas) {
+        for (auto&& r : info.replicas()) {
             if (r.host == host) {
                 if (r.shard == shard) {
                     return std::nullopt; // routed correctly
