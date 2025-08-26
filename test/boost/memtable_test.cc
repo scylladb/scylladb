@@ -1550,7 +1550,7 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
             mutation_reader reader;
         };
 
-        auto data_ptr = env.db().invoke_on(first_tablet_info.replicas.front().shard, [&table_name, fm = freeze(expected_mut)] (replica::database& db)
+        auto data_ptr = env.db().invoke_on(first_tablet_info.replicas().front().shard, [&table_name, fm = freeze(expected_mut)] (replica::database& db)
                 -> future<foreign_ptr<std::unique_ptr<remote_data>>> {
             auto& tbl = db.find_column_family("ks", table_name);
             const auto schema = tbl.schema();
@@ -1577,7 +1577,7 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
 
         // Migrate the tablet to another shard
         {
-            const auto src = first_tablet_info.replicas.front();
+            const auto src = first_tablet_info.replicas().front();
             auto dst = src;
             dst.shard = (src.shard + 1) % smp::count;
             // Closing the storage-group is done in the background, so it is fine
