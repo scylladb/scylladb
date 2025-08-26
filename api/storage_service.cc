@@ -962,9 +962,9 @@ rest_is_starting(sharded<service::storage_service>& ss, std::unique_ptr<http::re
 
 static
 future<json::json_return_type>
-rest_get_drain_progress(http_context& ctx, std::unique_ptr<http::request> req) {
-        return ctx.db.map_reduce(adder<replica::database::drain_progress>(), [] (auto& db) {
-            return db.get_drain_progress();
+rest_get_drain_progress(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
+        return ss.map_reduce(adder<replica::database::drain_progress>(), [] (auto& ss) {
+            return ss.get_database().get_drain_progress();
         }).then([] (auto&& progress) {
             auto progress_str = format("Drained {}/{} ColumnFamilies", progress.remaining_cfs, progress.total_cfs);
             return make_ready_future<json::json_return_type>(std::move(progress_str));
@@ -1855,7 +1855,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_logging_levels.set(r, rest_bind(rest_get_logging_levels));
     ss::get_operation_mode.set(r, rest_bind(rest_get_operation_mode, ss));
     ss::is_starting.set(r, rest_bind(rest_is_starting, ss));
-    ss::get_drain_progress.set(r, rest_bind(rest_get_drain_progress, ctx));
+    ss::get_drain_progress.set(r, rest_bind(rest_get_drain_progress, ss));
     ss::drain.set(r, rest_bind(rest_drain, ss));
     ss::get_keyspaces.set(r, rest_bind(rest_get_keyspaces, ctx));
     ss::stop_gossiping.set(r, rest_bind(rest_stop_gossiping, ss));
