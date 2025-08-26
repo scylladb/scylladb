@@ -1005,7 +1005,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     new_ks_props.validate();
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features(), _db.get_config());
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
-                    locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
+                    locator::shared_tablet_map new_tablet_map{unimportant_init_tablet_count};
 
                     auto tables_with_mvs = ks.metadata()->tables();
                     auto views = ks.metadata()->views();
@@ -1017,13 +1017,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             // the base table will coordinate the transition for the entire group.
                             continue;
                         }
-                        auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
+                        auto old_tablets = co_await tmptr->tablets().get_shared_tablet_map(table_or_mv->id()).clone_gently();
                         locator::replication_strategy_params params{ks_md->strategy_options(), old_tablets.tablet_count(), ks.metadata()->consistency_option()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
 
                         replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
-                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::shared_tablet_info& tablet_info) -> future<> {
                             auto last_token = new_tablet_map.get_last_token(tablet_id);
                             updates.emplace_back(co_await make_canonical_mutation_gently(
                                     replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
@@ -1034,7 +1034,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             ));
 
                             // Calculate abandoning replica and abort view building tasks on them
-                            auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                            auto& old_tablet_info = old_tablets.get_tablet_info(last_token);
                             auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
                             if (!abandoning_replicas.empty()) {
                                 if (abandoning_replicas.size() != 1) {
@@ -2140,7 +2140,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 std::unordered_set<locator::host_id> replica_hosts;
                 const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
                 co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                    for (const locator::tablet_replica& replica: tinfo.replicas) {
+                    for (const locator::tablet_replica& replica: tinfo.replicas()) {
                         if (!_topo_sm._topology.excluded_tablet_nodes.contains(raft::server_id(replica.host.uuid()))) {
                             replica_hosts.insert(replica.host);
                         }

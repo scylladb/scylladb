@@ -227,7 +227,7 @@ future<std::optional<tasks::task_status>> tablet_virtual_task::wait(tasks::task_
 
     res->status.state = tasks::task_manager::task_state::done; // Failed repair task is retried.
     if (is_migration_task(task_type)) {
-        auto& replicas = _ss.get_token_metadata().tablets().get_tablet_map(table).get_tablet_info(tablet_id_opt.value()).replicas;
+        auto& replicas = _ss.get_token_metadata().tablets().get_tablet_map(table).get_tablet_info(tablet_id_opt.value()).replicas();
         auto migration_failed = std::all_of(replicas.begin(), replicas.end(), [&] (const auto& replica) { return res->pending_replica.has_value() && replica != res->pending_replica.value(); });
         res->status.state = migration_failed ? tasks::task_manager::task_state::failed : tasks::task_manager::task_state::done;
     } else if (is_resize_task(task_type)) {
