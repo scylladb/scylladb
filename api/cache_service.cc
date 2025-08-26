@@ -204,53 +204,53 @@ void set_cache_service(http_context& ctx, sharded<replica::database>& db, routes
         });
     });
 
-    cs::get_row_hits.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx.db, uint64_t(0), [](const replica::column_family& cf) {
+    cs::get_row_hits.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return map_reduce_cf(db, uint64_t(0), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.count();
         }, std::plus<uint64_t>());
     });
 
-    cs::get_row_requests.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx.db, uint64_t(0), [](const replica::column_family& cf) {
+    cs::get_row_requests.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return map_reduce_cf(db, uint64_t(0), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.count() + cf.get_row_cache().stats().misses.count();
         }, std::plus<uint64_t>());
     });
 
-    cs::get_row_hit_rate.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf(ctx.db, ratio_holder(), [](const replica::column_family& cf) {
+    cs::get_row_hit_rate.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return map_reduce_cf(db, ratio_holder(), [](const replica::column_family& cf) {
             return ratio_holder(cf.get_row_cache().stats().hits.count() + cf.get_row_cache().stats().misses.count(),
                     cf.get_row_cache().stats().hits.count());
         }, std::plus<ratio_holder>());
     });
 
-    cs::get_row_hits_moving_avrage.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_raw(ctx.db, utils::rate_moving_average(), [](const replica::column_family& cf) {
+    cs::get_row_hits_moving_avrage.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return map_reduce_cf_raw(db, utils::rate_moving_average(), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.rate();
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
     });
 
-    cs::get_row_requests_moving_avrage.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return map_reduce_cf_raw(ctx.db, utils::rate_moving_average(), [](const replica::column_family& cf) {
+    cs::get_row_requests_moving_avrage.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return map_reduce_cf_raw(db, utils::rate_moving_average(), [](const replica::column_family& cf) {
             return cf.get_row_cache().stats().hits.rate() + cf.get_row_cache().stats().misses.rate();
         }, std::plus<utils::rate_moving_average>()).then([](const utils::rate_moving_average& m) {
             return make_ready_future<json::json_return_type>(meter_to_json(m));
         });
     });
 
-    cs::get_row_size.set(r, [&ctx] (std::unique_ptr<http::request> req) {
+    cs::get_row_size.set(r, [&db] (std::unique_ptr<http::request> req) {
         // In origin row size is the weighted size.
         // We currently do not support weights, so we use raw size in bytes instead
-        return ctx.db.map_reduce0([](replica::database& db) -> uint64_t {
+        return db.map_reduce0([](replica::database& db) -> uint64_t {
             return db.row_cache_tracker().region().occupancy().used_space();
         }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
             return make_ready_future<json::json_return_type>(res);
         });
     });
 
-    cs::get_row_entries.set(r, [&ctx] (std::unique_ptr<http::request> req) {
-        return ctx.db.map_reduce0([](replica::database& db) -> uint64_t {
+    cs::get_row_entries.set(r, [&db] (std::unique_ptr<http::request> req) {
+        return db.map_reduce0([](replica::database& db) -> uint64_t {
             return db.row_cache_tracker().partitions();
         }, uint64_t(0), std::plus<uint64_t>()).then([](const int64_t& res) {
             return make_ready_future<json::json_return_type>(res);
