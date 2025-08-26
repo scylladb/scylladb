@@ -2287,8 +2287,9 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
                 api::unset_server_authorization_cache(ctx).get();
             });
 
+            // Precondition: we can only call this after `auth::service` has been initialized and started on all shards.
             sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
-                controller.register_auth_integration();
+                controller.register_auth_integration(auth_service.local());
             }).get();
 
             auto unregister_sl_controller_integration = defer([] {

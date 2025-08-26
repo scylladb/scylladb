@@ -131,6 +131,7 @@ public:
     private:
         // FIXME: Will be extended in an upcoming commit.
         service_level_controller& _sl_controller;
+        auth::service& _auth_service;
 
         /// This gate is supposed to synchronize `stop` with other tasks that
         /// this interface performs. Because of that, EVERY coroutine function
@@ -140,7 +141,7 @@ public:
         seastar::gate _stop_gate;
 
     public:
-        auth_integration(service_level_controller&);
+        auth_integration(service_level_controller&, auth::service&);
 
         future<> stop();
 
@@ -235,7 +236,7 @@ public:
      */
     future<> start();
 
-    void register_auth_integration();
+    void register_auth_integration(auth::service&);
 
     future<> unregister_auth_integration();
 
