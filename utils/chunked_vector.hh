@@ -324,12 +324,15 @@ public:
 public:
     iterator insert(const_iterator pos, const T& x);
     iterator insert(const_iterator pos, T&& x);
+    template <typename Iterator>
+    iterator insert(const_iterator post, Iterator first, Iterator last);
     template <typename... Args>
     iterator emplace(const_iterator pos, Args&&... args);
     iterator erase(iterator pos);
     iterator erase(const_iterator pos);
     iterator erase(iterator first, iterator last);
     iterator erase(const_iterator first, const_iterator last);
+    void swap(chunked_vector& x) noexcept;
 };
 
 template<typename T, size_t max_contiguous_allocation>
@@ -623,6 +626,18 @@ chunked_vector<T, max_contiguous_allocation>::insert(const_iterator pos, T&& x) 
 }
 
 template <typename T, size_t max_contiguous_allocation>
+template <typename Iterator>
+typename chunked_vector<T, max_contiguous_allocation>::iterator
+chunked_vector<T, max_contiguous_allocation>::insert(const_iterator pos, Iterator first, Iterator last) {
+    auto insert_idx = pos - begin();
+    auto n_insert = std::distance(first, last);
+    reserve(size() + n_insert);
+    std::copy(first, last, std::back_inserter(*this));
+    std::rotate(begin() + insert_idx, end() - n_insert, end());
+    return begin() + insert_idx;
+}
+
+template <typename T, size_t max_contiguous_allocation>
 template <typename... Args>
 typename chunked_vector<T, max_contiguous_allocation>::iterator
 chunked_vector<T, max_contiguous_allocation>::emplace(const_iterator pos, Args&&... args) {
@@ -658,6 +673,15 @@ template <typename T, size_t max_contiguous_allocation>
 typename chunked_vector<T, max_contiguous_allocation>::iterator
 chunked_vector<T, max_contiguous_allocation>::erase(iterator pos) {
     return erase(const_iterator(pos));
+}
+
+template <typename T, size_t max_contiguous_allocation>
+void
+chunked_vector<T, max_contiguous_allocation>::swap(chunked_vector& x) noexcept {
+    using std::swap;
+    swap(_chunks, x._chunks);
+    swap(_size, x._size);
+    swap(_capacity, x._capacity);
 }
 
 template <typename T, size_t max_contiguous_allocation>
