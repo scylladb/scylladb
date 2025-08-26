@@ -32,7 +32,7 @@ namespace locator {
 
 seastar::logger tablet_logger("tablets");
 
-std::optional<std::pair<tablet_id, tablet_id>> tablet_map::sibling_tablets(tablet_id t) const {
+std::optional<std::pair<tablet_id, tablet_id>> shared_tablet_map::sibling_tablets(tablet_id t) const {
     if (tablet_count() == 1) {
         return std::nullopt;
     }
@@ -182,16 +182,16 @@ bool tablet_has_excluded_node(const locator::topology& topo, const tablet_info_v
     return false;
 }
 
-tablet_info::tablet_info(tablet_replica_set replicas, tablet_task_info migration_task_info)
+shared_tablet_info::shared_tablet_info(tablet_replica_set replicas, tablet_task_info migration_task_info)
     : replicas(std::move(replicas))
     , migration_task_info(std::move(migration_task_info))
 {}
 
-tablet_info::tablet_info(tablet_replica_set replicas)
-    : tablet_info(std::move(replicas), tablet_task_info{})
+shared_tablet_info::shared_tablet_info(tablet_replica_set replicas)
+    : shared_tablet_info(std::move(replicas), tablet_task_info{})
 {}
 
-std::optional<std::pair<tablet_info, per_table_tablet_info>> merge_tablet_info(tablet_info_view a, tablet_info_view b) {
+std::optional<std::pair<shared_tablet_info, per_table_tablet_info>> merge_tablet_info(tablet_info_view a, tablet_info_view b) {
     if (a.repair_task_info().is_valid() || b.repair_task_info().is_valid()) {
         return {};
     }
@@ -208,7 +208,7 @@ std::optional<std::pair<tablet_info, per_table_tablet_info>> merge_tablet_info(t
     int64_t sstables_repaired_at = std::max(a.sstables_repaired_at(), b.sstables_repaired_at());
 
     return std::make_pair(
-        tablet_info(std::move(a.replicas()), a.migration_task_info()),
+        shared_tablet_info(std::move(a.replicas()), a.migration_task_info()),
         per_table_tablet_info(repair_time, a.repair_task_info(), sstables_repaired_at)
     );
 }
@@ -285,6 +285,10 @@ const tablet_map_view& tablet_metadata::get_tablet_map_view(table_id id) const {
 }
 
 const tablet_map& tablet_metadata::get_tablet_map(table_id id) const {
+    return get_shared_tablet_map(id);
+}
+
+const shared_tablet_map& tablet_metadata::get_shared_tablet_map(table_id id) const {
     try {
         return *_tablets.at(id).shared;
     } catch (const std::out_of_range&) {
@@ -300,7 +304,7 @@ const per_table_tablet_map& tablet_metadata::get_per_table_tablet_map(table_id i
     }
 }
 
-future<locator::tablet_map_ptr> tablet_metadata::get_tablet_map_ptr(table_id id) const {
+future<locator::shared_tablet_map_ptr> tablet_metadata::get_tablet_map_ptr(table_id id) const {
     try {
         // lightweight since it only copies the shared ptr, not the map itself.
         co_return co_await _tablets.at(id).shared.copy();
@@ -325,7 +329,7 @@ bool tablet_metadata::is_base_table(table_id id) const {
     return !_base_table.contains(id);
 }
 
-future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(tablet_map&, per_table_tablet_map&)> func) {
+future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_function<future<>(shared_tablet_map&, per_table_tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
         throw no_such_tablet_map(id);
@@ -335,10 +339,10 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
         // For mutating the tablet map of a co-located table, mutate_colocated_tablet_map_async should be used.
         on_internal_error(tablet_logger, format("Cannot mutate tablet map for co-located table {}.", id));
     }
-    auto tablet_map_copy = make_lw_shared<tablet_map>(co_await it->second.shared->clone_gently());
+    auto tablet_map_copy = make_lw_shared<shared_tablet_map>(co_await it->second.shared->clone_gently());
     auto per_table_tablet_map_copy = make_lw_shared<per_table_tablet_map>(co_await it->second.per_table->clone_gently());
     co_await func(*tablet_map_copy, *per_table_tablet_map_copy);
-    auto new_map_ptr = lw_shared_ptr<const tablet_map>(std::move(tablet_map_copy));
+    auto new_map_ptr = lw_shared_ptr<const shared_tablet_map>(std::move(tablet_map_copy));
     auto new_per_table_map_ptr = lw_shared_ptr<const per_table_tablet_map>(std::move(per_table_tablet_map_copy));
     // share the tablet map with all co-located tables
     for (auto colocated_id : _table_groups.at(id)) {
@@ -353,7 +357,7 @@ future<> tablet_metadata::mutate_tablet_map_async(table_id id, noncopyable_funct
     it->second = tablet_map_view { make_foreign(std::move(new_map_ptr)), make_foreign(std::move(new_per_table_map_ptr)) };
 }
 
-future<> tablet_metadata::mutate_colocated_tablet_map_async(table_id id, noncopyable_function<future<>(const tablet_map&, per_table_tablet_map&)> func) {
+future<> tablet_metadata::mutate_colocated_tablet_map_async(table_id id, noncopyable_function<future<>(const shared_tablet_map&, per_table_tablet_map&)> func) {
     auto it = _tablets.find(id);
     if (it == _tablets.end()) {
         throw no_such_tablet_map(id);
@@ -379,8 +383,8 @@ future<tablet_metadata> tablet_metadata::copy() const {
     co_return copy;
 }
 
-void tablet_metadata::set_tablet_map(table_id id, tablet_map map, per_table_tablet_map per_table_map) {
-    auto map_ptr = make_lw_shared<const tablet_map>(std::move(map));
+void tablet_metadata::set_tablet_map(table_id id, shared_tablet_map map, per_table_tablet_map per_table_map) {
+    auto map_ptr = make_lw_shared<const shared_tablet_map>(std::move(map));
     auto per_table_map_ptr = make_lw_shared<const per_table_tablet_map>(std::move(per_table_map));
     if (auto it = _table_groups.find(id); it == _table_groups.end()) {
         _table_groups[id] = {id};
@@ -452,7 +456,7 @@ future<> tablet_metadata::clear_gently() {
     // First, Sort the tablet maps per shard to avoid destruction of all foreign tablet map ptrs
     // on this shard. We don't use sharded<> here since it will require a similar 
     // submit_to to each shard owner per tablet-map.
-    std::vector<std::vector<tablet_map_ptr>> tablet_maps_per_shard;
+    std::vector<std::vector<shared_tablet_map_ptr>> tablet_maps_per_shard;
     std::vector<std::vector<per_table_tablet_map_ptr>> per_table_tablet_maps_per_shard;
     tablet_maps_per_shard.resize(smp::count);
     per_table_tablet_maps_per_shard.resize(smp::count);
@@ -493,7 +497,7 @@ bool tablet_metadata::operator==(const tablet_metadata& o) const {
     return true;
 }
 
-tablet_map::tablet_map(size_t tablet_count)
+shared_tablet_map::shared_tablet_map(size_t tablet_count)
         : _log2_tablets(log2ceil(tablet_count)) {
     if (tablet_count != 1ul << _log2_tablets) {
         on_internal_error(tablet_logger, format("Tablet count not a power of 2: {}", tablet_count));
@@ -501,11 +505,11 @@ tablet_map::tablet_map(size_t tablet_count)
     _tablets.resize(tablet_count);
 }
 
-tablet_map tablet_map::clone() const {
-    return tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info);
+shared_tablet_map shared_tablet_map::clone() const {
+    return shared_tablet_map(_tablets, _log2_tablets, _transitions, _resize_decision, _resize_task_info);
 }
 
-future<tablet_map> tablet_map::clone_gently() const {
+future<shared_tablet_map> shared_tablet_map::clone_gently() const {
     tablet_container tablets;
     tablets.reserve(_tablets.size());
     for (const auto& t : _tablets) {
@@ -520,40 +524,40 @@ future<tablet_map> tablet_map::clone_gently() const {
         co_await coroutine::maybe_yield();
     }
 
-    co_return tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, _resize_task_info);
+    co_return shared_tablet_map(std::move(tablets), _log2_tablets, std::move(transitions), _resize_decision, _resize_task_info);
 }
 
-void tablet_map::check_tablet_id(tablet_id id) const {
+void shared_tablet_map::check_tablet_id(tablet_id id) const {
     if (size_t(id) >= tablet_count()) {
         throw std::logic_error(format("Invalid tablet id: {} >= {}", id, tablet_count()));
     }
 }
 
-const tablet_info& tablet_map::get_tablet_info(tablet_id id) const {
+const shared_tablet_info& shared_tablet_map::get_tablet_info(tablet_id id) const {
     check_tablet_id(id);
     return _tablets[size_t(id)];
 }
 
-tablet_id tablet_map::get_tablet_id(token t) const {
+tablet_id shared_tablet_map::get_tablet_id(token t) const {
     return tablet_id(dht::compaction_group_of(_log2_tablets, t));
 }
 
-std::pair<tablet_id, tablet_range_side> tablet_map::get_tablet_id_and_range_side(token t) const {
+std::pair<tablet_id, tablet_range_side> shared_tablet_map::get_tablet_id_and_range_side(token t) const {
     auto id_after_split = dht::compaction_group_of(_log2_tablets + 1, t);
     auto current_id = id_after_split >> 1;
     return {tablet_id(current_id), tablet_range_side(id_after_split & 0x1)};
 }
 
-dht::token tablet_map::get_last_token(tablet_id id, size_t log2_tablets) const {
+dht::token shared_tablet_map::get_last_token(tablet_id id, size_t log2_tablets) const {
     return dht::last_token_of_compaction_group(log2_tablets, size_t(id));
 }
 
-dht::token tablet_map::get_last_token(tablet_id id) const {
+dht::token shared_tablet_map::get_last_token(tablet_id id) const {
     check_tablet_id(id);
     return get_last_token(id, _log2_tablets);
 }
 
-dht::token tablet_map::get_first_token(tablet_id id) const {
+dht::token shared_tablet_map::get_first_token(tablet_id id) const {
     if (id == first_tablet()) {
         return dht::first_token();
     } else {
@@ -561,7 +565,7 @@ dht::token tablet_map::get_first_token(tablet_id id) const {
     }
 }
 
-dht::token_range tablet_map::get_token_range(tablet_id id, size_t log2_tablets) const {
+dht::token_range shared_tablet_map::get_token_range(tablet_id id, size_t log2_tablets) const {
     if (id == first_tablet()) {
         return dht::token_range::make({dht::minimum_token(), false}, {get_last_token(id, log2_tablets), true});
     } else {
@@ -569,12 +573,12 @@ dht::token_range tablet_map::get_token_range(tablet_id id, size_t log2_tablets) 
     }
 }
 
-dht::token_range tablet_map::get_token_range(tablet_id id) const {
+dht::token_range shared_tablet_map::get_token_range(tablet_id id) const {
     check_tablet_id(id);
     return get_token_range(id, _log2_tablets);
 }
 
-dht::token_range tablet_map::get_token_range_after_split(const token& t) const noexcept {
+dht::token_range shared_tablet_map::get_token_range_after_split(const token& t) const noexcept {
     // when the tablets are split, the tablet count doubles, (i.e.) _log2_tablets increases by 1
     const auto log2_tablets_after_split = _log2_tablets + 1;
     auto id_after_split = tablet_id(dht::compaction_group_of(log2_tablets_after_split, t));
@@ -586,12 +590,12 @@ std::optional<tablet_replica> maybe_get_primary_replica(tablet_id id, const tabl
     return !replicas.empty() ? std::make_optional(replicas.at(size_t(id) % replicas.size())) : std::nullopt;
 }
 
-tablet_replica tablet_map::get_primary_replica(tablet_id id) const {
+tablet_replica shared_tablet_map::get_primary_replica(tablet_id id) const {
     const auto& replicas = get_tablet_info(id).replicas;
     return replicas.at(size_t(id) % replicas.size());
 }
 
-tablet_replica tablet_map::get_secondary_replica(tablet_id id) const {
+tablet_replica shared_tablet_map::get_secondary_replica(tablet_id id) const {
     if (get_tablet_info(id).replicas.size() < 2) {
         throw std::runtime_error(format("No secondary replica for tablet id {}", id));
     }
@@ -599,13 +603,13 @@ tablet_replica tablet_map::get_secondary_replica(tablet_id id) const {
     return replicas.at((size_t(id)+1) % replicas.size());
 }
 
-std::optional<tablet_replica> tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
+std::optional<tablet_replica> shared_tablet_map::maybe_get_selected_replica(tablet_id id, const topology& topo, const tablet_task_info& tablet_task_info) const {
     return maybe_get_primary_replica(id, get_tablet_info(id).replicas, [&] (const auto& tr) {
         return tablet_task_info.selected_by_filters(tr, topo);
     });
 }
 
-future<utils::chunked_vector<token>> tablet_map::get_sorted_tokens() const {
+future<utils::chunked_vector<token>> shared_tablet_map::get_sorted_tokens() const {
     utils::chunked_vector<token> tokens;
     tokens.reserve(tablet_count());
 
@@ -617,40 +621,40 @@ future<utils::chunked_vector<token>> tablet_map::get_sorted_tokens() const {
     co_return tokens;
 }
 
-void tablet_map::set_tablet(tablet_id id, tablet_info info) {
+void shared_tablet_map::set_tablet(tablet_id id, shared_tablet_info info) {
     check_tablet_id(id);
     _tablets[size_t(id)] = std::move(info);
 }
 
-void tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info info) {
+void shared_tablet_map::set_tablet_transition_info(tablet_id id, tablet_transition_info info) {
     check_tablet_id(id);
     _transitions.insert_or_assign(id, std::move(info));
 }
 
-void tablet_map::set_resize_decision(locator::resize_decision decision) {
+void shared_tablet_map::set_resize_decision(locator::resize_decision decision) {
     _resize_decision = std::move(decision);
 }
 
-void tablet_map::set_resize_task_info(tablet_task_info task_info) {
+void shared_tablet_map::set_resize_task_info(tablet_task_info task_info) {
     _resize_task_info = std::move(task_info);
 }
 
-void tablet_map::clear_tablet_transition_info(tablet_id id) {
+void shared_tablet_map::clear_tablet_transition_info(tablet_id id) {
     check_tablet_id(id);
     _transitions.erase(id);
 }
 
-future<> tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const tablet_info&)> func) const {
+future<> shared_tablet_map::for_each_tablet(seastar::noncopyable_function<future<>(tablet_id, const shared_tablet_info&)> func) const {
     std::optional<tablet_id> tid = first_tablet();
-    for (const tablet_info& ti : tablets()) {
+    for (const shared_tablet_info& ti : tablets()) {
         co_await func(*tid, ti);
         tid = next_tablet(*tid);
     }
 }
 
-future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<future<>(tablet_desc, std::optional<tablet_desc>)> func) const {
+future<> shared_tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<future<>(shared_tablet_desc, std::optional<shared_tablet_desc>)> func) const {
     auto make_desc = [this] (tablet_id tid) {
-        return tablet_desc{tid, &get_tablet_info(tid), get_tablet_transition_info(tid)};
+        return shared_tablet_desc{tid, &get_tablet_info(tid), get_tablet_transition_info(tid)};
     };
     if (_tablets.size() == 1) {
         co_return co_await func(make_desc(first_tablet()), std::nullopt);
@@ -666,11 +670,11 @@ future<> tablet_map::for_each_sibling_tablets(seastar::noncopyable_function<futu
     }
 }
 
-void tablet_map::clear_transitions() {
+void shared_tablet_map::clear_transitions() {
     _transitions.clear();
 }
 
-bool tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
+bool shared_tablet_map::has_replica(tablet_id tid, tablet_replica r) const {
     auto& tinfo = get_tablet_info(tid);
     if (contains(tinfo.replicas, r)) {
         return true;
@@ -701,7 +705,7 @@ size_t per_table_tablet_map::external_memory_usage() const {
     return 0; // ?
 }
 
-future<> tablet_map::clear_gently() {
+future<> shared_tablet_map::clear_gently() {
     return utils::clear_gently(_tablets);
 }
 
@@ -749,7 +753,7 @@ future<tablet_map_view> tablet_map_view::clone_gently() const {
 }
 
 tablet_info_view tablet_map_view::get_tablet_info(tablet_id id) const {
-    const tablet_info& shared_info = shared->get_tablet_info(id);
+    const shared_tablet_info& shared_info = shared->get_tablet_info(id);
     const per_table_tablet_info& per_table_info = per_table->get_tablet_info(id);
     return tablet_info_view(shared_info, per_table_info);
 }
@@ -783,7 +787,7 @@ size_t tablet_map_view::external_memory_usage() const {
     return shared->external_memory_usage() + per_table->external_memory_usage();
 }
 
-const tablet_transition_info* tablet_map::get_tablet_transition_info(tablet_id id) const {
+const tablet_transition_info* shared_tablet_map::get_tablet_transition_info(tablet_id id) const {
     auto i = _transitions.find(id);
     if (i == _transitions.end()) {
         return nullptr;
@@ -922,7 +926,7 @@ tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const 
     return tablet_repair_incremental_mode_from_name.at(name);
 }
 
-size_t tablet_map::external_memory_usage() const {
+size_t shared_tablet_map::external_memory_usage() const {
     size_t result = _tablets.external_memory_usage();
     for (auto&& tablet : _tablets) {
         result += tablet.replicas.external_memory_usage();
@@ -934,19 +938,19 @@ bool resize_decision::operator==(const resize_decision& o) const {
     return way.index() == o.way.index() && sequence_number == o.sequence_number;
 }
 
-bool tablet_map::needs_split() const {
+bool shared_tablet_map::needs_split() const {
     return std::holds_alternative<resize_decision::split>(_resize_decision.way);
 }
 
-bool tablet_map::needs_merge() const {
+bool shared_tablet_map::needs_merge() const {
     return std::holds_alternative<resize_decision::merge>(_resize_decision.way);
 }
 
-const locator::resize_decision& tablet_map::resize_decision() const {
+const locator::resize_decision& shared_tablet_map::resize_decision() const {
     return _resize_decision;
 }
 
-const tablet_task_info& tablet_map::resize_task_info() const {
+const tablet_task_info& shared_tablet_map::resize_task_info() const {
     return _resize_task_info;
 }
 
@@ -1517,7 +1521,7 @@ auto fmt::formatter<locator::tablet_repair_incremental_mode>::format(const locat
     return fmt::format_to(ctx.out(), "{}", locator::tablet_repair_incremental_mode_to_string(mode));
 }
 
-auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, fmt::format_context& ctx) const
+auto fmt::formatter<locator::shared_tablet_map>::format(const locator::shared_tablet_map& r, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     auto out = ctx.out();
     if (r.tablet_count() == 0) {

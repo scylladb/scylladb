@@ -149,7 +149,7 @@ static void add_per_table_tablet_mutations(mutation& m, const auto& ck, const pe
 constexpr size_t min_tablets_in_mutation = 1024;
 
 future<>
-tablet_map_to_mutations(const tablet_map& tablets, const per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
+tablet_map_to_mutations(const shared_tablet_map& tablets, const per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
                        api::timestamp_type ts, const gms::feature_service& features, std::function<future<>(mutation)> process_mutation) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
@@ -207,7 +207,7 @@ tablet_map_to_mutations(const tablet_map& tablets, const per_table_tablet_map& p
 }
 
 mutation
-colocated_tablet_map_to_mutation(const tablet_map& tablets, const per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
+colocated_tablet_map_to_mutation(const shared_tablet_map& tablets, const per_table_tablet_map& per_table_map, table_id id, const sstring& keyspace_name, const sstring& table_name,
         table_id base_table, api::timestamp_type ts, const gms::feature_service& features) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
@@ -451,16 +451,16 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
     muts.reserve(tm.all_tables_ungrouped().size());
     for (auto&& [base_id, tables] : tm.all_table_groups()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
-        const auto& tablets = tm.get_tablet_map(base_id);
+        const auto& shared_map = tm.get_shared_tablet_map(base_id);
         auto s = db.find_schema(base_id);
-        co_await tablet_map_to_mutations(tablets, tm.get_per_table_tablet_map(base_id), base_id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
+        co_await tablet_map_to_mutations(shared_map, tm.get_per_table_tablet_map(base_id), base_id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
             muts.emplace_back(co_await freeze_gently(m));
         });
         for (auto id : tables) {
             if (id != base_id) {
                 auto s = db.find_schema(id);
                 muts.emplace_back(
-                        colocated_tablet_map_to_mutation(tablets, tm.get_per_table_tablet_map(id), id, s->ks_name(), s->cf_name(), base_id, ts, db.features()));
+                        colocated_tablet_map_to_mutation(shared_map, tm.get_per_table_tablet_map(id), id, s->ks_name(), s->cf_name(), base_id, ts, db.features()));
             }
         }
     }
@@ -616,7 +616,7 @@ per_table_tablet_map construct_per_table_map_from_raw(const tablet_map& base_map
     return result;
 }
 
-tablet_id process_one_row(table_id table, tablet_map& map, per_table_tablet_map& per_table_map, tablet_id tid, const cql3::untyped_result_set_row& row, std::vector<std::pair<table_id, token>>& update_repair_time) {
+tablet_id process_one_row(table_id table, shared_tablet_map& map, per_table_tablet_map& per_table_map, tablet_id tid, const cql3::untyped_result_set_row& row, std::vector<std::pair<table_id, token>>& update_repair_time) {
     tablet_replica_set tablet_replicas;
     if (row.has("replicas")) {
         tablet_replicas = deserialize_replica_set(row.get_view("replicas"));
@@ -674,7 +674,7 @@ tablet_id process_one_row(table_id table, tablet_map& map, per_table_tablet_map&
     }
 
     tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
-    map.set_tablet(tid, tablet_info{std::move(tablet_replicas), std::move(migration_task_info)});
+    map.set_tablet(tid, shared_tablet_info{std::move(tablet_replicas), std::move(migration_task_info)});
     per_table_map.set_tablet(tid, per_table_tablet_info(repair_time, std::move(repair_task_info), sstables_repaired_at));
 
     auto persisted_last_token = dht::token::from_int64(row.get_as<int64_t>("last_token"));
@@ -717,7 +717,7 @@ struct tablet_metadata_builder {
 
     struct active_tablet_map {
         struct base_tablet_map {
-            tablet_map map;
+            shared_tablet_map map;
             per_table_tablet_map per_table_map;
             tablet_id tid;
         };
@@ -767,7 +767,7 @@ struct tablet_metadata_builder {
                 current = active_tablet_map{table, active_tablet_map::colocated_tablet_map{base_table, raw_per_table_tablet_map()}};
             } else {
                 auto tablet_count = row.get_as<int>("tablet_count");
-                auto tmap = tablet_map(tablet_count);
+                auto tmap = shared_tablet_map(tablet_count);
                 auto first_tablet = tmap.first_tablet();
                 current = active_tablet_map{table, active_tablet_map::base_tablet_map{std::move(tmap), per_table_tablet_map(), first_tablet}};
             }
@@ -924,7 +924,7 @@ do_update_tablet_metadata_partition(cql3::query_processor& qp, tablet_metadata& 
 }
 
 static future<>
-do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp, tablet_map& tmap, per_table_tablet_map& per_table_tmap, const tablet_metadata_change_hint::table_hint& hint, tablet_metadata_builder& builder) {
+do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp, shared_tablet_map& tmap, per_table_tablet_map& per_table_tmap, const tablet_metadata_change_hint::table_hint& hint, tablet_metadata_builder& builder) {
     for (const auto token : hint.tokens) {
         auto res = co_await qp.execute_internal(
                 "select * from system.tablets where table_id = ? and last_token = ?",
@@ -942,7 +942,7 @@ do_update_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp,
 }
 
 static future<>
-do_update_colocated_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp, const tablet_map& tmap, per_table_tablet_map& per_table_tmap, const tablet_metadata_change_hint::table_hint& hint, tablet_metadata_builder& builder) {
+do_update_colocated_tablet_metadata_rows(replica::database& db, cql3::query_processor& qp, const shared_tablet_map& tmap, per_table_tablet_map& per_table_tmap, const tablet_metadata_change_hint::table_hint& hint, tablet_metadata_builder& builder) {
     for (const auto token : hint.tokens) {
         auto res = co_await qp.execute_internal(
                 "select * from system.tablets where table_id = ? and last_token = ?",
@@ -969,11 +969,11 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
                 co_await do_update_tablet_metadata_partition(qp, tm, table_hint, builder);
             } else {
                 if (tm.is_base_table(table_hint.table_id)) {
-                    co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (tablet_map& tmap, per_table_tablet_map& per_table_tmap) -> future<> {
+                    co_await tm.mutate_tablet_map_async(table_hint.table_id, [&] (shared_tablet_map& tmap, per_table_tablet_map& per_table_tmap) -> future<> {
                         co_await do_update_tablet_metadata_rows(db, qp, tmap, per_table_tmap, table_hint, builder);
                     });
                 } else {
-                    co_await tm.mutate_colocated_tablet_map_async(table_hint.table_id, [&] (const tablet_map& tmap, per_table_tablet_map& per_table_tmap) -> future<> {
+                    co_await tm.mutate_colocated_tablet_map_async(table_hint.table_id, [&] (const shared_tablet_map& tmap, per_table_tablet_map& per_table_tmap) -> future<> {
                         co_await do_update_colocated_tablet_metadata_rows(db, qp, tmap, per_table_tmap, table_hint, builder);
                     });
                 }
