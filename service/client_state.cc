@@ -113,21 +113,10 @@ future<> service::client_state::check_internal_table_permissions(std::string_vie
     //    from running ALTER or DROP commands on them.
     // 2. Non-superusers are not allowed to access $paxos tables, even if explicit
     //    permissions have been granted.
+    // Note: This function is on a hot path; coroutines are avoided to reduce allocations.
 
     static constexpr auto forbidden_permissions = auth::permission_set::of<
                     auth::permission::ALTER, auth::permission::DROP>();
-
-    if (service::paxos::paxos_store::try_get_base_table(table_name)) {
-        if (forbidden_permissions.contains(cmd.permission)) {
-            throw exceptions::unauthorized_exception(
-                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
-        }
-
-        if (!co_await _auth_service->underlying_role_manager().is_superuser(*_user->name)) {
-            throw exceptions::unauthorized_exception(
-                    format("Only superusers are allowed to {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
-        }
-    }
 
     if (forbidden_permissions.contains(cmd.permission)) {
         if ((ks == db::system_distributed_keyspace::NAME || ks == db::system_distributed_keyspace::NAME_EVERYWHERE)
@@ -135,10 +124,28 @@ future<> service::client_state::check_internal_table_permissions(std::string_vie
                 || table_name == db::system_distributed_keyspace::CDC_TOPOLOGY_DESCRIPTION
                 || table_name == db::system_distributed_keyspace::CDC_TIMESTAMPS
                 || table_name == db::system_distributed_keyspace::CDC_GENERATIONS_V2)) {
-            throw exceptions::unauthorized_exception(
-                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource));
+            return make_exception_future(exceptions::unauthorized_exception(
+                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
         }
     }
+
+    if (service::paxos::paxos_store::try_get_base_table(table_name)) {
+        if (forbidden_permissions.contains(cmd.permission)) {
+            return make_exception_future(exceptions::unauthorized_exception(
+                    format("Cannot {} {}", auth::permissions::to_string(cmd.permission), cmd.resource)));
+        }
+
+        return _auth_service->underlying_role_manager().is_superuser(*_user->name)
+            .then([&cmd](bool is_superuser) {
+                return is_superuser
+                    ? make_ready_future<>()
+                    : make_exception_future(exceptions::unauthorized_exception(
+                        format("Only superusers are allowed to {} {}", 
+                            auth::permissions::to_string(cmd.permission), cmd.resource)));
+            });
+    }
+
+    return make_ready_future<>();
 }
 
 future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
