@@ -13,6 +13,8 @@
 #include <vector>
 
 #include "bytes_ostream.hh"
+#include "cql3/type_json.hh"
+#include "db/marshal/type_parser.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
@@ -24,9 +26,11 @@
 #include "types/vector.hh"
 #include "utils/big_decimal.hh"
 #include "utils/fragment_range.hh"
+#include "utils/managed_bytes.hh"
 #include "utils/multiprecision_int.hh"
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/rjson.hh"
 
 BOOST_AUTO_TEST_CASE(test_comparable_bytes_opt) {
     BOOST_REQUIRE(comparable_bytes::from_data_value(data_value::make_null(int32_type)) == comparable_bytes_opt());
@@ -825,29 +829,40 @@ SEASTAR_TEST_CASE(test_compatibility) {
                 std::string curr_line = input_buffer.substr(pos, end - pos);
                 pos = end + 1;
 
-                // Extract test data from curr_line
-                std::vector<std::string> csv_values;
-                std::istringstream line_stream(curr_line);
-                std::string current_value;
-                while (std::getline(line_stream, current_value, ',')) {
-                    csv_values.push_back(std::move(current_value));
-                }
-
                 // Test data has `type` followed by the test data in subsequent lines.
-                if (csv_values.size() == 1) {
+                // Extract them from curr_line.
+                if (curr_line.starts_with("org.apache.cassandra.db.marshal")) {
                     // This is the type line, parse it and continue to the next line.
-                    type = abstract_type::parse_type(csv_values[0]);
-                    testlog.info("testing compatibility of type: {}", type->cql3_type_name());
+                    type = db::marshal::type_parser::parse(std::string_view(curr_line));
+                    testlog.info("testing compatibility of type: {}",
+                        type->is_reversed() ? format("reversed<{}>", type->cql3_type_name()) : type->cql3_type_name());
                     continue;
                 }
 
-                // Test data has two columns: actual value and expected comparable bytes.
-                const auto serialized_bytes = type->from_string(csv_values[0]);
-                const auto expected_comparable_bytes = bytes_type->from_string(csv_values[1]);
+                // This line has the test data for the type.
+                // Test data has two columns: actual value and comparable bytes encoded by cassandra
+                const auto comma_pos = curr_line.rfind(',');
+                BOOST_REQUIRE_MESSAGE(comma_pos != std::string::npos, "invalid CSV entry");
+                const auto actual_value = curr_line.substr(0, comma_pos);
+                const auto origin_encoded_cb = comparable_bytes(managed_bytes(bytes_type->from_string(curr_line.substr(comma_pos + 1))));
 
-                comparable_bytes comparable_bytes(*type, managed_bytes_view(serialized_bytes));
-                BOOST_REQUIRE_MESSAGE(comparable_bytes.as_managed_bytes_view() == managed_bytes_view(expected_comparable_bytes), seastar::value_of([&] () {
-                    return fmt::format("failed for type : {} and value : {}", type->cql3_type_name(), csv_values[0]);
+                bytes serialized_bytes;
+                if (type->is_native()) {
+                    serialized_bytes = type->from_string(actual_value);
+                } else {
+                    // Workaround for composite types as abstract_type::from_string() doesn't support them.
+                    serialized_bytes = from_json_object(*type, rjson::parse(actual_value));
+                }
+
+                // Verify encoding
+                comparable_bytes scylla_encoded_cb(*type, managed_bytes_view(serialized_bytes));
+                BOOST_REQUIRE_MESSAGE(scylla_encoded_cb == origin_encoded_cb, seastar::value_of([&] () {
+                    return fmt::format("encoding failed for value : {}", actual_value);
+                }));
+
+                // Verify decoding
+                BOOST_REQUIRE_MESSAGE(origin_encoded_cb.to_data_value(type) == type->deserialize(serialized_bytes), seastar::value_of([&] () {
+                    return fmt::format("decoding failed for value : {}", actual_value);
                 }));
             }
 
