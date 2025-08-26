@@ -332,8 +332,8 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
 cql_server::~cql_server() = default;
 
 shared_ptr<generic_server::connection>
-cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units, bool is_tls) {
-    return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units), is_tls);
+cql_server::make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) {
+    return make_shared<connection>(*this, server_addr, std::move(fd), std::move(addr), sem, std::move(initial_sem_units));
 }
 
 unsigned
@@ -633,13 +633,12 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
     });
 }
 
-cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units, bool is_tls)
+cql_server::connection::connection(cql_server& server, socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units)
     : generic_server::connection{server, std::move(fd), sem, std::move(initial_sem_units)}
     , _server(server)
     , _server_addr(server_addr)
     , _client_state(service::client_state::external_tag{}, server._auth_service, &server._sl_controller, server.timeout_config(), addr)
     , _current_scheduling_group(default_scheduling_group())
-    , _is_tls(is_tls)
 {
     _shedding_timer.set_callback([this] {
         clogger.debug("Shedding all incoming requests due to overload");
@@ -664,7 +663,7 @@ cql_server::connection::~connection() {
     }
 }
 
-future<client_data> cql_server::connection::make_client_data() const {
+client_data cql_server::connection::make_client_data() const {
     client_data cd;
     cd.ip = _client_state.get_client_address().addr();
     cd.port = _client_state.get_client_port();
@@ -683,21 +682,11 @@ future<client_data> cql_server::connection::make_client_data() const {
     cd.scheduling_group_name = _current_scheduling_group.name();
     cd.hostname = fmt::format("{}", _client_state.get_remote_address().addr());
 
-    try {
-        if (_is_tls) {
-            cd.ssl_enabled = true;
-            // Note that even though we're yielding, the underlying Seastar's TLS API returns immediately for a connected socket.
-            cd.ssl_protocol = co_await tls::get_protocol_version(_fd);
-            cd.ssl_cipher_suite = co_await tls::get_cipher_suite(_fd);
-        } else {
-            cd.ssl_enabled = false;
-        }
-    } catch (...) {
-        cd.ssl_enabled = false;
-        cd.ssl_protocol.reset();
-        cd.ssl_cipher_suite.reset();
-    }
-    co_return cd;
+    cd.ssl_enabled = _ssl_enabled;
+    cd.ssl_protocol = _ssl_protocol;
+    cd.ssl_cipher_suite = _ssl_cipher_suite;
+
+    return cd;
 }
 
 thread_local cql_server::connection::execution_stage_type
@@ -2201,18 +2190,12 @@ const cql3::cql_metadata_id_type& cql_metadata_id_wrapper::get_response_metadata
 }
 
 future<utils::chunked_vector<client_data>> cql_server::get_client_data() {
-    return do_with(utils::chunked_vector<client_data>(), std::vector<future<>>{}, [this](auto& ret, auto& pending) {
-        return for_each_gently([&ret, &pending](generic_server::connection& c) {
-            auto& conn = static_cast<connection&>(c);
-            pending.emplace_back(conn.make_client_data().then([&ret](client_data cd) {
-                ret.emplace_back(std::move(cd));
-            }));
-        }).then([&ret, &pending]() mutable {
-            return when_all_succeed(pending.begin(), pending.end()).discard_result().then([&ret]() mutable {
-                return make_ready_future<utils::chunked_vector<client_data>>(std::move(ret));
-            });
-        });
+    utils::chunked_vector<client_data> ret;
+    co_await for_each_gently([&ret] (const generic_server::connection& c) {
+        const connection& conn = dynamic_cast<const connection&>(c);
+        ret.emplace_back(conn.make_client_data());
     });
+    co_return ret;
 }
 
 future<> cql_server::update_connections_scheduling_group() {
