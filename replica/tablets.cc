@@ -432,15 +432,15 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
     muts.reserve(tm.all_tables_ungrouped().size());
     for (auto&& [base_id, tables] : tm.all_table_groups()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
-        const auto& shared_map = tm.get_shared_tablet_map(base_id);
+        const auto& shared_map = *tm.get_tablet_map(base_id).shared;
         auto s = db.find_schema(base_id);
         muts.emplace_back(
-                co_await tablet_map_to_mutation(shared_map, tm.get_per_table_tablet_map(base_id), base_id, s->ks_name(), s->cf_name(), ts, db.features()));
+                co_await tablet_map_to_mutation(shared_map, *tm.get_tablet_map(base_id).per_table, base_id, s->ks_name(), s->cf_name(), ts, db.features()));
         for (auto id : tables) {
             if (id != base_id) {
                 auto s = db.find_schema(id);
                 muts.emplace_back(
-                        colocated_tablet_map_to_mutation(shared_map, tm.get_per_table_tablet_map(id), id, s->ks_name(), s->cf_name(), base_id, ts, db.features()));
+                        colocated_tablet_map_to_mutation(shared_map, *tm.get_tablet_map(id).per_table, id, s->ks_name(), s->cf_name(), base_id, ts, db.features()));
             }
         }
     }
