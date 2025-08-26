@@ -808,7 +808,7 @@ public:
         return (it != _table_load_stats->tables.end()) ? &it->second : nullptr;
     }
 
-    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info_view& info,
+    future<bool> needs_auto_repair(const locator::global_tablet_id& gid, const locator::tablet_info& info,
             const locator::repair_scheduler_config& config, const db_clock::time_point& now, db_clock::duration& diff) {
         co_return false;
     }
@@ -889,7 +889,7 @@ public:
             co_await coroutine::maybe_yield();
             auto& config = tmap.repair_scheduler_config();
             auto now = db_clock::now();
-            co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info_view& info) -> future<> {
+            co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
                 auto gid = locator::global_tablet_id{table, id};
                 // Skip tablet that is in transitions.
                 auto* tti = tmap.get_tablet_transition_info(id);
@@ -965,9 +965,9 @@ public:
     // Returns true if a table has replicas of all its sibling tablets co-located.
     // This is used for determining whether merge can be finalized, since co-location
     // is a strict requirement for sibling tablets to be merged.
-    future<bool> all_sibling_tablet_replicas_colocated(table_id table, const tablet_map_view& tmap) {
+    future<bool> all_sibling_tablet_replicas_colocated(table_id table, const tablet_map& tmap) {
         bool all_colocated = true;
-        co_await tmap.for_each_sibling_tablets([&] (tablet_desc_view t1, std::optional<tablet_desc_view> t2_opt) -> future<> {
+        co_await tmap.for_each_sibling_tablets([&] (tablet_desc t1, std::optional<tablet_desc> t2_opt) -> future<> {
             // FIXME: introduce variant of for_each_sibling_tablets() that accepts stop_iteration.
             if (!all_colocated) {
                 return make_ready_future<>();
@@ -1606,7 +1606,7 @@ public:
                                   table, tmap.resize_decision().sequence_number);
                 }
             // If all sibling tablets are co-located across all DCs, then merge can be finalized.
-            } else if (tmap.needs_merge() && co_await all_sibling_tablet_replicas_colocated(table, _tm->tablets().get_tablet_map_view(table)) && !bypass_merge_completion()) {
+            } else if (tmap.needs_merge() && co_await all_sibling_tablet_replicas_colocated(table, _tm->tablets().get_tablet_map(table)) && !bypass_merge_completion()) {
                 finalize_decision();
                 lblogger.info("Finalizing resize decision for table {} as all replicas are co-located", table);
             }
@@ -3356,7 +3356,7 @@ private:
     // So a tablet of id 0 is remapped into ids 0 and 1. Another of id 1 is remapped
     // into ids 2 and 3, and so on.
     future<std::pair<shared_tablet_map, per_table_tablet_map>> split_tablets(token_metadata_ptr tm, table_id table) {
-        auto& tablets = tm->tablets().get_tablet_map_view(table);
+        auto& tablets = tm->tablets().get_tablet_map(table);
 
         shared_tablet_map new_tablets(tablets.tablet_count() * 2);
         per_table_tablet_map new_per_table_tablets;
@@ -3384,7 +3384,7 @@ private:
     // The merging of tablet is completely based on the power-of-two constraint.
     // Tablet of ids X and X+1 are merged into new tablet id (X >> 1).
     future<std::pair<shared_tablet_map, per_table_tablet_map>> merge_tablets(token_metadata_ptr tm, table_id table) {
-        auto& tablets = tm->tablets().get_tablet_map_view(table);
+        auto& tablets = tm->tablets().get_tablet_map(table);
 
         shared_tablet_map new_tablets(tablets.tablet_count() / 2);
         per_table_tablet_map new_per_table_tablets;

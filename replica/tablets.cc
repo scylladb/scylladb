@@ -806,7 +806,7 @@ struct tablet_metadata_builder {
         }
 
         for (auto& [table, tablet_token] : update_repair_time) {
-            const auto& map = tm.get_tablet_map_view(table);
+            const auto& map = tm.get_tablet_map(table);
             auto tid = map.get_tablet_id(tablet_token);
             auto myid = db.get_token_metadata().get_my_id();
             auto range = map.get_token_range(tid);
