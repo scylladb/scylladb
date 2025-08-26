@@ -42,7 +42,7 @@ private:
 
     dht::shard_replica_set choose_shard_for_writes(tablet_id tid, host_id host, std::optional<write_replica_set_selector> sel = std::nullopt) const {
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
-        auto& tinfo = _tmap->get_tablet_info(tid);
+        const auto& tinfo = _tmap->get_tablet_info(tid);
         dht::shard_replica_set shards;
 
         auto push_from = [&](const tablet_replica_set& replicas) {
@@ -62,7 +62,7 @@ private:
                         shards.push_back(trinfo->pending_replica->shard);
                         [[fallthrough]];
                     case write_replica_set_selector::previous:
-                        push_from(tinfo.replicas);
+                        push_from(tinfo.replicas());
                         break;
                     case write_replica_set_selector::next:
                         shards.push_back(trinfo->pending_replica->shard);
@@ -72,7 +72,7 @@ private:
                 shards.push_back(trinfo->pending_replica->shard);
             }
         } else {
-            push_from(tinfo.replicas);
+            push_from(tinfo.replicas());
         }
 
         return shards;
@@ -81,22 +81,22 @@ private:
     std::optional<shard_id> choose_shard_for_reads(tablet_id tid, host_id host) const {
         ensure_tablet_map();
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
-        auto& tinfo = _tmap->get_tablet_info(tid);
+        const auto& tinfo = _tmap->get_tablet_info(tid);
 
         if (!trinfo) {
-            return get_shard(tinfo.replicas, host);
+            return get_shard(tinfo.replicas(), host);
         }
 
         // See "Shard assignment stability" from doc/dev/topology-over-raft.md for explanation of logic.
 
         if (trinfo->pending_replica && trinfo->pending_replica->host == host) {
             if (trinfo->transition == tablet_transition_kind::intranode_migration && trinfo->reads == read_replica_set_selector::previous) {
-                return get_shard(tinfo.replicas, host);
+                return get_shard(tinfo.replicas(), host);
             }
             return trinfo->pending_replica->shard;
         }
 
-        return get_shard(tinfo.replicas, host);
+        return get_shard(tinfo.replicas(), host);
     }
 public:
     tablet_sharder(const token_metadata& tm, table_id table, std::optional<host_id> host = std::nullopt)
@@ -160,9 +160,9 @@ public:
         auto tid = _tmap->get_tablet_id(t);
 
         auto* trinfo = _tmap->get_tablet_transition_info(tid);
-        auto& tinfo = _tmap->get_tablet_info(tid);
+        const auto& tinfo = _tmap->get_tablet_info(tid);
 
-        auto shard = get_shard(tinfo.replicas, _host).value_or(0);
+        auto shard = get_shard(tinfo.replicas(), _host).value_or(0);
 
         if (!trinfo) {
             return {shard};
