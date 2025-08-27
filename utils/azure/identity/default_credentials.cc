@@ -40,25 +40,25 @@ future<> default_credentials::detect(const resource_type& resource_uri) {
         co_return;
     }
     if (_sources.contains<source::Env>()) {
-        az_creds_logger.debug("[{}] Detecting credentials in environment", *this);
+        az_creds_logger.info("[{}] Detecting credentials in environment", *this);
         if (auto creds = co_await get_credentials_from_env(resource_uri)) {
-            az_creds_logger.debug("[{}] Credentials found in environment!", *this);
+            az_creds_logger.info("[{}] Credentials found in environment!", *this);
             _creds = std::move(*creds);
             co_return;
         }
     }
     if (_sources.contains<source::AzureCli>()) {
-        az_creds_logger.debug("[{}] Detecting credentials in CLI", *this);
+        az_creds_logger.info("[{}] Detecting credentials in CLI", *this);
         if (auto creds = co_await get_credentials_from_azure_cli(resource_uri)) {
-            az_creds_logger.debug("[{}] Credentials found in CLI!", *this);
+            az_creds_logger.info("[{}] Credentials found in CLI!", *this);
             _creds = std::move(*creds);
             co_return;
         }
     }
     if (_sources.contains<source::Imds>()) {
-        az_creds_logger.debug("[{}] Detecting credentials in IMDS", *this);
+        az_creds_logger.info("[{}] Detecting credentials in IMDS", *this);
         if (auto creds = co_await get_credentials_from_imds(resource_uri)) {
-            az_creds_logger.debug("[{}] Credentials found in IMDS!", *this);
+            az_creds_logger.info("[{}] Credentials found in IMDS!", *this);
             _creds = std::move(*creds);
             co_return;
         }
@@ -75,15 +75,21 @@ future<default_credentials::credentials_opt> default_credentials::get_credential
     auto creds_found = tenant_id || client_id || client_secret || client_certificate_path;
     auto creds_complete = tenant_id && client_id && (client_secret || client_certificate_path);
     if (!creds_found) {
-        az_creds_logger.debug("[{}] No credentials found in environment", *this);
+        az_creds_logger.info("[{}] No credentials found in environment", *this);
         co_return std::nullopt;
     } else if (!creds_complete) {
-        az_creds_logger.debug("[{}] Incomplete credentials. Both 'AZURE_TENANT_ID' and 'AZURE_CLIENT_ID', and at least one of 'AZURE_CLIENT_SECRET', 'AZURE_CLIENT_CERTIFICATE_PATH' must be provided. Currently:", *this);
-        az_creds_logger.debug("[{}] Tenant ID is {}set", *this, tenant_id ? "" : "NOT ");
-        az_creds_logger.debug("[{}] Client ID is {}set", *this, client_id ? "" : "NOT ");
-        az_creds_logger.debug("[{}] Client Secret is {}set", *this, client_secret ? "" : "NOT ");
-        az_creds_logger.debug("[{}] Client Certificate is {}set", *this, client_certificate_path ? "" : "NOT ");
-        az_creds_logger.debug("[{}] Authority host is {}set", *this, authority ? "" : "NOT ");
+        az_creds_logger.info("[{}] Incomplete credentials. Both 'AZURE_TENANT_ID' and 'AZURE_CLIENT_ID', and at least one of 'AZURE_CLIENT_SECRET', 'AZURE_CLIENT_CERTIFICATE_PATH' must be provided. Currently:\n"
+                "Tenant ID is {}set\n"
+                "Client ID is {}set\n"
+                "Client Secret is {}set\n"
+                "Client Certificate is {}set\n"
+                "Authority host is {}set",
+                *this,
+                tenant_id ? "" : "NOT ",
+                client_id ? "" : "NOT ",
+                client_secret ? "" : "NOT ",
+                client_certificate_path ? "" : "NOT ",
+                authority ? "" : "NOT ");
         co_return std::nullopt;
     }
     auto creds = std::make_unique<service_principal_credentials>(
@@ -98,7 +104,7 @@ future<default_credentials::credentials_opt> default_credentials::get_credential
     try {
         co_await creds->get_access_token(resource_uri);
     } catch (auth_error& e) {
-        az_creds_logger.debug("[{}] Failed to obtain token from environment: {}", *this, e.what());
+        az_creds_logger.info("[{}] Failed to obtain token from environment: {}", *this, e.what());
         co_return std::nullopt;
     }
     co_return creds;
@@ -109,7 +115,7 @@ future<default_credentials::credentials_opt> default_credentials::get_credential
     try {
         co_await creds->get_access_token(resource_uri);
     } catch (auth_error& e) {
-        az_creds_logger.debug("[{}] Failed to obtain token from Azure CLI: {}", *this, e.what());
+        az_creds_logger.info("[{}] Failed to obtain token from Azure CLI: {}", *this, e.what());
         co_return std::nullopt;
     }
     co_return creds;
@@ -134,10 +140,10 @@ future<default_credentials::credentials_opt> default_credentials::get_credential
     try {
         co_await creds->get_access_token(resource_uri);
     } catch (timed_out_error&) {
-        az_creds_logger.debug("[{}] Failed to connect to IMDS.", *this);
+        az_creds_logger.info("[{}] Failed to connect to IMDS.", *this);
         co_return std::nullopt;
     } catch (auth_error& e) {
-        az_creds_logger.debug("[{}] Got unexpected return from IMDS: {}", *this, e.what());
+        az_creds_logger.info("[{}] Got unexpected return from IMDS: {}", *this, e.what());
         co_return std::nullopt;
     }
     co_return creds;
