@@ -14,6 +14,8 @@ import asyncio
 import shlex
 from random import randint
 
+import pytest
+
 from types import SimpleNamespace
 
 import colorama
@@ -310,7 +312,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         logging.info(f'No boost found. Skipping pytest execution for boost tests.')
         return 0, []
     args = [
-        'pytest',
         "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
@@ -353,30 +354,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.markers:
         args.append(f'-m={options.markers}')
     args.extend(files_to_run)
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
-    try:
-        # Read output from pytest and print it to the console
-        if options.verbose:
-            for line in p.stdout:
-                print(line, end='', flush=True)
-        else:
-            # without verbose, pytest output only one line, so to have live progress, need to read it by char,
-            # because each char is a test result
-            while True:
-                char = p.stdout.read(1)
-                if char == '' and p.poll() is not None:
-                    break
-                if char:
-                    print(char, end='', flush=True)
-
-        # Wait for pytest to finish and get its return code
-        p.wait(timeout=60)
-    except subprocess.TimeoutExpired:
-        print('Timeout reached')
-        p.kill()
-    except KeyboardInterrupt:
-        p.kill()
-        raise
+    pytest.main(args=args)
 
     if options.list_tests:
         return 0, []
