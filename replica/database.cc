@@ -1092,6 +1092,7 @@ future<> database::drop_table_on_all_shards(sharded<database>& sharded_db, shard
         return table_shards->stop();
     });
     f.get(); // re-throw exception from truncate() if any
+    co_await sys_ks.local().remove_truncation_records(table_shards->schema()->id());
     co_await table_shards->destroy_storage();
 }
 
