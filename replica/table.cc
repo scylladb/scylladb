@@ -4090,6 +4090,12 @@ future<> storage_group::stop(sstring reason) noexcept {
     // picking this group that is being stopped.
     auto closed_gate_fut = _async_gate.close();
 
+    co_await utils::get_local_injector().inject("wait_before_stop_compaction_groups", [] (auto& handler) -> future<> {
+        dblog.info("wait_before_stop_compaction_groups: wait");
+        co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+        dblog.info("wait_before_stop_compaction_groups: done");
+    }, false);
+
     // Synchronizes with in-flight writes if any, and also takes care of flushing if needed.
 
     // The reason we have to stop main cg first, is because an ongoing split always run in main cg
