@@ -406,34 +406,19 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
                 continue;
             }
             // Move the processing into the background.
-            (void)futurize_invoke([this, conn, is_tls] {
-                // Build a future<> that completes after TLS info is populated (or reset on failure).
-                future<> tls_init = make_ready_future<>();
-
+            (void)futurize_invoke([this, conn, is_tls] -> future<> {
                 if (is_tls) {
                     conn->_ssl_enabled = true;
-
-                    tls_init = tls::get_protocol_version(conn->_fd).then([conn](const sstring& protocol) {
-                        conn->_ssl_protocol = protocol;
-                        return tls::get_cipher_suite(conn->_fd);
-                    }).then([conn](const sstring& cipher_suite) {
-                        conn->_ssl_cipher_suite = cipher_suite;
-                        return make_ready_future<>();
-                    }).handle_exception([conn](std::exception_ptr) {
-                        conn->_ssl_enabled = true;
-                        conn->_ssl_protocol.reset();
-                        conn->_ssl_cipher_suite.reset();
-                    });
-                } else {
-                    conn->_ssl_enabled = false;
-                    conn->_ssl_protocol.reset();
-                    conn->_ssl_cipher_suite.reset();
+                    try {
+                        conn->_ssl_protocol = co_await tls::get_protocol_version(conn->_fd);
+                        conn->_ssl_cipher_suite = co_await tls::get_cipher_suite(conn->_fd);
+                    } catch (...) {
+                        conn->_ssl_protocol = "unknown";
+                        conn->_ssl_cipher_suite = "unknown";
+                    }
                 }
-
-                return tls_init.then([conn] {
-                    // Block while monitoring for lifetime/errors.
-                    return conn->process();
-                }).then_wrapped([this, conn](auto f) {
+                // Block while monitoring for lifetime/errors.
+                co_return co_await conn->process().then_wrapped([this, conn] (auto f) {
                     try {
                         f.get();
                     } catch (...) {
@@ -451,5 +436,4 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
         }
     }
 }
-
 }

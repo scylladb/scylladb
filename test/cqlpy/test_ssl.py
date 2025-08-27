@@ -73,10 +73,12 @@ def test_system_clients_stores_tls_info(cql):
     # to reconsider this test.
     with try_connect(cql.cluster, ssl.TLSVersion.TLSv1_2) as session:
         table_result = session.execute(f"SELECT * FROM system.clients")
+        print(f"system.clients has {len(table_result.current_rows)} rows")
+        rows_count = len(table_result.current_rows)
         for row in table_result:
             assert row.ssl_enabled
             assert row.hostname == '127.0.0.1'
-            assert row.ssl_protocol == 'TLS1.2'
+            assert row.ssl_protocol == 'TLS1.2', f"system.clients has {len(table_result.current_rows)} rows"
             expected_ciphers = [normalize_cipher(cipher['name']) for cipher in ssl.create_default_context().get_ciphers()]
             actual_cipher = normalize_cipher(row.ssl_cipher_suite)
             assert actual_cipher in expected_ciphers
