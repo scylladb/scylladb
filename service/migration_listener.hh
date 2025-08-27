@@ -32,6 +32,7 @@ class function_name;
 }
 namespace locator {
 class tablet_metadata_change_hint;
+class tablet_map;
 }
 
 #include "timestamp.hh"
@@ -86,6 +87,8 @@ public:
     virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+
+    virtual void on_before_allocate_tablet_map(const locator::tablet_map&, const schema& s, utils::chunked_vector<mutation>&, api::timestamp_type) {}
 
     class only_view_notifications;
     class empty_listener;
@@ -159,6 +162,8 @@ public:
     void before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type);
     void before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
     void before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type);
+
+    void before_allocate_tablet_map(const locator::tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
 };
 
 }

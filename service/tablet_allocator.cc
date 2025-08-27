@@ -3236,19 +3236,29 @@ public:
             // if the base is a new table, allocate new tablets for it.
             // for the other tables in the group, create a co-located tablet map.
             for (const auto& [base_id, group_schemas] : table_groups) {
-                if (auto it = new_cfms_map.find(base_id); it != new_cfms_map.end()) {
-                    const auto& s = *it->second;
+
+                auto create_colocated_tablet_maps = [&] (const tablet_map& base_map) {
+                    for (auto sp : group_schemas) {
+                        const auto& s = *sp;
+                        if (s.id() != base_id) {
+                            lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
+                            muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_id, ts));
+                            _db.get_notifier().before_allocate_tablet_map(base_map, s, muts, ts);
+                        }
+                    }
+                };
+
+                if (tm->tablets().has_tablet_map(base_id)) {
+                    const auto& base_map = tm->tablets().get_tablet_map(base_id);
+                    create_colocated_tablet_maps(base_map);
+                } else {
+                    const auto& s = *new_cfms_map[base_id];
                     lblogger.debug("Creating tablets for {}.{} id={}", s.ks_name(), s.cf_name(), s.id());
                     auto base_map = allocate_tablets_for_new_base_table(tablet_rs, s);
-                    muts.emplace_back(tablet_map_to_mutation(std::move(base_map), s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
-                }
+                    muts.emplace_back(tablet_map_to_mutation(base_map, s.id(), s.ks_name(), s.cf_name(), ts, _db.features()).get());
+                    _db.get_notifier().before_allocate_tablet_map(base_map, s, muts, ts);
 
-                for (auto sp : group_schemas) {
-                    const auto& s = *sp;
-                    if (s.id() != base_id) {
-                        lblogger.debug("Creating tablets for {}.{} id={} with base={}", s.ks_name(), s.cf_name(), s.id(), base_id);
-                        muts.emplace_back(colocated_tablet_map_to_mutation(s.id(), s.ks_name(), s.cf_name(), base_id, ts));
-                    }
+                    create_colocated_tablet_maps(base_map);
                 }
             }
         }
