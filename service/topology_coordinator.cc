@@ -123,6 +123,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     service::topology_state_machine& _topo_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
+    qos::service_level_controller& _sl_controller;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -3079,12 +3080,14 @@ public:
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
             gms::feature_service& feature_service,
+            qos::service_level_controller& sl_controller,
             topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _tablet_load_stats_refresh_interval_in_seconds(db.get_config().tablet_load_stats_refresh_interval_in_seconds)
         , _group0(group0), _topo_sm(topo_sm), _as(as)
         , _feature_service(feature_service)
+        , _sl_controller(sl_controller)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
@@ -3710,6 +3713,7 @@ future<> run_topology_coordinator(
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
+        qos::service_level_controller& sl_controller,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker) {
 
     topology_coordinator coordinator{
@@ -3719,6 +3723,7 @@ future<> run_topology_coordinator(
             tablet_allocator,
             ring_delay,
             feature_service,
+            sl_controller,
             topology_cmd_rpc_tracker};
 
     std::exception_ptr ex;

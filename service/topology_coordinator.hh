@@ -17,6 +17,7 @@
 #include "raft/raft.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/topology_state_machine.hh"
+#include "service/qos/service_level_controller.hh"
 
 namespace db {
 class system_keyspace;
@@ -78,6 +79,7 @@ future<> run_topology_coordinator(
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
+        qos::service_level_controller& sl_controller,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);
 
 }
