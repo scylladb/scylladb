@@ -1066,9 +1066,14 @@ bool table::all_storage_groups_split() {
 }
 
 future<sstables::compaction_type_options::split> tablet_storage_group_manager::split_compaction_options() const noexcept {
-    co_return sstables::compaction_type_options::split([this](dht::token t) {
+    // Split must work with a snapshot of tablet map, since it expects stability
+    // throughout its execution.
+    auto erm = _t.get_effective_replication_map();
+    auto tablet_map_ptr = co_await erm->get_token_metadata().tablets().get_tablet_map_ptr(schema()->id());
+
+    co_return sstables::compaction_type_options::split([tablet_map_ptr = make_lw_shared(std::move(tablet_map_ptr))] (dht::token t) {
         // Classifies the input stream into either left or right side.
-        auto [_, side] = storage_group_of(t);
+        auto [_, side] = (*tablet_map_ptr)->get_tablet_id_and_range_side(t);
         return mutation_writer::token_group_id(side);
     });
 }
