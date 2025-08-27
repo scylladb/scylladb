@@ -69,7 +69,7 @@ bool cdc::metadata::streams_available() const {
     return  it != _gens.end();
 }
 
-cdc::stream_id cdc::metadata::get_stream(api::timestamp_type ts, dht::token tok) {
+cdc::stream_id cdc::metadata::get_vnode_stream(api::timestamp_type ts, dht::token tok) {
     auto now = api::new_timestamp();
     if (ts > now + get_generation_leeway().count()) {
         throw exceptions::invalid_request_exception(seastar::format(
