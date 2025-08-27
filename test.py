@@ -16,6 +16,8 @@ import shlex
 import socket
 from random import randint
 
+import pytest
+
 from types import SimpleNamespace
 
 import colorama
@@ -302,7 +304,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         expression += f'{"and not ".join(options.skip_patterns)}'
     modes = ' '.join(f'--mode={mode}' for mode in options.modes)
     args = [
-        'pytest',
         "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
@@ -336,6 +337,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.markers:
         args.append(f"-m={options.markers}")
     args.extend(files_to_run)
+<<<<<<< HEAD
 
     args = shlex.split(' '.join(args))
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
@@ -362,6 +364,34 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     except KeyboardInterrupt:
         p.kill()
         raise
+||||||| parent of 7e34d5aa28 (test.py: start pytest as a module instead of subprocess)
+    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
+    try:
+        # Read output from pytest and print it to the console
+        if options.verbose:
+            for line in p.stdout:
+                print(line, end='', flush=True)
+        else:
+            # without verbose, pytest output only one line, so to have live progress, need to read it by char,
+            # because each char is a test result
+            while True:
+                char = p.stdout.read(1)
+                if char == '' and p.poll() is not None:
+                    break
+                if char:
+                    print(char, end='', flush=True)
+
+        # Wait for pytest to finish and get its return code
+        p.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        print('Timeout reached')
+        p.kill()
+    except KeyboardInterrupt:
+        p.kill()
+        raise
+=======
+    pytest.main(args=args)
+>>>>>>> 7e34d5aa28 (test.py: start pytest as a module instead of subprocess)
 
     if options.list_tests:
         return 0, []
