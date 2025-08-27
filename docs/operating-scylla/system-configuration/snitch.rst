@@ -36,12 +36,16 @@ SimpleSnitch
 Use the SimpleSnitch when working with single cluster deployments and all the nodes are under the same datacenter.
 The SimpleSnitch binds all the nodes to the same Rack and datacenter and is recommended to be used only in single datacenter deployments.
 
+The name of the datacenter is set to ``datacenter1``, while the name of the rack—to ``rack1``.
+
 .. _snitch-rack-inferring-snitch:
 
 RackInferringSnitch
 ...................
 
 RackInferringSnitch binds nodes to DCs and racks according to their broadcast IP addresses.
+The name of the DC will correspond to the number represented by the second octet of bits
+in the address, while the name of the rack—to the third octet.
 
 
 For Example:
@@ -67,6 +71,7 @@ For Example:
    dc=my_data_center 
    rack=my_rack
 
+When using this snitch, it is mandatory to provide both the name of the datacenter and the name of the rack.
 
 Setting *prefer_local* to *true* instructs ScyllaDB to use an internal IP address for interactions with nodes in the same DC.
 
