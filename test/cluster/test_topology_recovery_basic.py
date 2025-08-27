@@ -20,6 +20,7 @@ from test.cluster.util import enter_recovery_state, \
 from test.cluster.conftest import cluster_con
 
 
+@pytest.mark.nightly
 @pytest.mark.asyncio
 @log_run_time
 async def test_topology_recovery_basic(request, build_mode: str, manager: ManagerClient):
