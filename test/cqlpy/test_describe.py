@@ -1197,6 +1197,66 @@ def test_describe_cdc_log_table_opts(scylla_only, cql, test_keyspace, cdc_enable
     test_config("speculative_retry = '17.0PERCENTILE'")
     test_config("tombstone_gc = {'mode': 'immediate', 'propagation_delay_in_seconds': '17'}")
 
+# Verify that describing the underlying materialized view of a secondary index
+# produces a `CREATE MATERIALIZED VIEW` statement, and that the statement
+# is commented out with a proper explanation.
+#
+# Reproducer of scylladb/scylladb#24610.
+def test_describe_underlying_mv_of_index(scylla_only, cql, test_keyspace):
+    index_name = unique_name()
+    mv_name = f"{index_name}_index"
+
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        with new_secondary_index(cql, table, "v", index_name):
+            result = cql.execute(f"DESCRIBE MATERIALIZED VIEW {test_keyspace}.{mv_name}").one()
+
+            # Sanity checks.
+            assert result.keyspace_name == test_keyspace
+            assert result.type == "view"
+            assert result.name == mv_name
+
+            assert hasattr(result, "create_statement")
+            assert f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_name}" in result.create_statement
+
+            prefix = "/* Do NOT execute this statement! It's only for informational purposes.\n" \
+                     "   This materialized view is the underlying materialized view of a secondary\n" \
+                     "   index. It can be restored via restoring the index.\n" \
+                     "\n"
+            suffix = "*/"
+
+            assert result.create_statement.startswith(prefix)
+            assert result.create_statement.endswith(suffix)
+
+# Verify that describing the underlying materialized view of an unnamed secondary index
+# produces a `CREATE MATERIALIZED VIEW` statement, and that the statement
+# is commented out with a proper explanation.
+#
+# Reproducer of scylladb/scylladb#24610.
+def test_describe_underlying_mv_of_unnamed_index(scylla_only, cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        _, table_name = table.split(".")
+        index_name = f"{table_name}_v_idx"
+        mv_name = f"{index_name}_index"
+
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+        result = cql.execute(f"DESCRIBE MATERIALIZED VIEW {test_keyspace}.{mv_name}").one()
+
+        # Sanity checks.
+        assert result.keyspace_name == test_keyspace
+        assert result.type == "view"
+        assert result.name == mv_name
+
+        assert hasattr(result, "create_statement")
+        assert f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_name}" in result.create_statement
+
+        prefix = "/* Do NOT execute this statement! It's only for informational purposes.\n" \
+                 "   This materialized view is the underlying materialized view of a secondary\n" \
+                 "   index. It can be restored via restoring the index.\n" \
+                 "\n"
+        suffix = "*/"
+
+        assert result.create_statement.startswith(prefix)
+        assert result.create_statement.endswith(suffix)
 
 ### =========================== UTILITY FUNCTIONS =============================
 
