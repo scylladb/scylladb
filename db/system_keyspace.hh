@@ -439,6 +439,7 @@ public:
     future<> save_truncation_record(const replica::column_family&, db_clock::time_point truncated_at, db::replay_position);
     future<replay_positions> get_truncated_positions(table_id);
     future<> drop_truncation_rp_records();
+    future<> remove_truncation_records(table_id);
 
     // Converts a `dht::token_range` object to the left-open integer range (x,y] form.
     //
