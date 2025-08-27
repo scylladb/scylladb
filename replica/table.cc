@@ -3186,8 +3186,13 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
     // materialized view was created right after truncation started, and it
     // would not have compaction disabled when this function is called on it.
     if (!schema()->is_view()) {
-        auto compaction_disabled = std::ranges::all_of(storage_groups() | std::views::values,
-                                                       std::mem_fn(&storage_group::compaction_disabled));
+        // Check if the storage groups have compaction disabled, but also check if they have been stopped.
+        // This is to avoid races with tablet cleanup which stops the storage group, and then stops the
+        // compaction groups. We could have a situation where compaction couldn't have been disabled by
+        // truncate because the storage group has been stopped, but the compaction groups have not yet been stopped.
+        auto compaction_disabled = std::ranges::all_of(storage_groups() | std::views::values, [] (const storage_group_ptr& sgp) {
+            return sgp->async_gate().is_closed() || sgp->compaction_disabled();
+        });
         if (!compaction_disabled) {
             utils::on_internal_error(fmt::format("compaction not disabled on table {}.{} during TRUNCATE",
                 schema()->ks_name(), schema()->cf_name()));
