@@ -1109,9 +1109,14 @@ bool table::all_storage_groups_split() {
 }
 
 future<sstables::compaction_type_options::split> tablet_storage_group_manager::split_compaction_options() const noexcept {
-    co_return sstables::compaction_type_options::split([this](dht::token t) {
+    // Split must work with a snapshot of tablet map, since it expects stability
+    // throughout its execution.
+    auto erm = _t.get_effective_replication_map();
+    auto tablet_map_ptr = co_await erm->get_token_metadata().tablets().get_tablet_map_ptr(schema()->id());
+
+    co_return sstables::compaction_type_options::split([tablet_map_ptr = make_lw_shared(std::move(tablet_map_ptr))] (dht::token t) {
         // Classifies the input stream into either left or right side.
-        auto [_, side] = storage_group_of(t);
+        auto [_, side] = (*tablet_map_ptr)->get_tablet_id_and_range_side(t);
         return mutation_writer::token_group_id(side);
     });
 }
@@ -3076,6 +3081,9 @@ void tablet_storage_group_manager::update_effective_replication_map(const locato
 // guarantees there is no tablet repair. The cm.stop_and_disable_compaction() ensures no compaction is running.
 future<> table::update_repaired_at_for_merge() {
     if (!uses_tablets()) {
+        co_return;
+    }
+    if (utils::get_local_injector().enter("skip_update_repaired_at_for_merge")) {
         co_return;
     }
     auto sgs = storage_groups();

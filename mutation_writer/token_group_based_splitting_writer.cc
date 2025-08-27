@@ -12,6 +12,7 @@
 #include <seastar/core/on_internal_error.hh>
 
 #include "mutation_writer/feed_writers.hh"
+#include "utils/error_injection.hh"
 
 namespace mutation_writer {
 
@@ -44,6 +45,7 @@ private:
         auto wr = std::exchange(_current_writer, std::nullopt);
         co_await wr->close();
         allocate_new_writer_if_needed();
+        co_await utils::get_local_injector().inject("splitting_mutation_writer_switch_wait", utils::wait_for_message(std::chrono::seconds(60)));
     }
 
     // Called frequently, hence yields (and allocates)
