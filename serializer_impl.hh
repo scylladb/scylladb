@@ -769,6 +769,12 @@ utils::input_stream as_input_stream(const bytes_ostream& b) {
     return utils::input_stream::fragmented(b.fragments().begin(), b.size());
 }
 
+template<FragmentedView View>
+inline
+auto as_input_stream(View v) {
+    return fragmented_memory_input_stream(fragment_range(v).begin(), v.size_bytes());
+}
+
 template<typename Output, typename ...T>
 void serialize(Output& out, const boost::variant<T...>& v) {}
 
