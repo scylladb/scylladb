@@ -1580,7 +1580,7 @@ public:
 
     // DON'T move the transformer after this
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
-        const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
+        const auto stream_id = _ctx._cdc_metadata.get_vnode_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
         _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());
