@@ -11,6 +11,7 @@
 #include <boost/functional/hash.hpp>
 #include <boost/icl/interval_map.hpp>
 #include <fmt/ranges.h>
+#include <ranges>
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -1749,9 +1750,15 @@ future<> system_keyspace::drop_truncation_rp_records() {
     auto rs = co_await execute_cql(req);
 
     bool any = false;
+    std::unordered_set<table_id> to_delete;
+    auto db = _qp.db();
     auto max_concurrency = std::min(1024u, smp::count * 8);
     co_await seastar::max_concurrent_for_each(*rs, max_concurrency, [&] (const cql3::untyped_result_set_row& row) -> future<> {
         auto table_uuid = table_id(row.get_as<utils::UUID>("table_uuid"));
+        if (!db.try_find_table(table_uuid)) {
+            to_delete.emplace(table_uuid);
+            co_return;
+        }
         auto shard = row.get_as<int32_t>("shard");
         auto segment_id = row.get_as<int64_t>("segment_id");
 
@@ -1761,9 +1768,24 @@ future<> system_keyspace::drop_truncation_rp_records() {
             co_await execute_cql(req);
         }
     });
+    if (!to_delete.empty()) {
+        // IN has a limit to how many values we can put into it.
+        for (auto&& chunk : to_delete | std::views::transform(&table_id::to_sstring) | std::views::chunk(100)) {
+            auto str = std::ranges::to<std::string>(chunk | std::views::join_with(','));
+            auto req = fmt::format("DELETE FROM system.{} WHERE table_uuid IN ({})", TRUNCATED, str);
+            co_await execute_cql(req);
+        }
+        any = true;
+    }
     if (any) {
         co_await force_blocking_flush(TRUNCATED);
     }
+}
+
+future<> system_keyspace::remove_truncation_records(table_id id) {
+    auto req = format("DELETE FROM system.{} WHERE table_uuid = {}", TRUNCATED, id);
+    co_await execute_cql(req);
+    co_await force_blocking_flush(TRUNCATED);
 }
 
 future<> system_keyspace::save_truncation_record(const replica::column_family& cf, db_clock::time_point truncated_at, db::replay_position rp) {
