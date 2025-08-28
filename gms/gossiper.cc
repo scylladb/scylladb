@@ -621,6 +621,13 @@ future<> gossiper::do_apply_state_locally(locator::host_id node, endpoint_state 
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await lock_endpoint(node, null_permit_id);
     auto es = get_endpoint_state_ptr(node);
+
+    // If remote state update does not contain a host id, check whether the endpoint still
+    // exists in the `_endpoint_state_map` since after a preemption point it could have been deleted.
+    if (!remote_state.get_host_id() && !es) {
+        throw std::runtime_error(format("Entry for host id {} does not exist in the endpoint state map.", node));
+    }
+
     if (es) {
         endpoint_state local_state = *es;
         auto local_generation = local_state.get_heart_beat_state().get_generation();
