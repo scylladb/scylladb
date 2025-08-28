@@ -3449,6 +3449,7 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
     auto view_exploded_ck = ck.explode();
     std::vector<bytes> base_exploded_pk(_base_schema->partition_key_size());
     std::vector<bytes> base_exploded_ck(_base_schema->clustering_key_size());
+    std::map<const column_definition*, bytes> view_key_cols_not_in_base_key;
     for (const column_definition& view_cdef : _view->all_columns()) {
         const column_definition* base_cdef = _base_schema->get_column_definition(view_cdef.name());
         if (base_cdef) {
@@ -3457,6 +3458,8 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
                 base_exploded_pk[base_cdef->id] = view_exploded_key[view_cdef.id];
             } else if (base_cdef->is_clustering_key()) {
                 base_exploded_ck[base_cdef->id] = view_exploded_key[view_cdef.id];
+            } else if (!base_cdef->is_computed() && view_cdef.is_primary_key()) {
+                view_key_cols_not_in_base_key[base_cdef] = view_exploded_key[view_cdef.id];
             }
         }
     }
@@ -3464,22 +3467,44 @@ void delete_ghost_rows_visitor::accept_new_row(const clustering_key& ck, const q
     clustering_key base_ck = clustering_key::from_exploded(base_exploded_ck);
 
     dht::partition_range_vector partition_ranges({dht::partition_range::make_singular(dht::decorate_key(*_base_schema, base_pk))});
-    auto selection = cql3::selection::selection::for_columns(_base_schema, std::vector<const column_definition*>({&_base_schema->partition_key_columns().front()}));
+    auto view_key_cols_not_in_base_key_cdefs = view_key_cols_not_in_base_key | std::views::keys | std::ranges::to<std::vector<const column_definition*>>();
+    auto selection = cql3::selection::selection::for_columns(_base_schema,
+        view_key_cols_not_in_base_key.empty() ? std::vector<const column_definition*>({&_base_schema->partition_key_columns().front()}) : view_key_cols_not_in_base_key_cdefs);
 
     std::vector<query::clustering_range> bounds{query::clustering_range::make_singular(base_ck)};
-    query::partition_slice partition_slice(std::move(bounds), {},  {}, selection->get_query_options());
+    utils::small_vector<column_id, 8> view_key_col_ids;
+    for (const auto& [col_def, _] : view_key_cols_not_in_base_key) {
+        view_key_col_ids.push_back(col_def->id);
+    }
+    query::partition_slice partition_slice(std::move(bounds), {}, std::move(view_key_col_ids), selection->get_query_options());
     auto command = ::make_lw_shared<query::read_command>(_base_schema->id(), _base_schema->version(), partition_slice,
             _proxy.get_max_result_size(partition_slice), query::tombstone_limit(_proxy.get_tombstone_limit()));
     auto timeout = db::timeout_clock::now() + _timeout_duration;
     service::storage_proxy::coordinator_query_options opts{timeout, _state.get_permit(), _state.get_client_state(), _state.get_trace_state()};
     auto base_qr = _proxy.query(_base_schema, command, std::move(partition_ranges), db::consistency_level::ALL, opts).get();
     query::result& result = *base_qr.query_result;
-    if (result.row_count().value_or(0) == 0) {
+    auto delete_ghost_row = [&]() {
         mutation m(_view, *_view_pk);
         auto& row = m.partition().clustered_row(*_view, ck);
         row.apply(tombstone(api::new_timestamp(), gc_clock::now()));
         timeout = db::timeout_clock::now() + _timeout_duration;
         _proxy.mutate({m}, db::consistency_level::ALL, timeout, _state.get_trace_state(), empty_service_permit(), db::allow_per_partition_rate_limit::no).get();
+    };
+    if (result.row_count().value_or(0) == 0) {
+        delete_ghost_row();
+    } else if (!view_key_cols_not_in_base_key.empty()) {
+        if (result.row_count().value_or(0) != 1) {
+            on_internal_error(vlogger, format("Got multiple base rows corresponding to a single view row when pruning {}.{}", _view->ks_name(), _view->cf_name()));
+        }
+        auto results = query::result_set::from_raw_result(_base_schema, partition_slice, result);
+        auto& base_row = results.row(0);
+        for (const auto& [col_def, col_val] : view_key_cols_not_in_base_key) {
+            const data_value* base_val = base_row.get_data_value(col_def->name_as_text());
+            if (!base_val || base_val->is_null() || col_val != base_val->serialize_nonnull()) {
+                delete_ghost_row();
+                break;
+            }
+        }
     }
 }
 
