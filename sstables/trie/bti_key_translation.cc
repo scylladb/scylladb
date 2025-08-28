@@ -133,8 +133,22 @@ static bound_weight convert_bound_to_bound_weight(sstables::bound_kind_m b) {
 
 lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv)
     : _ckp(pipv.has_key() ? std::optional<clustering_key_prefix>(pipv.key()) : std::optional<clustering_key_prefix>())
-    , _terminator(bound_weight_to_terminator(pipv.get_bound_weight()))
     , _s(s) {
+    if (pipv.region() < partition_region::clustered) [[unlikely]] {
+        _terminator = bound_weight_to_terminator(bound_weight::before_all_prefixed);
+        // This isn't defined by the BTI format docs, it's just something smaller than
+        // any actual BTI-encoded clustering position.
+        // It could be reasonably used during reads, but it should never be written.
+        _terminator = std::byte(0x00);
+    } else if (pipv.region() > partition_region::clustered) [[unlikely]] {
+        _terminator = bound_weight_to_terminator(bound_weight::after_all_prefixed);
+        // This isn't defined by the BTI format docs, it's just something greater than
+        // any actual BTI-encoded clustering position.
+        // It could be reasonably used during reads, but it should never be written.
+        _terminator = std::byte(0xff);
+    } else {
+        _terminator = bound_weight_to_terminator(pipv.get_bound_weight());
+    }
     advance();
 }
 
