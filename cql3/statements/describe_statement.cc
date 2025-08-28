@@ -21,6 +21,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/exception.hh>
 #include "index/vector_index.hh"
+#include "schema/schema.hh"
 #include "service/client_state.hh"
 #include "types/types.hh"
 #include "cql3/query_processor.hh"
@@ -223,7 +224,31 @@ description view(const data_dictionary::database& db, const sstring& ks, const s
         throw exceptions::invalid_request_exception(format("Materialized view '{}' not found in keyspace '{}'", name, ks));
     }
 
-    return view->schema()->describe(replica::make_schema_describe_helper(view->schema(), db), with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+    auto helper = replica::make_schema_describe_helper(view->schema(), db);
+    // We want to get a `CREATE MATERIALIZED VIEW` statement, not a `CREATE INDEX` one.
+    const auto actual_type = std::exchange(helper.type, schema_describe_helper::type::view);
+
+    auto result = view->schema()->describe(helper, with_internals ? describe_option::STMTS_AND_INTERNALS : describe_option::STMTS);
+
+    // However, if the view is the underlying materialized view of a secondary index,
+    // we'd like to comment it out to implicitly convey that the statement should not
+    // be executed to restore the schema entity. The user should restore the index instead.
+    // It's the same for CDC log tables.
+    if (actual_type == schema_describe_helper::type::index) {
+        fragmented_ostringstream os{};
+
+        fmt::format_to(os.to_iter(),
+                "/* Do NOT execute this statement! It's only for informational purposes.\n"
+                "   This materialized view is the underlying materialized view of a secondary\n"
+                "   index. It can be restored via restoring the index.\n"
+                "\n{}\n"
+                "*/",
+                *result.create_statement);
+
+        result.create_statement = std::move(os).to_managed_string();
+    }
+
+    return result;
 }
 
 description index(const data_dictionary::database& db, const sstring& ks, const sstring& name, bool with_internals) {
