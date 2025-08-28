@@ -50,7 +50,7 @@ public:
         _operators.emplace_back(i);
         check_depth_limit();
     }
-    void add_dot(std::string(name)) {
+    void add_dot(std::string name) {
         _operators.emplace_back(std::move(name));
         check_depth_limit();
     }
@@ -85,7 +85,7 @@ struct constant {
     }
 };
 
-// "value" is is a value used in the right hand side of an assignment
+// "value" is a value used in the right hand side of an assignment
 // expression, "SET a = ...". It can be a constant (a reference to a value
 // included in the request, e.g., ":val"), a path to an attribute from the
 // existing item (e.g., "a.b[3].c"), or a function of other such values.
@@ -205,7 +205,7 @@ public:
 // The supported primitive conditions are:
 // 1. Binary operators - v1 OP v2, where OP is =, <>, <, <=, >, or >= and
 //    v1 and v2 are values - from the item (an attribute path), the query
-//    (a ":val" reference), or a function of the the above (only the size()
+//    (a ":val" reference), or a function of the above (only the size()
 //    function is supported).
 // 2. Ternary operator - v1 BETWEEN v2 and v3 (means v1 >= v2 AND v1 <= v3).
 // 3. N-ary operator - v1 IN ( v2, v3, ... )
