@@ -36,6 +36,21 @@ concept MutationViewVisitor = requires (T& visitor, tombstone t, atomic_cell ac,
     visitor.accept_row_cell(column_id(), cmv);
 };
 
+template<typename T>
+concept AsyncMutationViewVisitor = requires (T& visitor, tombstone t, atomic_cell ac,
+                                             collection_mutation_view cmv, range_tombstone rt,
+                                             position_in_partition_view pipv, row_tombstone row_tomb,
+                                             row_marker rm) {
+    { visitor.accept_partition_tombstone(t) } -> std::same_as<void>;
+    { visitor.accept_static_cell(column_id(), std::move(ac)) } -> std::same_as<void>;
+    { visitor.accept_static_cell(column_id(), cmv) } -> std::same_as<void>;
+    { visitor.accept_row_tombstone(rt) } -> std::same_as<future<>>;
+    { visitor.accept_row(pipv, row_tomb, rm, is_dummy::no, is_continuous::yes) } -> std::same_as<future<>>;
+    { visitor.accept_row_cell(column_id(), std::move(ac)) } -> std::same_as<void>;
+    { visitor.accept_row_cell(column_id(), cmv) } -> std::same_as<void>;
+    { visitor.accept_end_of_partition() } -> std::same_as<future<>>;
+};
+
 class mutation_partition_view_virtual_visitor {
 public:
     virtual ~mutation_partition_view_virtual_visitor();
@@ -61,8 +76,12 @@ private:
     void do_accept(const column_mapping&, Visitor& visitor) const;
 
     template<typename Visitor>
-    requires MutationViewVisitor<Visitor>
+    requires (MutationViewVisitor<Visitor> && !AsyncMutationViewVisitor<Visitor>)
     future<> do_accept_gently(const column_mapping&, Visitor& visitor) const;
+
+    template<typename AsyncVisitor>
+    requires AsyncMutationViewVisitor<AsyncVisitor>
+    future<> do_accept_gently(const column_mapping&, AsyncVisitor& visitor) const;
 
     struct accept_ordered_cookie {
         bool accepted_partition_tombstone = false;
@@ -91,7 +110,8 @@ public:
     }
     static mutation_partition_view from_view(ser::mutation_partition_view v);
     void accept(const schema& schema, partition_builder& visitor) const;
-    future<> accept_gently(const schema& schema, partition_builder& visitor) const;
+    future<> accept_gently(const schema& schema, mutation_partition_visitor& visitor) const;
+    future<> accept_gently(const schema& schema, async_mutation_partition_visitor& visitor) const;
     void accept(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     future<> accept_gently(const column_mapping&, converting_mutation_partition_applier& visitor) const;
     void accept(const column_mapping&, mutation_partition_view_virtual_visitor& mpvvv) const;
