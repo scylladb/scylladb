@@ -584,6 +584,7 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await lock_endpoint(node, null_permit_id);
     auto es = get_endpoint_state_ptr(node);
+<<<<<<< HEAD
     if (!es && _topo_sm) {
         // Even if there is no endpoint for the given IP the message can still belong to existing endpoint that
         // was restarted with different IP, so lets try to locate the endpoint by host id as well. Do it in raft
@@ -595,6 +596,16 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             }
         }
     }
+||||||| parent of 13392a40d4 (gossiper: check for a race condition in `do_apply_state_locally`)
+=======
+
+    // If remote state update does not contain a host id, check whether the endpoint still
+    // exists in the `_endpoint_state_map` since after a preemption point it could have been deleted.
+    if (!remote_state.get_host_id() && !es) {
+        throw std::runtime_error(format("Entry for host id {} does not exist in the endpoint state map.", node));
+    }
+
+>>>>>>> 13392a40d4 (gossiper: check for a race condition in `do_apply_state_locally`)
     if (es) {
         endpoint_state local_state = *es;
         auto local_generation = local_state.get_heart_beat_state().get_generation();
