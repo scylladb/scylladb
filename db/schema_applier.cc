@@ -667,12 +667,7 @@ future<> schema_applier::merge_tables_and_views()
     if (_tablet_hint) {
         slogger.info("Tablet metadata changed");
         auto new_token_metadata = co_await _ss.local().prepare_tablet_metadata(_tablet_hint);
-        co_await smp::invoke_on_others([this, &db, &new_token_metadata] () -> future<> {
-            auto& shared_metadata = db.local().get_shared_token_metadata();
-            _affected_tables_and_views.pending_token_metadata.local() = shared_metadata.make_token_metadata_ptr(
-                    co_await new_token_metadata->clone_async());
-        });
-        _affected_tables_and_views.pending_token_metadata.local() = std::move(new_token_metadata);
+        co_await _affected_tables_and_views.pending_token_metadata.assign(new_token_metadata);
     }
 }
 
@@ -721,9 +716,18 @@ future<schema_diff_per_shard> schema_diff_per_shard::copy_from(replica::database
     co_return result;
 }
 
- locator::mutable_token_metadata_ptr& pending_token_metadata::local() {
+future<> pending_token_metadata::assign(locator::mutable_token_metadata_ptr new_token_metadata) {
+    auto& sharded_token_metadata = new_token_metadata->get_shared_token_metadata().container();
+    // clone a local copy of new_token_metadata on all other shards
+    co_await smp::invoke_on_others([this, &new_token_metadata, &sharded_token_metadata] () -> future<> {
+        local() = sharded_token_metadata.local().make_token_metadata_ptr(co_await new_token_metadata->clone_async());
+    });
+    local() = std::move(new_token_metadata);
+}
+
+locator::mutable_token_metadata_ptr& pending_token_metadata::local() {
     return shards[this_shard_id()];
- }
+}
 
 future<> pending_token_metadata::destroy() {
     return smp::invoke_on_all([this] () {

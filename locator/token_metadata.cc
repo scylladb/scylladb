@@ -859,6 +859,10 @@ void token_metadata::set_shared_token_metadata(shared_token_metadata& stm) {
     _shared_token_metadata = &stm;
 }
 
+shared_token_metadata& token_metadata::get_shared_token_metadata() {
+    return *_shared_token_metadata;
+}
+
 const utils::chunked_vector<token>&
 token_metadata::sorted_tokens() const {
     return _impl->sorted_tokens();
