@@ -2061,4 +2061,138 @@ SEASTAR_TEST_CASE(test_commitlog_buffer_size_counter) {
     co_await log.clear();
 }
 
+<<<<<<< HEAD
+||||||| parent of cc9eb321a1 (commitlog: Ensure segment deletion is re-entrant)
+SEASTAR_TEST_CASE(test_commitlog_handle_replayed_segments) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 8 * 1024;
+
+    cfg.commitlog_total_space_in_mb = max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+    cfg.commitlog_sync_period_in_ms = 1;
+
+    for (size_t k = 0; k < 100; ++k) {
+        tmpdir tmp;
+        cfg.commit_log_location = tmp.path().string();
+
+        auto log = co_await commitlog::create_commitlog(cfg);
+
+        auto shard_size = max_size_mb * 1024 * 1024;
+        auto seg_size = cfg.commitlog_segment_size_in_mb * 1024 * 1024;
+        auto n = 4 + (max_size_mb / cfg.commitlog_segment_size_in_mb);
+        std::vector<sstring> files;
+        for (size_t i = 0; i < n; ++i) {
+            auto name = (tmp.path() / ("tuta" + std::to_string(i) + ".log")).string();
+            auto f = co_await open_file_dma(name, open_flags::create|open_flags::wo, {});
+            co_await f.allocate(0, seg_size);
+            co_await f.truncate(seg_size);
+            co_await f.close();
+            files.emplace_back(std::move(name));
+        }
+
+        BOOST_REQUIRE_GE(files.size() * seg_size, shard_size + seg_size);
+
+        co_await log.delete_segments(std::move(files));
+
+        auto footprint = log.disk_footprint();
+
+        BOOST_REQUIRE_LE(footprint, shard_size + seg_size);
+        BOOST_REQUIRE_GE(footprint, shard_size);
+
+        co_await log.shutdown();
+        co_await log.clear();
+    }
+}
+
+=======
+SEASTAR_TEST_CASE(test_commitlog_handle_replayed_segments) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 8 * 1024;
+
+    cfg.commitlog_total_space_in_mb = max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+    cfg.commitlog_sync_period_in_ms = 1;
+
+    for (size_t k = 0; k < 100; ++k) {
+        tmpdir tmp;
+        cfg.commit_log_location = tmp.path().string();
+
+        auto log = co_await commitlog::create_commitlog(cfg);
+
+        auto shard_size = max_size_mb * 1024 * 1024;
+        auto seg_size = cfg.commitlog_segment_size_in_mb * 1024 * 1024;
+        auto n = 4 + (max_size_mb / cfg.commitlog_segment_size_in_mb);
+        std::vector<sstring> files;
+        for (size_t i = 0; i < n; ++i) {
+            auto name = (tmp.path() / ("tuta" + std::to_string(i) + ".log")).string();
+            auto f = co_await open_file_dma(name, open_flags::create|open_flags::wo, {});
+            co_await f.allocate(0, seg_size);
+            co_await f.truncate(seg_size);
+            co_await f.close();
+            files.emplace_back(std::move(name));
+        }
+
+        BOOST_REQUIRE_GE(files.size() * seg_size, shard_size + seg_size);
+
+        co_await log.delete_segments(std::move(files));
+
+        auto footprint = log.disk_footprint();
+
+        BOOST_REQUIRE_LE(footprint, shard_size + seg_size);
+        BOOST_REQUIRE_GE(footprint, shard_size);
+
+        co_await log.shutdown();
+        co_await log.clear();
+    }
+}
+
+// #25709 
+// Test that creating large mutation entries (cross more than one 
+// segment) and releasing them the memtable way (ref count, not rp)
+// does not crash.
+// When releasing such a segment, we will get recursion in segment
+// pruning, and need to handle this in both discard_unused_segments
+// as well as (for tests anyway) orphan_all.
+// Note: this test is not perfect. It does not really force a crash
+// in actual discard_unused_segments per se, but the orphan_all call
+// in cl_test will in fact cause a recursion that, without the fix,
+// will do a double free -> boom.
+SEASTAR_TEST_CASE(test_commitlog_release_large_mutation_segments) {
+    commitlog::config cfg;
+
+    constexpr uint64_t max_size_mb = 8;
+
+    cfg.commitlog_segment_size_in_mb = max_size_mb;
+    cfg.commitlog_total_space_in_mb = 8 * 4 * max_size_mb * smp::count;
+    cfg.allow_going_over_size_limit = false;
+    cfg.allow_fragmented_entries = true;
+    cfg.use_o_dsync = false; 
+
+    return cl_test(cfg, [](commitlog& log) -> future<> {
+        auto uuid = make_table_id();
+        {
+            db::rp_set handles;
+            auto size = log.max_record_size() * 2 - log.max_record_size() / 2;
+            auto buf = fragmented_temporary_buffer::allocate_to_fit(size);
+
+            for (size_t i = 0; i < 6; ++i) {
+                auto h = co_await log.add_mutation(uuid, size, db::commitlog::force_sync::no, [&](db::commitlog::output& dst) {
+                    for (auto& tmp : buf) {
+                        dst.write(tmp.get(), tmp.size());
+                    }
+                });
+                handles.put(std::move(h));
+            }
+
+            co_await log.force_new_active_segment();
+            co_await log.sync_all_segments();
+        }
+        // now handles will release
+    });
+}
+
+
+>>>>>>> cc9eb321a1 (commitlog: Ensure segment deletion is re-entrant)
 BOOST_AUTO_TEST_SUITE_END()

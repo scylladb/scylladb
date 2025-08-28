@@ -799,6 +799,8 @@ class db::commitlog::segment : public enable_shared_from_this<segment>, public c
     void end_flush() {
         _segment_manager->end_flush();
         if (can_delete()) {
+            // #25709 - do this early if possible
+            _extended_segments.clear();
             _segment_manager->discard_unused_segments();
         }
     }
@@ -874,6 +876,8 @@ public:
     void release_cf_count(const cf_id_type& cf) {
         mark_clean(cf, 1);
         if (can_delete()) {
+            // #25709 - do this early if possible
+            _extended_segments.clear();
             _segment_manager->discard_unused_segments();
         }
     }
@@ -2574,20 +2578,24 @@ struct fmt::formatter<db::commitlog::segment::cf_mark> {
 void db::commitlog::segment_manager::discard_unused_segments() noexcept {
     clogger.trace("Checking for unused segments ({} active)", _segments.size());
 
-    std::erase_if(_segments, [=](sseg_ptr s) {
-        if (s->can_delete()) {
-            clogger.debug("Segment {} is unused", *s);
-            return true;
-        }
-        if (s->is_still_allocating()) {
-            clogger.debug("Not safe to delete segment {}; still allocating.", *s);
-        } else if (!s->is_clean()) {
-            clogger.debug("Not safe to delete segment {}; dirty is {}", *s, segment::cf_mark {*s});
-        } else {
-            clogger.debug("Not safe to delete segment {}; disk ops pending", *s);
-        }
-        return false;
-    });
+    // #25709 ensure we don't free any segment until after prune.
+    {
+        auto tmp = _segments; 
+        std::erase_if(_segments, [=](sseg_ptr s) {
+            if (s->can_delete()) {
+                clogger.debug("Segment {} is unused", *s);
+                return true;
+            }
+            if (s->is_still_allocating()) {
+                clogger.debug("Not safe to delete segment {}; still allocating.", *s);
+            } else if (!s->is_clean()) {
+                clogger.debug("Not safe to delete segment {}; dirty is {}", *s, segment::cf_mark {*s});
+            } else {
+                clogger.debug("Not safe to delete segment {}; disk ops pending", *s);
+            }
+            return false;
+        });
+    }
 
     // launch in background, but guard with gate so this deletion is
     // sure to finish in shutdown, because at least through this path,
@@ -2875,7 +2883,10 @@ future<> db::commitlog::segment_manager::do_pending_deletes() {
 }
 
 future<> db::commitlog::segment_manager::orphan_all() {
-    _segments.clear();
+    // #25709. the actual process of destroying the elements here
+    // might cause a call into discard_unused_segments.
+    // ensure the target vector is empty when we get to destructors
+    auto tmp = std::exchange(_segments, {});
     return clear_reserve_segments();
 }
 
