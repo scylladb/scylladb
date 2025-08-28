@@ -14,7 +14,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, freeze, list_tables, get_region
+from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region
 
 # All tests in this file are expected to fail with tablets due to #23838.
 # To ensure that Alternator Streams is still being tested, instead of
@@ -492,6 +492,42 @@ def create_table_ss(dynamodb, dynamodbstreams, type):
     yield table, arn
     table.delete()
 
+def create_table_sss_lsi(dynamodb, dynamodbstreams, type):
+    table = create_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }, { 'AttributeName': 'c', 'KeyType': 'RANGE' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }, { 'AttributeName': 'c', 'AttributeType': 'S' }, { 'AttributeName': 'a', 'AttributeType': 'S' }],
+        LocalSecondaryIndexes=[
+            {
+                'IndexName': 'a_idx',
+                'KeySchema': [
+                    { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'a', 'KeyType': 'RANGE' }],
+                'Projection': {
+                    'ProjectionType': 'ALL',
+                    'NonKeyAttributes': ['string']
+                }
+            }
+        ],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': type })
+    (arn, label) = wait_for_active_stream(dynamodbstreams, table, timeout=60)
+    yield table, arn
+    table.delete()
+
+def create_table_s_no_ck(dynamodb, dynamodbstreams, type):
+    table = create_test_table(dynamodb,
+        Tags=TAGS,
+        KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
+        AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
+        StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': type })
+    (arn, label) = wait_for_active_stream(dynamodbstreams, table, timeout=60)
+    yield table, arn
+    table.delete()
+
+@pytest.fixture(scope="function")
+def test_table_sss_new_and_old_images_lsi(dynamodb, dynamodbstreams):
+    yield from create_table_sss_lsi(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
+
 @pytest.fixture(scope="function")
 def test_table_ss_keys_only(dynamodb, dynamodbstreams):
     yield from create_table_ss(dynamodb, dynamodbstreams, 'KEYS_ONLY')
@@ -507,6 +543,14 @@ def test_table_ss_old_image(dynamodb, dynamodbstreams):
 @pytest.fixture(scope="function")
 def test_table_ss_new_and_old_images(dynamodb, dynamodbstreams):
     yield from create_table_ss(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
+
+@pytest.fixture(scope="function")
+def test_table_s_no_ck_keys_only(dynamodb, dynamodbstreams):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'KEYS_ONLY')
+
+@pytest.fixture(scope="function")
+def test_table_s_no_ck_new_and_old_images(dynamodb, dynamodbstreams):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
 
 # Test that it is, sadly, not allowed to use UpdateTable on a table which
 # already has a stream enabled to change that stream's StreamViewType.
@@ -655,7 +699,9 @@ def compare_events(expected_events, output, mode, expected_region):
         deserializer = TypeDeserializer()
         key = {x:deserializer.deserialize(y) for (x,y) in record['Keys'].items()}
         expected_type, expected_key, expected_old_image, expected_new_image = expected_events_map[freeze(key)].pop(0)
-        if expected_type != '*': # hack to allow a caller to not test op, to bypass issue #6918.
+        if isinstance(expected_type, list): # relaxed op checking to bypass #6918
+            assert op in expected_type
+        elif expected_type != '*': # hack to allow a caller to not test op, to bypass issue #6918.
             assert op == expected_type
         assert record['StreamViewType'] == mode
         # We don't know what ApproximateCreationDateTime should be, but we do
@@ -739,16 +785,69 @@ def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p
     pytest.fail('missing events in output: {}'.format(output))
 
 # Test a single PutItem of a new item. Should result in a single INSERT
-# event. Currently fails because in Alternator, PutItem - which generates a
-# tombstone to *replace* an item - generates REMOVE+MODIFY (issue #6930).
-@pytest.mark.xfail(reason="Currently fails - see issue #6930")
+# event. Reproduces #6930.
 def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'x': 2})
-        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        # TODO: change to 'INSERT' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
     do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+
+# Replacing an item should result in a MODIFY, rather than REMOVE and MODIFY.
+# Moreover, the old item should be visible in OldImage. Reproduces #6930.
+def test_streams_putitem_new_items_override_old(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.put_item(Item={'p': p, 'c': c, 'a': 1})
+        # TODO: change to 'INSERT' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': 1}])
+        table.put_item(Item={'p': p, 'c': c, 'b': 2})
+        # TODO: change to 'MODIFY' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 1}, {'p': p, 'c': c, 'b': 2}])
+        table.put_item(Item={'p': p, 'c': c, 'a': 3, 'b': 4})
+        # TODO: change to 'MODIFY' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'b': 2}, {'p': p, 'c': c, 'a': 3, 'b': 4}])
+        table.put_item(Item={'p': p, 'c': c})
+        # TODO: change to 'MODIFY' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'a': 3, 'b': 4}, {'p': p, 'c': c}])
+        return events
+    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# Same as test_streams_putitem_new_items_overrides_old, but for a replaced
+# column is used in LSI. Reproduces #6930.
+def test_streams_putitem_new_item_overrides_old_lsi(test_table_sss_new_and_old_images_lsi, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.put_item(Item={'p': p, 'c': c, 'a': '1'})
+        # TODO: change to 'INSERT' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, None, {'p': p, 'c': c, 'a': '1'}])
+        table.put_item(Item={'p': p, 'c': c})
+        # TODO: change to 'MODIFY' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p, 'c': c}, {'p': p, 'c': c, 'a': '1'}, {'p': p, 'c': c}])
+        assert len(full_scan(table, IndexName='a_idx')) == 0
+        return events
+    do_test(test_table_sss_new_and_old_images_lsi, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# Test PutItem streams in a table with no clustering key.
+def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, _):
+        events = []
+        table.put_item(Item={'p': p, 'a': 1})
+        # TODO: change to 'INSERT' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p}, None, {'p': p, 'a': 1}])
+        table.put_item(Item={'p': p, 'b': 2})
+        # TODO: change to 'MODIFY' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p}, {'p': p, 'a': 1}, {'p': p, 'b': 2}])
+        table.put_item(Item={'p': p, 'a': 3, 'b': 4})
+        # TODO: change to 'MODIFY' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p}, {'p': p, 'b': 2}, {'p': p, 'a': 3, 'b': 4}])
+        table.put_item(Item={'p': p})
+        # TODO: change to 'MODIFY' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p}, {'p': p, 'a': 3, 'b': 4}, {'p': p}])
+        return events
+    do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Test a single UpdateItem. Should result in a single INSERT event.
 # Currently fails because Alternator generates a MODIFY event even though

@@ -16,6 +16,7 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "mutation/tombstone.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -2359,23 +2360,39 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, std::move(c.value)));
         }
     }
+    auto attrs = attrs_column(*schema);
     if (!attrs_collector.empty()) {
         auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
-        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        row.cells().apply(attrs, std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
     // PutItem is supposed to completely replace the old item, so we need to
-    // also have a tombstone removing old cells. We can't use the timestamp
-    // ts, because when data and tombstone tie on timestamp, the tombstone
-    // wins. So we need to use ts-1. Note that we use this trick also in
-    // Scylla proper, to implement the operation to replace an entire
-    // collection ("UPDATE .. SET x = ..") - see
-    // cql3::update_parameters::make_tombstone_just_before().
-    if (use_partition_tombstone) {
-        m.partition().apply(tombstone(ts-1, gc_clock::now()));
-    } else {
-        row.apply(tombstone(ts-1, gc_clock::now()));
+    // also have a tombstone removing old cells. Important points:
+    // 1) Alternator's schema is dynamic, therefore we store data in a map
+    //    in column :attrs. Since we're replacing a row, invalidating only
+    //    :attrs is enough. Alternator base tables also had columns for LSI
+    //    keys and GSI keys. New tables no longer have such columns, but old
+    //    tables created in the past may still have them.
+    // 2) We use a collection tombstone for the :attrs column instead of a row
+    //    tombstone. While a row tombstone would also replace the data, it has
+    //    an undesirable side effect for CDC, which would report it as a 
+    //    separate deletion event. To model PutItem's "replace" semantic, we
+    //    leverage a corner case: a collection tombstone at ts-1 paired with an
+    //    upsert at ts is not reported by CDC as a separate REMOVE event. We
+    //    can't use the timestamp ts, because when data and tombstone tie on
+    //    timestamp, the tombstone wins. These tricks were introduced in
+    //    Scylla to handle collection replacements in CQL (see #6084, PR #6491,
+    //    e.g. cql3::maps::setter::execute()) and we utilize it to avoid
+    //    emitting the REMOVE event (resolving #6930).
+    row.cells().apply(attrs, collection_mutation_description{tombstone{ts - 1, gc_clock::now()}}.serialize(*attrs.type));
+    // Note that for old tables created with regular LSI and GSI key columns,
+    // we must also delete the regular columns that are not part of the new
+    // schema consisting of pk, ck, and :attrs.
+    for (const auto& cdef : schema->regular_columns()) {
+        if (cdef.name_as_text() != executor::ATTRS_COLUMN_NAME) {
+            row.cells().apply(cdef, atomic_cell::make_dead(ts - 1, gc_clock::now()));
+        }
     }
     return m;
 }
