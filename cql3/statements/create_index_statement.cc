@@ -10,9 +10,14 @@
 
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
+#include "concrete_types.hh"
+#include "cql3/statements/view_prop_defs.hh"
+#include "db/tags/extension.hh"
 #include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
+#include "replica/database.hh"
 #include "types/types.hh"
+#include "utils/chunked_vector.hh"
 #include "validation.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
@@ -27,6 +32,7 @@
 #include "cql3/statements/index_prop_defs.hh"
 #include "index/secondary_index_manager.hh"
 #include "mutation/mutation.hh"
+#include "db/schema_tables.hh"
 
 #include <stdexcept>
 
@@ -37,12 +43,14 @@ namespace statements {
 create_index_statement::create_index_statement(cf_name name,
                                                ::shared_ptr<index_name> index_name,
                                                std::vector<::shared_ptr<index_target::raw>> raw_targets,
-                                               ::shared_ptr<index_prop_defs> properties,
+                                               index_specific_prop_defs idx_properties,
+                                               view_prop_defs view_properties,
                                                bool if_not_exists)
     : schema_altering_statement(name)
     , _index_name(index_name->get_idx())
     , _raw_targets(raw_targets)
-    , _properties(properties)
+    , _idx_properties(std::move(idx_properties))
+    , _view_properties(std::move(view_properties))
     , _if_not_exists(if_not_exists)
 {
 }
@@ -65,11 +73,47 @@ static sstring target_type_name(index_target::target_type type) {
 void
 create_index_statement::validate(query_processor& qp, const service::client_state& state) const
 {
-    if (_raw_targets.empty() && !_properties->is_custom) {
+    if (_raw_targets.empty() && !_idx_properties.is_custom) {
         throw exceptions::invalid_request_exception("Only CUSTOM indexes can be created without specifying a target column");
     }
 
-    _properties->validate();
+    _idx_properties.validate();
+
+    // FIXME: This is ugly and can be improved.
+    const bool is_vector_index = _idx_properties.custom_class && *_idx_properties.custom_class == "vector_index";
+    const bool uses_view_properties = _view_properties.properties()->count() > 0
+            || _view_properties.use_compact_storage()
+            || _view_properties.defined_ordering().size() > 0;
+
+    if (is_vector_index && uses_view_properties) {
+        throw exceptions::invalid_request_exception("You cannot use view properties with a vector index");
+    }
+
+    const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(qp.db().extensions());
+    _view_properties.validate_raw(view_prop_defs::op_type::create, qp.db(), keyspace(), exts);
+
+    // These keywords are still accepted by other schema entities, but they don't have effect on them.
+    // Since indexes are not bound by any backward compatibility contract in this regard, let's forbid these.
+    static sstring obsolete_keywords[] = {
+        "index_interval",
+        "replicate_on_write",
+        "populate_io_cache_on_flush",
+        "read_repair_chance",
+        "dclocal_read_repair_chance",
+    };
+
+    for (const sstring& keyword : obsolete_keywords) {
+        if (_view_properties.properties()->has_property(keyword)) {
+            // We use the same type of exception and the same error message as would be thrown for
+            // an invalid property via `_view_properties.validate_raw`.
+            throw exceptions::syntax_exception(seastar::format("Unknown property '{}'", keyword));
+        }
+    }
+
+    // FIXME: This is a temporary limitation as it might deserve more attention.
+    if (!_view_properties.defined_ordering().empty()) {
+        throw exceptions::invalid_request_exception("Indexes do not allow for specifying the clustering order");
+    }
 }
 
 std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_executing(data_dictionary::database db) const {
@@ -102,13 +146,13 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         targets.emplace_back(raw_target->prepare(*schema));
     }
 
-    if (_properties && _properties->custom_class) {
+    if (_idx_properties.custom_class) {
 
-        auto validator = secondary_index::secondary_index_manager::get_custom_class_factory(*_properties->custom_class);
+        auto validator = secondary_index::secondary_index_manager::get_custom_class_factory(*_idx_properties.custom_class);
         if (!validator) {
-            throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *(_properties->custom_class)));
+            throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *_idx_properties.custom_class));
         }
-        (*validator)()->validate(*schema, *_properties, targets, db.features());
+        (*validator)()->validate(*schema, _idx_properties, targets, db.features());
     }
 
     if (targets.size() > 1) {
@@ -327,7 +371,7 @@ void create_index_statement::validate_target_column_is_map_if_index_involves_key
 
 void create_index_statement::validate_targets_for_multi_column_index(std::vector<::shared_ptr<index_target>> targets) const
 {
-    if (!_properties->is_custom) {
+    if (!_idx_properties.is_custom) {
         if (targets.size() > 2 || (targets.size() == 2 && std::holds_alternative<index_target::single_column>(targets.front()->value))) {
             throw exceptions::invalid_request_exception("Only CUSTOM indexes support multiple columns");
         }
@@ -358,8 +402,8 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     }
     index_metadata_kind kind;
     index_options_map index_options;
-    if (_properties->custom_class) {
-        index_options = _properties->get_options();
+    if (_idx_properties.custom_class) {
+        index_options = _idx_properties.get_options();
         kind = index_metadata_kind::custom;
     } else {
         kind = schema->is_compound() ? index_metadata_kind::composites : index_metadata_kind::keys;
@@ -388,16 +432,202 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
     return base_schema_with_new_index{builder.build(), index};
 }
 
+static const data_type collection_keys_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_keys_type: only collections (maps, lists and sets) supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const list_type_impl& l) {
+            return timeuuid_type;
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return m.get_keys_type();
+        }
+        const data_type operator()(const set_type_impl& s) {
+            return s.get_elements_type();
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static const data_type collection_values_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_values_type: only maps and lists supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return m.get_values_type();
+        }
+        const data_type operator()(const list_type_impl& l) {
+            return l.get_elements_type();
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static const data_type collection_entries_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_entries_type: only maps supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return tuple_type_impl::get_instance({m.get_keys_type(), m.get_values_type()});
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static bytes get_available_column_name(const schema& schema, const bytes& root) {
+    bytes accepted_name = root;
+    int i = 0;
+    while (schema.get_column_definition(accepted_name)) {
+        accepted_name = root + to_bytes("_") + to_bytes(std::to_string(++i));
+    }
+    return accepted_name;
+}
+
+static bytes get_available_token_column_name(const schema& schema) {
+    return get_available_column_name(schema, "idx_token");
+}
+
+static bytes get_available_computed_collection_column_name(const schema& schema) {
+    return get_available_column_name(schema, "coll_value");
+}
+
+static data_type type_for_computed_column(cql3::statements::index_target::target_type target, const abstract_type& collection_type) {
+    using namespace cql3::statements;
+    switch (target) {
+        case index_target::target_type::keys:               return collection_keys_type(collection_type);
+        case index_target::target_type::keys_and_values:    return collection_entries_type(collection_type);
+        case index_target::target_type::collection_values:  return collection_values_type(collection_type);
+        default: throw std::logic_error("reached regular values or full when only collection index target types were expected");
+    }
+}
+
+view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im,
+        const data_dictionary::database db) const
+{
+    sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
+    schema_builder builder{schema->ks_name(), secondary_index::index_table_name(im.name())};
+    auto target_info = secondary_index::target_parser::parse(schema, im);
+    const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
+    auto target_type = target_info.type;
+
+    // For local indexing, start with base partition key
+    if (im.local()) {
+        if (index_target->is_partition_key()) {
+            throw exceptions::invalid_request_exception("Local indexing based on partition key column is not allowed,"
+                    " since whole base partition key must be used in queries anyway. Use global indexing instead.");
+        }
+        for (auto& col : schema->partition_key_columns()) {
+            builder.with_column(col.name(), col.type, column_kind::partition_key);
+        }
+        builder.with_column(index_target->name(), index_target->type, column_kind::clustering_key);
+    } else {
+        if (target_type == cql3::statements::index_target::target_type::regular_values) {
+            builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
+        } else {
+            bytes key_column_name = get_available_computed_collection_column_name(*schema);
+            column_computation_ptr collection_column_computation_ptr = [&name = index_target->name(), target_type] {
+                switch (target_type) {
+                    case cql3::statements::index_target::target_type::keys:
+                        return collection_column_computation::for_keys(name);
+                    case cql3::statements::index_target::target_type::collection_values:
+                        return collection_column_computation::for_values(name);
+                    case cql3::statements::index_target::target_type::keys_and_values:
+                        return collection_column_computation::for_entries(name);
+                    default:
+                        throw std::logic_error(format("create_view_for_index: invalid target_type, received {}", to_sstring(target_type)));
+                }
+            }().clone();
+
+            data_type t = type_for_computed_column(target_type, *index_target->type);
+            builder.with_computed_column(key_column_name, t, column_kind::partition_key, std::move(collection_column_computation_ptr));
+        }
+        // Additional token column is added to ensure token order on secondary index queries
+        bytes token_column_name = get_available_token_column_name(*schema);
+        builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
+
+        for (auto& col : schema->partition_key_columns()) {
+            if (col == *index_target) {
+                continue;
+            }
+            builder.with_column(col.name(), col.type, column_kind::clustering_key);
+        }
+    }
+
+    if (!index_target->is_static()) {
+        for (auto& col : schema->clustering_key_columns()) {
+            if (col == *index_target) {
+                continue;
+            }
+            builder.with_column(col.name(), col.type, column_kind::clustering_key);
+        }
+    }
+
+    // This column needs to be after the base clustering key.
+    if (!im.local()) {
+        // If two cells within the same collection share the same value but not liveness information, then
+        // for the index on the values, the rows generated would share the same primary key and thus the
+        // liveness information as well. Prevent that by distinguishing them in the clustering key.
+        if (target_type == cql3::statements::index_target::target_type::collection_values) {
+            data_type t = type_for_computed_column(cql3::statements::index_target::target_type::keys, *index_target->type);
+            bytes column_name = get_available_column_name(*schema, "keys_for_values_idx");
+            builder.with_computed_column(column_name, t, column_kind::clustering_key, collection_column_computation::for_keys(index_target->name()).clone());
+        }
+    }
+
+    if (index_target->is_primary_key()) {
+        for (auto& def : schema->regular_columns()) {
+            db::view::create_virtual_column(builder, def.name(), def.type);
+        }
+    }
+    // "WHERE col IS NOT NULL" is not needed (and doesn't work)
+    // when col is a collection.
+    const sstring where_clause =
+        (target_type == cql3::statements::index_target::target_type::regular_values) ?
+        format("{} IS NOT NULL", index_target->name_as_cql_string()) :
+        "";
+    builder.with_view_info(schema, false, where_clause);
+    // A local secondary index should be backed by a *synchronous* view,
+    // see #16371. A view is marked synchronous with a tag. Non-local indexes
+    // do not need the tags schema extension at all.
+    if (im.local()) {
+        std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
+        builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
+    }
+
+    const schema::extensions_map exts = _view_properties.properties()->make_schema_extensions(db.extensions());
+    _view_properties.apply_to_builder(view_prop_defs::op_type::create, builder, exts, db, keyspace());
+
+    return view_ptr{builder.build()};
+}
+
 future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chunked_vector<mutation>, cql3::cql_warnings_vec>>
 create_index_statement::prepare_schema_mutations(query_processor& qp, const query_options&, api::timestamp_type ts) const {
     using namespace cql_transport;
     auto res = build_index_schema(qp.db());
 
     ::shared_ptr<event::schema_change> ret;
-    utils::chunked_vector<mutation> m;
+    utils::chunked_vector<mutation> muts;
 
     if (res) {
-        m = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
+        const replica::database& db = qp.proxy().local_db();
+        const auto& cf = db.find_column_family(keyspace(), column_family());
+
+        // Produce statements to update schema tables with index-specific information.
+        muts = co_await service::prepare_column_family_update_announcement(qp.proxy(), std::move(res->schema), {}, ts);
+
+        // Produce the underlying view for the index.
+        if (db::schema_tables::view_should_exist(res->index)) {
+            view_ptr view = create_view_for_index(cf.schema(), res->index, qp.db());
+            utils::chunked_vector<mutation> view_muts = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(view), ts);
+
+            muts.reserve(muts.size() + view_muts.size());
+            for (mutation& view_mutation : view_muts) {
+                muts.push_back(std::move(view_mutation));
+            }
+        }
 
         ret = ::make_shared<event::schema_change>(
                 event::schema_change::change_type::UPDATED,
@@ -406,7 +636,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
                 column_family());
     }
 
-    co_return std::make_tuple(std::move(ret), std::move(m), std::vector<sstring>());
+    co_return std::make_tuple(std::move(ret), std::move(muts), std::vector<sstring>());
 }
 
 std::unique_ptr<cql3::statements::prepared_statement>
