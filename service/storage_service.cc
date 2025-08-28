@@ -4204,7 +4204,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
 }
 
 future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
-    return run_with_api_lock_conditionally(sstring("removenode"), !raft_topology_change_enabled(), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
+    return run_with_api_lock_in_gossiper_mode_only(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             ss.check_ability_to_perform_topology_operation("removenode");
             if (ss.raft_topology_change_enabled()) {

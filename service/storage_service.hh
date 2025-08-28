@@ -784,6 +784,17 @@ private:
      */
     future<> stream_ranges(std::unordered_map<sstring, std::unordered_multimap<dht::token_range, locator::host_id>> ranges_to_stream_by_keyspace);
 
+    template <typename Func>
+    auto run_with_api_lock_internal(storage_service& ss, Func&& func, sstring& operation) {
+        if (!ss._operation_in_progress.empty()) {
+            throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
+        }
+        ss._operation_in_progress = std::move(operation);
+        return func(ss).finally([&ss] {
+            ss._operation_in_progress = sstring();
+        });
+    }
+
 public:
     int32_t get_exception_count();
 
@@ -791,13 +802,7 @@ public:
     auto run_with_api_lock(sstring operation, Func&& func) {
         return container().invoke_on(0, [operation = std::move(operation),
                 func = std::forward<Func>(func)] (storage_service& ss) mutable {
-            if (!ss._operation_in_progress.empty()) {
-                throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
-            }
-            ss._operation_in_progress = std::move(operation);
-            return func(ss).finally([&ss] {
-                ss._operation_in_progress = sstring();
-            });
+            return ss.run_with_api_lock_internal(ss, std::forward<Func>(func), operation);
         });
     }
 
@@ -809,8 +814,14 @@ public:
     }
 
     template <typename Func>
-    auto run_with_api_lock_conditionally(sstring operation, bool lock, Func&& func) {
-        return lock ? run_with_api_lock(std::move(operation), std::forward<Func>(func)) : run_with_no_api_lock(std::forward<Func>(func));
+    auto run_with_api_lock_in_gossiper_mode_only(sstring operation, Func&& func) {
+        return container().invoke_on(0, [operation = std::move(operation),
+                func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            if (ss.raft_topology_change_enabled()) {
+                return func(ss);
+            }
+            return ss.run_with_api_lock_internal(ss, std::forward<Func>(func), operation);
+       });
     }
 
 private:
