@@ -1730,6 +1730,11 @@ rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std
         if (!await.empty()) {
             await_completion = validate_bool(await);
         }
+        sstring incremental_mode;
+        auto inc = req->get_query_param("incremental_mode");
+        if (!inc.empty()) {
+            incremental_mode = inc;
+        }
         auto table_id = validate_table(ctx.db.local(), ks, table);
         std::variant<utils::chunked_vector<dht::token>, service::storage_service::all_tokens_tag> tokens_variant;
         if (all_tokens) {
@@ -1752,7 +1757,7 @@ rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std
             }) | std::ranges::to<std::unordered_set>();
         }
         auto dcs_filter = locator::tablet_task_info::deserialize_repair_dcs_filter(dcs);
-        auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant, hosts_filter, dcs_filter, await_completion);
+        auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant, hosts_filter, dcs_filter, await_completion, incremental_mode);
         co_return json::json_return_type(res);
 }
 
