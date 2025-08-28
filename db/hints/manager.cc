@@ -638,7 +638,7 @@ bool manager::check_dc_for(endpoint_id ep) const noexcept {
     }
 }
 
-future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept {
+future<> manager::drain_for(endpoint_id host_id) noexcept {
     if (!started() || stopping() || draining_all()) {
         co_return;
     }
@@ -696,14 +696,13 @@ future<> manager::drain_for(endpoint_id host_id, gms::inet_address ip) noexcept 
             if (_uses_host_id) {
                 return host_id;
             }
-            // Before the whole cluster is migrated to the host-ID-based hinted handoff,
-            // one hint directory may correspond to multiple target nodes. If *any* of them
-            // leaves the cluster, we should drain the hint directory. This is why we need
-            // to rely on this mapping here.
-            const auto maybe_mapping = _hint_directory_manager.get_mapping(host_id, ip);
-            if (maybe_mapping) {
-                return maybe_mapping->first;
-            }
+            // As of this version, all clusters should have already been migrated to host-ID-based hinted handoff.
+            // The migration is performed when the corresponding cluster feature is enabled, so to
+            // miss the migration, the user must have skipped multiple major versions in their upgrade.
+            // Additionally, to reach this point, the user must be removing/replacing a node before the cluster
+            // feature got enabled.
+            // Because of that, we accept losing the hints that were stored for the corresponding IP address
+            // in this scenario. The hint directory, if it exists, will be removed during the migration.
             return std::nullopt;
         });
 
@@ -984,7 +983,7 @@ future<> manager::drain_left_nodes() {
     for (const auto& [host_id, ep_man] : _ep_managers) {
         if (!_proxy.get_token_metadata_ptr()->is_normal_token_owner(host_id)) {
             // It's safe to discard this future. It's awaited in `manager::stop()`.
-            (void) drain_for(host_id, {});
+            (void) drain_for(host_id);
         }
     }
 
