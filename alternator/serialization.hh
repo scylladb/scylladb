@@ -55,7 +55,7 @@ partition_key pk_from_json(const rjson::value& item, schema_ptr schema);
 clustering_key ck_from_json(const rjson::value& item, schema_ptr schema);
 position_in_partition pos_from_json(const rjson::value& item, schema_ptr schema);
 
-// If v encodes a number (i.e., it is a {"N": [...]}, returns an object representing it.  Otherwise,
+// If v encodes a number (i.e., it is a {"N": [...]}), returns an object representing it.  Otherwise,
 // raises ValidationException with diagnostic.
 big_decimal unwrap_number(const rjson::value& v, std::string_view diagnostic);
 

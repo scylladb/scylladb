@@ -30,7 +30,7 @@ namespace alternator {
 
 // expiration_service is a sharded service responsible for cleaning up expired
 // items in all tables with per-item expiration enabled. Currently, this means
-// Alternator tables with TTL configured via a UpdateTimeToLive request.
+// Alternator tables with TTL configured via an UpdateTimeToLive request.
 class expiration_service final : public seastar::peering_sharded_service<expiration_service> {
 public:
     // Object holding per-shard statistics related to the expiration service.

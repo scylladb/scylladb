@@ -174,7 +174,7 @@ static void validate_is_object(const rjson::value& value, const char* caller) {
 }
 
 // This function assumes the given value is an object and returns requested member value.
-// If it is not possible an api_error::validation is thrown.
+// If it is not possible, an api_error::validation is thrown.
 static const rjson::value& get_member(const rjson::value& obj, const char* member_name, const char* caller) {
     validate_is_object(obj, caller);
     const rjson::value* ret = rjson::find(obj, member_name);
@@ -186,7 +186,7 @@ static const rjson::value& get_member(const rjson::value& obj, const char* membe
 
 
 // This function assumes the given value is an object with a single member, and returns this member.
-// In case the requirements are not met an api_error::validation is thrown.
+// In case the requirements are not met, an api_error::validation is thrown.
 static const rjson::value::Member& get_single_member(const rjson::value& v, const char* caller) {
     if (!v.IsObject() || v.MemberCount() != 1) {
         throw api_error::validation(format("{}: expected an object with a single member.", caller));
@@ -761,7 +761,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
                 sstring index_name = cf_name.substr(delim_it + 1);
                 rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
                 rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
-                // Add indexes' KeySchema and collect types for AttributeDefinitions:
+                // Add index's KeySchema and collect types for AttributeDefinitions:
                 executor::describe_key_schema(view_entry, *vptr, key_attribute_types);
                 // Add projection type
                 rjson::value projection = rjson::empty_object();

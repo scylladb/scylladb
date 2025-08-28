@@ -140,7 +140,7 @@ future<executor::request_return_type> executor::describe_time_to_live(client_sta
 
 // expiration_service is a sharded service responsible for cleaning up expired
 // items in all tables with per-item expiration enabled. Currently, this means
-// Alternator tables with TTL configured via a UpdateTimeToLive request.
+// Alternator tables with TTL configured via an UpdateTimeToLive request.
 //
 // Here is a brief overview of how the expiration service works:
 //
@@ -587,7 +587,7 @@ static future<> scan_table_ranges(
             if (retries >= 10) {
                 // Don't get stuck forever asking the same page, maybe there's
                 // a bug or a real problem in several replicas. Give up on
-                // this scan an retry the scan from a random position later,
+                // this scan and retry the scan from a random position later,
                 // in the next scan period.
                 throw runtime_exception("scanner thread failed after too many timeouts for the same page");
             }
