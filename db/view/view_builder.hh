@@ -195,6 +195,7 @@ public:
     static constexpr size_t batch_memory_max = 1024*1024;
 
     replica::database& get_db() noexcept { return _db; }
+    db::system_keyspace& get_sys_ks() noexcept { return _sys_ks; }
 
 public:
     view_builder(replica::database&, db::system_keyspace&, db::system_distributed_keyspace&, service::migration_notifier&, view_update_generator& vug,

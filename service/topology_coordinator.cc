@@ -9,6 +9,7 @@
 #include <chrono>
 #include <fmt/ranges.h>
 
+#include <memory>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -50,6 +51,7 @@
 #include "service/tablet_allocator.hh"
 #include "service/tablet_operation.hh"
 #include "service/topology_state_machine.hh"
+#include "db/view/view_building_coordinator.hh"
 #include "topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -121,8 +123,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     utils::updateable_value<uint32_t> _tablet_load_stats_refresh_interval_in_seconds;
     service::raft_group0& _group0;
     service::topology_state_machine& _topo_sm;
+    db::view::view_building_state_machine& _vb_sm;
     abort_source& _as;
     gms::feature_service& _feature_service;
+    endpoint_lifecycle_notifier& _lifecycle_notifier;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -131,6 +135,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     raft_topology_cmd_handler_type _raft_topology_cmd_handler;
 
     tablet_allocator& _tablet_allocator;
+    std::unique_ptr<db::view::view_building_coordinator> _vb_coordinator;
 
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
@@ -170,15 +175,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         std::optional<topology_request> request;
         std::optional<request_param> req_param;
     };
-
-    // The topology coordinator takes guard before operation start, but it releases it during various
-    // RPC commands that it sends to make it possible to submit new requests to the state machine while
-    // the coordinator drives current topology change. It is safe to do so since only the coordinator is
-    // ever allowed to change node's state, others may only create requests. To make sure the coordinator did
-    // not change while the lock was released, and hence the old coordinator does not work on old state, we check
-    // that the raft term is still the same after the lock is re-acquired. Throw term_changed_error if it did.
-
-    struct term_changed_error {};
 
     future<group0_guard> cleanup_group0_config_if_needed(group0_guard guard) {
         auto& topo = _topo_sm._topology;
@@ -952,6 +948,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 auto views = ks.metadata()->views();
                 tables_with_mvs.insert(tables_with_mvs.end(), views.begin(), views.end());
                 for (const auto& table_or_mv : tables_with_mvs) {
+                    locator::tablet_map old_tablets{unimportant_init_tablet_count};
                     try {
                         if (!tmptr->tablets().is_base_table(table_or_mv->id())) {
                             // Apply the transition only on base tables.
@@ -959,10 +956,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             // the base table will coordinate the transition for the entire group.
                             continue;
                         }
-                        locator::tablet_map old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
+                        old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
                         locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
-                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, std::move(old_tablets));
+                        new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
                     } catch (const std::exception& e) {
                         error = e.what();
                         rtlogger.error("Couldn't process global_topology_request::keyspace_rf_change, error: {},"
@@ -981,6 +978,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                         .set_transition(last_token, locator::choose_rebuild_transition_kind(_feature_service))
                                         .build()
                         ));
+
+                        // Calculate abandoning replica and abort view building tasks on them
+                        auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                        auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
+                        if (!abandoning_replicas.empty()) {
+                            if (abandoning_replicas.size() != 1) {
+                                on_internal_error(rtlogger, fmt::format("Keyspace RF abandons {} replicas for table {} and tablet id {}", abandoning_replicas.size(), table_or_mv->id(), tablet_id));
+                            }
+                            _vb_coordinator->abort_tasks(updates, guard, table_or_mv->id(), *abandoning_replicas.begin(), last_token);
+                        }
+
                         co_await coroutine::maybe_yield();
                     });
                 }
@@ -1228,6 +1236,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_transition(last_token, mig.kind)
                 .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
                 .build());
+        _vb_coordinator->abort_tasks(out, guard, mig.tablet.table, mig.src, last_token);
     }
 
     void generate_repair_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
@@ -1456,6 +1465,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         utils::get_local_injector().inject("stream_tablet_fail_on_drain",
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
+                    utils::get_local_injector().inject("stream_tablet_fail",
+                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
 
                     if (action_failed(tablet_state.streaming)) {
                         bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
@@ -1595,6 +1606,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .del_transition(last_token)
                                 .del_migration_task_info(last_token, _feature_service)
                                 .build());
+                        if (trinfo.pending_replica) {
+                            _vb_coordinator->rollback_aborted_tasks(updates, guard, gid.table, *trinfo.pending_replica, last_token);
+                        }
                     }
                     break;
                 case locator::tablet_transition_stage::end_migration: {
@@ -1608,6 +1622,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .set_replicas(last_token, trinfo.next)
                                 .del_migration_task_info(last_token, _feature_service)
                                 .build());
+                        _vb_coordinator->generate_tablet_migration_updates(updates, guard, tmap, gid, trinfo);
                     }
                 }
                     break;
@@ -1842,6 +1857,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
             // Clears the resize decision for a table.
             generate_resize_update(updates, guard, table_id, locator::resize_decision{});
+            _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
 
             const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
             auto old_cnt = tmap.tablet_count();
@@ -2179,7 +2195,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             rtbuilder.done();
                             auto reason = ::format("bootstrap: joined a zero-token node {}", node.id);
                             co_await _voter_handler.on_node_added(node.id, _as);
-                            co_await update_topology_state(std::move(guard), {builder.build(), rtbuilder.build()}, reason);
+                            utils::chunked_vector<canonical_mutation> updates{builder.build(), rtbuilder.build()};
+                            co_await mark_view_build_statuses_on_node_join(updates, guard, node.id);
+                            co_await update_topology_state(std::move(guard), std::move(updates), reason);
                             break;
                         }
 
@@ -2233,7 +2251,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                     .set("node_state", node_state::left);
                             rtbuilder.done();
                             co_await _voter_handler.on_node_added(node.id, _as);
-                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), builder2.build(), rtbuilder.build()},
+                            utils::chunked_vector<canonical_mutation> updates{builder.build(), builder2.build(), rtbuilder.build()};
+                            co_await mark_view_build_statuses_on_node_join(updates, node.guard, node.id);
+                            co_await remove_view_build_statuses_on_left_node(updates, node.guard, replaced_id);
+                            co_await update_topology_state(take_guard(std::move(node)), std::move(updates),
                                     fmt::format("replace: replaced node {} with the new zero-token node {}", replaced_id, node.id));
                             break;
                         }
@@ -2497,6 +2518,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     muts.emplace_back(builder.build());
                     muts.emplace_back(rtbuilder.build());
                     co_await _voter_handler.on_node_added(node.id, _as);
+                    co_await mark_view_build_statuses_on_node_join(muts, node.guard, node.id);
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts), "bootstrap: read fence completed");
                     trigger_load_stats_refresh();
                     }
@@ -2519,6 +2541,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         builder.del_transition_state();
                         cleanup_ignored_nodes_on_left(builder, node.id);
                         muts.push_back(rtbuilder.build());
+                        co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
                         co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
                     }
                     builder.set_version(_topo_sm._topology.version + 1)
@@ -2553,6 +2576,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     muts.push_back(builder2.build());
 
                     muts.push_back(rtbuilder.build());
+                    co_await mark_view_build_statuses_on_node_join(muts, node.guard, node.id);
+                    co_await remove_view_build_statuses_on_left_node(muts, node.guard, replaced_node_id);
                     co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(replaced_node_id.uuid()), muts);
                     co_await _voter_handler.on_node_added(node.id, _as);
                     co_await update_topology_state(take_guard(std::move(node)), std::move(muts),
@@ -2667,6 +2692,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                        .with_node(node.id)
                        .set("node_state", node_state::left);
                 muts.push_back(builder.build());
+                co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
                 co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
                 auto str = node.rs->state == node_state::decommissioning
                         ? ::format("finished decommissioning node {}", node.id)
@@ -3042,6 +3068,38 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
+    future<> run_view_building_coordinator() {
+        while (!_feature_service.view_building_coordinator && !_as.abort_requested()) {
+            condition_variable feature_cv;
+            auto listener = _feature_service.view_building_coordinator.when_enabled([&feature_cv] {
+                feature_cv.broadcast();
+            });
+            auto abort = _as.subscribe([&feature_cv] () noexcept {
+                feature_cv.broadcast();
+            });
+            co_await feature_cv.wait();
+        }
+        if (_as.abort_requested()) {
+            co_return;
+        }
+
+        _lifecycle_notifier.register_subscriber(_vb_coordinator.get());
+        try {
+            co_await _vb_coordinator->run();
+        } catch (...) {
+            on_fatal_internal_error(rtlogger, format("unhandled exception in view_building_coordinator::run(): {}", std::current_exception()));
+        }
+        co_await _lifecycle_notifier.unregister_subscriber(_vb_coordinator.get());
+    }
+
+    future<> mark_view_build_statuses_on_node_join(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, raft::server_id node_id) {
+        co_await _vb_coordinator->mark_view_build_statuses_on_node_join(out, guard, locator::host_id{node_id.uuid()});
+    }
+
+    future<> remove_view_build_statuses_on_left_node(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, raft::server_id node_id) {
+        co_await _vb_coordinator->remove_view_build_statuses_on_left_node(out, guard, locator::host_id{node_id.uuid()});
+    }
+
     // Returns the guard if no work done. Otherwise, performs a table migration and consumes the guard.
     future<std::optional<group0_guard>> maybe_migrate_system_tables(group0_guard guard);
 
@@ -3074,20 +3132,21 @@ public:
             sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
             netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
             db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
-            service::topology_state_machine& topo_sm, abort_source& as, raft::server& raft_server,
+            service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
-            gms::feature_service& feature_service,
+            gms::feature_service& feature_service, endpoint_lifecycle_notifier& lifecycle_notifier,
             topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _tablet_load_stats_refresh_interval_in_seconds(db.get_config().tablet_load_stats_refresh_interval_in_seconds)
-        , _group0(group0), _topo_sm(topo_sm), _as(as)
-        , _feature_service(feature_service)
+        , _group0(group0), _topo_sm(topo_sm), _vb_sm(vb_sm), _as(as)
+        , _feature_service(feature_service), _lifecycle_notifier(lifecycle_notifier)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
+        , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
         , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
@@ -3566,7 +3625,7 @@ bool topology_coordinator::handle_topology_coordinator_error(std::exception_ptr 
         rtlogger.warn("topology change coordinator fiber got commit_status_unknown");
     } catch (group0_concurrent_modification&) {
         rtlogger.info("topology change coordinator fiber got group0_concurrent_modification");
-    } catch (topology_coordinator::term_changed_error&) {
+    } catch (term_changed_error&) {
         // Term changed. We may no longer be a leader
         rtlogger.debug("topology change coordinator fiber notices term change {} -> {}", _term, _raft.get_current_term());
     } catch (seastar::rpc::remote_verb_error&) {
@@ -3622,6 +3681,7 @@ future<> topology_coordinator::run() {
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
     auto group0_voter_refresher = group0_voter_refresher_fiber();
+    auto vb_coordinator_fiber = run_view_building_coordinator();
 
     while (!_as.abort_requested()) {
         bool sleep = false;
@@ -3663,6 +3723,8 @@ future<> topology_coordinator::run() {
     co_await std::move(cdc_generation_publisher);
     co_await std::move(gossiper_orphan_remover);
     co_await std::move(group0_voter_refresher);
+    co_await std::move(vb_coordinator_fiber);
+    co_await _vb_coordinator->stop();
 }
 
 future<> topology_coordinator::stop() {
@@ -3704,7 +3766,7 @@ future<> run_topology_coordinator(
         seastar::sharded<db::system_distributed_keyspace>& sys_dist_ks, gms::gossiper& gossiper,
         netw::messaging_service& messaging, locator::shared_token_metadata& shared_tm,
         db::system_keyspace& sys_ks, replica::database& db, service::raft_group0& group0,
-        service::topology_state_machine& topo_sm, seastar::abort_source& as, raft::server& raft,
+        service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
@@ -3714,11 +3776,11 @@ future<> run_topology_coordinator(
 
     topology_coordinator coordinator{
             sys_dist_ks, gossiper, messaging, shared_tm,
-            sys_ks, db, group0, topo_sm, as, raft,
+            sys_ks, db, group0, topo_sm, vb_sm, as, raft,
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             ring_delay,
-            feature_service,
+            feature_service, lifecycle_notifier,
             topology_cmd_rpc_tracker};
 
     std::exception_ptr ex;

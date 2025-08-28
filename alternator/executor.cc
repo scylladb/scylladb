@@ -922,7 +922,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
             }
 
             auto m = co_await service::prepare_column_family_drop_announcement(_proxy, keyspace_name, table_name, group0_guard.write_timestamp(), service::drop_views::yes);
-            auto m2 = co_await service::prepare_keyspace_drop_announcement(_proxy.local_db(), keyspace_name, group0_guard.write_timestamp());
+            auto m2 = co_await service::prepare_keyspace_drop_announcement(_proxy, keyspace_name, group0_guard.write_timestamp());
 
             std::move(m2.begin(), m2.end(), std::back_inserter(m));
 

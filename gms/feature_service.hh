@@ -169,6 +169,7 @@ public:
     gms::feature topology_global_request_queue { *this, "TOPOLOGY_GLOBAL_REQUEST_QUEUE"sv };
     gms::feature lwt_with_tablets { *this, "LWT_WITH_TABLETS"sv };
     gms::feature repair_msg_split { *this, "REPAIR_MSG_SPLIT"sv };
+    gms::feature view_building_coordinator { *this, "VIEW_BUILDING_COORDINATOR"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

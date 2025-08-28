@@ -253,6 +253,8 @@ SEASTAR_TEST_CASE(test_twcs_restrictions_mixed) {
 }
 
 SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
+    cql_test_config cfg;
+    cfg.need_remote_proxy = true;
     return do_with_cql_env_thread([](cql_test_env& e) {
         e.execute_cql("CREATE TABLE tbl (a int, b int, c float, PRIMARY KEY (a))").get();
         e.execute_cql("CREATE INDEX idx1 ON tbl (b)").get();
@@ -270,7 +272,7 @@ SEASTAR_TEST_CASE(test_drop_table_with_si_and_mv) {
         e.execute_cql("CREATE MATERIALIZED VIEW tbl_view AS SELECT c FROM tbl WHERE c IS NOT NULL PRIMARY KEY (c, a)").get();
         // dropping whole keyspace with MV and SI is fine too
         e.execute_cql("DROP KEYSPACE ks").get();
-    });
+    }, std::move(cfg));
 }
 
 SEASTAR_TEST_CASE(test_list_elements_validation) {
@@ -6082,7 +6084,7 @@ SEASTAR_TEST_CASE(test_sstable_load_mixed_generation_type) {
 
         // Load sstables with mixed generation types
         copy_directory("test/resource/sstables/mixed_generation_type", upload_dir);
-        replica::distributed_loader::process_upload_dir(e.db(), e.view_builder(), "ks", "test", false, false).get();
+        replica::distributed_loader::process_upload_dir(e.db(), e.view_builder(), e.view_building_worker(), "ks", "test", false, false).get();
 
         // Verify the expected data is present
         assert_that(e.execute_cql("SELECT * FROM ks.test").get()).is_rows()

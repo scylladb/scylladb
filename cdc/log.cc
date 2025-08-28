@@ -216,7 +216,7 @@ public:
             auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
 
             auto log_mut = log_schema 
-                ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
+                ? db::schema_tables::make_update_table_mutations(_ctxt._proxy, keyspace.metadata(), log_schema, new_log_schema, timestamp)
                 : db::schema_tables::make_create_table_mutations(new_log_schema, timestamp)
                 ;
 

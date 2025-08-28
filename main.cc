@@ -12,6 +12,7 @@
 
 #include <seastar/util/closeable.hh>
 #include <seastar/core/abort_source.hh>
+#include "db/view/view_building_worker.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/inet_address.hh"
 #include "auth/allow_all_authenticator.hh"
@@ -21,6 +22,7 @@
 #include <seastar/core/signal.hh>
 #include <seastar/core/timer.hh>
 #include "service/qos/raft_service_level_distributed_data_accessor.hh"
+#include "db/view/view_building_state.hh"
 #include "tasks/task_manager.hh"
 #include "utils/assert.hh"
 #include "utils/build_id.hh"
@@ -1369,6 +1371,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             static sharded<db::system_keyspace> sys_ks;
             static sharded<db::view::view_update_generator> view_update_generator;
             static sharded<db::view::view_builder> view_builder;
+            static sharded<db::view::view_building_worker> view_building_worker;
             static sharded<cdc::generation_service> cdc_generation_service;
 
             db::sstables_format_selector sst_format_selector(db);
@@ -1732,6 +1735,12 @@ sharded<locator::shared_token_metadata> token_metadata;
                 }
             };
 
+            sharded<db::view::view_building_state_machine> vbsm;
+            vbsm.start().get();
+            auto stop_vbsm = defer_verbose_shutdown("view_building_state_machine", [&vbsm] {
+                vbsm.stop().get();
+            });
+
             checkpoint(stop_signal, "starting system distributed keyspace");
             sys_dist_ks.start(std::ref(qp), std::ref(mm), std::ref(proxy)).get();
             auto stop_sdks = defer_verbose_shutdown("system distributed keyspace", [] {
@@ -1750,9 +1759,15 @@ sharded<locator::shared_token_metadata> token_metadata;
                 view_builder.stop().get();
             });
 
+            checkpoint(stop_signal, "starting the view building worker");
+            view_building_worker.start(std::ref(db), std::ref(sys_ks), std::ref(mm_notifier), std::ref(group0_client), std::ref(view_update_generator), std::ref(messaging), std::ref(vbsm)).get();
+            auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [] {
+                view_building_worker.stop().get();
+            });
+
             checkpoint(stop_signal, "starting repair service");
             auto max_memory_repair = memory::stats().total_memory() * 0.1;
-            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
+            repair.start(std::ref(tsm), std::ref(gossiper), std::ref(messaging), std::ref(db), std::ref(proxy), std::ref(bm), std::ref(sys_ks), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(mm), max_memory_repair).get();
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
@@ -1766,7 +1781,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             debug::the_stream_manager = &stream_manager;
             checkpoint(stop_signal, "starting streaming service");
-            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
+            stream_manager.start(std::ref(*cfg), std::ref(db), std::ref(view_builder), std::ref(view_building_worker), std::ref(messaging), std::ref(mm), std::ref(gossiper), maintenance_scheduling_group).get();
             auto stop_stream_manager = defer_verbose_shutdown("stream manager", [&stream_manager] {
                 // FIXME -- keep the instances alive, just call .stop on them
                 stream_manager.invoke_on_all(&streaming::stream_manager::stop).get();
@@ -1790,7 +1805,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 std::ref(messaging), std::ref(repair),
                 std::ref(stream_manager), std::ref(lifecycle_notifier), std::ref(bm), std::ref(snitch),
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(qp), std::ref(sl_controller),
-                std::ref(tsm), std::ref(task_manager), std::ref(gossip_address_map),
+                std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
                 only_on_shard0(&*disk_space_monitor_shard0)
             ).get();
@@ -1951,7 +1966,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             });
 
             checkpoint(stop_signal, "initializing storage proxy RPC verbs");
-            proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks), std::ref(paxos_store), std::ref(group0_client), std::ref(tsm)).get();
+            proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(messaging), std::ref(gossiper), std::ref(mm), std::ref(sys_ks), std::ref(paxos_store), std::ref(group0_client), std::ref(tsm), std::ref(vbsm)).get();
             auto stop_proxy_handlers = defer_verbose_shutdown("storage proxy RPC verbs", [&proxy] {
                 proxy.invoke_on_all(&service::storage_proxy::stop_remote).get();
             });
@@ -2121,7 +2136,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             });
 
             checkpoint(stop_signal, "starting sstables loader");
-            sst_loader.start(std::ref(db), std::ref(messaging), std::ref(view_builder), std::ref(task_manager), std::ref(sstm), maintenance_scheduling_group).get();
+            sst_loader.start(std::ref(db), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), maintenance_scheduling_group).get();
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
                 sst_loader.stop().get();
             });
@@ -2401,6 +2416,12 @@ sharded<locator::shared_token_metadata> token_metadata;
             }
             auto drain_view_builder = defer_verbose_shutdown("draining view builders", [&] {
                 view_builder.invoke_on_all(&db::view::view_builder::drain).get();
+            });
+
+            checkpoint(stop_signal, "starting view building worker's background fibers");
+            view_building_worker.local().start_backgroud_fibers();
+            auto drain_view_buiding_worker = defer_verbose_shutdown("draining view building worker", [&] {
+                view_building_worker.invoke_on_all(&db::view::view_building_worker::drain).get();
             });
 
             api::set_server_view_builder(ctx, view_builder, gossiper).get();

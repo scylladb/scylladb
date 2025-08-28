@@ -91,6 +91,7 @@ async def test_base_partition_deletion_with_metrics(manager: ManagerClient, perm
             insert = cql.prepare(f'INSERT INTO {table} (p1,p2,c) VALUES (?,?,?)')
             # The view partition key is a permutation of the base partition key.
             async with new_materialized_view(manager, table, '*', '(p2,p1),c' if permuted else '(p1,p2),c', 'p1 is not null and p2 is not null and c is not null') as mv:
+                await wait_for_view(cql, mv.split('.')[1], 1)
                 # the metric total_view_updates_pushed_local is incremented by 1 for each 100 row view
                 # updates, because it is collected in batches according to max_rows_for_view_updates.
                 # To verify the behavior, we want the metric to increase by at least 2 without the optimization,
@@ -138,6 +139,7 @@ async def test_base_partition_deletion_in_batch_with_delete_row_with_metrics(man
             insert = cql.prepare(f'INSERT INTO {table} (p,c,v) VALUES (?,?,?)')
             # The view partition key is the same as the base partition key.
             async with new_materialized_view(manager, table, '*', '(p,c),v', 'p is not null and c is not null and v is not null') as mv:
+                await wait_for_view(cql, mv.split('.')[1], 1)
                 N = 101 # See comment above
                 for i in range(N):
                     await cql.run_async(insert, [1, 10, i])

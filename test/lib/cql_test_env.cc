@@ -11,6 +11,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
 #include "gms/generation-number.hh"
+#include "db/view/view_building_worker.hh"
 #include "replica/database_fwd.hh"
 #include "test/lib/cql_test_env.hh"
 #include "cdc/generation_service.hh"
@@ -43,6 +44,7 @@
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
 #include "schema/schema_builder.hh"
+#include "db/view/view_building_state.hh"
 #include "test/lib/tmpdir.hh"
 #include "test/lib/log.hh"
 #include "db/view/view_builder.hh"
@@ -140,11 +142,13 @@ private:
     sharded<cql3::query_processor> _qp;
     sharded<auth::service> _auth_service;
     sharded<db::view::view_builder> _view_builder;
+    sharded<db::view::view_building_worker> _view_building_worker;
     sharded<db::view::view_update_generator> _view_update_generator;
     sharded<service::migration_notifier> _mnotifier;
     sharded<qos::service_level_controller> _sl_controller;
     sharded<qos::service_level_controller::auth_integration> _sl_controller_auth_integration;
     sharded<service::topology_state_machine> _topology_state_machine;
+    sharded<db::view::view_building_state_machine> _view_building_state_machine;
     sharded<utils::walltime_compressor_tracker> _compressor_tracker;
     sharded<service::migration_manager> _mm;
     sharded<db::batchlog_manager> _batchlog_manager;
@@ -360,6 +364,10 @@ public:
 
     virtual db::view::view_update_generator& local_view_update_generator() override {
         return _view_update_generator.local();
+    }
+
+    virtual distributed<db::view::view_building_worker>& view_building_worker() override {
+        return _view_building_worker;
     }
 
     virtual service::migration_notifier& local_mnotifier() override {
@@ -898,6 +906,11 @@ private:
                 _topology_state_machine.stop().get();
             });
 
+            _view_building_state_machine.start().get();
+            auto stop_view_building_state_machine = defer_verbose_shutdown("view building state machine", [this] {
+                _view_building_state_machine.stop().get();
+            });
+
             service::raft_group0 group0_service{
                     abort_sources.local(), _group0_registry.local(), _ms,
                     _gossiper.local(), _feature_service.local(), _sys_ks.local(), group0_client, scheduling_groups.gossip_scheduling_group};
@@ -916,7 +929,7 @@ private:
                 _view_builder.stop().get();
             });
 
-            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
+            _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
 
             _ss.start(std::ref(abort_sources), std::ref(_db),
@@ -936,6 +949,7 @@ private:
                 std::ref(_qp),
                 std::ref(_sl_controller),
                 std::ref(_topology_state_machine),
+                std::ref(_view_building_state_machine),
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,
@@ -1008,7 +1022,7 @@ private:
             });
 
             if (cfg_in.need_remote_proxy) {
-                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(_paxos_store), std::ref(group0_client), std::ref(_topology_state_machine)).get();
+                _proxy.invoke_on_all(&service::storage_proxy::start_remote, std::ref(_ms), std::ref(_gossiper), std::ref(_mm), std::ref(_sys_ks), std::ref(_paxos_store), std::ref(group0_client), std::ref(_topology_state_machine), std::ref(_view_building_state_machine)).get();
             }
             auto stop_proxy_remote = defer_verbose_shutdown("storage proxy RPC verbs", [this, need = cfg_in.need_remote_proxy] {
                 if (need) {
@@ -1062,6 +1076,11 @@ private:
             });
 
             group0_service.setup_group0_if_exist(_sys_ks.local(), _ss.local(), _qp.local(), _mm.local()).get();
+
+            _view_building_worker.start(std::ref(_db), std::ref(_sys_ks), std::ref(_mnotifier), std::ref(group0_client), std::ref(_view_update_generator), std::ref(_ms), std::ref(_view_building_state_machine)).get();
+            auto stop_view_building_worker = defer_verbose_shutdown("view building worker", [this] {
+                _view_building_worker.stop().get();
+            });
 
             const auto generation_number = gms::generation_type(_sys_ks.local().increment_and_get_generation().get());
 
