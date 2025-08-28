@@ -438,6 +438,7 @@ class load_balancer {
         uint64_t tablet_count = 0;
         std::optional<uint64_t> capacity; // Invariant: bool(capacity) || drained.
         bool drained = false;
+        bool excluded = false; // Permanently down, marked so by "nodetool removenode".
         const locator::node* node; // never nullptr
 
         // The average shard load on this node.
@@ -834,7 +835,8 @@ public:
         };
         // TODO: share code with make_plan()
         topo.for_each_node([&] (const locator::node& node) {
-            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+            bool is_drained = node.is_drained()
+                              || node.get_state() == locator::node::state::being_decommissioned
                               || node.get_state() == locator::node::state::being_removed;
             if (node.get_state() == locator::node::state::normal || is_drained) {
                 ensure_node(node.host_id());
@@ -1244,7 +1246,7 @@ public:
 
         std::unordered_map<sstring, unsigned> shards_per_dc;
         _tm->for_each_token_owner([&] (const node& n) {
-            if (n.is_normal()) {
+            if (n.is_normal() && !n.is_drained()) {
                 shards_per_dc[n.dc_rack().dc] += n.get_shard_count();
             }
         });
@@ -2715,7 +2717,8 @@ public:
             }
 
             tablet_transition_kind kind = (src_node_info.state() == locator::node::state::being_removed
-                                           || src_node_info.state() == locator::node::state::left)
+                                           || src_node_info.state() == locator::node::state::left
+                                           || (src_node_info.drained && src_node_info.excluded))
                        ? locator::choose_rebuild_transition_kind(_db.features()) : tablet_transition_kind::migration;
             auto mig = get_migration_info(source_tablets, kind, src, dst);
             auto mig_streaming_info = get_migration_streaming_infos(topo, tmap, mig);
@@ -2863,6 +2866,7 @@ public:
             load.node = node;
             load.shard_count = node->get_shard_count();
             load.shards.resize(load.shard_count);
+            load.excluded = node->is_excluded();
             if (!load.shard_count) {
                 throw std::runtime_error(format("Shard count of {} not found in topology", host));
             }
@@ -2878,17 +2882,18 @@ public:
             if (node.dc_rack().dc != dc) {
                 return;
             }
-            bool is_drained = node.get_state() == locator::node::state::being_decommissioned
+            bool is_drained = node.is_drained()
+                              || node.get_state() == locator::node::state::being_decommissioned
                               || node.get_state() == locator::node::state::being_removed;
             if (node.get_state() == locator::node::state::normal || is_drained) {
-                if (is_drained) {
+                if (node.is_excluded()) {
+                    // Excluded nodes should not be chosen as targets for migration.
+                    lblogger.debug("Ignoring excluded node {}: state={}", node.host_id(), node.get_state());
+                } else if (is_drained) {
                     ensure_node(node.host_id());
                     lblogger.info("Will drain node {} ({}) from DC {}", node.host_id(), node.get_state(), dc);
                     nodes_to_drain.emplace(node.host_id());
                     nodes[node.host_id()].drained = true;
-                } else if (node.is_excluded()) {
-                    // Excluded nodes should not be chosen as targets for migration.
-                    lblogger.debug("Ignoring excluded node {}: state={}", node.host_id(), node.get_state());
                 } else {
                     ensure_node(node.host_id());
                 }
@@ -3012,9 +3017,9 @@ public:
             }
             auto level = (read + write) > 0 ? seastar::log_level::info : seastar::log_level::debug;
             lblogger.log(level, "Node {}: dc={} rack={} load={} tablets={} shards={} tablets/shard={} state={} cap={}"
-                                " stream_read={} stream_write={}",
+                                " stream_read={} stream_write={} drained={}",
                          host, dc, load.rack(), load.avg_load, load.tablet_count, load.shard_count,
-                         load.tablets_per_shard(), load.state(), load.capacity, read, write);
+                         load.tablets_per_shard(), load.state(), load.capacity, read, write, load.drained);
         }
 
         if (!min_load_node) {
