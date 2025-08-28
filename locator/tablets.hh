@@ -161,6 +161,31 @@ enum class tablet_task_type {
 sstring tablet_task_type_to_string(tablet_task_type);
 tablet_task_type tablet_task_type_from_string(const sstring&);
 
+
+// - regular (regular incremental repair): The incremental repair logic is enabled.
+//   Unrepaired sstables will be included for repair. Repaired sstables will be
+//   skipped. The incremental repair states will be updated after repair.
+
+// - full (full incremental repair): The incremental repair logic is enabled.
+//   Both repaired and unrepaired sstables will be included for repair. The
+//   incremental repair states will be updated after repair.
+
+// - disabled (non incremental repair): The incremental repair logic is disabled
+//   completely. The incremental repair states, e.g., repaired_at in sstables and
+//   sstables_repaired_at in system.tablets table, will not be updated after
+//   repair.
+enum class tablet_repair_incremental_mode : uint8_t {
+    regular,
+    full,
+    disabled,
+};
+
+constexpr tablet_repair_incremental_mode default_tablet_repair_incremental_mode{tablet_repair_incremental_mode::regular};
+
+sstring tablet_repair_incremental_mode_to_string(tablet_repair_incremental_mode);
+tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const sstring&);
+
+
 struct tablet_task_info {
     tablet_task_type request_type = tablet_task_type::none;
     locator::tablet_task_id tablet_task_id;
@@ -169,12 +194,13 @@ struct tablet_task_info {
     db_clock::time_point sched_time;
     std::unordered_set<locator::host_id> repair_hosts_filter;
     std::unordered_set<sstring> repair_dcs_filter;
+    tablet_repair_incremental_mode repair_incremental_mode = tablet_repair_incremental_mode::disabled;
     bool operator==(const tablet_task_info&) const = default;
     bool is_valid() const;
     bool is_user_repair_request() const;
     bool selected_by_filters(const tablet_replica& replica, const topology& topo) const;
-    static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
-    static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {});
+    static tablet_task_info make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {}, tablet_repair_incremental_mode incremental = default_tablet_repair_incremental_mode);
+    static tablet_task_info make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter = {}, std::unordered_set<sstring> dcs_filter = {}, tablet_repair_incremental_mode incremental = default_tablet_repair_incremental_mode);
     static tablet_task_info make_migration_request();
     static tablet_task_info make_intranode_migration_request();
     static tablet_task_info make_split_request();
@@ -848,4 +874,9 @@ struct fmt::formatter<locator::tablet_task_info> : fmt::formatter<string_view> {
 template <>
 struct fmt::formatter<locator::tablet_task_type> : fmt::formatter<string_view> {
     auto format(const locator::tablet_task_type&, fmt::format_context& ctx) const -> decltype(ctx.out());
+};
+
+template <>
+struct fmt::formatter<locator::tablet_repair_incremental_mode> : fmt::formatter<string_view> {
+    auto format(const locator::tablet_repair_incremental_mode&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };

@@ -76,6 +76,7 @@ schema_ptr make_tablets_schema() {
             .with_column("repair_task_info", tablet_task_info_type)
             .with_column("repair_scheduler_config", repair_scheduler_config_type, column_kind::static_column)
             .with_column("sstables_repaired_at", long_type)
+            .with_column("repair_incremental_mode", utf8_type)
             .with_column("migration_task_info", tablet_task_info_type)
             .with_column("resize_task_info", tablet_task_info_type, column_kind::static_column)
             .with_column("base_table", uuid_type, column_kind::static_column)
@@ -150,6 +151,9 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
         if (features.tablet_repair_scheduler) {
             if (tablet.repair_task_info.is_valid()) {
                 m.set_clustered_cell(ck, "repair_task_info", tablet_task_info_to_data_value(tablet.repair_task_info), ts);
+                if (features.tablet_incremental_repair) {
+                    m.set_clustered_cell(ck, "repair_incremental_mode", locator::tablet_repair_incremental_mode_to_string(tablet.repair_task_info.repair_incremental_mode), ts);
+                }
             }
             if (tablet.repair_time != db_clock::time_point{}) {
                 m.set_clustered_cell(ck, "repair_time", data_value(tablet.repair_time), ts);
@@ -278,15 +282,23 @@ tablet_mutation_builder::set_sstables_repair_at(dht::token last_token, int64_t s
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::set_repair_task_info(dht::token last_token, locator::tablet_task_info repair_task_info) {
+tablet_mutation_builder::set_repair_task_info(dht::token last_token, locator::tablet_task_info repair_task_info, const gms::feature_service& features) {
     _m.set_clustered_cell(get_ck(last_token), "repair_task_info", tablet_task_info_to_data_value(repair_task_info), _ts);
+    if (features.tablet_incremental_repair) {
+        auto mode = locator::tablet_repair_incremental_mode_to_string(repair_task_info.repair_incremental_mode);
+        _m.set_clustered_cell(get_ck(last_token), "repair_incremental_mode", data_value(mode), _ts);
+    }
     return *this;
 }
 
 tablet_mutation_builder&
-tablet_mutation_builder::del_repair_task_info(dht::token last_token) {
+tablet_mutation_builder::del_repair_task_info(dht::token last_token, const gms::feature_service& features) {
     auto col = _s->get_column_definition("repair_task_info");
     _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    if (features.tablet_incremental_repair) {
+        auto col = _s->get_column_definition("repair_incremental_mode");
+        _m.set_clustered_cell(get_ck(last_token), *col, atomic_cell::make_dead(_ts, gc_clock::now()));
+    }
     return *this;
 }
 
@@ -369,6 +381,7 @@ locator::tablet_task_info tablet_task_info_from_cell(const data_value& v) {
         value_cast<db_clock::time_point>(dv[4]),
         locator::tablet_task_info::deserialize_repair_hosts_filter(value_cast<sstring>(dv[5])),
         locator::tablet_task_info::deserialize_repair_dcs_filter(value_cast<sstring>(dv[6])),
+        locator::tablet_repair_incremental_mode::disabled,
     };
     return result;
 }
@@ -568,6 +581,10 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
     locator::tablet_task_info repair_task_info;
     if (row.has("repair_task_info")) {
         repair_task_info = deserialize_tablet_task_info(row.get_view("repair_task_info"));
+        if (row.has("repair_incremental_mode")) {
+            auto inc = row.get_as<sstring>("repair_incremental_mode");
+            repair_task_info.repair_incremental_mode = locator::tablet_repair_incremental_mode_from_string(inc);
+        }
     }
 
     locator::tablet_task_info migration_task_info;
