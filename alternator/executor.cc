@@ -560,7 +560,7 @@ static std::optional<int> get_int_attribute(const rjson::value& value, std::stri
 }
 
 // Sets a KeySchema object inside the given JSON parent describing the key
-// attributes of the the given schema as being either HASH or RANGE keys.
+// attributes of the given schema as being either HASH or RANGE keys.
 // Additionally, adds to a given map mappings between the key attribute
 // names and their type (as a DynamoDB type string).
 void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>* attribute_types) {
@@ -761,7 +761,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
                 sstring index_name = cf_name.substr(delim_it + 1);
                 rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
                 rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
-                // Add indexes's KeySchema and collect types for AttributeDefinitions:
+                // Add indexes' KeySchema and collect types for AttributeDefinitions:
                 executor::describe_key_schema(view_entry, *vptr, key_attribute_types);
                 // Add projection type
                 rjson::value projection = rjson::empty_object();
@@ -2215,7 +2215,7 @@ std::unordered_map<bytes, std::string> si_key_attributes(data_dictionary::table 
 //   case, this function simply won't be called for this attribute.)
 //
 // This function checks if the given attribute update is an update to some
-// GSI's key, and if the value is unsuitable, a api_error::validation is
+// GSI's key, and if the value is unsuitable, an api_error::validation is
 // thrown. The checking here is similar to the checking done in
 // get_key_from_typed_value() for the base table's key columns.
 //
@@ -3264,7 +3264,7 @@ static bool hierarchy_filter(rjson::value& val, const attribute_path_map_node<T>
     return true;
 }
 
-// Add a path to a attribute_path_map. Throws a validation error if the path
+// Add a path to an attribute_path_map. Throws a validation error if the path
 // "overlaps" with one already in the filter (one is a sub-path of the other)
 // or "conflicts" with it (both a member and index is requested).
 template<typename T>

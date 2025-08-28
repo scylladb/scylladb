@@ -30,7 +30,7 @@ namespace alternator {
 
 // expiration_service is a sharded service responsible for cleaning up expired
 // items in all tables with per-item expiration enabled. Currently, this means
-// Alternator tables with TTL configured via a UpdateTimeToLeave request.
+// Alternator tables with TTL configured via a UpdateTimeToLive request.
 class expiration_service final : public seastar::peering_sharded_service<expiration_service> {
 public:
     // Object holding per-shard statistics related to the expiration service.
@@ -52,7 +52,7 @@ private:
     data_dictionary::database _db;
     service::storage_proxy& _proxy;
     gms::gossiper& _gossiper;
-    // _end is set by start(), and resolves when the the background service
+    // _end is set by start(), and resolves when the background service
     // started by it ends. To ask the background service to end, _abort_source
     // should be triggered. stop() below uses both _abort_source and _end.
     std::optional<future<>> _end;

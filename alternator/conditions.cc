@@ -618,7 +618,7 @@ conditional_operator_type get_conditional_operator(const rjson::value& req) {
 // Check if the existing values of the item (previous_item) match the
 // conditions given by the Expected and ConditionalOperator parameters
 // (if they exist) in the request (an UpdateItem, PutItem or DeleteItem).
-// This function can throw an ValidationException API error if there
+// This function can throw a ValidationException API error if there
 // are errors in the format of the condition itself.
 bool verify_expected(const rjson::value& req, const rjson::value* previous_item) {
     const rjson::value* expected = rjson::find(req, "Expected");
