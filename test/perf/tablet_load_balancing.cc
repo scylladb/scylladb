@@ -257,39 +257,70 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
     auto cfg = tablet_cql_test_config();
     results global_res;
     co_await do_with_cql_env_thread([&] (auto& e) {
-        const int n_hosts = p.nodes;
+        SCYLLA_ASSERT(p.nodes > 0);
+        SCYLLA_ASSERT(p.rf1 > 0);
+        SCYLLA_ASSERT(p.rf2 > 0);
+
+        const size_t n_hosts = p.nodes;
+        const size_t rf1 = p.rf1;
+        const size_t rf2 = p.rf2;
         const shard_id shard_count = p.shards;
         const int cycles = p.iterations;
 
+        struct host_info {
+            host_id id;
+            endpoint_dc_rack dc_rack;
+        };
+
         topology_builder topo(e);
-        std::vector<host_id> hosts;
+        std::vector<endpoint_dc_rack> racks;
+        std::vector<host_info> hosts;
         locator::load_stats stats;
 
-        auto add_host = [&] {
-            auto host = topo.add_node(service::node_state::normal, shard_count);
-            hosts.push_back(host);
+        auto populate_racks = [&] (const size_t count) {
+            SCYLLA_ASSERT(count > 0);
+            racks.push_back(topo.rack());
+            for (size_t i = 0; i < count - 1; ++i) {
+                racks.push_back(topo.start_new_rack());
+            }
+        };
+
+        const sstring dc1 = topo.dc();
+        populate_racks(rf1);
+
+        topo.start_new_dc();
+        const sstring dc2 = topo.dc();
+        populate_racks(rf2);
+
+        const size_t rack_count = racks.size();
+
+        auto add_host = [&] (endpoint_dc_rack dc_rack) {
+            auto host = topo.add_node(service::node_state::normal, shard_count, dc_rack);
+            hosts.emplace_back(host, dc_rack);
             stats.capacity[host] = default_target_tablet_size * shard_count;
-            testlog.info("Added new node: {}", host);
+            testlog.info("Added new node: {} / {}:{}", host, dc_rack.dc, dc_rack.rack);
         };
 
         auto make_stats = [&] {
             return make_lw_shared<locator::load_stats>(stats);
         };
 
-        for (int i = 0; i < n_hosts; ++i) {
-            add_host();
+        for (size_t i = 0; i < n_hosts; ++i) {
+            add_host(racks[i % rack_count]);
         }
 
         auto& stm = e.shared_token_metadata().local();
 
-        auto bootstrap = [&] {
-            add_host();
+        auto bootstrap = [&] (endpoint_dc_rack dc_rack) {
+            add_host(std::move(dc_rack));
             global_res.stats += rebalance_tablets(e, make_stats());
         };
 
         auto decommission = [&] (host_id host) {
-            auto i = std::distance(hosts.begin(), std::find(hosts.begin(), hosts.end(), host));
-            if ((size_t)i == hosts.size()) {
+            const auto it = std::ranges::find_if(hosts, [&] (const host_info& info) {
+                return info.id == host;
+            });
+            if (it == hosts.end()) {
                 throw std::runtime_error(format("No such host: {}", host));
             }
             topo.set_node_state(host, service::node_state::decommissioning);
@@ -299,11 +330,11 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             }
             topo.set_node_state(host, service::node_state::left);
             testlog.info("Node decommissioned: {}", host);
-            hosts.erase(hosts.begin() + i);
+            hosts.erase(it);
         };
 
-        auto ks1 = add_keyspace(e, {{topo.dc(), p.rf1}}, p.tablets1.value_or(1));
-        auto ks2 = add_keyspace(e, {{topo.dc(), p.rf2}}, p.tablets2.value_or(1));
+        auto ks1 = add_keyspace(e, {{dc1, rf1}, {dc2, 0}}, p.tablets1.value_or(1));
+        auto ks2 = add_keyspace(e, {{dc1, 0}, {dc2, rf2}}, p.tablets2.value_or(1));
         auto id1 = add_table(e, ks1).get();
         auto id2 = add_table(e, ks2).get();
         schema_ptr s1 = e.local_db().find_schema(id1);
@@ -323,7 +354,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 min_max_tracker<uint64_t> node_load_minmax;
                 uint64_t sum_node_load = 0;
                 uint64_t shard_count = 0;
-                for (auto h: hosts) {
+                for (auto [h, _] : hosts) {
                     auto minmax = load.get_shard_minmax(h);
                     auto node_load = load.get_load(h);
                     auto avg_shard_load = load.get_real_avg_shard_load(h);
@@ -376,10 +407,12 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         global_res.init = global_res.worst = check_balance();
 
         for (int i = 0; i < cycles; i++) {
-            bootstrap();
+            const auto [id, dc_rack] = hosts[0];
+
+            bootstrap(dc_rack);
             check_balance();
 
-            decommission(hosts[0]);
+            decommission(id);
             global_res.last = check_balance();
         }
     }, cfg);
@@ -424,12 +457,16 @@ future<> run_simulation(const params& p, const sstring& name = "") {
 
 future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
     for (auto i = 0; i < app_cfg["runs"].as<int>(); i++) {
+        constexpr int MIN_RF = 1;
+        constexpr int MAX_RF = 3;
+
         auto shards = 1 << tests::random::get_int(0, 8);
-        auto rf1 = tests::random::get_int(1, 3);
-        auto rf2 = tests::random::get_int(1, 3);
+        auto rf1 = tests::random::get_int(MIN_RF, MAX_RF);
+        auto rf2 = tests::random::get_int(MIN_RF, MAX_RF);
         auto scale1 = 1 << tests::random::get_int(0, 5);
         auto scale2 = 1 << tests::random::get_int(0, 5);
-        auto nodes = tests::random::get_int(3, 6);
+        auto nodes = tests::random::get_int(rf1 + rf2, 2 *  MAX_RF);
+
         params p {
             .iterations = app_cfg["iterations"].as<int>(),
             .nodes = nodes,
