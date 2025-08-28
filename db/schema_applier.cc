@@ -985,7 +985,7 @@ future<> schema_applier::finalize_tables_and_views() {
     // We must do it after tables are dropped so that table snapshot doesn't experience missing tablet map,
     // and so that compaction groups are not destroyed altogether.
     // TODO: maybe untangle this dependency
-    if (diff.pending_token_metadata.local()) {
+    if (_tablet_hint) {
         co_await _ss.local().commit_tablet_metadata(diff.pending_token_metadata.local());
     }
 
