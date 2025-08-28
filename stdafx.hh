@@ -3,6 +3,9 @@
 
 #pragma once
 
+// ccache:disable
+// NOTE: ccache disable comment has to be in first 4096 bytes of this file
+
 #ifdef SCYLLA_USE_PRECOMPILED_HEADER
 
 #include <absl/container/btree_set.h>
@@ -154,7 +157,6 @@
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/core/align.hh>
 #include <seastar/core/app-template.hh>
-#include <seastar/core/array_map.hh>
 #include <seastar/core/bitops.hh>
 #include <seastar/core/bitset-iter.hh>
 #include <seastar/core/byteorder.hh>
@@ -193,7 +195,6 @@
 #include <seastar/core/internal/run_in_background.hh>
 #include <seastar/core/io_priority_class.hh>
 #include <seastar/core/iostream.hh>
-#include <seastar/core/linux-aio.hh>
 #include <seastar/core/loop.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/make_task.hh>
@@ -254,7 +255,6 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/http/api_docs.hh>
-#include <seastar/http/chunk_parsers.hh>
 #include <seastar/http/client.hh>
 #include <seastar/http/common.hh>
 #include <seastar/http/connection_factory.hh>
@@ -301,14 +301,6 @@
 #include <seastar/net/virtio.hh>
 #include <seastar/rpc/rpc.hh>
 #include <seastar/rpc/rpc_types.hh>
-#include <seastar/testing/entry_point.hh>
-#include <seastar/testing/exchanger.hh>
-#include <seastar/testing/linux_perf_event.hh>
-#include <seastar/testing/random.hh>
-#include <seastar/testing/seastar_test.hh>
-#include <seastar/testing/test_case.hh>
-#include <seastar/testing/test_runner.hh>
-#include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/alloc_failure_injector.hh>
 #include <seastar/util/assert.hh>
 #include <seastar/util/backtrace.hh>
