@@ -21,8 +21,7 @@ target_link_libraries(tools
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    db
-    scylla-precompiled-header)
+    db)
 
 include(build_submodule)
 build_submodule(cqlsh cqlsh)

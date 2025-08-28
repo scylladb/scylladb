@@ -14,8 +14,7 @@ target_link_libraries(message
     Seastar::seastar
     absl::headers
   PRIVATE
-    idl
-    scylla-precompiled-header)
+    idl)
 
 check_headers(check-headers message
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

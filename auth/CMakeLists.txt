@@ -40,8 +40,7 @@ target_link_libraries(scylla_auth
     idl
     ldap
     wasmtime_bindings
-    libxcrypt::libxcrypt
-    scylla-precompiled-header)
+    libxcrypt::libxcrypt)
 
 add_whole_archive(auth scylla_auth)
 

@@ -85,8 +85,7 @@ target_link_libraries(utils
     cryptopp::cryptopp
     rapidxml::rapidxml
     yaml-cpp::yaml-cpp
-    GnuTLS::gnutls
-    scylla-precompiled-header)
+    GnuTLS::gnutls)
 
 check_headers(check-headers utils
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

@@ -51,8 +51,7 @@ target_link_libraries(service
     raft
     repair
     streaming
-    systemd
-    scylla-precompiled-header)
+    systemd)
 
 check_headers(check-headers service
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
