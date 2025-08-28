@@ -4388,7 +4388,7 @@ SEASTAR_TEST_CASE(test_populating_cache_with_expired_and_nonexpired_tombstones) 
         schema_ptr s = t.schema();
 
         // emulate commitlog behaivor
-        t.get_compaction_manager().get_shared_tombstone_gc_state().set_gc_time_min_source([s](const table_id& id) {
+        t.get_compaction_manager().get_shared_tombstone_gc_state().set_gc_time_min_source([s](const table_id& id, const db::rp_set*) {
             return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
@@ -4583,7 +4583,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
         tombstone_gc_state gc_state(gc_shared_state);
 
         // emulate commitlog behaivor
-        gc_shared_state.set_gc_time_min_source([&s](const table_id& id) {
+        gc_shared_state.set_gc_time_min_source([&s](const table_id& id, const db::rp_set*) {
                 return gc_clock::now() - (std::chrono::seconds(s->gc_grace_seconds().count() + 600));
         });
 
