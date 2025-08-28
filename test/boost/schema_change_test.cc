@@ -756,6 +756,7 @@ future<> test_schema_digest_does_not_change_with_disabled_features(sstring data_
         std::set<sstring> disabled_features, std::vector<utils::UUID> expected_digests,
         std::function<void(cql_test_env& e)> extra_schema_changes,
         std::shared_ptr<db::extensions> extensions = std::make_shared<db::extensions>()) {
+
     using namespace db;
     using namespace db::schema_tables;
 
@@ -871,9 +872,10 @@ SEASTAR_TEST_CASE(test_schema_digest_does_not_change_without_digest_feature) {
         utils::UUID("e69a05e8-80a6-3e8f-bd34-1b5837374c79"),
         utils::UUID("de49e92f-a00d-3f24-8779-d07de26708cb"),
     };
-    return test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test",
+    co_await test_schema_digest_does_not_change_with_disabled_features("./test/resource/sstables/schema_digest_test",
             std::set<sstring>{"COMPUTED_COLUMNS", "CDC", "KEYSPACE_STORAGE_OPTIONS", "TABLE_DIGEST_INSENSITIVE_TO_EXPIRY"},
             std::move(expected_digests), [] (cql_test_env& e) {});
+    assert(false);
 }
 
 SEASTAR_TEST_CASE(test_schema_digest_does_not_change_after_computed_columns_without_digest_feature) {

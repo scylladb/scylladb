@@ -1,0 +1,165 @@
+INFO  2025-08-26 17:43:56,981 seastar - Reactor backend: linux-aio
+INFO  2025-08-26 17:43:56,982 seastar - Perf-based stall detector creation failed (EACCESS), try setting /proc/sys/kernel/perf_event_paranoid to 1 or less to enable kernel backtraces: falling back to posix timer.
+INFO  2025-08-26 17:43:56,983 [shard 0:main] seastar - IO queue was unable to find a suitable maximum request length, the search was cut-off early at: 16MB
+INFO  2025-08-26 17:43:56,983 [shard 0:main] seastar - IO queue was unable to find a suitable maximum request length, the search was cut-off early at: 16MB
+random-seed=3508069738
+INFO  2025-08-26 17:43:57,055 [shard 0:main] seastar - updated: blocked-reactor-notify-ms=1000000
+INFO  2025-08-26 17:43:57,055 [shard 1:main] seastar - updated: blocked-reactor-notify-ms=1000000
+INFO  2025-08-26 17:43:57,058 [shard 0:main] task_manager - Registered module compaction
+INFO  2025-08-26 17:43:57,058 [shard 1:main] task_manager - Registered module compaction
+INFO  2025-08-26 17:43:57,058 [shard 0:main] compaction_manager - Set unlimited compaction bandwidth
+INFO  2025-08-26 17:43:57,061 [shard 0:main] seastar - updated: blocked-reactor-notify-ms=2000000
+INFO  2025-08-26 17:43:57,061 [shard 1:main] seastar - updated: blocked-reactor-notify-ms=2000000
+INFO  2025-08-26 17:43:57,062 [shard 0:main] vector_store_client - Vector Store service URI is empty, disabling Vector Store service
+INFO  2025-08-26 17:43:57,062 [shard 1:main] vector_store_client - Vector Store service URI is empty, disabling Vector Store service
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Populating Keyspace system_schema
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF scylla_aggregates id=08d8cb28-9202-3371-a968-ad926e0fdc37 version=0932cbed-85be-3dd2-b382-ebc0a1b8ff67 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/scylla_aggregates-08d8cb2892023371a968ad926e0fdc37
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF scylla_keyspaces id=fa0ea2bd-608f-3e74-9b1e-b84b46b33adf version=870d0877-ce04-39f9-b424-b52e3357482f storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/scylla_keyspaces-fa0ea2bd608f3e749b1eb84b46b33adf
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF scylla_tables id=5d912ff1-f759-3665-b2c8-8042ab5103dd version=1cd1fbf6-7ec2-39c0-bd43-84d0662bc7be storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/scylla_tables-5d912ff1f7593665b2c88042ab5103dd
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF columns id=24101c25-a2ae-3af7-87c1-b40ee1aca33f version=965bb399-b6ce-3719-a2ab-c553007ca96d storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/columns-24101c25a2ae3af787c1b40ee1aca33f
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF dropped_columns id=5e7583b5-f3f4-3af1-9a39-b7e1d6f5f11f version=991656e6-6c75-3880-8773-94ef09ea20e9 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/dropped_columns-5e7583b5f3f43af19a39b7e1d6f5f11f
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF triggers id=4df70b66-6b05-3251-95a1-32b54005fd48 version=93d9681a-4c75-3eee-8ee0-fca7551d4b6d storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/triggers-4df70b666b05325195a132b54005fd48
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF types id=5a8b1ca8-6602-3f77-a045-9273d308917a version=de9c5552-145c-3374-9d6d-6c26e699a4c5 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/types-5a8b1ca866023f77a0459273d308917a
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF keyspaces id=abac5682-dea6-31c5-b535-b3d6cffd0fb6 version=717dd966-cae2-323f-9d14-a71f0c7332a9 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/keyspaces-abac5682dea631c5b535b3d6cffd0fb6
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF functions id=96489b79-80be-3e14-a701-66a0b9159450 version=b115589d-0bec-3f6a-9146-b649316c4e90 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/functions-96489b7980be3e14a70166a0b9159450
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF aggregates id=924c5587-2e3a-345b-b10c-12f37c1ba895 version=92ed268a-46ff-3368-a6b0-85003702d44f storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/aggregates-924c55872e3a345bb10c12f37c1ba895
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF tables id=afddfb9d-bc1e-3068-8056-eed6c302ba09 version=5fd800ab-c110-3c56-9ca7-0fba0e76741a storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/tables-afddfb9dbc1e30688056eed6c302ba09
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF indexes id=0feb57ac-311f-382f-ba6d-9024d305702f version=981e19d8-4580-3f54-9995-0c2a0aa548e8 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/indexes-0feb57ac311f382fba6d9024d305702f
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF computed_columns id=cc7c7069-3740-33c1-92a4-c3de78dbd2c4 version=aaac493b-441b-325d-afc6-66750f3182da storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/computed_columns-cc7c7069374033c192a4c3de78dbd2c4
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF views id=9786ac1c-dd58-3201-a7cd-ad556410c985 version=0b48b48c-f4c4-3aeb-ac54-b2edf89b3e51 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/views-9786ac1cdd583201a7cdad556410c985
+INFO  2025-08-26 17:43:57,102 [shard 0:main] database - Keyspace system_schema: Reading CF view_virtual_columns id=08843b63-45dc-3be2-9798-a0418295cfaa version=3d503008-db1e-3a76-88f4-aef847668f2d storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system_schema/view_virtual_columns-08843b6345dc3be29798a0418295cfaa
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Populating Keyspace system
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF schema_functions id=d1b675fe-2b50-3ca4-8e49-c0f81989dcad version=71e3c821-e90d-3156-8620-7dc458ae59a4 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/schema_functions-d1b675fe2b503ca48e49c0f81989dcad
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF schema_triggers id=0359bc71-7123-3ee1-9a4a-b9dfb11fc125 version=9841b830-c839-3627-ae16-e76288d76e46 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/schema_triggers-0359bc7171233ee19a4ab9dfb11fc125
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF schema_columns id=296e9c04-9bec-3085-827d-c17d3df2122a version=8aba3be5-6206-37d9-8096-eaea206088f9 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/schema_columns-296e9c049bec3085827dc17d3df2122a
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF schema_columnfamilies id=45f5b360-24bc-3f83-a363-1034ea4fa697 version=0e2f35a4-7701-3b62-b150-ff40b5c3bd91 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/schema_columnfamilies-45f5b36024bc3f83a3631034ea4fa697
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF schema_keyspaces id=b0f22357-4458-3cdb-9631-c43e59ce3676 version=78ed4359-b28f-35ab-8337-0ec575c16766 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/schema_keyspaces-b0f2235744583cdb9631c43e59ce3676
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF tablets id=fd4f7a46-96bd-3e73-91bf-99eb77e82a5c version=c930e6d2-2738-3220-abca-af42a9bbdb70 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/tablets-fd4f7a4696bd3e7391bf99eb77e82a5c
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF dicts id=c9c77c6f-c08c-3303-9b94-65dd3d25f3ba version=09ac496b-dd80-3076-b2f9-842f2d345e8d storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/dicts-c9c77c6fc08c33039b9465dd3d25f3ba
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF view_build_status_v2 id=e0ab84ed-510d-374c-bcc0-973d28d13640 version=94c08ea5-c109-3def-8f30-d10d7f156faf storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/view_build_status_v2-e0ab84ed510d374cbcc0973d28d13640
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF service_levels_v2 id=961a7251-d58e-3169-ab49-3391eec5b75d version=e8b9ecff-d293-3e3a-b350-66db1e0c6ee3 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/service_levels_v2-961a7251d58e3169ab493391eec5b75d
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF topology_requests id=b3068525-d0f2-39c2-8250-584f9b1bf460 version=c0d60460-56b3-35e2-a6de-0022f73bce59 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/topology_requests-b3068525d0f239c28250584f9b1bf460
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF cdc_generations_v3 id=c697df3f-5539-3ef5-b003-843be7ba1422 version=c2f8dfed-cc7d-3ab2-bb60-2fa985d6be3c storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/cdc_generations_v3-c697df3f55393ef5b003843be7ba1422
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF discovery id=1ef3d792-4f26-3706-a049-fc39024f49c5 version=431ad718-f6cb-3eea-8f81-6cf410d7ce60 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/discovery-1ef3d7924f263706a049fc39024f49c5
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF group0_history id=027e42f5-683a-3ed7-b404-a0100762063c version=fb2d07e3-5771-3937-955b-dd6afbd24917 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/group0_history-027e42f5683a3ed7b404a0100762063c
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF raft id=3e17774c-57f5-3993-9625-327cbafbf5bb version=9fde49b1-aaea-3986-b333-80f4c18e65ee storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/raft-3e17774c57f539939625327cbafbf5bb
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF role_members id=ea2318da-4fdd-33d0-87c1-91435088e326 version=c6943cfa-1253-32fc-9cf7-bd881a828623 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/role_members-ea2318da4fdd33d087c191435088e326
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF raft_snapshot_config id=43bba703-ec9d-3ae2-8011-d1f8476aa272 version=c485adda-07e3-353e-91ef-b0080fc511d6 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/raft_snapshot_config-43bba703ec9d3ae28011d1f8476aa272
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF peer_events id=59dfeaea-8db2-3341-91ef-109974d81484 version=3666dd8d-67a2-37af-b83f-ac2f87951bc0 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/peer_events-59dfeaea8db2334191ef109974d81484
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF commitlog_cleanups id=8cd016f4-846b-3ba2-9ed7-50eb431cd0e4 version=742133b3-db54-3085-8066-e2c9816e15ab storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/commitlog_cleanups-8cd016f4846b3ba29ed750eb431cd0e4
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF schema_aggregates id=a5fc57fc-9d6c-3bfd-a3fc-01ad54686fea version=4f202946-6654-3918-ba48-7986827d6728 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/schema_aggregates-a5fc57fc9d6c3bfda3fc01ad54686fea
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF paxos id=b7b7f0c2-fd0a-3410-8c05-3ef614bb7c2d version=9dae4803-74c7-34c4-8406-9d002f7bd447 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/paxos-b7b7f0c2fd0a34108c053ef614bb7c2d
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF corrupt_data id=0c2b57b8-3fa8-312d-bcd0-097198247a1f version=ab978e96-8af6-35f8-90f8-44ffdaa8b3a2 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/corrupt_data-0c2b57b83fa8312dbcd0097198247a1f
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF sstables id=760524a1-8b3f-3c22-a937-7be2af90b75b version=af1d4715-8d65-383a-b6c5-66cb0f5637f0 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/sstables-760524a18b3f3c22a9377be2af90b75b
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF hints id=2666e205-73ef-38b3-90fe-fecf96e8f0c7 version=92327ed9-2027-3f40-84d4-fe53b583f32b storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/hints-2666e20573ef38b390fefecf96e8f0c7
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF local id=7ad54392-bcdd-35a6-8417-4e047860b377 version=c8cb364f-e676-3306-a23f-c9f235907089 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/local-7ad54392bcdd35a684174e047860b377
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF compactions_in_progress id=55080ab0-5d9c-3886-90a4-acb25fe1f77b version=29399fd0-851f-3849-9ae7-db4d9f72a91a storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/compactions_in_progress-55080ab05d9c388690a4acb25fe1f77b
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF batchlog id=0290003c-977e-397c-ac3e-fdfdc01d626b version=1f504ac7-350f-37aa-8a9e-105b1325d8e3 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/batchlog-0290003c977e397cac3efdfdc01d626b
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF compaction_history id=b4dbb7b4-dc49-3fb5-b3bf-ce6e434832ca version=76d12eea-fe99-3390-828a-28474bb0e823 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/compaction_history-b4dbb7b4dc493fb5b3bfce6e434832ca
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF sstable_activity id=5a1ff267-ace0-3f12-8563-cfae6103c65e version=c852560d-4540-3561-94a2-fc2d140228ec storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/sstable_activity-5a1ff267ace03f128563cfae6103c65e
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF IndexInfo id=9f5c6374-d485-3229-9a0a-5094af9ad1e3 version=c5e87d6a-788b-370f-9451-64d19aff1b5a storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/IndexInfo-9f5c6374d48532299a0a5094af9ad1e3
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF repair_history id=8e097009-c753-3518-a0ec-217f75f5dffa version=d831a1a1-ead9-3957-9f7b-dd3bf4294518 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/repair_history-8e097009c7533518a0ec217f75f5dffa
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF scylla_local id=2972ec7f-fb20-38dd-aac1-d876f2e3fcbd version=51341235-72c8-3f46-b14f-e1b93fbb4207 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/scylla_local-2972ec7ffb2038ddaac1d876f2e3fcbd
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF peers id=37f71aca-7dc2-383b-a706-72528af04d4f version=dcfa29ca-8136-3973-b0e4-525eb4e0742e storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/peers-37f71aca7dc2383ba70672528af04d4f
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF schema_usertypes id=3aa75225-4f82-350b-8d5c-430fa221fa0a version=9aa2d0a6-ec73-36a0-8ad7-1f97145e75b3 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/schema_usertypes-3aa752254f82350b8d5c430fa221fa0a
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF large_rows id=40550f66-0858-39a0-9430-f27fc08034e9 version=086d8c3b-7779-30f9-8c7d-d490e20a587a storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/large_rows-40550f66085839a09430f27fc08034e9
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF role_permissions id=42d45091-4c22-3d60-994c-f4dde1153478 version=94ddd667-1941-3a98-995f-54eaf369ba5a storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/role_permissions-42d450914c223d60994cf4dde1153478
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF built_views id=4b3c50a9-ea87-3d76-9101-6dbc9c38494a version=7dd4fbd2-7793-3e91-911d-fdb02e3a9497 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/built_views-4b3c50a9ea873d7691016dbc9c38494a
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF roles id=23392e27-9e45-3292-b429-12845e17c153 version=5fde116a-2d74-3107-90b5-22fa0ddac10e storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/roles-23392e279e453292b42912845e17c153
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF topology id=5be1feb3-929e-3df9-8da8-d771c36129a0 version=217f4aa9-4b87-3331-9798-b65c3151d68a storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/topology-5be1feb3929e3df98da8d771c36129a0
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF range_xfers id=55d76438-4e55-3f8b-9f6e-676d4af3976d version=037f35d3-573f-33a2-a3c4-8ffe6eaebb90 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/range_xfers-55d764384e553f8b9f6e676d4af3976d
+INFO  2025-08-26 17:43:57,119 [shard 0:main] database - Keyspace system: Reading CF size_estimates id=618f817b-005f-3678-b8a4-53f3930b8e86 version=613ab070-8bfb-3118-aa00-227fc6375dd4 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/size_estimates-618f817b005f3678b8a453f3930b8e86
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF large_partitions id=8a7fe624-96b0-34b1-b90e-f71bddcdd2d3 version=f62deb77-a400-3cbe-a489-8ee134c20d9d storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/large_partitions-8a7fe62496b034b1b90ef71bddcdd2d3
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF scylla_table_schema_history id=0191a53e-40f0-31d4-9171-b0d19ffb17b4 version=fefc4525-f763-30fe-9e38-ace85f1fd778 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/scylla_table_schema_history-0191a53e40f031d49171b0d19ffb17b4
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF raft_snapshots id=6fa537a7-7e97-344e-9034-b69c7ef69be6 version=aa7dfdf3-05b5-389e-8c69-96171192c454 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/raft_snapshots-6fa537a77e97344e9034b69c7ef69be6
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF role_attributes id=f7c2e5a6-f361-3cbd-936a-91c7c1e1051d version=de42c8f2-2054-388f-9469-4eec740291ec storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/role_attributes-f7c2e5a6f3613cbd936a91c7c1e1051d
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF large_cells id=ead8bbc5-f146-3ae1-9f71-0b11f9a1d296 version=b1d2e97c-c06d-3ad5-a50b-2895610e3b84 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/large_cells-ead8bbc5f1463ae19f710b11f9a1d296
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF views_builds_in_progress id=b7f2c108-78cd-3c80-9cd5-d609b2bd149c version=3b4570f3-b3d5-3131-82c6-703495f4efa7 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/views_builds_in_progress-b7f2c10878cd3c809cd5d609b2bd149c
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF scylla_views_builds_in_progress id=a04c7bfd-1e13-36c9-a44d-f22da352281d version=08b2ace6-46f2-3666-82c2-4fc531ee6e19 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/scylla_views_builds_in_progress-a04c7bfd1e1336c9a44df22da352281d
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF truncated id=38c19fd0-fb86-3310-a4b7-0d0cc66628aa version=26855f4b-1fc1-35f8-ad96-4152a9835ddb storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/truncated-38c19fd0fb863310a4b70d0cc66628aa
+INFO  2025-08-26 17:43:57,120 [shard 0:main] database - Keyspace system: Reading CF cdc_local id=0bcaffd4-0c83-3ead-ad13-dc1d5015b77c version=f9f1483c-8f8a-3947-b0e7-97ced0a99de9 storage=/scylladir/testlog/x86_64/dev/scylla-57ac7169/system/cdc_local-0bcaffd40c833eadad13dc1d5015b77c
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature LOAD_AND_STREAM_ABORT_RPC_MESSAGE is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature ENFORCED_RAFT_RPC_SCHEDULING_GROUP is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature SSTABLE_COMPRESSION_DICTS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_LOAD_STATS_V2 is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_OPTIONS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature COMPRESSION_DICTS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature WORKLOAD_PRIORITIZATION is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature COLOCATED_TABLETS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature IN_MEMORY_TABLES is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_RESIZE_VIRTUAL_TASK is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_MIGRATION_VIRTUAL_TASK is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_RACK_AWARE_VIEW_PAIRING is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature REPAIR_BASED_TABLET_REBUILD is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_REPAIR_SCHEDULER is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_INCREMENTAL_REPAIR is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature FILE_STREAM is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature FRAGMENTED_COMMITLOG_ENTRIES is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature COMPACTION_HISTORY_UPGRADE is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature ADDRESS_NODES_BY_HOST_IDS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature GROUP0_LIMITED_VOTERS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature VIEW_BUILD_STATUS_ON_GROUP0 is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TOMBSTONE_GC_OPTIONS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature EMPTY_REPLICA_MUTATION_PAGES is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature EMPTY_REPLICA_PAGES is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature ALTERNATOR_TTL is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLET_MERGE is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature ZERO_TOKEN_NODES is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature UDA is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature GROUP0_SCHEMA_VERSIONING is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature COLLECTION_INDEXING is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature RANGE_SCAN_DATA_VARIANT is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature SUPPORTS_RAFT_CLUSTER_MANAGEMENT is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature SEPARATE_PAGE_SIZE_AND_SAFETY_LIMIT is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature PARALLELIZED_AGGREGATION is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature NATIVE_REVERSE_QUERIES is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature CDC_GENERATIONS_V2 is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature REPAIR_MSG_SPLIT is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature LWT_WITH_TABLETS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature MAINTENANCE_TENANT is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature UDF is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature UDA_NATIVE_PARALLELIZED_AGGREGATION is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature LARGE_COLLECTION_DETECTION is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature RANGE_TOMBSTONE_AND_DEAD_ROWS_DETECTION is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TOPOLOGY_REQUESTS_TYPE_COLUMN is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature SECONDARY_INDEXES_ON_STATIC_COLUMNS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TOPOLOGY_GLOBAL_REQUEST_QUEUE is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature AGGREGATE_STORAGE_OPTIONS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TYPED_ERRORS_IN_READ_RPC is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TABLETS is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature TRUNCATE_AS_TOPOLOGY_OPERATION is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES is enabled
+INFO  2025-08-26 17:43:57,186 [shard 0:main] features - Feature HOST_ID_BASED_HINTED_HANDOFF is enabled
+INFO  2025-08-26 17:43:57,187 [shard 0:main] storage_service - Started node_ops_abort_thread
+INFO  2025-08-26 17:43:57,187 [shard 0:main] task_manager - Registered module node_ops
+INFO  2025-08-26 17:43:57,187 [shard 0:main] task_manager - Registered module tablets
+INFO  2025-08-26 17:43:57,187 [shard 0:main] stream_session - Set unlimited streaming bandwidth
+INFO  2025-08-26 17:43:57,187 [shard 1:main] storage_service - Started node_ops_abort_thread
+INFO  2025-08-26 17:43:57,187 [shard 1:main] task_manager - Registered module node_ops
+INFO  2025-08-26 17:43:57,187 [shard 1:main] task_manager - Registered module tablets
+INFO  2025-08-26 17:43:57,196 [shard 0:main] migration_manager - Reloading schema
+INFO  2025-08-26 17:43:57,200 [shard 0:main] schema_tables - Reloading system_auth.role_members id=0ecdaa87-f8fb-3e60-88d1-74fb36fe5c0d version=bbe3c403-dbea-3e58-a037-83186a2cc61e
+INFO  2025-08-26 17:43:57,200 [shard 0:main] schema_tables - Reloading system_distributed.cdc_streams_descriptions id=249f0ac2-8856-36d4-9802-f55223eb01c2 version=f727f60d-bfaa-32de-a0d6-898e1cbaf2c9
+INFO  2025-08-26 17:43:57,200 [shard 0:main] schema_tables - Reloading system_distributed.view_build_status id=5582b59f-8e4e-35e1-b913-3acada51eb04 version=e61ea49b-8dbc-3ff6-a69f-896f4d38b7bb
+INFO  2025-08-26 17:43:57,200 [shard 0:main] schema_tables - Reloading system_auth.roles id=5bc52802-de25-35ed-aeab-188eecebb090 version=463bc3a4-2d58-3a0e-b5f3-f1659cee6d88
+INFO  2025-08-26 17:43:57,200 [shard 0:main] schema_tables - Reloading tests.table1 id=9dadf9e0-4ab6-11eb-8249-000000000000 version=13d418e8-968e-3bd8-801a-6df5e5327d44
+INFO  2025-08-26 17:43:57,201 [shard 0:main] schema_tables - Reloading ks.tbl id=9e019820-4ab6-11eb-8249-000000000000 version=75808956-93e2-331a-96cc-8dc9cdea79ca
+INFO  2025-08-26 17:43:57,201 [shard 0:main] schema_tables - Reloading system_distributed.cdc_generation_descriptions id=ae653406-7b3e-34aa-af70-d5b90f837c67 version=95e9e159-839f-39b3-990f-8e8a04817ff8
+INFO  2025-08-26 17:43:57,201 [shard 0:main] schema_tables - Reloading tests.table1_c1_idx_index id=9dd88c51-4ab6-11eb-8249-000000000000 version=91cb60d8-c27b-3e47-be81-b4d5a3713530
+INFO  2025-08-26 17:43:57,201 [shard 0:main] schema_tables - Reloading ks.tbl_view id=9e268540-4ab6-11eb-8249-000000000000 version=7eccb793-c6f4-3e84-ae35-788d03188baf
+INFO  2025-08-26 17:43:57,201 [shard 0:main] schema_tables - Reloading ks.tbl_view_2 id=9e4f42f0-4ab6-11eb-8249-000000000000 version=467deb84-d7de-36cb-a1fa-f3672cb66340
+ERROR 2025-08-26 17:43:57,208 [shard 0:main] schema_tables - schema commit failed: data_dictionary::no_such_column_family (Can't find a column family with UUID 9dd88c51-4ab6-11eb-8249-000000000000), at: /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x57c04c /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x57c350 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x57c658 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x3b56d9 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x3b58e7 0x272e0c1 0x160b29a /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x405909 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x406f15 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x406d69 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x408122 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x4073f8 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x366f46 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x366299 /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar_testing.so+0x2c8d /jenkins/workspace/scylla-master/scylla-ci/scylla/build/dev/seastar/libseastar.so+0x3b66ca /lib64/libc.so.6+0x711d3 /lib64/libc.so.6+0xf3d2b
+   --------
+   seastar::internal::coroutine_traits_base<void>::promise_type
+   --------
+   seastar::internal::coroutine_traits_base<void>::promise_type
+   --------
+   seastar::internal::coroutine_traits_base<void>::promise_type
+   --------
+   seastar::internal::coroutine_traits_base<void>::promise_type
+   --------
+   seastar::internal::coroutine_traits_base<void>::promise_type
+   --------
+   seastar::internal::coroutine_traits_base<void>::promise_type
+   --------
+   seastar::continuation<seastar::internal::promise_base_with_type<void>, seastar::noncopyable_function<seastar::future<void> (seastar::future<void>&&)>, seastar::future<void>::then_wrapped_nrvo<seastar::future<void>, seastar::noncopyable_function<seastar::future<void> (seastar::future<void>&&)> >(seastar::noncopyable_function<seastar::future<void> (seastar::future<void>&&)>&&)::{lambda(seastar::internal::promise_base_with_type<void>&&, seastar::noncopyable_function<seastar::future<void> (seastar::future<void>&&)>&, seastar::future_state<seastar::internal::monostate>&&)#1}, void>
