@@ -461,6 +461,7 @@ public:
     friend class compaction_weight_registration;
     friend class sstables::test_env_compaction_manager;
 
+    friend class compaction::compaction_task_impl;
     friend class compaction::compaction_task_executor;
     friend class compaction::sstables_task_executor;
     friend class compaction::major_compaction_task_executor;
