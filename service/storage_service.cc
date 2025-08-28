@@ -6610,13 +6610,13 @@ replica::tablet_mutation_builder storage_service::tablet_mutation_builder_for_ba
 // Repair the tablets contain the tokens and wait for the repair to finish
 // This is used to run a manual repair requested by user from the restful API.
 future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_request(table_id table, std::variant<utils::chunked_vector<dht::token>, all_tokens_tag> tokens_variant,
-        std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter, bool await_completion) {
+        std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter, bool await_completion, locator::tablet_repair_incremental_mode incremental_mode) {
     auto holder = _async_gate.hold();
 
     if (this_shard_id() != 0) {
         // group0 is only set on shard 0.
         co_return co_await container().invoke_on(0, [&] (auto& ss) {
-            return ss.add_repair_tablet_request(table, std::move(tokens_variant), std::move(hosts_filter), std::move(dcs_filter), await_completion);
+            return ss.add_repair_tablet_request(table, std::move(tokens_variant), std::move(hosts_filter), std::move(dcs_filter), await_completion, incremental_mode);
         });
     }
 
@@ -6630,12 +6630,12 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         throw std::runtime_error("The TABLET_REPAIR_SCHEDULER feature is not enabled on the cluster yet");
     }
 
-    auto repair_task_info = locator::tablet_task_info::make_user_repair_request(hosts_filter, dcs_filter);
+    auto repair_task_info = locator::tablet_task_info::make_user_repair_request(hosts_filter, dcs_filter, incremental_mode);
     auto res = std::unordered_map<sstring, sstring>{{sstring("tablet_task_id"), repair_task_info.tablet_task_id.to_sstring()}};
 
     auto start = std::chrono::steady_clock::now();
-    slogger.info("Starting tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} hosts_filter={} dcs_filter={}",
-            table, tokens, all_tokens, repair_task_info.tablet_task_id, hosts_filter, dcs_filter);
+    slogger.info("Starting tablet repair by API request table_id={} tokens={} all_tokens={} tablet_task_id={} hosts_filter={} dcs_filter={} incremental_mode={}",
+            table, tokens, all_tokens, repair_task_info.tablet_task_id, hosts_filter, dcs_filter, incremental_mode);
 
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
@@ -6668,7 +6668,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
             auto last_token = tmap.get_last_token(tid);
             updates.emplace_back(
                 tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                    .set_repair_task_info(last_token, repair_task_info)
+                    .set_repair_task_info(last_token, repair_task_info, _feature_service)
                     .build());
         }
 
@@ -6737,7 +6737,7 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
             auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
-                            .del_repair_task_info(last_token);
+                            .del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
             }

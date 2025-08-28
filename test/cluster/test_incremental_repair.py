@@ -626,3 +626,48 @@ async def test_tablet_incremental_repair_merge_error_in_merge_finalization(manag
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_merge_error_in_merge_completion_fiber(manager):
     await do_test_tablet_incremental_repair_merge_error(manager, 'merge_completion_fiber_error')
+
+@pytest.mark.asyncio
+async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
+    servers, cql, hosts, ks, table_id, logs, _, _, _, token = await preapre_cluster_for_incremental_repair(manager)
+    token = -1
+
+    sstables_repaired_at = 0
+
+    async def do_repair_and_check(incremental_mode, expected_increment, expected_log_regex, check=None):
+        nonlocal sstables_repaired_at
+        mark = await logs[0].mark()
+        if check:
+            skip1 = get_incremental_repair_sst_skipped_bytes(servers[0])
+            read1 = get_incremental_repair_sst_read_bytes(servers[0])
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode=incremental_mode)
+        sstables_repaired_at += expected_increment
+        m = await load_tablet_sstables_repaired_at(manager, cql, servers[0], hosts[0], table_id)
+        assert get_sstables_repaired_at(m, token) == sstables_repaired_at
+        await logs[0].wait_for(expected_log_regex, from_mark=mark)
+        if check:
+            skip2 = get_incremental_repair_sst_skipped_bytes(servers[0])
+            read2 = get_incremental_repair_sst_read_bytes(servers[0])
+            check(skip1, read1, skip2, read2)
+
+    def check1(skip1, read1, skip2, read2):
+        assert skip1 == 0
+        assert read1 == 0
+        assert skip2 == 0
+        assert read2 > 0
+    await do_repair_and_check(None, 1, rf'Starting tablet repair by API .* incremental_mode=regular.*', check1)
+
+    def check2(skip1, read1, skip2, read2):
+        assert skip1 == skip2
+        assert read1 == read2
+    await do_repair_and_check('disabled', 0, rf'Starting tablet repair by API .* incremental_mode=disabled.*', check2)
+
+    def check3(skip1, read1, skip2, read2):
+        assert skip1 < skip2
+        assert read1 == read2
+    await do_repair_and_check('regular', 1, rf'Starting tablet repair by API .* incremental_mode=regular.*', check3)
+
+    def check4(skip1, read1, skip2, read2):
+        assert skip1 == skip2
+        assert read1 < read2
+    await do_repair_and_check('full', 1, rf'Starting tablet repair by API .* incremental_mode=full.*', check4)

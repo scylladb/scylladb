@@ -1258,7 +1258,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_new_replicas(last_token, tmap.get_tablet_info(gid.tablet).replicas)
                 .set_stage(last_token, locator::tablet_transition_stage::repair)
                 .set_transition(last_token, locator::tablet_transition_kind::repair)
-                .set_repair_task_info(last_token, repair_task_info)
+                .set_repair_task_info(last_token, repair_task_info, _feature_service)
                 .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()))
                 .build());
     }
@@ -1687,11 +1687,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         bool valid = tinfo.repair_task_info.is_valid();
                         auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
                         auto dcs_filter = tinfo.repair_task_info.repair_dcs_filter;
+                        auto incremental = tinfo.repair_task_info.repair_incremental_mode != locator::tablet_repair_incremental_mode::disabled;
                         bool is_filter_off = hosts_filter.empty() && dcs_filter.empty();
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::end_repair);
                         auto update = get_mutation_builder()
                                         .set_stage(last_token, locator::tablet_transition_stage::end_repair)
-                                        .del_repair_task_info(last_token)
+                                        .del_repair_task_info(last_token, _feature_service)
                                         .del_session(last_token);
                         // Skip update repair time in case hosts filter or dcs filter is set.
                         if (valid && is_filter_off) {
@@ -1699,7 +1700,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             auto time = tablet_state.repair_time;
                             update.set_repair_time(last_token, time);
                             auto repaired_at = sstring("None");
-                            if (_feature_service.tablet_incremental_repair) {
+                            if (_feature_service.tablet_incremental_repair && incremental) {
                                 auto sstables_repaired_at = tinfo.sstables_repaired_at + 1;
                                 if (utils::get_local_injector().enter("repair_tablet_no_update_sstables_repair_at")) {
                                     rtlogger.info("Skip update system.tablet ssstables_repaired_at={}", sstables_repaired_at);
