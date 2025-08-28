@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 
-from test.pylib.suite.cql_approval import CQLApprovalTestSuite
 from test.pylib.suite.python import PythonTestSuite
 from test.pylib.suite.run import RunTestSuite
 from test.pylib.suite.tool import ToolTestSuite
