@@ -555,10 +555,8 @@ rest_get_token_endpoint(http_context& ctx, sharded<service::storage_service>& ss
             token_endpoints = ss.local().get_token_to_endpoint_map();
         } else if (!keyspace_name.empty() && !table_name.empty()) {
             auto& db = ctx.db.local();
-            if (!db.has_schema(keyspace_name, table_name)) {
-                throw bad_param_exception(fmt::format("Failed to find table {}.{}", keyspace_name, table_name));
-            }
-            token_endpoints = co_await ss.local().get_tablet_to_endpoint_map(db.find_schema(keyspace_name, table_name)->id());
+            auto tid = validate_table(db, keyspace_name, table_name);
+            token_endpoints = co_await ss.local().get_tablet_to_endpoint_map(tid);
         } else {
             throw bad_param_exception("Either provide both keyspace and table (for tablet table) or neither (for vnodes)");
         }
