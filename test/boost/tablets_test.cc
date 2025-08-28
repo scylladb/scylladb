@@ -2047,6 +2047,7 @@ SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
             auto dc1_new_racks = rack_list{rack1.rack, rack2.rack};
             replication_strategy_config_options alter_opts;
             alter_opts[dc1] = dc1_new_racks;
+            alter_opts[dc2] = "1";
             auto [new_tablet_map, new_opts] = alter_replication(e, ks1, table1, alter_opts);
 
             check_rack_list(tm_topo, new_tablet_map, dc1, dc1_new_racks, bad_nodes);
@@ -2080,25 +2081,36 @@ SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
                    {{dc1, rack_list{rack1.rack, rack3.rack}}},
                    {{dc1, rack_list{rack1.rack, rack3.rack}}, {dc2, rack_list{}}});
 
-        test_alter({rack1.rack}, {rack4.rack},
-                   {{dc2, rack_list{}}},
-                   {{dc1, rack_list{rack1.rack}}, {dc2, rack_list{}}});
+        BOOST_REQUIRE_THROW(test_alter({rack1.rack}, {rack4.rack},
+                    {{dc2, rack_list{}}},
+                    {{dc1, rack_list{rack1.rack}}, {dc2, rack_list{}}}),
+        exceptions::configuration_exception);
 
         test_alter({rack1.rack, rack2.rack}, {rack4.rack},
                    {{dc1, rack_list{rack2.rack}}, {dc2, rack_list{rack4.rack}}},
                    {{dc1, rack_list{rack2.rack}}, {dc2, rack_list{rack4.rack}}});
 
         test_alter({rack2.rack}, {rack4.rack},
-                   {{dc1, rack_list{rack2.rack}}},
+                   {{dc1, rack_list{rack2.rack}}, {dc2, rack_list{rack4.rack}}},
                    {{dc1, rack_list{rack2.rack}}, {dc2, rack_list{rack4.rack}}});
+
+        BOOST_REQUIRE_THROW(test_alter({rack2.rack}, {rack4.rack},
+                   {{dc1, rack_list{rack2.rack}}},
+                   {{dc1, rack_list{rack2.rack}}, {dc2, rack_list{rack4.rack}}}),
+        exceptions::configuration_exception);
 
         test_alter({rack2.rack}, {rack4.rack},
                    {{dc1, rack_list{rack2.rack}}, {dc2, rack_list{rack4.rack, rack5.rack}}},
                    {{dc1, rack_list{rack2.rack}}, {dc2, rack_list{rack4.rack, rack5.rack}}});
 
         test_alter({rack1.rack, rack2.rack, rack3.rack}, {},
-                   {{dc2, rack_list{rack4.rack}}},
+                   {{dc1, rack_list{rack1.rack, rack2.rack, rack3.rack}}, {dc2, rack_list{rack4.rack}}},
                    {{dc1, rack_list{rack1.rack, rack2.rack, rack3.rack}}, {dc2, rack_list{rack4.rack}}});
+
+        BOOST_REQUIRE_THROW(test_alter({rack1.rack, rack2.rack, rack3.rack}, {},
+                   {{dc2, rack_list{rack4.rack}}},
+                   {{dc1, rack_list{rack1.rack, rack2.rack, rack3.rack}}, {dc2, rack_list{rack4.rack}}}),
+        exceptions::configuration_exception);
     }, cfg).get();
 }
 
