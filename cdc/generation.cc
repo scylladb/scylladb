@@ -13,6 +13,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/util/later.hh>
 
 #include "gms/endpoint_state.hh"
 #include "gms/versioned_value.hh"
@@ -30,6 +31,7 @@
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/stall_free.hh"
 #include "utils/to_string.hh"
 
 #include "cdc/generation.hh"
@@ -180,6 +182,19 @@ const utils::chunked_vector<token_range_description>& topology_description::entr
 
 utils::chunked_vector<token_range_description>&& topology_description::entries() && {
     return std::move(_entries);
+}
+
+future<topology_description> topology_description::clone_async() const {
+    utils::chunked_vector<token_range_description> vec{};
+
+    co_await utils::reserve_gently(vec, _entries.size());
+
+    for (const auto& entry : _entries) {
+        vec.push_back(entry);
+        co_await seastar::maybe_yield();
+    }
+
+    co_return topology_description{std::move(vec)};
 }
 
 static std::vector<stream_id> create_stream_ids(
@@ -984,8 +999,11 @@ future<> generation_service::handle_cdc_generation(cdc::generation_id_v2 gen_id)
 
     auto gen_data = co_await _sys_ks.local().read_cdc_generation(gen_id.id);
 
-    bool using_this_gen = co_await container().map_reduce(or_reducer(), [ts, &gen_data] (generation_service& svc) {
-        return svc._cdc_metadata.insert(ts, cdc::topology_description{gen_data});
+    bool using_this_gen = co_await container().map_reduce(or_reducer(), [ts, &gen_data] (generation_service& svc) -> future<bool> {
+        // We need to copy it here before awaiting anything to avoid destruction of the captures.
+        const auto timestamp = ts;
+        topology_description gen_copy = co_await gen_data.clone_async();
+        co_return svc._cdc_metadata.insert(timestamp, std::move(gen_copy));
     });
 
     if (using_this_gen) {
@@ -1137,9 +1155,12 @@ future<bool> generation_service::legacy_do_handle_cdc_generation(cdc::generation
     }
 
     // Return `true` iff the generation was inserted on any of our shards.
-    co_return co_await container().map_reduce(or_reducer(), [ts = get_ts(gen_id), &gen] (generation_service& svc) {
-        auto gen_ = *gen;
-        return svc._cdc_metadata.insert(ts, std::move(gen_));
+    co_return co_await container().map_reduce(or_reducer(),
+            [ts = get_ts(gen_id), &gen] (generation_service& svc) -> future<bool> {
+        // We need to copy it here before awaiting anything to avoid destruction of the captures.
+        const auto timestamp = ts;
+        topology_description gen_copy = co_await gen->clone_async();
+        co_return svc._cdc_metadata.insert(timestamp, std::move(gen_copy));
     });
 }
 

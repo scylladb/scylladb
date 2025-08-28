@@ -101,6 +101,9 @@ public:
 
     const utils::chunked_vector<token_range_description>& entries() const&;
     utils::chunked_vector<token_range_description>&& entries() &&;
+
+    /// The object MUST NOT be modified until the returned future resolves.
+    future<topology_description> clone_async() const;
 };
 
 /**
