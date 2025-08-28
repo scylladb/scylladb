@@ -227,7 +227,7 @@ target_sources(scylla-main
     exceptions/exceptions.cc
     frozen_schema.cc
     generic_server.cc
-    debug.cc
+    debug/debug.cc
     init.cc
     keys/keys.cc
     multishard_mutation_query.cc
