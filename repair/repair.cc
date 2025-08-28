@@ -2255,6 +2255,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto& topology = guard.get_token_metadata()->get_topology();
     auto hosts_filter = info.repair_task_info.repair_hosts_filter;
     auto dcs_filter = info.repair_task_info.repair_dcs_filter;
+    auto incremental_mode = info.repair_task_info.repair_incremental_mode;
     for (auto& r : replicas) {
         auto shard = r.shard;
         if (r.host != myhostid) {
@@ -2289,7 +2290,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
     auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, rebuild_replicas.has_value());
     bool sched_by_scheduler = true;
-    task_impl_ptr->sched_info = tablet_repair_sched_info(sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair);
+    task_impl_ptr->sched_info = tablet_repair_sched_info(sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair, incremental_mode);
     auto task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
     task->start();
     co_await task->done();
