@@ -605,6 +605,13 @@ future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state
             }
         }
     }
+
+    // If remote state update does not contain a host id, check whether the endpoint still
+    // exists in the `_endpoint_state_map` since after a preemption point it could have been deleted.
+    if (!remote_state.get_host_id() && !es) {
+        throw std::runtime_error(format("Entry for host id {} does not exist in the endpoint state map.", node));
+    }
+
     if (es) {
         endpoint_state local_state = *es;
         auto local_generation = local_state.get_heart_beat_state().get_generation();
@@ -2152,7 +2159,11 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         });
 
         for (auto& response : responses) {
-            co_await apply_state_locally_in_shadow_round(std::move(response.endpoint_state_map));
+            try {
+                co_await apply_state_locally_in_shadow_round(std::move(response.endpoint_state_map));
+            } catch (const std::exception& exception) {
+                logger.warn("Error while applying node state {}", exception.what());
+            }
         }
         if (!nodes_talked.empty()) {
             break;
