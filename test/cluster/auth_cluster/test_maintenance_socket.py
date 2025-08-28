@@ -43,8 +43,8 @@ async def test_maintenance_socket(manager: ManagerClient):
     session = cluster.connect()
 
     session.execute("CREATE ROLE john WITH PASSWORD = 'password' AND LOGIN = true;")
-    session.execute("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1};")
-    session.execute("CREATE KEYSPACE ks2 WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1};")
+    session.execute("CREATE KEYSPACE ks1 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};")
+    session.execute("CREATE KEYSPACE ks2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};")
     session.execute("CREATE TABLE ks1.t1 (pk int PRIMARY KEY, val int);")
     session.execute("CREATE TABLE ks2.t1 (pk int PRIMARY KEY, val int);")
     session.execute("GRANT SELECT ON ks1.t1 TO john;")
@@ -65,5 +65,5 @@ async def test_maintenance_socket(manager: ManagerClient):
     maintenance_session.execute("SELECT * FROM ks1.t1")
     maintenance_session.execute("SELECT * FROM ks2.t1")
     maintenance_session.execute("INSERT INTO ks1.t1 (pk, val) VALUES (1, 1);")
-    maintenance_session.execute("CREATE KEYSPACE ks3 WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 1};")
+    maintenance_session.execute("CREATE KEYSPACE ks3 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};")
     maintenance_session.execute("CREATE TABLE ks1.t2 (pk int PRIMARY KEY, val int);")
