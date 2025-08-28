@@ -2678,18 +2678,18 @@ future<> storage_service::on_change(gms::inet_address endpoint, locator::host_id
             co_await notify_cql_change(endpoint, host_id, ep_state->is_cql_ready());
         }
         if (auto it = states.find(application_state::INTERNAL_IP); it != states.end()) {
-            co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value()));
+            co_await maybe_reconnect_to_preferred_ip(endpoint, inet_address(it->second.value()), host_id);
         }
     }
 }
 
-future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip) {
+future<> storage_service::maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip, locator::host_id host_id) {
     if (!_snitch.local()->prefer_local()) {
         co_return;
     }
 
     const auto& topo = get_token_metadata().get_topology();
-    if (topo.get_datacenter() == topo.get_datacenter(_gossiper.get_host_id(ep)) && _messaging.local().get_preferred_ip(ep) != local_ip) {
+    if (topo.get_datacenter() == topo.get_datacenter(host_id) && _messaging.local().get_preferred_ip(ep) != local_ip) {
         slogger.debug("Initiated reconnect to an Internal IP {} for the {}", local_ip, ep);
         co_await _messaging.invoke_on_all([ep, local_ip] (auto& local_ms) {
             local_ms.cache_preferred_ip(ep, local_ip);
