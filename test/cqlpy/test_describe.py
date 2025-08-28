@@ -1130,7 +1130,8 @@ def test_describe_cdc_log_table_create_statement(scylla_only, cql, test_keyspace
                 AND max_index_interval = 2048
                 AND memtable_flush_period_in_ms = 0
                 AND min_index_interval = 128
-                AND speculative_retry = '99.0PERCENTILE';
+                AND speculative_retry = '99.0PERCENTILE'
+                AND tombstone_gc = {{'mode': 'timeout', 'propagation_delay_in_seconds': '3600'}};
             """
         expected = format_create_statement(expected)
 
@@ -2822,7 +2823,6 @@ def test_desc_auth_attach_service_levels(cql, scylla_only):
 
         assert set(sl_stmts) == set(desc_iter)
 
-@pytest.mark.xfail(reason="issue #25187")
 def test_desc_restore(cql):
     """
     Verify that restoring the schema, auth and service levels works correctly. We create entities

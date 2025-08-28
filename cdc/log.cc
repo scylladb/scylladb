@@ -22,12 +22,14 @@
 #include "cdc/cdc_partitioner.hh"
 #include "bytes.hh"
 #include "index/vector_index.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_listener.hh"
 #include "service/storage_proxy.hh"
+#include "tombstone_gc_extension.hh"
 #include "types/tuple.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/untyped_result_set.hh"
@@ -57,8 +59,18 @@ using namespace std::chrono_literals;
 
 logging::logger cdc_log("cdc");
 
+namespace {
+
+shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy(const keyspace_metadata& ksm) {
+    locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
+    return locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
+}
+
+} // anonymous namespace
+
 namespace cdc {
-static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
+static schema_ptr create_log_schema(const schema&, const replica::database&, const keyspace_metadata&,
+        std::optional<table_id> = {}, schema_ptr = nullptr);
 }
 
 static constexpr auto cdc_group_name = "cdc";
@@ -168,7 +180,7 @@ public:
             ensure_that_table_uses_vnodes(ksm, schema);
 
             // in seastar thread
-            auto log_schema = create_log_schema(schema);
+            auto log_schema = create_log_schema(schema, db, ksm);
 
             auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
 
@@ -213,7 +225,8 @@ public:
             ensure_that_table_has_no_counter_columns(new_schema);
             ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
 
-            auto new_log_schema = create_log_schema(new_schema, log_schema ? std::make_optional(log_schema->id()) : std::nullopt, log_schema);
+            std::optional<table_id> maybe_id = log_schema ? std::make_optional(log_schema->id()) : std::nullopt;
+            auto new_log_schema = create_log_schema(new_schema, db, *keyspace.metadata(), std::move(maybe_id), log_schema);
 
             auto log_mut = log_schema 
                 ? db::schema_tables::make_update_table_mutations(db, keyspace.metadata(), log_schema, new_log_schema, timestamp)
@@ -278,8 +291,7 @@ private:
     // to be attempted - in particular the log table we try to create will not
     // have tablets, and will cause a failure.
     static void ensure_that_table_uses_vnodes(const keyspace_metadata& ksm, const schema& schema) {
-        locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
-        auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
+        auto rs = generate_replication_strategy(ksm);
         if (rs->uses_tablets()) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because keyspace uses tablets. See issue #16317.",
                 schema.ks_name(), schema.cf_name()));
@@ -508,7 +520,9 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name) {
     return to_bytes(cdc_deleted_elements_column_prefix) + column_name;
 }
 
-static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uuid, schema_ptr old) {
+static schema_ptr create_log_schema(const schema& s, const replica::database& db,
+        const keyspace_metadata& ksm, std::optional<table_id> uuid, schema_ptr old)
+{
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner(cdc::cdc_partitioner::classname);
     b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
@@ -594,6 +608,10 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
     if (uuid) {
         b.set_uuid(*uuid);
     }
+
+    auto rs = generate_replication_strategy(ksm);
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata()));
+    b.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 
     /**
      * #10473 - if we are redefining the log table, we need to ensure any dropped

@@ -342,3 +342,47 @@ def test_reattach_cdc_log_table_after_altering_base_schema(cql, test_keyspace, s
         create_stmt_t2 = create_stmt_t2.replace(t2, t1)
 
         assert create_stmt_t1 == create_stmt_t2
+
+# Verify that the `tombstone_gc` property is present after creating a CDC log table.
+# Reproducer of scylladb/scylladb#25187.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_log_table_tombstone_gc_present(cql, test_keyspace, scylla_only):
+    def get_log_alter_stmt(log_table_name: str):
+        descs_it = cql.execute(f"DESCRIBE KEYSPACE {test_keyspace} WITH INTERNALS")
+        [log_desc] = filter(lambda desc: desc.name == log_table_name, descs_it)
+        assert hasattr(log_desc, "create_statement")
+        return log_desc.create_statement
+
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+        _, table_name = table.split(".")
+        cdc_log_table = f"{table_name}_scylla_cdc_log"
+
+        log_stmt = get_log_alter_stmt(cdc_log_table)
+        # Doesn't matter what the value is. Just check the property is present.
+        assert "tombstone_gc = {" in log_stmt
+
+# Verify that performing a no-op ALTER TABLE statement (changing a property to the same value)
+# on the log table doesn't change anything.
+# Reproducer of scylladb/scylladb#25187.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_desc_log_table_properties_preserved_after_noop_alter(cql, test_keyspace, scylla_only):
+    def get_log_alter_stmt(log_table_name: str):
+        descs_it = cql.execute(f"DESCRIBE KEYSPACE {test_keyspace} WITH INTERNALS")
+        [log_desc] = filter(lambda desc: desc.name == log_table_name, descs_it)
+        assert hasattr(log_desc, "create_statement")
+        return log_desc.create_statement
+
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+        _, table_name = table.split(".")
+        cdc_log_table = f"{table_name}_scylla_cdc_log"
+
+        old_log_stmt = get_log_alter_stmt(cdc_log_table)
+        # No-op.
+        cql.execute(old_log_stmt)
+        new_log_stmt = get_log_alter_stmt(cdc_log_table)
+
+        assert old_log_stmt == new_log_stmt
