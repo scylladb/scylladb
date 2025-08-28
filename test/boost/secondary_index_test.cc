@@ -1984,6 +1984,129 @@ SEASTAR_TEST_CASE(test_deleting_ghost_rows) {
     });
 }
 
+SEASTAR_TEST_CASE(test_deleting_ghost_rows_with_same_base_pk) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (p int, c int, v int, PRIMARY KEY (p, c))");
+        cquery_nofail(e, "CREATE MATERIALIZED VIEW tv AS SELECT v, p, c FROM t WHERE v IS NOT NULL AND c IS NOT NULL PRIMARY KEY (v, p, c);");
+        for (int i = 0; i < 100; i++) {
+            cquery_nofail(e, format("INSERT INTO t (p,c,v) VALUES ({},{},{})", i, i * 100, i + 100));
+        }
+
+        std::vector<std::vector<bytes_opt>> expected_view_rows;
+        for (int i = 0; i < 100; i++) {
+            expected_view_rows.push_back({int32_type->decompose(i + 100), int32_type->decompose(i), int32_type->decompose(i * 100)});
+        }
+        auto inject_ghost_row = [&e] (int p, int c, int v) {
+            e.db().invoke_on_all([p, c, v] (replica::database& db) {
+                schema_ptr schema = db.find_schema("ks", "tv");
+                replica::table& t = db.find_column_family(schema);
+                mutation m(schema, partition_key::from_singular(*schema, v));
+                auto& row = m.partition().clustered_row(*schema, clustering_key::from_exploded(*schema, {int32_type->decompose(p), int32_type->decompose(c)}));
+                row.apply(row_marker{api::new_timestamp()});
+                unsigned shard = t.shard_for_reads(m.token());
+                if (shard == this_shard_id()) {
+                    t.apply(m);
+                }
+            }).get();
+        };
+
+        inject_ghost_row(1, 100, 1111);
+        eventually([&] {
+            // The ghost row exists, but it can only be queried from the view, not from the base
+            auto msg = cquery_nofail(e, "SELECT * FROM tv WHERE v = 1111;");
+            assert_that(msg).is_rows().with_rows({
+                {int32_type->decompose(1111), int32_type->decompose(1), int32_type->decompose(100)},
+            });
+        });
+
+        // Ghost row deletion is attempted for a single view partition
+        cquery_nofail(e, "PRUNE MATERIALIZED VIEW tv WHERE v = 1111");
+        eventually([&] {
+            // The ghost row is deleted
+            auto msg = cquery_nofail(e, "SELECT * FROM tv where v = 1111;");
+            assert_that(msg).is_rows().with_size(0);
+        });
+
+        for (int i = 0; i < 100; ++i) {
+            inject_ghost_row(i, i * 100, i * 4321);
+        }
+        eventually([&] {
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_size(200);
+        });
+
+        // Ghost row deletion is attempted for the whole table
+        cquery_nofail(e, "PRUNE MATERIALIZED VIEW tv;");
+        eventually([&] {
+            // Ghost rows are deleted
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_rows_ignore_order(expected_view_rows);
+        });
+
+        for (int i = 0; i < 100; ++i) {
+            inject_ghost_row(i, i * 100, i * 2345);
+        }
+        eventually([&] {
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_size(200);
+        });
+
+        // Ghost row deletion is attempted with a parallelized table scan
+        when_all(
+            e.execute_cql("PRUNE MATERIALIZED VIEW tv WHERE token(v) >= -9223372036854775807 AND token(v) <= 0"),
+            e.execute_cql("PRUNE MATERIALIZED VIEW tv WHERE token(v) > 0 AND token(v) <= 10000000"),
+            e.execute_cql("PRUNE MATERIALIZED VIEW tv WHERE token(v) > 10000000 AND token(v) <= 20000000"),
+            e.execute_cql("PRUNE MATERIALIZED VIEW tv WHERE token(v) > 20000000 AND token(v) <= 30000000"),
+            e.execute_cql("PRUNE MATERIALIZED VIEW tv WHERE token(v) > 30000000 AND token(v) <= 9223372036854775807")
+        ).get();
+        eventually([&] {
+            // Ghost rows are deleted
+            auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+            assert_that(msg).is_rows().with_rows_ignore_order(expected_view_rows);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_not_deleting_rows_with_different_regular_columns) {
+    return do_with_cql_env_thread([] (auto& e) {
+        cquery_nofail(e, "CREATE TABLE t (p int, c int, v int, PRIMARY KEY (p, c))");
+        cquery_nofail(e, "CREATE MATERIALIZED VIEW tv AS SELECT c, p, v FROM t WHERE v IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p);");
+        for (int i = 0; i < 100; i++) {
+            cquery_nofail(e, format("INSERT INTO t (p,c,v) VALUES ({},{},{})", i, i * 100, i + 100));
+        }
+
+        auto inject_different_but_not_ghost_row = [&e] (int p, int c, int v) {
+            e.db().invoke_on_all([p, c, v] (replica::database& db) {
+                schema_ptr schema = db.find_schema("ks", "tv");
+                replica::table& t = db.find_column_family(schema);
+                mutation m(schema, partition_key::from_singular(*schema, c));
+                auto timestamp = api::new_timestamp();
+                auto ck = clustering_key::from_exploded(*schema, {int32_type->decompose(p)});
+                auto& row = m.partition().clustered_row(*schema, ck);
+                m.set_cell(ck, to_bytes("v"), v, timestamp);
+                row.apply(row_marker{timestamp});
+                unsigned shard = t.shard_for_reads(m.token());
+                if (shard == this_shard_id()) {
+                    t.apply(m);
+                }
+            }).get();
+        };
+
+        for (int i = 0; i < 100; ++i) {
+            inject_different_but_not_ghost_row(i, i * 100, i + 101);
+        }
+        std::vector<std::vector<bytes_opt>> expected_view_rows;
+        for (int i = 0; i < 100; i++) {
+            expected_view_rows.push_back({int32_type->decompose(i * 100), int32_type->decompose(i), int32_type->decompose(i + 101)});
+        }
+
+        cquery_nofail(e, "PRUNE MATERIALIZED VIEW tv");
+        // Not a single row should get deleted
+        auto msg = cquery_nofail(e, "SELECT * FROM tv;");
+        assert_that(msg).is_rows().with_rows_ignore_order(expected_view_rows);
+    });
+}
+
 SEASTAR_TEST_CASE(test_returning_failure_from_ghost_rows_deletion) {
     return do_with_cql_env_thread([] (auto& e) {
         cquery_nofail(e, "CREATE TABLE t (p int, c int, v int, PRIMARY KEY (p, c))");
