@@ -50,18 +50,22 @@ std::vector<data_value> replicas_to_data_value(const locator::tablet_replica_set
 /// The mutations will delete any older tablet information for the same table.
 /// The provided timestamp should be strictly monotonically increasing
 /// between calls for the overriding to work correctly.
-future<mutation> tablet_map_to_mutation(const locator::tablet_map&,
+future<mutation> tablet_map_to_mutation(const locator::shared_tablet_map&,
+                                        const locator::per_table_tablet_map&,
                                         table_id,
                                         const sstring& keyspace_name,
                                         const sstring& table_name,
                                         api::timestamp_type,
                                         const gms::feature_service& features);
 
-mutation colocated_tablet_map_to_mutation(table_id,
+mutation colocated_tablet_map_to_mutation(const locator::shared_tablet_map&,
+                                        const locator::per_table_tablet_map&,
+                                        table_id,
                                         const sstring& keyspace_name,
                                         const sstring& table_name,
                                         table_id base_table,
-                                        api::timestamp_type);
+                                        api::timestamp_type,
+                                        const gms::feature_service& features);
 
 mutation make_drop_tablet_map_mutation(table_id, api::timestamp_type);
 
