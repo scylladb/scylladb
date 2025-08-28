@@ -3,6 +3,7 @@
 import sys
 import os
 import subprocess
+from pathlib import Path
 
 # Use the run.py library from ../cqlpy:
 sys.path.insert(1, sys.path[0] + '/../cqlpy')
@@ -62,6 +63,31 @@ def run_pytest_in_gdb(pytest_dir, executable, additional_parameters):
         return True
 
 
+def modify_junit_xml_filename(args, filename_modifier):
+    """
+    Modify the filename part of --junit-xml parameter while preserving the path.
+
+    Args:
+        args: List of command line arguments
+        filename_modifier: suffix to append to the filename part of --junit-xml
+
+    Returns:
+        Modified list of arguments
+    """
+    if filename_modifier is None:
+        return args
+
+    modified_args = []
+    for arg in args:
+        if arg.startswith('--junit-xml='):
+            junit_xml = Path(arg.split('=', 1)[1])
+            new_junit_xml = junit_xml.with_suffix(f'.{filename_modifier}{junit_xml.suffix}')
+            modified_args.append(f'--junit-xml={new_junit_xml}')
+        else:
+            modified_args.append(arg)
+
+    return modified_args
+
 # Interesting note: We must use "--scylla-tmp-dir=DIR" here instead of
 # "--scylla-tmp-dir DIR": While the latter does work, pytest has a bug that
 # its command-line parser finds the given directory name in the original
@@ -70,15 +96,18 @@ def run_pytest_in_gdb(pytest_dir, executable, additional_parameters):
 # source files).
 success = True
 for with_scylla in [True, False]:
+    modified_argv = None
     if with_scylla:
         args = ['--scylla-pid='+str(pid),
                 '--scylla-tmp-dir='+run.pid_to_dir(pid),
                 '-m', 'not without_scylla']
         executable = run.scylla
+        modified_argv = modify_junit_xml_filename(sys.argv[1:], 'with_scylla')
     else:
         args = ['-m', 'without_scylla']
         executable = ''
-    if not run_pytest_in_gdb(sys.path[0], executable, args + sys.argv[1:]):
+        modified_argv = modify_junit_xml_filename(sys.argv[1:], 'without_scylla')
+    if not run_pytest_in_gdb(sys.path[0], executable, args + modified_argv):
         success = False
 
 run.summary = 'Scylla GDB tests pass' if success else 'Scylla GDB tests failure'
