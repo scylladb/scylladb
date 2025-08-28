@@ -25,8 +25,7 @@ target_link_libraries(streaming
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    replica
-    scylla-precompiled-header)
+    replica)
 
 check_headers(check-headers streaming
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

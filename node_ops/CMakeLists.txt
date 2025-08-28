@@ -10,8 +10,7 @@ target_link_libraries(node_ops
     utils
     Seastar::seastar
   PRIVATE
-    service
-    scylla-precompiled-header)
+    service)
 
 check_headers(check-headers node_ops
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
