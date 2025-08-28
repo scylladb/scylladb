@@ -353,6 +353,8 @@ public:
     version_t get_version() const;
     void set_version(version_t version);
 
+    shared_token_metadata& get_shared_token_metadata();
+
     friend class token_metadata_impl;
     friend class shared_token_metadata;
 private:
