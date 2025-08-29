@@ -56,7 +56,7 @@ public:
     static write_isolation get_write_isolation_for_schema(schema_ptr schema);
 
     static write_isolation default_write_isolation;
-public:
+
     static void set_default_write_isolation(std::string_view mode);
 
 protected:
@@ -111,6 +111,7 @@ public:
     // Convert the above apply() into the signature needed by cas_request:
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override;
     virtual ~rmw_operation() = default;
+    const wcu_consumed_capacity_counter& consumed_capacity() const noexcept { return _consumed_capacity; }
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
