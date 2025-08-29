@@ -118,7 +118,7 @@ private:
 public:
     tablet_repair_sched_info sched_info;
 public:
-    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, bool skip_flush = false)
+    tablet_repair_task_impl(tasks::task_manager::module_ptr module, repair_uniq_id id, sstring keyspace, tasks::task_id parent_id, std::vector<sstring> tables, streaming::stream_reason reason, std::vector<tablet_repair_task_meta> metas, std::optional<int> ranges_parallelism, service::frozen_topology_guard topo_guard, tablet_repair_sched_info sched_info, bool skip_flush = false)
         : repair_task_impl(module, id.uuid(), id.id, "keyspace", keyspace, "", "", parent_id, reason)
         , _keyspace(std::move(keyspace))
         , _tables(std::move(tables))
@@ -126,6 +126,7 @@ public:
         , _ranges_parallelism(ranges_parallelism)
         , _topo_guard(topo_guard)
         , _skip_flush(skip_flush)
+        , sched_info(std::move(sched_info))
     {
     }
 
