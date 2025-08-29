@@ -103,12 +103,11 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
     }
 
     if (_properties && _properties->custom_class) {
-
-        auto validator = secondary_index::secondary_index_manager::get_custom_class_factory(*_properties->custom_class);
-        if (!validator) {
+        auto custom_index_factory = secondary_index::secondary_index_manager::get_custom_class_factory(*_properties->custom_class);
+        if (!custom_index_factory) {
             throw exceptions::invalid_request_exception(format("Non-supported custom class \'{}\' provided", *(_properties->custom_class)));
         }
-        (*validator)()->validate(*schema, *_properties, targets, db.features());
+        (*custom_index_factory)()->validate(*schema, *_properties, targets, db.features());
     }
 
     if (targets.size() > 1) {
