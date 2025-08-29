@@ -97,10 +97,20 @@ class topology_description {
     utils::chunked_vector<token_range_description> _entries;
 public:
     topology_description(utils::chunked_vector<token_range_description> entries);
+
+    topology_description(const topology_description&) = delete;
+    topology_description& operator=(const topology_description&) = delete;
+
+    topology_description(topology_description&&) = default;
+    topology_description& operator=(topology_description&&) = default;
+
     bool operator==(const topology_description&) const;
 
     const utils::chunked_vector<token_range_description>& entries() const&;
     utils::chunked_vector<token_range_description>&& entries() &&;
+
+    /// The object MUST NOT be modified until the returned future resolves.
+    future<topology_description> clone_async() const;
 };
 
 /**
