@@ -1539,12 +1539,10 @@ future<> repair::data_sync_repair_task_impl::run() {
                 bool hints_batchlog_flushed = false;
                 auto ranges_parallelism = std::nullopt;
                 auto flush_time = gc_clock::time_point();
-                auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), std::move(keyspace),
+                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
                         service::default_session_id, tablet_repair_sched_info{}, ranges_reduced_factor);
-                auto task = co_await local_repair._repair_module->make_task(std::move(task_impl_ptr), parent_data);
-                task->start();
                 co_await task->done();
             });
             repair_results.push_back(std::move(f));
@@ -2291,11 +2289,9 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     bool sched_by_scheduler = true;
     tablet_repair_sched_info sched_info{sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair};
     task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, std::move(sched_info), rebuild_replicas.has_value());
-    auto task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
-    task->start();
+    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>(global_tablet_repair_task_info, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, std::move(sched_info), rebuild_replicas.has_value());
     co_await task->done();
-    auto flush_time = task_impl_ptr->get_flush_time();
+    auto flush_time = task->get_flush_time();
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
     if (delay) {
         rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
@@ -2417,11 +2413,9 @@ future<> repair::tablet_repair_task_impl::run() {
                 }
                 bool small_table_optimization = false;
 
-                auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
+                auto task = co_await rs._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(),
                         m.keyspace_name, rs, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
                         std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, topo_guard, sched_info);
-                auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
-                task->start();
                 auto res = co_await coroutine::as_future(task->done());
                 if (res.failed()) {
                     auto ep = res.get_exception();
@@ -2439,7 +2433,7 @@ future<> repair::tablet_repair_task_impl::run() {
                     }
                 }
                 auto current = flush_times[this_shard_id()];
-                auto time = task_impl_ptr->get_flush_time();
+                auto time = task->get_flush_time();
                 flush_times[this_shard_id()] = current == gc_clock::time_point() ? time : std::min(current, time);
             }
             if (error) {

@@ -46,7 +46,7 @@ protected:
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
 
-using current_task_type = tasks::task_manager::task_ptr;
+using current_task_type = shared_ptr<compaction_task_impl>;
 
 enum class flush_mode {
     skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
