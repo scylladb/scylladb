@@ -679,6 +679,7 @@ client_data cql_server::connection::make_client_data() const {
         cd.connection_stage = client_connection_stage::authenticating;
     }
     cd.scheduling_group_name = _current_scheduling_group.name();
+    cd.driver_config = _client_state.get_driver_config();
     return cd;
 }
 
@@ -941,6 +942,11 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
     }
     if (auto driver_name_opt = options.find("DRIVER_NAME"); driver_name_opt != options.end()) {
         _client_state.set_driver_name(driver_name_opt->second);
+    }
+
+    if (auto driver_config = options.find("DRIVER_CONFIG"); driver_config != options.end()) {
+        clogger.debug("Received DRIVER_CONFIG option: {}", driver_config->second);
+        _client_state.set_driver_config(driver_config->second);
     }
 
     cql_protocol_extension_enum_set cql_proto_exts;
