@@ -640,15 +640,15 @@ future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, co
 
 repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr module,
         tasks::task_id id,
-        const sstring& keyspace,
+        sstring keyspace,
         repair_service& repair,
         locator::effective_replication_map_ptr erm_,
-        const dht::token_range_vector& ranges_,
+        dht::token_range_vector ranges_,
         std::vector<table_id> table_ids_,
         repair_uniq_id parent_id_,
-        const std::vector<sstring>& data_centers_,
-        const std::vector<sstring>& hosts_,
-        const std::unordered_set<locator::host_id>& ignore_nodes_,
+        std::vector<sstring> data_centers_,
+        std::vector<sstring> hosts_,
+        std::unordered_set<locator::host_id> ignore_nodes_,
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed,
         bool small_table_optimization,
@@ -656,20 +656,20 @@ repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::modu
         gc_clock::time_point flush_time,
         service::frozen_topology_guard topo_guard,
         tablet_repair_sched_info sched_info)
-    : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
+    : repair_task_impl(module, id, 0, "shard", std::move(keyspace), "", "", parent_id_.uuid(), reason_)
     , rs(repair)
     , db(repair.get_db())
     , messaging(repair.get_messaging().container())
     , mm(repair.get_migration_manager())
     , gossiper(repair.get_gossiper())
     , erm(std::move(erm_))
-    , ranges(ranges_)
+    , ranges(std::move(ranges_))
     , cfs(get_table_names(db.local(), table_ids_))
     , table_ids(std::move(table_ids_))
     , global_repair_id(parent_id_)
-    , data_centers(data_centers_)
-    , hosts(hosts_)
-    , ignore_nodes(ignore_nodes_)
+    , data_centers(std::move(data_centers_))
+    , hosts(std::move(hosts_))
+    , ignore_nodes(std::move(ignore_nodes_))
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , _small_table_optimization(small_table_optimization)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
@@ -1391,7 +1391,7 @@ future<> repair::user_requested_repair_task_impl::run() {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
+                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
                         service::default_session_id);
@@ -1535,7 +1535,7 @@ future<> repair::data_sync_repair_task_impl::run() {
                 bool hints_batchlog_flushed = false;
                 auto ranges_parallelism = std::nullopt;
                 auto flush_time = gc_clock::time_point();
-                auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
+                auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
                         id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
                         service::default_session_id);
