@@ -18,7 +18,8 @@
 #include "exceptions/exceptions.hh"
 #include "utils/rjson.hh"
 
-const sstring db::index::secondary_index::custom_index_option_name = "class_name";
+const sstring db::index::secondary_index::custom_class_option_name = "class_name";
+const sstring db::index::secondary_index::index_version_option_name = "index_version";
 
 namespace secondary_index {
 
