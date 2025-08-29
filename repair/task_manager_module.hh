@@ -194,13 +194,15 @@ public:
             std::vector<sstring> data_centers_,
             std::vector<sstring> hosts_,
             std::unordered_set<locator::host_id> ignore_nodes_,
+            std::unordered_map<dht::token_range, repair_neighbors> neighbors_,
             streaming::stream_reason reason_,
             bool hints_batchlog_flushed,
             bool small_table_optimization,
             std::optional<int> ranges_parallelism,
             gc_clock::time_point flush_time,
             service::frozen_topology_guard topo_guard,
-            tablet_repair_sched_info sched_info = tablet_repair_sched_info());
+            tablet_repair_sched_info sched_info = tablet_repair_sched_info(),
+            size_t small_table_optimization_ranges_reduced_factor_ = 1);
     void check_failed_ranges();
     void check_in_abort_or_shutdown();
     repair_neighbors get_repair_neighbors(const dht::token_range& range);
