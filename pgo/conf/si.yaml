@@ -1,5 +1,6 @@
 keyspace: sec_index
 
+# FIXME: use tablets after https://github.com/scylladb/scylladb/issues/22677 is done.
 keyspace_definition: |
 
   CREATE KEYSPACE IF NOT EXISTS sec_index WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND TABLETS = {'enabled': false};
