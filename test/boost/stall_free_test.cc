@@ -11,7 +11,9 @@
 #include <set>
 #include <unordered_set>
 
+#include "seastar/core/lowres_clock.hh"
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/eventually.hh"
 #include "utils/stall_free.hh"
 #include "utils/small_vector.hh"
 #include "utils/chunked_vector.hh"
@@ -230,7 +232,9 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr) {
 
     p0.reset();
     utils::clear_gently(p1).get();
-    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
+
+    // p0's payload is destroyed in the background so allow it some time to complete
+    REQUIRE_EVENTUALLY_EQUAL<int>([&] { return cleared_gently; }, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr_const_payload) {
@@ -260,7 +264,9 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr_const_payload) {
 
     p0.reset();
     utils::clear_gently(p1).get();
-    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
+
+    // p0's payload is destroyed in the background so allow it some time to complete
+    REQUIRE_EVENTUALLY_EQUAL<int>([&] { return cleared_gently; }, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr) {
