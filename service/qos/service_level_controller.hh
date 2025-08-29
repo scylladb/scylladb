@@ -104,6 +104,7 @@ using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
 class service_level_controller : public peering_sharded_service<service_level_controller>, public service::endpoint_lifecycle_subscriber {
 public:
     static inline const int32_t default_shares = 1000;
+    static inline const seastar::sstring driver_service_level_name = "driver";
 
     class service_level_distributed_data_accessor {
     public:
@@ -287,6 +288,11 @@ public:
      * @return a future that is resolved when the update loop stops.
      */
     void maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client);
+
+    /**
+     * Create `sl:driver` if possible, and remember it in `system.scylla_local`
+     */
+    future<> create_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
 
     /**
      * Request abort of update loop.

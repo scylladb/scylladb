@@ -2247,6 +2247,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 return controller.reload_distributed_data_accessor(
                         qp.local(), group0_client, sys_ks.local(), sys_dist_ks.local());
             }).get();
+            tsm.local().event.broadcast(); // initiate creation of driver service level
 
             sl_controller.local().maybe_start_legacy_update_from_distributed_data([cfg] () {
                 return std::chrono::duration_cast<steady_clock_type::duration>(std::chrono::milliseconds(cfg->service_levels_interval()));

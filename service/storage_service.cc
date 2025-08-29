@@ -1151,6 +1151,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service,
+                    _sl_controller.local(),
                     _topology_cmd_rpc_tracker);
         }
     } catch (...) {
@@ -7486,6 +7487,11 @@ void storage_service::init_messaging_service() {
 
                 mutations.reserve(mutations.size() + muts.size());
                 std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
+            }
+
+            auto sl_driver_created_mut = co_await ss._sys_ks.local().get_service_levels_driver_created_mutation();
+            if (sl_driver_created_mut) {
+                mutations.push_back(canonical_mutation(*sl_driver_created_mut));
             }
 
             auto sl_version_mut = co_await ss._sys_ks.local().get_service_levels_version_mutation();
