@@ -8,7 +8,10 @@
 
 #pragma once
 
+#include "replica/database.hh"
 #include "seastarx.hh"
+#include "service/migration_listener.hh"
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
@@ -33,7 +36,11 @@ namespace service {
 /// A client with the vector-store service.
 class vector_store_client final {
     struct impl;
-    std::unique_ptr<impl> _impl;
+    struct metrics_proxy;
+    struct index_metrics;
+    class migration_subscriber;
+    std::shared_ptr<impl> _impl;
+    std::shared_ptr<metrics_proxy> _metrics_proxy;
 
 public:
     using config = db::config;
@@ -91,7 +98,7 @@ public:
         }
     };
 
-    explicit vector_store_client(config const& cfg);
+    explicit vector_store_client(config const& cfg, migration_notifier& notifier, replica::database const& db);
     ~vector_store_client();
 
     /// Start background tasks.
@@ -112,7 +119,6 @@ public:
     /// Request the vector store service for the primary keys of the nearest neighbors
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, ann_error>>;
-
 private:
     friend struct vector_store_client_tester;
 };
