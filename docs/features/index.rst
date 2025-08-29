@@ -15,6 +15,7 @@ This document highlights ScyllaDB's key data modeling features.
    Change Data Capture </features/cdc/index>
    Workload Attributes </features/workload-attributes>
    Workload Prioritization </features/workload-prioritization>
+   Backup and Restore </features/backup-and-restore>
 
 .. panel-box::
   :title: ScyllaDB Features
@@ -36,3 +37,5 @@ This document highlights ScyllaDB's key data modeling features.
     state and the history of all changes made to tables in the database.
   * :doc:`Workload Attributes </features/workload-attributes>` assigned to your workloads
     specify how ScyllaDB will handle requests depending on the workload.
+  * :doc:`Backup and Restore </features/backup-and-restore>` allows you to create
+    backups of your data and restore it when needed.
