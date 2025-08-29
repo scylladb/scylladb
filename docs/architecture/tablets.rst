@@ -135,6 +135,48 @@ You can create a keyspace with tablets enabled with the ``tablets = {'enabled': 
     the keyspace schema with ``tablets = { 'enabled': false }`` or 
     ``tablets = { 'enabled': true }``.
 
+.. _absolute-number-of-tablets:
+
+Absolute number of tablets
+==========================
+
+ScyllaDB has a background process which periodically re-evaluates the number of tablets of each table.
+The computed number of tablets a table will have is based on several parameters and factors. These are:
+
+* Keyspace tablets option ``'initial'``. This option sets the initial number of tablets on the keyspace level.
+  See :ref:`The tablets property <tablets>` for details.
+* Table level option ``'expected_data_size_in_gb'``. This option sets the minimal number of tablets for a table
+  based on the expected table size and the target tablet size. See :ref:`CREATE TABLE <create-table-statement>`
+  for details.
+* Table level option ``'min_per_shard_tablet_count'``. Using this option results in the number of tablets being
+  computed based on the number of shards in a DC so that each shard has at least ``'min_per_shard_tablet_count'``
+  tablets on average. See :ref:`CREATE TABLE <create-table-statement>` for details.
+* Table level option ``'min_tablet_count'``. This option sets the minimal number of tablets for the given table.
+  See :ref:`CREATE TABLE <create-table-statement>` for details.
+
+Another factor which determines the absolute tablet count is the amount of data the table contains. If the
+amount of data in the table is such that the average tablet size is larger than double the target tablet size
+the table will be split (the number of tablets will be doubled), and if the average tablet size is smaller than
+half the target tablet size, it will be merged (the number of tablets will be halved).
+
+Each of these factors is taken into consideration, and the one producing the largest number of tablets wins, and
+will be used as the number of tablets for the given table.  
+
+As the last step, in order to avoid having too many tablets in a cluster, ScyllaDB will run the following
+algorithm to respect the ``tablets_per_shard_goal`` config option:  
+
+* Compute average tablet count per-shard in each DC.
+* Determine if per-shard goal is exceeded in that DC.
+* Compute scale factor by which tablet count should be multiplied so that the goal is not exceeded in that DC.
+* Take the smallest scale factor among all DCs, which ensures that no DC is overloaded.
+* Each table's tablet count is aligned to the nearest power of 2 post-scaling.
+
+Please note that because of the this alignment, the scaling may not be effective and in the worst case may be
+overshot by a factor of 2, and that the ``tablets_per_shard_goal`` is a soft limit and not a hard constraint.
+
+Finally, the computed tablet count is compared with the current tablet count for each table, and if there is
+a difference, a table resize (split or merge) is executed.
+
 .. _tablets-limitations:
 
 Limitations and Unsupported Features
