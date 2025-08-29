@@ -46,6 +46,8 @@ protected:
     future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
 };
 
+using current_task_type = tasks::task_manager::task_ptr;
+
 enum class flush_mode {
     skip,               // Skip flushing.  Useful when application explicitly flushes all tables prior to compaction
     compacted_tables,   // Flush only the compacted keyspace/tables
@@ -107,7 +109,7 @@ private:
     // _cvp and _current_task are engaged when the task is invoked from
     // global_major_compaction_task_impl
     seastar::condition_variable* _cv;
-    tasks::task_manager::task_ptr* _current_task;
+    current_task_type* _current_task;
 public:
     major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -117,7 +119,7 @@ public:
             std::optional<flush_mode> fm = std::nullopt,
             bool consider_only_existing_data = false,
             seastar::condition_variable* cv = nullptr,
-            tasks::task_manager::task_ptr* current_task = nullptr) noexcept
+            current_task_type* current_task = nullptr) noexcept
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(),
                 parent_id ? 0 : module->new_sequence_number(),
                 "keyspace", std::move(keyspace), "", "", parent_id,
@@ -158,7 +160,7 @@ private:
     replica::database& _db;
     table_info _ti;
     seastar::condition_variable& _cv;
-    tasks::task_manager::task_ptr& _current_task;
+    current_task_type& _current_task;
 public:
     table_major_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -167,7 +169,7 @@ public:
             replica::database& db,
             table_info ti,
             seastar::condition_variable& cv,
-            tasks::task_manager::task_ptr& current_task,
+            current_task_type& current_task,
             flush_mode fm,
             bool consider_only_existing_data) noexcept
         : major_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id, fm, consider_only_existing_data)
@@ -269,7 +271,7 @@ private:
     replica::database& _db;
     table_info _ti;
     seastar::condition_variable& _cv;
-    tasks::task_manager::task_ptr& _current_task;
+    current_task_type& _current_task;
 public:
     table_cleanup_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
@@ -278,7 +280,7 @@ public:
             replica::database& db,
             table_info ti,
             seastar::condition_variable& cv,
-            tasks::task_manager::task_ptr& current_task) noexcept
+            current_task_type& current_task) noexcept
         : cleanup_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _ti(std::move(ti))
@@ -359,7 +361,7 @@ private:
     replica::database& _db;
     table_info _ti;
     seastar::condition_variable& _cv;
-    tasks::task_manager::task_ptr& _current_task;
+    current_task_type& _current_task;
     bool& _needed;
 public:
     table_offstrategy_keyspace_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -369,7 +371,7 @@ public:
             replica::database& db,
             table_info ti,
             seastar::condition_variable& cv,
-            tasks::task_manager::task_ptr& current_task,
+            current_task_type& current_task,
             bool& needed) noexcept
         : offstrategy_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
@@ -460,7 +462,7 @@ private:
     replica::database& _db;
     table_info _ti;
     seastar::condition_variable& _cv;
-    tasks::task_manager::task_ptr& _current_task;
+    current_task_type& _current_task;
     bool _exclude_current_version;
 public:
     table_upgrade_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -470,7 +472,7 @@ public:
             replica::database& db,
             table_info ti,
             seastar::condition_variable& cv,
-            tasks::task_manager::task_ptr& current_task,
+            current_task_type& current_task,
             bool exclude_current_version) noexcept
         : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
