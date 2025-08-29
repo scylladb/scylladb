@@ -14,7 +14,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, freeze, list_tables
+from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, freeze, list_tables, get_region
 
 # All tests in this file are expected to fail with tablets due to #16317.
 # To ensure that Alternator Streams is still being tested, instead of
@@ -612,13 +612,14 @@ def fetch_more(dynamodbstreams, iterators, output):
 # "output". This mode dictates what we can compare - e.g., in KEYS_ONLY mode
 # the compare_events() function ignores the the old and new image in
 # expected_events.
+# The "expected_region" parameter specifies the value of awsRegion field.
 # compare_events() throws an exception immediately if it sees an unexpected
 # event, but if some of the expected events are just missing in the "output",
 # it only returns false - suggesting maybe the caller needs to try again
 # later - maybe more output is coming.
 # Note that the order of events is only guaranteed (and therefore compared)
 # inside a single partition.
-def compare_events(expected_events, output, mode):
+def compare_events(expected_events, output, mode, expected_region):
     # The order of expected_events is only meaningful inside a partition, so
     # let's convert it into a map indexed by partition key.
     expected_events_map = {}
@@ -638,11 +639,13 @@ def compare_events(expected_events, output, mode):
         # In DynamoDB, eventSource is 'aws:dynamodb'. We decided to set it to
         # a *different* value - 'scylladb:alternator'. Issue #6931.
         assert 'eventSource' in event
-        # Alternator is missing "awsRegion", which makes little sense for it
-        # (although maybe we should have provided the DC name). Issue #6931.
-        #assert 'awsRegion' in event
-        # Alternator is also missing the "eventVersion" entry. Issue #6931.
-        #assert 'eventVersion' in event
+        # For lack of a direct equivalent of a region, Alternator provides the
+        # DC name instead. Reproduces #6931.
+        assert 'awsRegion' in event
+        assert event['awsRegion'] == expected_region
+        # Reproduces #6931.
+        assert 'eventVersion' in event
+        assert event['eventVersion'] in ['1.0', '1.1']
         # Check that eventID appears, but can't check much on what it is.
         assert 'eventID' in event
         op = event['eventName']
@@ -709,7 +712,7 @@ def compare_events(expected_events, output, mode):
 # function "updatefunc" which is supposed to do some updates to the table
 # and also return an expected_events list. do_test() then fetches the streams
 # data and compares it to the expected_events using compare_events().
-def do_test(test_table_ss_stream, dynamodbstreams, updatefunc, mode, p = random_string(), c = random_string()):
+def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p = random_string(), c = random_string()):
     table, arn = test_table_ss_stream
     iterators = latest_iterators(dynamodbstreams, arn)
     expected_events = updatefunc(table, p, c)
@@ -723,11 +726,12 @@ def do_test(test_table_ss_stream, dynamodbstreams, updatefunc, mode, p = random_
     # This is optimization is important to keep *failing* tests reasonably
     # fast and not have to wait until the following arbitrary timeout.
     timeout = time.time() + 20
+    region = get_region(dynamodb)
     output = []
     while time.time() < timeout:
         iterators = fetch_more(dynamodbstreams, iterators, output)
         print("after fetch_more number expected_events={}, output={}".format(len(expected_events), len(output)))
-        if compare_events(expected_events, output, mode):
+        if compare_events(expected_events, output, mode, region):
             # success!
             return
         time.sleep(0.5)
@@ -738,44 +742,44 @@ def do_test(test_table_ss_stream, dynamodbstreams, updatefunc, mode, p = random_
 # event. Currently fails because in Alternator, PutItem - which generates a
 # tombstone to *replace* an item - generates REMOVE+MODIFY (issue #6930).
 @pytest.mark.xfail(reason="Currently fails - see issue #6930")
-def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_putitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.put_item(Item={'p': p, 'c': c, 'x': 2})
         events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
-    do_test(test_table_ss_keys_only, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
 
 # Test a single UpdateItem. Should result in a single INSERT event.
 # Currently fails because Alternator generates a MODIFY event even though
 # this is a new item (issue #6918).
 @pytest.mark.xfail(reason="Currently fails - see issue #6918")
-def test_streams_updateitem_keys_only(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_updateitem_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
         events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
-    do_test(test_table_ss_keys_only, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
 
 # This is exactly the same test as test_streams_updateitem_keys_only except
 # we don't verify the type of even we find (MODIFY or INSERT). It allows us
 # to have at least one good GetRecords test until solving issue #6918.
 # When we do solve that issue, this test should be removed.
-def test_streams_updateitem_keys_only_2(test_table_ss_keys_only, dynamodbstreams):
+def test_streams_updateitem_keys_only_2(test_table_ss_keys_only, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
             UpdateExpression='SET x = :val1', ExpressionAttributeValues={':val1': 2})
         events.append(['*', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
         return events
-    do_test(test_table_ss_keys_only, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
 
 # Test OLD_IMAGE using UpdateItem. Verify that the OLD_IMAGE indeed includes,
 # as needed, the entire old item and not just the modified columns.
 # Reproduces issue #6935
-def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodbstreams):
+def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -790,7 +794,7 @@ def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodbstreams):
             UpdateExpression='SET y = :val1', ExpressionAttributeValues={':val1': 3})
         events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2}, {'p': p, 'c': c, 'x': 2, 'y': 3}])
         return events
-    do_test(test_table_ss_old_image, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
 # Above we verified that if an item did not previously exist, the OLD_IMAGE
 # would be missing, but if the item did previously exist, OLD_IMAGE should
@@ -799,7 +803,7 @@ def test_streams_updateitem_old_image(test_table_ss_old_image, dynamodbstreams):
 # key - in this case since the item did exist, OLD_IMAGE should be returned -
 # and include just the key. This is a special case of reproducing #6935 -
 # the first patch for this issue failed in this special case.
-def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamodbstreams):
+def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         # Create an *empty* item, with nothing except a key:
@@ -811,7 +815,7 @@ def test_streams_updateitem_old_image_empty_item(test_table_ss_old_image, dynamo
         # with just a key, not entirely missing.
         events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c}, {'p': p, 'c': c, 'y': 3}])
         return events
-    do_test(test_table_ss_old_image, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
 # Test that OLD_IMAGE indeed includes the entire old item and not just the
 # modified attributes, in the special case of attributes which are a key of
@@ -847,7 +851,7 @@ def test_table_ss_old_image_and_lsi(dynamodb, dynamodbstreams):
     yield table, arn
     table.delete()
 
-def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynamodbstreams):
+def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -862,14 +866,14 @@ def test_streams_updateitem_old_image_lsi(test_table_ss_old_image_and_lsi, dynam
         # In issue #7030, the 'k' value was missing from the OldImage.
         events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2, 'k': 'dog'}, {'p': p, 'c': c, 'x': 2, 'k': 'dog', 'y': 3}])
         return events
-    do_test(test_table_ss_old_image_and_lsi, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_test(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
 # This test is the same as the previous (test_streams_updateitem_old_image_lsi)
 # except that the *old* value of the LSI key k is missing. Since PR 8568, CDC
 # adds a special deleted$k marker for a missing column in the preimage, and
 # this test verifies that Alternator Streams doesn't put this extra marker in
 # its output.
-def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image_and_lsi, dynamodbstreams):
+def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         # Note that we do *not* set the "k" attribute (the LSI key)
@@ -884,14 +888,14 @@ def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image
         # internal markers like "deleted$k".
         events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2}, {'p': p, 'c': c, 'x': 2, 'y': 3}])
         return events
-    do_test(test_table_ss_old_image_and_lsi, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_test(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
 
 # Tests similar to the above tests for OLD_IMAGE, just for NEW_IMAGE mode.
 # Verify that the NEW_IMAGE includes the entire old item (including the key),
 # that deleting the item results in a missing NEW_IMAGE, and that setting the
 # item to be empty has a different result - a NEW_IMAGE with just a key.
 # Reproduces issue #7107.
-def test_streams_new_image(test_table_ss_new_image, dynamodbstreams):
+def test_streams_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -914,7 +918,7 @@ def test_streams_new_image(test_table_ss_new_image, dynamodbstreams):
         table.delete_item(Key={'p': p, 'c': c})
         events.append(['REMOVE', {'p': p, 'c': c}, {'p': p, 'c': c}, None])
         return events
-    do_test(test_table_ss_new_image, dynamodbstreams, do_updates, 'NEW_IMAGE')
+    do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
 
 # Test similar to the above test for NEW_IMAGE corner cases, but here for
 # NEW_AND_OLD_IMAGES mode.
@@ -923,7 +927,7 @@ def test_streams_new_image(test_table_ss_new_image, dynamodbstreams):
 # implementation of the combined mode has unique bugs, so it is worth testing
 # it separately.
 # Reproduces issue #7107.
-def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodbstreams):
+def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     def do_updates(table, p, c):
         events = []
         table.update_item(Key={'p': p, 'c': c},
@@ -951,7 +955,7 @@ def test_streams_new_and_old_images(test_table_ss_new_and_old_images, dynamodbst
         table.delete_item(Key={'p': p, 'c': c})
         events.append(['REMOVE', {'p': p, 'c': c}, {'p': p, 'c': c, 'z': 4}, None])
         return events
-    do_test(test_table_ss_new_and_old_images, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Test that when a stream shard has no data to read, GetRecords returns an
 # empty Records array - not a missing one. Reproduces issue #6926.
@@ -1278,20 +1282,20 @@ def do_updates_1(table, p, c):
     return events
 
 @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
-def test_streams_1_keys_only(test_table_ss_keys_only, dynamodbstreams):
-    do_test(test_table_ss_keys_only, dynamodbstreams, do_updates_1, 'KEYS_ONLY')
+def test_streams_1_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
+    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates_1, 'KEYS_ONLY')
 
 @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
-def test_streams_1_new_image(test_table_ss_new_image, dynamodbstreams):
-    do_test(test_table_ss_new_image, dynamodbstreams, do_updates_1, 'NEW_IMAGE')
+def test_streams_1_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
+    do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates_1, 'NEW_IMAGE')
 
 @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
-def test_streams_1_old_image(test_table_ss_old_image, dynamodbstreams):
-    do_test(test_table_ss_old_image, dynamodbstreams, do_updates_1, 'OLD_IMAGE')
+def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams):
+    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates_1, 'OLD_IMAGE')
 
 @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
-def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodbstreams):
-    do_test(test_table_ss_new_and_old_images, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
+def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
 
 # A fixture which creates a test table with a stream enabled, and returns a
 # bunch of interesting information collected from the CreateTable response.
