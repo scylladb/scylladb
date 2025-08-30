@@ -543,3 +543,102 @@ def test_batch_get_item_full_failure(scylla_only, dynamodb, rest_api, test_table
     with scylla_inject_error(rest_api, "alternator_batch_get_item", one_shot=False):
         with pytest.raises(ClientError, match="InternalServerError"):
             reply = test_table_sn.meta.client.batch_get_item(RequestItems = to_read)
+
+# Test BatchWriteItem with non-key attribute names at the maximum allowed length
+def test_batch_write_item_nonkey_name_good(test_table_s):
+    """Test that BatchWriteItem accepts non-key attribute names at maximum allowed length (65535 bytes)."""
+    p = random_string()
+    # Create an attribute name exactly at the maximum allowed length (65535 bytes)
+    long_name = random_string(64)*1023 + random_string(7)  # 65535 bytes
+    
+    # Should succeed with attribute name at the maximum length
+    with test_table_s.batch_writer() as batch:
+        batch.put_item({'p': p, long_name: 'value'})
+    
+    # Verify the item was written successfully
+    response = test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    assert 'Item' in response
+    assert response['Item']['p'] == p
+    assert response['Item'][long_name] == 'value'
+
+# Test BatchWriteItem with non-key attribute names exceeding the allowed length
+def test_batch_write_item_nonkey_name_bad(test_table_s):
+    """Test that BatchWriteItem rejects non-key attribute names exceeding maximum allowed length."""
+    p = random_string()
+    # Create an attribute name exceeding the maximum allowed length (65536 bytes)
+    too_long_name = random_string(64)*1024  # 65536 bytes
+    
+    # Should fail with appropriate validation error
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
+        with test_table_s.batch_writer() as batch:
+            batch.put_item({'p': p, too_long_name: 'value'})
+    
+    # Verify no item was written
+    response = test_table_s.get_item(Key={'p': p}, ConsistentRead=True)
+    assert 'Item' not in response
+
+# Test BatchWriteItem with mixed valid and invalid attribute names
+def test_batch_write_item_mixed_name_lengths(test_table_s):
+    """Test that BatchWriteItem rejects the entire batch if any item contains an invalid attribute name."""
+    p1 = random_string()
+    p2 = random_string()
+    
+    normal_name = "normal"
+    too_long_name = random_string(64)*1024  # 65536 bytes
+    
+    # Batch containing both valid and invalid attribute names should be rejected entirely
+    with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
+        with test_table_s.batch_writer() as batch:
+            batch.put_item({'p': p1, normal_name: 'value1'})
+            batch.put_item({'p': p2, too_long_name: 'value2'})
+    
+    # Verify that neither item was written
+    response = test_table_s.get_item(Key={'p': p1}, ConsistentRead=True)
+    assert 'Item' not in response
+    
+    response = test_table_s.get_item(Key={'p': p2}, ConsistentRead=True)
+    assert 'Item' not in response
+
+# Test BatchWriteItem with key attribute names at the maximum allowed length
+def test_batch_write_item_key_name_good(dynamodb):
+    """Test that BatchWriteItem works with key attribute names at maximum allowed length (255 bytes)."""
+    # Create an attribute name exactly at the maximum allowed length for key attributes (255 bytes)
+    max_key_name = "k" * 255
+    
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': max_key_name, 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': max_key_name, 'AttributeType': 'S' } ]) as table:
+        
+        # BatchWriteItem should succeed with key names at maximum length
+        with table.batch_writer() as batch:
+            batch.put_item({max_key_name: 'value1', 'attr': 'data1'})
+            batch.put_item({max_key_name: 'value2', 'attr': 'data2'})
+        
+        # Verify items were written successfully
+        response = table.get_item(Key={max_key_name: 'value1'}, ConsistentRead=True)
+        assert 'Item' in response
+        assert response['Item'][max_key_name] == 'value1'
+        assert response['Item']['attr'] == 'data1'
+
+# Test BatchWriteItem in a table with key attribute name at limit
+# but using too long non-key attribute names
+def test_batch_write_item_key_and_nonkey_name_length(dynamodb):
+    """Test that BatchWriteItem enforces different length limits for key and non-key attributes."""
+    # Key attribute name at the maximum allowed length (255 bytes)
+    max_key_name = "k" * 255
+    
+    # Non-key attribute name exceeding the maximum allowed length (65536 bytes)
+    too_long_name = random_string(64)*1024  # 65536 bytes
+    
+    with new_test_table(dynamodb,
+            KeySchema=[ { 'AttributeName': max_key_name, 'KeyType': 'HASH' } ],
+            AttributeDefinitions=[ { 'AttributeName': max_key_name, 'AttributeType': 'S' } ]) as table:
+        
+        # Should fail when trying to write item with too long non-key attribute name
+        with pytest.raises(ClientError, match='ValidationException.*6553[56]'):
+            with table.batch_writer() as batch:
+                batch.put_item({max_key_name: 'value', too_long_name: 'data'})
+        
+        # Verify no item was written
+        response = table.get_item(Key={max_key_name: 'value'}, ConsistentRead=True)
+        assert 'Item' not in response
