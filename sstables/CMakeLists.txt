@@ -39,8 +39,7 @@ target_link_libraries(sstables
     tracing
     absl::headers
     libdeflate::libdeflate
-    ZLIB::ZLIB
-    scylla-precompiled-header)
+    ZLIB::ZLIB)
 
 check_headers(check-headers sstables
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

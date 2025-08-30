@@ -31,8 +31,7 @@ target_link_libraries(alternator
   PRIVATE
     cql3
     idl
-    absl::headers
-    scylla-precompiled-header)
+    absl::headers)
 
 check_headers(check-headers alternator
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

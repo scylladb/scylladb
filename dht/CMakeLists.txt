@@ -16,8 +16,7 @@ target_link_libraries(scylla_dht
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    replica
-    scylla-precompiled-header)
+    replica)
 
 add_whole_archive(dht scylla_dht)
 

@@ -29,8 +29,7 @@ target_link_libraries(scylla_locator
     Seastar::seastar
     xxHash::xxhash
   PRIVATE
-    db
-    scylla-precompiled-header)
+    db)
 
 add_whole_archive(locator scylla_locator)
 

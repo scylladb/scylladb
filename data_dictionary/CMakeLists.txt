@@ -10,8 +10,7 @@ target_link_libraries(data_dictionary
     cql3
   PUBLIC
     Seastar::seastar
-    xxHash::xxhash
-    scylla-precompiled-header)
+    xxHash::xxhash)
 
 check_headers(check-headers data_dictionary
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

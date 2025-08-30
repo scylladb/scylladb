@@ -11,8 +11,7 @@ target_link_libraries(ldap
   PUBLIC
     Seastar::seastar
   PRIVATE
-    OpenLDAP::ldap OpenLDAP::lber
-    scylla-precompiled-header)
+    OpenLDAP::ldap OpenLDAP::lber)
 
 check_headers(check-headers ldap
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

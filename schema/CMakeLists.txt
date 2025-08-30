@@ -15,8 +15,7 @@ target_link_libraries(schema
     xxHash::xxhash
     absl::headers
   PRIVATE
-    alternator
-    scylla-precompiled-header)
+    alternator)
 
 check_headers(check-headers schema
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

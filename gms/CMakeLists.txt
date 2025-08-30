@@ -21,8 +21,7 @@ target_link_libraries(gms
     xxHash::xxhash
   PRIVATE
     db
-    absl::headers
-    scylla-precompiled-header)
+    absl::headers)
 
 check_headers(check-headers gms
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

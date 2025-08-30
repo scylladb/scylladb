@@ -163,56 +163,7 @@ file(MAKE_DIRECTORY "${scylla_gen_build_dir}")
 include(add_version_library)
 generate_scylla_version()
 
-option(Scylla_USE_PRECOMPILED_HEADER "Use precompiled header for Scylla" ON)
-add_library(scylla-precompiled-header INTERFACE)
-target_link_libraries(scylla-precompiled-header INTERFACE
-    absl::headers
-    absl::btree
-    absl::hash
-    absl::raw_hash_set
-    Seastar::seastar
-    Snappy::snappy
-    systemd
-    ZLIB::ZLIB
-    lz4::lz4_static
-    zstd::zstd_static)
-add_library(scylla-precompiled-header-impl STATIC exported_templates.cc)
-target_link_libraries(scylla-precompiled-header-impl PRIVATE scylla-precompiled-header
-    absl::headers
-    absl::btree
-    absl::hash
-    absl::raw_hash_set
-    Seastar::seastar
-    Snappy::snappy
-    systemd
-    ZLIB::ZLIB
-    lz4::lz4_static
-    zstd::zstd_static)
-if (Scylla_USE_PRECOMPILED_HEADER)
-  set(Scylla_USE_PRECOMPILED_HEADER_USE ON)
-  find_program(DISTCC_EXEC NAMES distcc OPTIONAL)
-  if (DISTCC_EXEC)
-    if(DEFINED ENV{DISTCC_HOSTS})
-      set(Scylla_USE_PRECOMPILED_HEADER_USE OFF)
-      message(STATUS "Disabling precompiled header usage because distcc exists and DISTCC_HOSTS is set, assuming you're using distributed compilation.")
-    else()
-      file(REAL_PATH "~/.distcc/hosts" DIST_CC_HOSTS_PATH EXPAND_TILDE)
-      if (EXISTS ${DIST_CC_HOSTS_PATH})
-        set(Scylla_USE_PRECOMPILED_HEADER_USE OFF)
-        message(STATUS "Disabling precompiled header usage because distcc exists and ~/.distcc/hosts exists, assuming you're using distributed compilation.")
-      endif()
-    endif()
-  endif()
-  if (Scylla_USE_PRECOMPILED_HEADER_USE)
-    message(STATUS "Using precompiled header for Scylla - remember to add `sloppiness = pch_defines,time_macros` to ccache.conf, if you're using ccache.")
-    target_sources(scylla-precompiled-header INTERFACE stdafx.hh)
-    target_precompile_headers(scylla-precompiled-header INTERFACE "stdafx.hh")
-    target_compile_definitions(scylla-precompiled-header INTERFACE SCYLLA_USE_PRECOMPILED_HEADER)
-  endif()
-endif()
-
 add_library(scylla-main STATIC)
-
 target_sources(scylla-main
   PRIVATE
     absl-flat_hash_map.cc
@@ -266,8 +217,6 @@ target_link_libraries(scylla-main
     ZLIB::ZLIB
     lz4::lz4_static
     zstd::zstd_static
-    scylla-precompiled-header
-    scylla-precompiled-header-impl
 )
 
 option(Scylla_CHECK_HEADERS

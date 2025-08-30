@@ -78,7 +78,7 @@ target_include_directories(wasmtime_bindings
   PUBLIC
     ${scylla_gen_build_dir})
 target_link_libraries(wasmtime_bindings
-  INTERFACE Rust::rust_combined PRIVATE scylla-precompiled-header)
+  INTERFACE Rust::rust_combined)
 
 # only for testing
 generate_cxxbridge(inc
@@ -96,4 +96,4 @@ target_include_directories(inc
   PUBLIC
     ${scylla_gen_build_dir})
 target_link_libraries(inc
-  INTERFACE Rust::rust_combined PRIVATE scylla-precompiled-header)
+  INTERFACE Rust::rust_combined)

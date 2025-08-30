@@ -18,8 +18,7 @@ target_link_libraries(lang
     xxHash::xxhash
   PRIVATE
     absl::headers
-    ${LUA_LIBRARIES}
-    scylla-precompiled-header)
+    ${LUA_LIBRARIES})
 
 check_headers(check-headers lang
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
