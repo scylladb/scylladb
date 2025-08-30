@@ -225,14 +225,21 @@ future<> unset_server_gossip(http_context& ctx) {
 }
 
 future<> set_server_column_family(http_context& ctx, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks) {
-    return register_api(ctx, "column_family",
+    co_await register_api(ctx, "column_family",
                 "The column family API", [&db, &sys_ks] (http_context& ctx, routes& r) {
                     set_column_family(ctx, r, db, sys_ks);
+                });
+    co_await register_api(ctx, "cache_service",
+            "The cache service API", [&db] (http_context& ctx, routes& r) {
+                    set_cache_service(ctx, db, r);
                 });
 }
 
 future<> unset_server_column_family(http_context& ctx) {
-    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_column_family(ctx, r); });
+    return ctx.http_server.set_routes([&ctx] (routes& r) {
+        unset_column_family(ctx, r);
+        unset_cache_service(ctx, r);
+    });
 }
 
 future<> set_server_messaging_service(http_context& ctx, sharded<netw::messaging_service>& ms) {
@@ -262,15 +269,6 @@ future<> set_server_stream_manager(http_context& ctx, sharded<streaming::stream_
 
 future<> unset_server_stream_manager(http_context& ctx) {
     return ctx.http_server.set_routes([&ctx] (routes& r) { unset_stream_manager(ctx, r); });
-}
-
-future<> set_server_cache(http_context& ctx) {
-    return register_api(ctx, "cache_service",
-            "The cache service API", set_cache_service);
-}
-
-future<> unset_server_cache(http_context& ctx) {
-    return ctx.http_server.set_routes([&ctx] (routes& r) { unset_cache_service(ctx, r); });
 }
 
 future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& proxy, sharded<gms::gossiper>& g) {
