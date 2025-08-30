@@ -327,12 +327,10 @@ static value_set possible_lhs_values(const column_definition* cdef,
                                 if (oper.op == oper_t::EQ) {
                                     return value_list{std::move(*val)};
                                 }
-                                if (column_index_on_lhs > 0) {
-                                    // A multi-column comparison restricts only the first column, because
-                                    // comparison is lexicographical.
-                                    return unbounded_value_set;
-                                }
-                                return to_range(oper.op, std::move(*val));
+                                // While an inequality like (ck1, ck2) >= (:v1, v2) implies that ck1 >= :v1 (but does
+                                // not imply an independent constrain on ck2), we can't make use of this constraint downstream.
+                                // We don't in fact call here when this happens, so just error out.
+                                on_internal_error(rlogger, "possible_lhs_values: trying to solve for single column on tuple inequality");
                             } else if (oper.op == oper_t::IN) {
                                 return get_IN_values(oper.rhs, column_index_on_lhs, options, type->as_less_comparator());
                             }
