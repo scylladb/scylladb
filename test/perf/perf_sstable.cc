@@ -13,11 +13,6 @@
 #include <seastar/core/reactor.hh>
 #include <random>
 
-// hack: perf_sstable falsely depends on Boost.Test, but we can't include it with
-// with statically linked boost
-#define BOOST_REQUIRE(x) (void)(x)
-#define BOOST_CHECK_NO_THROW(x) (void)(x)
-
 #include "test/perf/perf_sstable.hh"
 
 using namespace sstables;
