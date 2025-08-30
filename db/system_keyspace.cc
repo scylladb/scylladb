@@ -2186,7 +2186,59 @@ future<> system_keyspace::update_peer_info(gms::inet_address ep, locator::host_i
 
     slogger.debug("{}: values={}", query, values);
 
-    co_await _qp.execute_internal(query, db::consistency_level::ONE, values, cql3::query_processor::cache_internal::yes);
+    const auto guard = co_await get_units(_peers_cache_lock, 1);
+    try {
+        co_await _qp.execute_internal(query, db::consistency_level::ONE, values, cql3::query_processor::cache_internal::yes);
+        if (auto* cache = get_peers_cache()) {
+            cache->host_id_to_inet_ip[hid] = ep;
+            cache->inet_ip_to_host_id[ep] = hid;
+        }
+    } catch (...) {
+        _peers_cache = nullptr;
+        throw;
+    }
+}
+
+system_keyspace::peers_cache* system_keyspace::get_peers_cache() {
+    auto* cache = _peers_cache.get();
+    if (cache && (lowres_clock::now() > cache->expiration_time)) {
+        _peers_cache = nullptr;
+        return nullptr;
+    }
+    return cache;
+}
+
+future<lw_shared_ptr<const system_keyspace::peers_cache>> system_keyspace::get_or_load_peers_cache() {
+    const auto guard = co_await get_units(_peers_cache_lock, 1);
+    if (auto* cache = get_peers_cache()) {
+        co_return cache->shared_from_this();
+    }
+    auto cache = make_lw_shared<peers_cache>();
+    cache->inet_ip_to_host_id = co_await load_host_ids();
+    cache->host_id_to_inet_ip.reserve(cache->inet_ip_to_host_id.size());
+    for (const auto [ip, id]: cache->inet_ip_to_host_id) {
+        const auto [it, inserted] = cache->host_id_to_inet_ip.insert({id, ip});
+        if (!inserted) {
+            on_internal_error(slogger, ::format("duplicate IP for host_id {}, first IP {}, second IP {}",
+                id, it->second, ip));
+        }
+    }
+    cache->expiration_time = lowres_clock::now() + std::chrono::milliseconds(200);
+    _peers_cache = cache;
+    co_return std::move(cache);
+}
+
+future<std::optional<gms::inet_address>> system_keyspace::get_ip_from_peers_table(locator::host_id id) {
+    const auto cache = co_await get_or_load_peers_cache();
+    if (const auto it = cache->host_id_to_inet_ip.find(id); it != cache->host_id_to_inet_ip.end()) {
+        co_return it->second;
+    }
+    co_return std::nullopt;
+}
+
+future<system_keyspace::host_id_to_ip_map_t> system_keyspace::get_host_id_to_ip_map() {
+    const auto cache = co_await get_or_load_peers_cache();
+    co_return cache->host_id_to_inet_ip;
 }
 
 template <typename T>
@@ -2236,7 +2288,22 @@ future<> system_keyspace::update_schema_version(table_schema_version version) {
 future<> system_keyspace::remove_endpoint(gms::inet_address ep) {
     const sstring req = format("DELETE FROM system.{} WHERE peer = ?", PEERS);
     slogger.debug("DELETE FROM system.{} WHERE peer = {}", PEERS, ep);
-    co_await execute_cql(req, ep.addr()).discard_result();
+
+    const auto guard = co_await get_units(_peers_cache_lock, 1);
+    try {
+        co_await execute_cql(req, ep.addr()).discard_result();
+        if (auto* cache = get_peers_cache()) {
+            const auto it = cache->inet_ip_to_host_id.find(ep);
+            if (it != cache->inet_ip_to_host_id.end()) {
+                const auto id = it->second;
+                cache->inet_ip_to_host_id.erase(it);
+                cache->host_id_to_inet_ip.erase(id);
+            }
+        }
+    } catch (...) {
+        _peers_cache = nullptr;
+        throw;
+    }
 }
 
 future<> system_keyspace::update_tokens(const std::unordered_set<dht::token>& tokens) {
