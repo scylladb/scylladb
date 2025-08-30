@@ -1631,6 +1631,8 @@ sharded<locator::shared_token_metadata> token_metadata;
                 api::unset_server_gossip(ctx).get();
             });
 
+            checkpoint(stop_signal, "gossiper API registered");
+
             static sharded<service::direct_fd_pinger> fd_pinger;
             checkpoint(stop_signal, "starting direct failure detector pinger service");
             fd_pinger.start(std::ref(messaging)).get();
