@@ -3292,7 +3292,9 @@ storage_proxy::mutate_locally(const mutation& m, tracing::trace_state_ptr tr_sta
             return db.apply(s, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
-    return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
+    return local_schema_registry().get(m.schema()->version())->registry_entry()->maybe_wait_for_sync().then([erm, &m, apply = std::move(apply)] () mutable {
+        return apply_on_shards(erm, *m.schema(), m.token(), std::move(apply));
+    });
 }
 
 future<>
@@ -3310,7 +3312,9 @@ storage_proxy::mutate_locally(const schema_ptr& s, const frozen_mutation& m, tra
             return db.apply(gs, m, gtr.get(), sync, timeout, shard_rate_limit);
         });
     };
-    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    return local_schema_registry().get(s->version())->registry_entry()->maybe_wait_for_sync().then([erm, s, &m, apply = std::move(apply)] () mutable {
+        return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    });
 }
 
 future<>
@@ -3341,7 +3345,9 @@ storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracin
             return db.apply_hint(gs, m, tr_state, timeout);
         });
     };
-    return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    return local_schema_registry().get(s->version())->registry_entry()->maybe_wait_for_sync().then([erm, s, &m, apply = std::move(apply)] () mutable {
+        return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
+    });
 }
 
 template<typename ID>
