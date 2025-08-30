@@ -203,6 +203,18 @@ void task_manager::task::impl::set_virtual_parent() noexcept {
     });
 }
 
+task_id task_manager::task::impl::id() const noexcept {
+    return _status.id;
+}
+
+task_manager::task::status& task_manager::task::impl::get_status() noexcept {
+    return _status;
+}
+
+future<> task_manager::task::impl::done() const noexcept {
+    return _done.get_shared_future();
+}
+
 void task_manager::task::impl::run_to_completion() {
     (void)run().then([this] {
         _as.check();
@@ -270,7 +282,7 @@ task_manager::task::task(task_impl_ptr&& impl, gate::holder gh) noexcept : _impl
 }
 
 task_id task_manager::task::id() {
-    return _impl->_status.id;
+    return _impl->id();
 }
 
 std::string task_manager::task::type() const {
@@ -278,7 +290,7 @@ std::string task_manager::task::type() const {
 }
 
 task_manager::task::status& task_manager::task::get_status() noexcept {
-    return _impl->_status;
+    return _impl->get_status();
 }
 
 uint64_t task_manager::task::get_sequence_number() const noexcept {
@@ -359,7 +371,7 @@ bool task_manager::task::abort_requested() const noexcept {
 }
 
 future<> task_manager::task::done() const noexcept {
-    return _impl->_done.get_shared_future();
+    return _impl->done();
 }
 
 void task_manager::task::register_task() {

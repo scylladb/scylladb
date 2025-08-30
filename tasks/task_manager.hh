@@ -218,6 +218,9 @@ public:
             }
             future<std::vector<task_essentials>> get_failed_children() const;
             void set_virtual_parent() noexcept;
+            task_id id() const noexcept;
+            task_manager::task::status& get_status() noexcept;
+            future<> done() const noexcept;
         protected:
             virtual future<> run() = 0;
             void run_to_completion();
@@ -358,11 +361,11 @@ public:
         requires (module_ptr module, Args&&... args) {
             {TaskImpl(module, std::forward<Args>(args)...)} -> std::same_as<TaskImpl>;
         }
-        future<task_ptr> make_and_start_task(tasks::task_info parent_info, Args&&... args) {
+        future<shared_ptr<TaskImpl>> make_and_start_task(tasks::task_info parent_info, Args&&... args) {
             auto task_impl_ptr = seastar::make_shared<TaskImpl>(shared_from_this(), std::forward<Args>(args)...);
-            auto task = co_await make_task(std::move(task_impl_ptr), parent_info);
+            auto task = co_await make_task(task_impl_ptr, parent_info);
             task->start();
-            co_return task;
+            co_return task_impl_ptr;
         }
 
         // Must be called on target shard.

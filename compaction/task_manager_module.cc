@@ -180,11 +180,11 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
 namespace compaction {
 
 struct table_tasks_info {
-    tasks::task_manager::task_ptr task;
+    current_task_type task;
     table_info ti;
 
-    table_tasks_info(tasks::task_manager::task_ptr t, table_info info)
-        : task(t)
+    table_tasks_info(current_task_type t, table_info info)
+        : task(std::move(t))
         , ti(info)
     {}
 };
@@ -209,13 +209,13 @@ future<> run_on_table(sstring op, replica::database& db, std::string keyspace, t
     }
 }
 
-future<> wait_for_your_turn(seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, tasks::task_id id) {
+future<> wait_for_your_turn(seastar::condition_variable& cv, current_task_type& current_task, tasks::task_id id) {
     co_await cv.wait([&] {
         return current_task && current_task->id() == id;
     });
 }
 
-future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> table_tasks, seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, bool sort) {
+future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> table_tasks, seastar::condition_variable& cv, current_task_type& current_task, bool sort) {
     std::exception_ptr ex;
 
     // While compaction is run on one table, the size of tables may significantly change.
@@ -256,18 +256,18 @@ future<> run_table_tasks(replica::database& db, std::vector<table_tasks_info> ta
 }
 
 struct keyspace_tasks_info {
-    tasks::task_manager::task_ptr task;
+    current_task_type task;
     sstring keyspace;
     std::vector<table_info> table_infos;
 
-    keyspace_tasks_info(tasks::task_manager::task_ptr t, sstring ks_name, std::vector<table_info> t_infos)
-        : task(t)
+    keyspace_tasks_info(current_task_type t, sstring ks_name, std::vector<table_info> t_infos)
+        : task(std::move(t))
         , keyspace(std::move(ks_name))
         , table_infos(std::move(t_infos))
     {}
 };
 
-future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_info> keyspace_tasks, seastar::condition_variable& cv, tasks::task_manager::task_ptr& current_task, bool sort) {
+future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_info> keyspace_tasks, seastar::condition_variable& cv, current_task_type& current_task, bool sort) {
     std::exception_ptr ex;
 
     // While compaction is run on one table, the size of tables may significantly change.
@@ -369,7 +369,7 @@ future<> global_major_compaction_task_impl::run() {
         tables_by_keyspace[ks_name].emplace_back(table_name, table_id);
     }
     seastar::condition_variable cv;
-    tasks::task_manager::task_ptr current_task;
+    current_task_type current_task;
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<keyspace_tasks_info> keyspace_tasks;
     flush_mode fm = flushed_all_tables ? flush_mode::skip : _flush_mode;
@@ -408,7 +408,7 @@ future<> major_keyspace_compaction_task_impl::run() {
 
 future<> shard_major_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
-    tasks::task_manager::task_ptr current_task;
+    current_task_type current_task;
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _local_tables) {
@@ -477,7 +477,7 @@ future<> global_cleanup_compaction_task_impl::run() {
 
 future<> shard_cleanup_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
-    tasks::task_manager::task_ptr current_task;
+    current_task_type current_task;
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _local_tables) {
@@ -525,7 +525,7 @@ future<> offstrategy_keyspace_compaction_task_impl::run() {
 
 future<> shard_offstrategy_keyspace_compaction_task_impl::run() {
     seastar::condition_variable cv;
-    tasks::task_manager::task_ptr current_task;
+    current_task_type current_task;
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _table_infos) {
@@ -558,7 +558,7 @@ future<> upgrade_sstables_compaction_task_impl::run() {
 
 future<> shard_upgrade_sstables_compaction_task_impl::run() {
     seastar::condition_variable cv;
-    tasks::task_manager::task_ptr current_task;
+    current_task_type current_task;
     tasks::task_info parent_info{_status.id, _status.shard};
     std::vector<table_tasks_info> table_tasks;
     for (auto& ti : _table_infos) {
