@@ -105,13 +105,6 @@ future<json::json_return_type> map_reduce_cf(sharded<replica::database>& db, I i
     });
 }
 
-future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db, const sstring& name,
-        int64_t replica::column_family_stats::*f);
-
-future<json::json_return_type>  get_cf_stats(sharded<replica::database>& db,
-        int64_t replica::column_family_stats::*f);
-
-
 std::tuple<sstring, sstring> parse_fully_qualified_cf_name(sstring name);
 
 }
