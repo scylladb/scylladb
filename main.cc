@@ -139,6 +139,7 @@ using namespace std::chrono_literals;
 namespace bpo = boost::program_options;
 
 logging::logger diaglog("diagnostics");
+extern seastar::logger dsmlog;
 
 // Must live in a seastar::thread
 class stop_signal {
@@ -1174,6 +1175,15 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_dsm = defer_verbose_shutdown("disk space monitor", [&disk_space_monitor_shard0] {
                 disk_space_monitor_shard0->stop().get();
             });
+            auto out_of_space_subscription = disk_space_monitor_shard0->subscribe(cfg->critical_disk_utilization_level, [&threhsold = cfg->critical_disk_utilization_level, &dsm = *disk_space_monitor_shard0] (auto threshold_reached) {
+                static constexpr auto msg_template = "{} the critical disk utilization level ({:.1f}%). Current disk utilization {:.1f}%";
+                if (threshold_reached) {
+                    dsmlog.warn(msg_template, "Reached", threhsold() * 100, dsm.disk_utilization() * 100);
+                } else {
+                    dsmlog.info(msg_template, "Dropped below", threhsold() * 100, dsm.disk_utilization() * 100);
+                }
+                return make_ready_future<>();
+            });
 
             checkpoint(stop_signal, "starting compaction_manager");
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
@@ -1192,6 +1202,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
                cm.stop().get();
             });
+            cm.invoke_on_all(&compaction_manager::start, std::ref(*cfg), only_on_shard0(&*disk_space_monitor_shard0)).get();
 
             checkpoint(stop_signal, "starting storage manager");
             sstables::storage_manager::config stm_cfg;
@@ -1264,7 +1275,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             // not include reserve segments created by active commitlogs.
             db.local().init_commitlog().get();
             checkpoint(stop_signal, "starting per-shard database core");
-            db.invoke_on_all(&replica::database::start, std::ref(sl_controller)).get();
+            db.invoke_on_all(&replica::database::start, std::ref(sl_controller), only_on_shard0(&*disk_space_monitor_shard0)).get();
 
             ::sigquit_handler sigquit_handler(db);
 
@@ -1771,7 +1782,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_repair_service = defer_verbose_shutdown("repair service", [&repair] {
                 repair.stop().get();
             });
-            repair.invoke_on_all(&repair_service::start).get();
+            repair.invoke_on_all(&repair_service::start, only_on_shard0(&*disk_space_monitor_shard0)).get();
             api::set_server_repair(ctx, repair, gossip_address_map).get();
             auto stop_repair_api = defer_verbose_shutdown("repair API", [&ctx] {
                 api::unset_server_repair(ctx).get();

@@ -35,10 +35,12 @@
 #include "tombstone_gc.hh"
 #include "utils/pluggable.hh"
 #include "compaction/compaction_reenabler.hh"
+#include "utils/disk_space_monitor.hh"
 
 namespace db {
 class compaction_history_entry;
 class system_keyspace;
+class config;
 }
 
 namespace sstables { class test_env_compaction_manager; }
@@ -64,7 +66,7 @@ inline owned_ranges_ptr make_owned_ranges_ptr(dht::token_range_vector&& ranges) 
 }
 // Compaction manager provides facilities to submit and track compaction jobs on
 // behalf of existing tables.
-class compaction_manager {
+class compaction_manager: public peering_sharded_service<compaction_manager> {
 public:
     using compaction_stats_opt = std::optional<sstables::compaction_stats>;
     struct stats {
@@ -101,16 +103,17 @@ private:
     //
     // none: started, but not yet enabled. Once the compaction manager moves out of "none", it can
     //       never legally move back
-    // stopped: stop() was called. The compaction_manager will never be enabled or disabled again
+    // stopped: stop() was called. The compaction_manager will never be running again
     //          and can no longer be used (although it is possible to still grab metrics, stats,
     //          etc)
-    // enabled: accepting compactions
-    // disabled: not accepting compactions
-    //
-    // Moving the compaction manager to and from enabled and disable states is legal, as many times
-    // as necessary.
-    enum class state { none, stopped, disabled, enabled };
+    // running: running, started and enabled at least once. Whether new compactions are accepted or not is determined by the counter
+    enum class state { none, stopped, running };
     state _state = state::none;
+    // The compaction manager is initiated in the none state. It is moved to the running state when start() is invoked
+    // and the service is immediately enabled.
+    uint32_t _disabled_state_count = 0;
+
+    bool is_disabled() const { return _state != state::running || _disabled_state_count > 0; }
 
     std::optional<future<>> _stop_future;
 
@@ -167,6 +170,8 @@ private:
     // still uses it with reference semantics (inconsistently though).
     // Drop this member, once the code is converted into using value semantics.
     tombstone_gc_state _tombstone_gc_state;
+
+    utils::disk_space_monitor::subscription _out_of_space_subscription;
 private:
     // Requires task->_compaction_state.gate to be held and task to be registered in _tasks.
     future<compaction_stats_opt> perform_task(shared_ptr<compaction::compaction_task_executor> task, throw_if_stopping do_throw_if_stopping);
@@ -302,11 +307,17 @@ public:
     // Stop all fibers. Ongoing compactions will be waited. Should only be called
     // once, from main teardown path.
     future<> stop();
+    future<> start(const db::config& cfg, utils::disk_space_monitor* dsm);
 
     // cancels all running compactions and moves the compaction manager into disabled state.
     // The compaction manager is still alive after drain but it will not accept new compactions
     // unless it is moved back to enabled state.
     future<> drain();
+
+    // Check if compaction manager is running, i.e. it was enabled or drained
+    bool is_running() const noexcept {
+        return _state == state::running;
+    }
 
     using compaction_history_consumer = noncopyable_function<future<>(const db::compaction_history_entry&)>;
     future<> get_compaction_history(compaction_history_consumer&& f);

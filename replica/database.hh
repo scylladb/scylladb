@@ -72,6 +72,7 @@
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "replica/tables_metadata_lock.hh"
 #include "service/topology_guard.hh"
+#include "utils/disk_space_monitor.hh"
 
 class cell_locker;
 class cell_locker_stats;
@@ -583,6 +584,10 @@ private:
     // This field cashes the last truncation time for the table.
     // The master resides in system.truncated table
     std::optional<db_clock::time_point> _truncated_at;
+
+    // This field is used to determine whether the table is eligible to write rejection on critical
+    // disk utilization.
+    bool _eligible_to_write_rejection_on_critical_disk_utilization { false };
 
     bool _is_bootstrap_or_replace = false;
     sstables::shared_sstable make_sstable(sstables::sstable_state state);
@@ -1257,6 +1262,14 @@ public:
 
     size_t estimate_read_memory_cost() const;
 
+    void set_eligible_to_write_rejection_on_critical_disk_utilization(bool eligible) {
+        _eligible_to_write_rejection_on_critical_disk_utilization = eligible;
+    }
+
+    bool is_eligible_to_write_rejection_on_critical_disk_utilization() const {
+        return _eligible_to_write_rejection_on_critical_disk_utilization;
+    }
+
 private:
     future<row_locker::lock_holder> do_push_view_replica_updates(shared_ptr<db::view::view_update_generator> gen, schema_ptr s, mutation m, db::timeout_clock::time_point timeout, mutation_source source,
             tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, query::partition_slice::option_set custom_opts) const;
@@ -1420,6 +1433,8 @@ public:
             const locator::shared_token_metadata& stm) const;
     void update_static_effective_replication_map(locator::static_effective_replication_map_ptr erm);
 
+    data_dictionary::keyspace as_data_dictionary() const;
+
     /**
      * This should not really be return by reference, since replication
      * strategy is also volatile in that it could be replaced at "any" time.
@@ -1562,6 +1577,7 @@ private:
         uint64_t total_writes_failed = 0;
         uint64_t total_writes_timedout = 0;
         uint64_t total_writes_rate_limited = 0;
+        uint64_t total_writes_rejected_due_to_out_of_space_prevention = 0;
         uint64_t total_reads = 0;
         uint64_t total_reads_failed = 0;
         uint64_t total_reads_rate_limited = 0;
@@ -1621,6 +1637,7 @@ private:
     compaction_manager& _compaction_manager;
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
+    uint32_t _critical_disk_utilization_mode_count = 0;
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
     query::querier_cache _querier_cache;
@@ -1657,6 +1674,8 @@ private:
     utils::observer<float> _memtable_flush_static_shares_observer;
 
     db_clock::time_point _all_tables_flushed_at;
+
+    utils::disk_space_monitor::subscription _out_of_space_subscription;
 
 public:
     data_dictionary::database as_data_dictionary() const;
@@ -1703,6 +1722,7 @@ private:
     template<typename Future>
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
+    void update_write_metrics_for_rejected_writes();
     future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
     void remove(table&) noexcept;
     future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const;
@@ -1710,7 +1730,11 @@ private:
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
     friend class ::sigquit_handler; // wants access to all semaphores to dump diagnostics
+
+    static future<> set_in_critical_disk_utilization_mode(sharded<database>& sharded_db, bool enabled);
 public:
+    bool is_in_critical_disk_utilization_mode() const;
+
     void insert_keyspace(std::unique_ptr<keyspace> ks);
     void update_keyspace(std::unique_ptr<keyspace_change> change);
     void drop_keyspace(const sstring& name);
@@ -1731,8 +1755,8 @@ public:
     future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
-            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&, const abort_source& abort,
-            utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
+            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&,
+            const abort_source& abort, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
 
@@ -1841,7 +1865,7 @@ public:
     /// reads, to speed up startup. After startup this should be reverted to
     /// the normal concurrency.
     void revert_initial_system_read_concurrency_boost();
-    future<> start(sharded<qos::service_level_controller>&);
+    future<> start(sharded<qos::service_level_controller>&, utils::disk_space_monitor* dsm);
     future<> shutdown();
     future<> stop();
     future<> close_tables(table_kind kind_to_close);

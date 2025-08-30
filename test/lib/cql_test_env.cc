@@ -523,6 +523,8 @@ private:
             if (!cfg->view_update_reader_concurrency_semaphore_kill_limit_multiplier.is_set()) {
                 cfg->view_update_reader_concurrency_semaphore_kill_limit_multiplier.set(std::numeric_limits<uint32_t>::max());
             }
+            cfg->critical_disk_utilization_level.set(1.0f);
+
             tmpdir data_dir;
             auto data_dir_path = data_dir.path().string();
             if (!cfg->data_file_directories.is_set()) {
@@ -649,6 +651,7 @@ private:
             });
             _cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager)).get();
             auto stop_cm = deferred_stop(_cm);
+            _cm.invoke_on_all(&compaction_manager::start, std::ref(*cfg), only_on_shard0(&*_disk_space_monitor_shard0)).get();
 
             _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = deferred_stop(_sstm);
@@ -688,7 +691,7 @@ private:
                 _db.stop().get();
             });
 
-            _db.invoke_on_all(&replica::database::start, std::ref(_sl_controller)).get();
+            _db.invoke_on_all(&replica::database::start, std::ref(_sl_controller), only_on_shard0(&*_disk_space_monitor_shard0)).get();
 
             smp::invoke_on_all([blocked_reactor_notify_ms] {
                 engine().update_blocked_reactor_notify_ms(blocked_reactor_notify_ms);

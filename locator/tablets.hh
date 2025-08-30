@@ -400,6 +400,9 @@ struct load_stats {
     // Capacity in bytes for data file storage.
     std::unordered_map<host_id, uint64_t> capacity;
 
+    // Critical disk utilization check for each host.
+    std::unordered_map<locator::host_id, bool> critical_disk_utilization;
+
     static load_stats from_v1(load_stats_v1&&);
 
     load_stats& operator+=(const load_stats& s);
