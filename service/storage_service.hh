@@ -809,7 +809,20 @@ public:
 
     template <typename Func>
     auto run_with_api_lock_conditionally(sstring operation, bool lock, Func&& func) {
-        return lock ? run_with_api_lock(std::move(operation), std::forward<Func>(func)) : run_with_no_api_lock(std::forward<Func>(func));
+        return container().invoke_on(0, [operation = std::move(operation),
+                func = std::forward<Func>(func)] (storage_service& ss) mutable {
+            if (ss.raft_topology_change_enabled()) {
+                return func(ss);
+            }
+
+            if (!ss._operation_in_progress.empty()) {
+                throw std::runtime_error(format("Operation {} is in progress, try again", ss._operation_in_progress));
+            }
+            ss._operation_in_progress = std::move(operation);
+            return func(ss).finally([&ss] {
+                ss._operation_in_progress = sstring();
+            });
+       });
     }
 
 private:
