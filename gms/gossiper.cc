@@ -607,10 +607,27 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<T> epset) {
 
 
 future<> gossiper::do_apply_state_locally(locator::host_id node, endpoint_state remote_state, bool shadow_round) {
+
+    co_await utils::get_local_injector().inject("delay_gossiper_apply", [&node, &remote_state](auto& handler) -> future<> {
+        const auto gossip_delay_node = handler.template get<std::string_view>("delay_node");
+        if (gossip_delay_node && !remote_state.get_host_id() && inet_address(sstring(gossip_delay_node.value())) == remote_state.get_ip()) {
+            logger.debug("delay_gossiper_apply: suspend for node {}", node);
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+            logger.debug("delay_gossiper_apply: resume for node {}", node);
+        }
+    });
+
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await lock_endpoint(node, null_permit_id);
     auto es = get_endpoint_state_ptr(node);
+
+    // If remote state update does not contain a host id, check whether the endpoint still
+    // exists in the `_endpoint_state_map` since after a preemption point it could have been deleted.
+    if (!remote_state.get_host_id() && !es) {
+        throw std::runtime_error(format("Entry for host id {} does not exist in the endpoint state map.", node));
+    }
+
     if (es) {
         endpoint_state local_state = *es;
         auto local_generation = local_state.get_heart_beat_state().get_generation();
@@ -1337,6 +1354,13 @@ utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const
 }
 
 future<> gossiper::replicate(endpoint_state es, permit_id pid) {
+    co_await utils::get_local_injector().inject("gossiper_fail_on_empty_host", [&es](auto& handler) -> future<> {
+        if (!es.get_host_id()) {
+            on_internal_error(logger, "adding a state with empty host id");
+        }
+        return make_ready_future<>();
+    });
+
     verify_permit(es.get_host_id(), pid);
 
     // First pass: replicate the new endpoint_state on all shards.
