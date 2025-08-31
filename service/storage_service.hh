@@ -646,8 +646,6 @@ private:
 
     future<> maybe_reconnect_to_preferred_ip(inet_address ep, inet_address local_ip, locator::host_id host_id);
 
-    // Return ip of the peers table entry with given host id
-    future<std::optional<gms::inet_address>> get_ip_from_peers_table(locator::host_id id);
 public:
 
     sstring get_release_version();
@@ -1026,8 +1024,7 @@ private:
         std::vector<std::pair<gms::inet_address, locator::host_id>> joined;
     };
 
-    using host_id_to_ip_map_t = std::unordered_map<locator::host_id, gms::inet_address>;
-    future<host_id_to_ip_map_t> get_host_id_to_ip_map();
+    using host_id_to_ip_map_t = db::system_keyspace::host_id_to_ip_map_t;
     future<> raft_topology_update_ip(locator::host_id id, gms::inet_address ip, const host_id_to_ip_map_t& map, nodes_to_notify_after_sync* nodes_to_notify);
     // Synchronizes the local node state (token_metadata, system.peers/system.local tables,
     // gossiper) to align it with the other raft topology nodes.
