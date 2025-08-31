@@ -525,6 +525,10 @@ class ScyllaRESTAPIClient:
             params = {"table": table}
         return await self.client.get_json(f'/storage_service/describe_ring/{keyspace}', host=node_ip, params=params)
 
+    async def natural_endpoints(self, node_ip: str, keyspace: str, table: str, key: str) -> Any:
+        params = {"cf": table, "key": key}
+        return await self.client.get_json(f'/storage_service/natural_endpoints/{keyspace}', host=node_ip, params=params)
+
 
 class ScyllaMetricsLine:
     def __init__(self, name: str, labels: dict, value: float):
