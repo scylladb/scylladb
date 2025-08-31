@@ -88,6 +88,22 @@ def test_protocol_version_mismatch(scylla_only, request, host):
     cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
     assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase after the test"
 
+def _build_frame(*, opcode: int, stream: int, body: bytes) -> bytearray:
+    frame = bytearray()
+    frame += struct.pack("!B", 0x04)         # version 4
+    frame += struct.pack("!B", 0x00)         # flags
+    frame += struct.pack("!H", stream)       # stream
+    frame += struct.pack("!B", opcode)       # opcode
+    frame += struct.pack("!I", len(body))  # body length
+    frame += body
+    return frame
+
+def _send_frame(sock: socket.socket, *, opcode: int, stream: int, body: bytes) -> None:
+    sock.send(_build_frame(opcode=opcode, stream=stream, body=body))
+
+def _recv_frame(sock: socket.socket) -> bytes:
+    return sock.recv(4096)
+
 # Many protocol errors are caused by sending malformed messages.
 # It is not possible to reproduce them with the Python driver,
 # so we use a low-level socket connection to send the messages.
@@ -100,36 +116,22 @@ def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_au
     try:
         if trigger_unknown_compression:
             # send STARTUP with an unknown COMPRESSION option
-            bad_startup = bytearray()
-            bad_startup += struct.pack("!B", 0x04)  # version 4
-            bad_startup += struct.pack("!B", 0x00)  # flags
-            bad_startup += struct.pack("!H", 0x01)  # stream = 1
-            bad_startup += struct.pack("!B", 0x01)  # opcode = STARTUP
             # two entries in the string map: CQL_VERSION and COMPRESSION
             body = (
                 b'\x00\x02'
                 b'\x00\x0bCQL_VERSION\x00\x053.0.0'
                 b'\x00\x0bCOMPRESSION\x00\x07invalid_compression_algorithm'
             )
-            bad_startup += struct.pack("!I", len(body))
-            bad_startup += body
-            s.send(bad_startup)
-            s.recv(4096)
+            _send_frame(s, opcode=0x01, stream=1, body=body)
+            _recv_frame(s)
             return
 
         # STARTUP
-        startup = bytearray()
-        startup += struct.pack("!B", 0x04)         # version 4
-        startup += struct.pack("!B", 0x00)         # flags
-        startup += struct.pack("!H", 0x01)         # stream = 1
-        startup += struct.pack("!B", 0x01)         # opcode = STARTUP
         body = b'\x00\x01\x00\x0bCQL_VERSION\x00\x053.0.0'
-        startup += struct.pack("!I", len(body))
-        startup += body
-        s.send(startup)
+        _send_frame(s, opcode=0x01, stream=1, body=body)
+        frame = _recv_frame(s)
 
         # READY or AUTHENTICATE?
-        frame = s.recv(4096)
         op = frame[4]
         assert op in (0x02, 0x03), f"expected READY(2) or AUTHENTICATE(3), got {hex(op)}"
 
@@ -141,44 +143,25 @@ def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_au
             # AUTHENTICATE path
             if trigger_unexpected_auth:
                 # send OPTIONS to trigger auth‐state exception
-                bad = bytearray()
-                bad += struct.pack("!B", 0x04)        # version 4
-                bad += struct.pack("!B", 0x00)        # flags
-                bad += struct.pack("!H", 0x02)        # stream = 2
-                bad += struct.pack("!B", 0x05)        # opcode = OPTIONS
-                bad += struct.pack("!I", 0)           # body length = 0
-                s.send(bad)
-                s.recv(4096)
+                _send_frame(s, opcode=0x05, stream=2, body=b'')
+                _recv_frame(s)
                 return
 
             # send correct AUTH_RESPONSE
-            auth = bytearray()
-            auth += struct.pack("!B", 0x04)
-            auth += struct.pack("!B", 0x00)
-            auth += struct.pack("!H", 0x02)       # stream = 2
-            auth += struct.pack("!B", 0x0F)       # AUTH_RESPONSE
-            payload = b'\x00cassandra\x00cassandra'
-            auth += struct.pack("!I", len(payload))
-            auth += payload
-            s.send(auth)
+            body = b'\x00cassandra\x00cassandra'
+            _send_frame(s, opcode=0x0F, stream=2, body=body)
             # wait for AUTH_SUCCESS (0x10)
-            resp = s.recv(4096)
+            resp = _recv_frame(s)
             assert resp[4] == 0x10, f"expected AUTH_SUCCESS, got {hex(resp[4])}"
 
         if trigger_bad_batch:
-            bad = bytearray()
-            bad += struct.pack("!B", 0x04)        # version 4
-            bad += struct.pack("!B", 0x00)        # flags
-            bad += struct.pack("!H", 0x03)        # stream = 3
-            bad += struct.pack("!B", 0x0D)        # BATCH
-            bbody = bytearray()
-            bbody += struct.pack("!B", 0x00)      # batch type = LOGGED
-            bbody += struct.pack("!H", 0x01)      # 1 statement
-            bbody += struct.pack("!B", 0xFF)      # INVALID kind = 255
-            bad += struct.pack("!I", len(bbody))
-            bad += bbody
-            s.send(bad)
-            s.recv(4096)
+            body = bytearray()
+            body += struct.pack("!B", 0x00)      # batch type = LOGGED
+            body += struct.pack("!H", 0x01)      # 1 statement
+            body += struct.pack("!B", 0xFF)      # INVALID kind = 255
+            # BATCH opcode 0x0D
+            _send_frame(s, opcode=0x0D, stream=3, body=body)
+            _recv_frame(s)
 
     finally:
         s.close()
