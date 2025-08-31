@@ -183,64 +183,40 @@ def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_au
     finally:
         s.close()
 
+def _test_impl(host, flag):
+    run_count = 100
+    cpp_exception_threshold = 10
+
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
+    protocol_exception_metrics_before = get_protocol_error_metrics(host)
+
+    for _ in range(run_count):
+        kwargs = {flag: True}
+        _protocol_error_impl(host, **kwargs)
+
+    protocol_exception_metrics_after = get_protocol_error_metrics(host)
+    assert protocol_exception_metrics_after > protocol_exception_metrics_before, f"Expected protocol errors to increase after running test with {flag}"
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
+    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, f"Expected C++ protocol errors to not increase after running test with {flag}"
+
 @pytest.fixture
 def no_ssl(request):
     if request.config.getoption("--ssl"):
         pytest.skip("skipping non-SSL test on SSL-enabled run")
     yield
 
-# Test if the error is raised when sending a malformed BATCH message
-# containing an invalid BATCH kind.
+# Malformed BATCH with an invalid kind triggers a protocol error.
 def test_invalid_kind_in_batch_message(scylla_only, no_ssl, host):
-    run_count = 100
-    cpp_exception_threshold = 10
+    _test_impl(host, "trigger_bad_batch")
 
-    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
-    protocol_exception_metrics_before = get_protocol_error_metrics(host)
-
-    for _ in range(run_count):
-        _protocol_error_impl(host, trigger_bad_batch=True)
-
-    protocol_exception_metrics_after = get_protocol_error_metrics(host)
-    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
-
-    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
-    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
-
-# Test if the error is raised when sending an unexpected AUTH_RESPONSE
-# message during the authentication phase.
+# Send OPTIONS during AUTHENTICATE to trigger auth-state error.
 def test_unexpected_message_during_auth(scylla_only, no_ssl, host):
-    run_count = 100
-    cpp_exception_threshold = 10
+    _test_impl(host, "trigger_unexpected_auth")
 
-    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
-    protocol_exception_metrics_before = get_protocol_error_metrics(host)
-
-    for _ in range(run_count):
-        _protocol_error_impl(host, trigger_unexpected_auth=True)
-
-    protocol_exception_metrics_after = get_protocol_error_metrics(host)
-    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
-
-    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
-    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
-
-# Test if the error is raised when sending an unknown compression algorithm.
+# STARTUP with unknown COMPRESSION option should produce a protocol error.
 def test_unknown_compression_algorithm(scylla_only, no_ssl, host):
-    run_count = 100
-    cpp_exception_threshold = 10
-
-    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host)
-    protocol_exception_metrics_before = get_protocol_error_metrics(host)
-
-    for _ in range(run_count):
-        _protocol_error_impl(host, trigger_unknown_compression=True)
-
-    protocol_exception_metrics_after = get_protocol_error_metrics(host)
-    assert protocol_exception_metrics_after > protocol_exception_metrics_before, "Expected protocol errors to increase"
-
-    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host)
-    assert cpp_exception_metrics_after - cpp_exception_metrics_before <= cpp_exception_threshold, "Expected C++ protocol errors to not increase"
+    _test_impl(host, "trigger_unknown_compression")
 
 # Test if the protocol exceptions do not decrease after running the test.
 # This is to ensure that the protocol exceptions are not cleared or reset
