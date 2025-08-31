@@ -13,8 +13,13 @@
 
 #include "bytes_ostream.hh"
 #include "concrete_types.hh"
+#include "types/collection.hh"
+#include "types/listlike_partial_deserializing_iterator.hh"
 #include "types/types.hh"
+#include "types/vector.hh"
+#include "utils/managed_bytes.hh"
 #include "utils/multiprecision_int.hh"
+#include "vint-serialization.hh"
 
 logging::logger cblogger("comparable_bytes");
 
@@ -35,6 +40,13 @@ static constexpr uint8_t ESCAPE = 0x00;
 // so zeroed spaces only grow by 1 byte
 static constexpr uint8_t ESCAPED_0_CONT = 0xFE;
 static constexpr uint8_t ESCAPED_0_DONE = 0xFF;
+
+// Next component marker.
+static constexpr uint8_t NEXT_COMPONENT = 0x40;
+// Marker for null components in tuples, maps, sets and clustering keys.
+static constexpr uint8_t NEXT_COMPONENT_NULL = 0x3E;
+// Terminator byte in sequences.
+static constexpr uint8_t TERMINATOR = 0x38;
 
 static void read_fragmented_checked(managed_bytes_view& view, size_t bytes_to_read, bytes::value_type* out) {
     if (view.size_bytes() < bytes_to_read) {
@@ -855,6 +867,270 @@ static void unescape_zeros(managed_bytes_view& comparable_bytes_view, bytes_ostr
     }
 }
 
+// Functions are defined later in the file as they depend on to_comparable_bytes_visitor and from_comparable_bytes_visitor.
+static void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out);
+static void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
+
+// Encodes a single non-null element of a multi-component type into a byte-comparable format.
+// The element can be an item from a list, set, vector, a key or value from a map, or a field from a tuple.
+// The serialized bytes of the element are transformed into a byte-comparable representation,
+// prefixed with a `NEXT_COMPONENT` marker to delimit it from other elements, and written to the output stream.
+void encode_component(const abstract_type& type, managed_bytes_view serialized_bytes_view, bytes_ostream& out) {
+    write_native_int(out, NEXT_COMPONENT);
+    to_comparable_bytes(type, serialized_bytes_view, out);
+}
+
+// Decodes a single non-null element of a multi-component type from its byte-comparable representation
+// into its serialized format. The serialized value is prefixed with its size in bytes.
+void decode_component(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    // Placeholder to write the size of the serialized bytes
+    auto element_size_ptr = reinterpret_cast<char*>(out.write_place_holder(sizeof(int32_t)));
+    auto curr_write_pos = out.pos();
+    // Decode the comparable bytes into serialized bytes and write it into out
+    from_comparable_bytes(type, comparable_bytes_view, out);
+    // Now write the size of the serialized bytes in big endian format
+    write_be(element_size_ptr, static_cast<int32_t>(out.written_since(curr_write_pos)));
+}
+
+// Encodes a single null element of a multi-component type into a byte-comparable format.
+static void encode_null_component(bytes_ostream& out) {
+    // Write the NULL component marker
+    write_native_int(out, NEXT_COMPONENT_NULL);
+}
+
+// Decodes a single null element of a multi-component type.
+static void decode_null_component(bytes_ostream& out) {
+    // Write -1 as length for null value encoded as 4-byte big endian.
+    static const auto null_length = [] {
+        std::array<char, 4> arr{};
+        write_be(arr.data(), int32_t(-1));
+        return arr;
+    }();
+    out.write(bytes_view(reinterpret_cast<const signed char*>(null_length.data()), null_length.size()));
+}
+
+// Decodes the next marker and the component, if available, into serialized format.
+template<bool allow_null_component_value>
+static stop_iteration decode_marker_and_component(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    switch (read_simple_native<uint8_t>(comparable_bytes_view)) {
+    case NEXT_COMPONENT:
+        decode_component(type, comparable_bytes_view, out);
+        return stop_iteration::no;
+    case TERMINATOR:
+        // End of the collection, return without writing anything
+        return stop_iteration::yes;
+    case NEXT_COMPONENT_NULL:
+        if constexpr (allow_null_component_value) {
+            decode_null_component(out);
+            return stop_iteration::no;
+        }
+        // NEXT_COMPONENT_NULL encountered when allow_null_component_value is false;
+        // Fallthrough to throw an exception
+        [[fallthrough]];
+    default:
+        // This should not happen unless the encoding scheme has changed
+        throw_with_backtrace<marshal_exception>("decode_next_component - unexpected component marker in collection");
+    }
+}
+
+// Encode a set or a list type into byte comparable format.
+// The collection is encoded as a sequence of components, each preceded by a header.
+// The component header is either NEXT_COMPONENT_NULL or NEXT_COMPONENT, depending on whether the element is null or not.
+// The collection is terminated with a TERMINATOR byte.
+static void encode_set_or_list_type(const listlike_collection_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    const auto& elements_type = *type.get_elements_type();
+    using llpdi = listlike_partial_deserializing_iterator;
+    for (auto it = llpdi::begin(serialized_bytes_view); it != llpdi::end(serialized_bytes_view); it++) {
+        // Read the serialized bytes from the collection value and write it in byte comparable format.
+        if ((*it).has_value()) {
+            encode_component(elements_type, (*it).value(), out);
+        } else {
+            encode_null_component(out);
+        }
+    }
+    write_native_int(out, TERMINATOR);
+}
+
+// Decode set or list type from byte comparable format.
+static void decode_set_or_list_type(const listlike_collection_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    const auto& elements_type = *type.get_elements_type();
+    // Create a place holder for the size of the collection.
+    // The size will be written later after decoding all the elements.
+    auto collection_size_ptr = reinterpret_cast<char*>(out.write_place_holder(sizeof(int32_t)));
+    int32_t collection_size = 0;
+    while (decode_marker_and_component<true>(elements_type, comparable_bytes_view, out) == stop_iteration::no) {
+        collection_size++;
+    }
+
+    write_be(collection_size_ptr, collection_size);
+}
+
+// Encode a map type into byte comparable format.
+// The map is encoded as a sequence of key-value pairs, each preceded by a component header similar to sets and lists.
+static void encode_map(const map_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    const auto& key_type = *type.get_keys_type();
+    const auto& value_type = *type.get_values_type();
+    auto map_size = read_collection_size(serialized_bytes_view);
+    while (map_size--) {
+        encode_component(key_type, read_collection_key(serialized_bytes_view), out);
+        encode_component(value_type, read_collection_value_nonnull(serialized_bytes_view), out);
+    }
+    write_native_int(out, TERMINATOR);
+}
+
+// Decode a map type from byte comparable format.
+static void decode_map(const map_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    const auto& key_type = *type.get_keys_type();
+    const auto& value_type = *type.get_values_type();
+    // Create a place holder for the size of the map.
+    // The size will be written later after decoding all the elements.
+    auto map_size_ptr = reinterpret_cast<char*>(out.write_place_holder(sizeof(int32_t)));
+    int32_t map_size = 0;
+    while (decode_marker_and_component<false>(key_type, comparable_bytes_view, out) == stop_iteration::no) {
+        // Decode value
+        if (read_simple_native<uint8_t>(comparable_bytes_view) != NEXT_COMPONENT) {
+            throw_with_backtrace<marshal_exception>("decode_map - unexpected component marker in map");
+        }
+        decode_component(value_type, comparable_bytes_view, out);
+        map_size++;
+    }
+    write_be(map_size_ptr, static_cast<int32_t>(map_size));
+}
+
+// Encode a tuple type into byte comparable format.
+// The tuple is encoded as a sequence of components, each preceded by a component header similar to sets and lists.
+// If an element is null, it is encoded with a NEXT_COMPONENT_NULL marker and any trailing nulls are skipped.
+// The tuple is terminated with a TERMINATOR byte.
+static void encode_tuple(const tuple_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    int pending_null_writes = 0;
+    for (const auto& element_type : type.all_types()) {
+        if (serialized_bytes_view.empty()) {
+            // End of tuple values: all remaining elements are null and can be omitted from encoding.
+            break;
+        }
+        auto element = read_tuple_element(serialized_bytes_view);
+        if (element) {
+            // Write any pending null components before writing the current element.
+            while (pending_null_writes > 0) {
+                encode_null_component(out);
+                pending_null_writes--;
+            }
+            encode_component(*element_type.get(), element.value(), out);
+        } else {
+            // Null tuple element. Track it but do not write it yet as it maybe a trailing null.
+            pending_null_writes++;
+        }
+    }
+
+    write_native_int(out, TERMINATOR);
+}
+
+// Decodes a tuple type from byte comparable format into its serialized representation.
+static void decode_tuple(const tuple_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    for (const auto& element_type : type.all_types()) {
+        if (decode_marker_and_component<true>(*element_type.get(), comparable_bytes_view, out) == stop_iteration::yes) {
+            break;
+        }
+    }
+}
+
+// Encodes a vector type into byte comparable format.
+// The collection is encoded as a sequence of components, each preceded by NEXT_COMPONENT header.
+// The collection is terminated with a TERMINATOR byte.
+static void encode_vector(const vector_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    const auto& element_type = *type.get_elements_type();
+    auto value_length = element_type.value_length_if_fixed();
+    for (size_t i = 0; i < type.get_dimension(); i++) {
+        encode_component(element_type, read_vector_element(serialized_bytes_view, value_length), out);
+    }
+    write_native_int(out, TERMINATOR);
+}
+
+// Decodes a vector from byte-comparable format into its serialized representation.
+// For vectors with fixed-length elements, each element is decoded directly into the output stream.
+// For vectors with variable-length elements, each element is decoded and prefixed with its size serialized as an unsigned_vint.
+static void decode_vector(const vector_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    const auto& element_type = *type.get_elements_type();
+    if (element_type.value_length_if_fixed()) {
+        // For fixed-length element types, decode each component directly into the output stream, no need to prefix length
+        while (read_simple_native<uint8_t>(comparable_bytes_view) == NEXT_COMPONENT) {
+            from_comparable_bytes(element_type, comparable_bytes_view, out);
+        }
+    } else {
+        // For variable-length element types, decode every component into a temporary buffer, serialize
+        // its size as an unsigned vint, and write both the size and the component to the output stream.
+        bytes_ostream decoded_value;
+        while (read_simple_native<uint8_t>(comparable_bytes_view) == NEXT_COMPONENT) {
+            from_comparable_bytes(element_type, comparable_bytes_view, decoded_value);
+            const auto decoded_size = decoded_value.size();
+            std::array<int8_t, max_vint_length> serialized_decoded_size;
+            unsigned_vint::serialize(decoded_size, serialized_decoded_size.data());
+            out.write(bytes_view(serialized_decoded_size.data(), unsigned_vint::serialized_size(decoded_size)));
+            out.append(decoded_value);
+            decoded_value.clear();
+        }
+    }
+}
+
+// Flip all the bits from the input and write to the flipped stream.
+static void flip_all_bits(const bytes_view& input, bytes_ostream& flipped) {
+    // Process word by word and write the flipped output to buffer
+    uint64_t word;
+    // Use an intermediate buffer to store the flipped output to reduce the
+    // number of writes to the output stream.
+    std::array<uint8_t, sizeof(word) * 128> buffer; // 1K buffer
+
+    // Process input as batches of words
+    size_t buffer_pos = 0, input_pos = 0, batch_size = 0;
+    while ((batch_size = std::min(align_down(input.size() - input_pos, sizeof(word)), buffer.size())) > 0) {
+        while (buffer_pos < batch_size) {
+            std::memcpy(&word, input.data() + input_pos, sizeof(word));
+            word = ~word;
+            std::memcpy(buffer.data() + buffer_pos, &word, sizeof(word));
+            input_pos += sizeof(word);
+            buffer_pos += sizeof(word);
+        }
+
+        // Flush the buffer
+        write_native_int_array(flipped, buffer, buffer_pos);
+        buffer_pos = 0;
+    }
+
+    // Flip the remaining bytes in input, if any, and write to buffer.
+    while (input_pos < input.size()) {
+        buffer[buffer_pos++] = ~input[input_pos++];
+    }
+
+    // Flush remaining data in buffer to out
+    if (buffer_pos > 0) {
+        // Flush the buffer
+        write_native_int_array(flipped, buffer, buffer_pos);
+    }
+}
+
+// Encodes a serialized value into its reversed type, byte comparable format.
+// The serialized bytes of the underlying type is transformed into its standard byte comparable representation.
+// Then, all the bits are flipped to ensure that the lexicographical sort order is reversed.
+static void encode_reversed(const reversed_type_impl& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    bytes_ostream encoded_bytes_bo;
+    to_comparable_bytes(*type.underlying_type(), serialized_bytes_view, encoded_bytes_bo);
+    for (const auto& fragment : encoded_bytes_bo.fragments()) {
+        flip_all_bits(fragment, out);
+    }
+}
+
+// Decode a reversed type byte comparable representation into its serialized format.
+static void decode_reversed(const reversed_type_impl& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    bytes_ostream encoded_bytes_bo;
+    while (!comparable_bytes_view.empty()) {
+        flip_all_bits(comparable_bytes_view.current_fragment(), encoded_bytes_bo);
+        comparable_bytes_view.remove_current();;
+    }
+    auto encoded_bytes_mb = std::move(encoded_bytes_bo).to_managed_bytes();
+    auto encoded_bytes_mbv = managed_bytes_view(encoded_bytes_mb);
+    from_comparable_bytes(*type.underlying_type(), encoded_bytes_mbv, out);
+}
+
 // to_comparable_bytes_visitor provides methods to
 // convert serialized bytes into byte comparable format.
 struct to_comparable_bytes_visitor {
@@ -931,7 +1207,29 @@ struct to_comparable_bytes_visitor {
         escape_zeros(serialized_bytes_view, out);
     }
 
-    // TODO: Handle other types
+    // encode sets and lists
+    void operator()(const listlike_collection_type_impl& type) {
+        encode_set_or_list_type(type, serialized_bytes_view, out);
+    }
+
+    void operator()(const map_type_impl& type) {
+        encode_map(type, serialized_bytes_view, out);
+    }
+
+    // encode tuples and UDTs
+    void operator()(const tuple_type_impl& type) {
+        encode_tuple(type, serialized_bytes_view, out);
+    }
+
+    void operator()(const vector_type_impl& type) {
+        encode_vector(type, serialized_bytes_view, out);
+    }
+
+    void operator()(const reversed_type_impl& type) {
+        encode_reversed(type, serialized_bytes_view, out);
+    }
+
+    void operator()(const empty_type_impl&) {}
 
     void operator()(const abstract_type& type) {
         // Unimplemented
@@ -939,9 +1237,13 @@ struct to_comparable_bytes_visitor {
     }
 };
 
+void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out) {
+    visit(type, to_comparable_bytes_visitor{serialized_bytes_view, out});
+}
+
 comparable_bytes::comparable_bytes(const abstract_type& type, managed_bytes_view serialized_bytes_view) {
     bytes_ostream encoded_bytes_ostream;
-    visit(type, to_comparable_bytes_visitor{serialized_bytes_view, encoded_bytes_ostream});
+    to_comparable_bytes(type, serialized_bytes_view, encoded_bytes_ostream);
     _encoded_bytes = std::move(encoded_bytes_ostream).to_managed_bytes();
 }
 
@@ -1027,7 +1329,29 @@ struct from_comparable_bytes_visitor {
         unescape_zeros(comparable_bytes_view, out);
     }
 
-    // TODO: Handle other types
+    // decode sets and lists
+    void operator()(const listlike_collection_type_impl& type) {
+        decode_set_or_list_type(type, comparable_bytes_view, out);
+    }
+
+    void operator()(const map_type_impl& type) {
+        decode_map(type, comparable_bytes_view, out);
+    }
+
+    // decode tuples and UDTs
+    void operator()(const tuple_type_impl& type) {
+        decode_tuple(type, comparable_bytes_view, out);
+    }
+
+    void operator()(const vector_type_impl& type) {
+        decode_vector(type, comparable_bytes_view, out);
+    }
+
+    void operator()(const reversed_type_impl& type) {
+        decode_reversed(type, comparable_bytes_view, out);
+    }
+
+    void operator()(const empty_type_impl&) {}
 
     void operator()(const abstract_type& type) {
         // Unimplemented
@@ -1035,14 +1359,18 @@ struct from_comparable_bytes_visitor {
     }
 };
 
+void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out) {
+    visit(type, from_comparable_bytes_visitor{comparable_bytes_view, out});
+}
+
 managed_bytes_opt comparable_bytes::to_serialized_bytes(const abstract_type& type) const {
-    if (_encoded_bytes.empty()) {
+    if (_encoded_bytes.empty() && type != *empty_type) {
         return managed_bytes_opt();
     }
 
     managed_bytes_view comparable_bytes_view(_encoded_bytes);
     bytes_ostream serialized_bytes_ostream;
-    visit(type, from_comparable_bytes_visitor{comparable_bytes_view, serialized_bytes_ostream});
+    from_comparable_bytes(type, comparable_bytes_view, serialized_bytes_ostream);
     return std::move(serialized_bytes_ostream).to_managed_bytes();
 }
 
