@@ -640,38 +640,42 @@ future<uint64_t> estimate_partitions(seastar::sharded<replica::database>& db, co
 
 repair::shard_repair_task_impl::shard_repair_task_impl(tasks::task_manager::module_ptr module,
         tasks::task_id id,
-        const sstring& keyspace,
+        sstring keyspace,
         repair_service& repair,
         locator::effective_replication_map_ptr erm_,
-        const dht::token_range_vector& ranges_,
+        dht::token_range_vector ranges_,
         std::vector<table_id> table_ids_,
         repair_uniq_id parent_id_,
-        const std::vector<sstring>& data_centers_,
-        const std::vector<sstring>& hosts_,
-        const std::unordered_set<locator::host_id>& ignore_nodes_,
+        std::vector<sstring> data_centers_,
+        std::vector<sstring> hosts_,
+        std::unordered_set<locator::host_id> ignore_nodes_,
+        std::unordered_map<dht::token_range, repair_neighbors> neighbors_,
         streaming::stream_reason reason_,
         bool hints_batchlog_flushed,
         bool small_table_optimization,
         std::optional<int> ranges_parallelism,
         gc_clock::time_point flush_time,
         service::frozen_topology_guard topo_guard,
-        tablet_repair_sched_info sched_info)
-    : repair_task_impl(module, id, 0, "shard", keyspace, "", "", parent_id_.uuid(), reason_)
+        tablet_repair_sched_info sched_info,
+        size_t small_table_optimization_ranges_reduced_factor_)
+    : repair_task_impl(module, id, 0, "shard", std::move(keyspace), "", "", parent_id_.uuid(), reason_)
     , rs(repair)
     , db(repair.get_db())
     , messaging(repair.get_messaging().container())
     , mm(repair.get_migration_manager())
     , gossiper(repair.get_gossiper())
     , erm(std::move(erm_))
-    , ranges(ranges_)
+    , ranges(std::move(ranges_))
     , cfs(get_table_names(db.local(), table_ids_))
     , table_ids(std::move(table_ids_))
     , global_repair_id(parent_id_)
-    , data_centers(data_centers_)
-    , hosts(hosts_)
-    , ignore_nodes(ignore_nodes_)
+    , data_centers(std::move(data_centers_))
+    , hosts(std::move(hosts_))
+    , ignore_nodes(std::move(ignore_nodes_))
+    , neighbors(std::move(neighbors_))
     , _hints_batchlog_flushed(std::move(hints_batchlog_flushed))
     , _small_table_optimization(small_table_optimization)
+    , small_table_optimization_ranges_reduced_factor(small_table_optimization_ranges_reduced_factor_)
     , _user_ranges_parallelism(ranges_parallelism ? std::optional<semaphore>(semaphore(*ranges_parallelism)) : std::nullopt)
     , _flush_time(flush_time)
     , _frozen_topology_guard(topo_guard)
@@ -1395,9 +1399,9 @@ future<> repair::user_requested_repair_task_impl::run() {
             auto f = rs.container().invoke_on(shard, [keyspace, table_ids, id, ranges, hints_batchlog_flushed, flush_time, ranges_parallelism, small_table_optimization,
                     data_centers, hosts, ignore_nodes, parent_data = get_repair_uniq_id().task_info, germs] (repair_service& local_repair) mutable -> future<> {
                 local_repair.get_metrics().repair_total_ranges_sum += ranges.size();
-                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), keyspace,
+                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::unordered_map<dht::token_range, repair_neighbors>{}, streaming::stream_reason::repair, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
                         service::default_session_id);
                 co_await task->done();
             });
@@ -1539,14 +1543,10 @@ future<> repair::data_sync_repair_task_impl::run() {
                 bool hints_batchlog_flushed = false;
                 auto ranges_parallelism = std::nullopt;
                 auto flush_time = gc_clock::time_point();
-                auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(local_repair._repair_module, tasks::task_id::create_random_id(), keyspace,
+                auto task = co_await local_repair._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(), std::move(keyspace),
                         local_repair, germs->get().shared_from_this(), std::move(ranges), std::move(table_ids),
-                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
-                        service::default_session_id);
-                task_impl_ptr->neighbors = std::move(neighbors);
-                task_impl_ptr->small_table_optimization_ranges_reduced_factor = ranges_reduced_factor;
-                auto task = co_await local_repair._repair_module->make_task(std::move(task_impl_ptr), parent_data);
-                task->start();
+                        id, std::move(data_centers), std::move(hosts), std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time,
+                        service::default_session_id, tablet_repair_sched_info{}, ranges_reduced_factor);
                 co_await task->done();
             });
             repair_results.push_back(std::move(f));
@@ -2294,14 +2294,12 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     std::vector<tablet_repair_task_meta> task_metas;
     auto ranges_parallelism = std::nullopt;
     auto start = std::chrono::steady_clock::now();
-    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
-    auto task_impl_ptr = seastar::make_shared<repair::tablet_repair_task_impl>(_repair_module, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, rebuild_replicas.has_value());
     bool sched_by_scheduler = true;
-    task_impl_ptr->sched_info = tablet_repair_sched_info(sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair);
-    auto task = co_await _repair_module->make_task(task_impl_ptr, global_tablet_repair_task_info);
-    task->start();
+    tablet_repair_sched_info sched_info{sched_by_scheduler, stage == locator::tablet_transition_stage::rebuild_repair};
+    task_metas.push_back(tablet_repair_task_meta{keyspace_name, table_name, table_id, *master_shard_id, range, repair_neighbors(nodes, shards), replicas});
+    auto task = co_await _repair_module->make_and_start_task<repair::tablet_repair_task_impl>(global_tablet_repair_task_info, id, keyspace_name, global_tablet_repair_task_info.id, table_names, streaming::stream_reason::repair, std::move(task_metas), ranges_parallelism, topo_guard, std::move(sched_info), rebuild_replicas.has_value());
     co_await task->done();
-    auto flush_time = task_impl_ptr->get_flush_time();
+    auto flush_time = task->get_flush_time();
     auto delay = utils::get_local_injector().inject_parameter<uint32_t>("tablet_repair_add_delay_in_ms");
     if (delay) {
         rlogger.debug("Execute tablet_repair_add_delay_in_ms={}", *delay);
@@ -2423,12 +2421,9 @@ future<> repair::tablet_repair_task_impl::run() {
                 }
                 bool small_table_optimization = false;
 
-                auto task_impl_ptr = seastar::make_shared<repair::shard_repair_task_impl>(rs._repair_module, tasks::task_id::create_random_id(),
+                auto task = co_await rs._repair_module->make_and_start_task<repair::shard_repair_task_impl>(parent_data, tasks::task_id::create_random_id(),
                         m.keyspace_name, rs, nullptr, std::move(ranges), std::move(table_ids), id, std::move(data_centers), std::move(hosts),
-                        std::move(ignore_nodes), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, topo_guard, sched_info);
-                task_impl_ptr->neighbors = std::move(neighbors);
-                auto task = co_await rs._repair_module->make_task(task_impl_ptr, parent_data);
-                task->start();
+                        std::move(ignore_nodes), std::move(neighbors), reason, hints_batchlog_flushed, small_table_optimization, ranges_parallelism, flush_time, topo_guard, sched_info);
                 auto res = co_await coroutine::as_future(task->done());
                 if (res.failed()) {
                     auto ep = res.get_exception();
@@ -2446,7 +2441,7 @@ future<> repair::tablet_repair_task_impl::run() {
                     }
                 }
                 auto current = flush_times[this_shard_id()];
-                auto time = task_impl_ptr->get_flush_time();
+                auto time = task->get_flush_time();
                 flush_times[this_shard_id()] = current == gc_clock::time_point() ? time : std::min(current, time);
             }
             if (error) {
