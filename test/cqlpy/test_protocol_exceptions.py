@@ -110,10 +110,28 @@ def _recv_frame(sock: socket.socket) -> bytes:
 # To avoid code duplication of this low-level code, we use a common
 # implementation function with parameters. To trigger a specific
 # protocol error, the appropriate trigger should be set to True.
-def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_auth=False, trigger_unknown_compression=False):
+def _protocol_error_impl(
+        host, *,
+        trigger_bad_batch=False,
+        trigger_unexpected_auth=False,
+        trigger_process_startup_invalid_string_map=False,
+        trigger_unknown_compression=False,
+        trigger_process_query_internal_malformed_query=False,
+        trigger_process_query_internal_fail_read_options=False,
+        trigger_process_prepare_malformed_query=False,
+        trigger_process_execute_internal_malformed_cache_key=False,
+        trigger_process_register_malformed_string_list=False):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect((host, 9042))
     try:
+        if trigger_process_startup_invalid_string_map:
+            # STARTUP opcode = 0x01.
+            # Body: map count = 1 (uint16), but no entries -> truncated
+            body = b'\x00\x01'
+            _send_frame(s, opcode=0x01, stream=1, body=body)
+            _recv_frame(s)
+            return
+
         if trigger_unknown_compression:
             # send STARTUP with an unknown COMPRESSION option
             # two entries in the string map: CQL_VERSION and COMPRESSION
@@ -155,6 +173,8 @@ def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_au
             assert resp[4] == 0x10, f"expected AUTH_SUCCESS, got {hex(resp[4])}"
 
         if trigger_bad_batch:
+            # BATCH opcode = 0x0D.
+            # Body: batch type = LOGGED (0), 1 statement, but invalid kind = 255
             body = bytearray()
             body += struct.pack("!B", 0x00)      # batch type = LOGGED
             body += struct.pack("!H", 0x01)      # 1 statement
@@ -162,6 +182,63 @@ def _protocol_error_impl(host, *, trigger_bad_batch=False, trigger_unexpected_au
             # BATCH opcode 0x0D
             _send_frame(s, opcode=0x0D, stream=3, body=body)
             _recv_frame(s)
+            return
+        
+        if trigger_process_query_internal_malformed_query:
+            # QUERY opcode = 0x07.
+            # Body: long-string length (uint32) = 100, but send only 2 bytes -> truncated
+            long_string_len = 100
+            body = struct.pack("!I", long_string_len) + b"AB"
+            _send_frame(s, opcode=0x07, stream=2, body=body)
+            resp = _recv_frame(s)
+            # Expect ERROR frame (opcode 0x00)
+            assert bool(resp) and resp[4] == 0x00
+            return
+
+        if trigger_process_query_internal_fail_read_options:
+            # QUERY opcode = 0x07
+            # Body: long-string query (uint32 len) + options; PAGE_SIZE flag set but page_size truncated (only 2 bytes provided instead of 4)
+            query = b"SELECT 1"
+            long_len = struct.pack("!I", len(query))
+            # options: consistency (uint16) + flags (byte with PAGE_SIZE bit = 0x04) + truncated page_size (2 bytes only)
+            options = struct.pack("!H", 0x0001) + struct.pack("!B", 0x04) + b'\x00\x10'  # only 2 bytes instead of 4
+            body = long_len + query + options
+            _send_frame(s, opcode=0x07, stream=2, body=body)
+            resp = _recv_frame(s)
+            # Expect ERROR frame (opcode 0x00)
+            assert bool(resp) and resp[4] == 0x00
+            return
+        
+        if trigger_process_prepare_malformed_query:
+            # PREPARE opcode = 0x09.
+            # Body: long-string length (uint32) = 100, but send only 2 bytes -> truncated
+            long_string_len = 100
+            body = struct.pack("!I", long_string_len) + b"AB" 
+            _send_frame(s, opcode=0x09, stream=2, body=body)
+            resp = _recv_frame(s)
+            # Expect ERROR frame (opcode 0x00)
+            assert bool(resp) and resp[4] == 0x00
+            return
+        
+        if trigger_process_execute_internal_malformed_cache_key:
+            # EXECUTE opcode = 0x0A.
+            # Body: short-bytes length (uint16) = 5, but send only 3 bytes -> truncated id
+            declared_len = 5
+            body = struct.pack("!H", declared_len) + b'ABC'  # actual = 2 + 3 = 5 bytes
+            _send_frame(s, opcode=0x0A, stream=2, body=body)
+            resp = _recv_frame(s)
+            # Expect ERROR frame (opcode 0x00)
+            assert bool(resp) and resp[4] == 0x00
+            return
+        
+        if trigger_process_register_malformed_string_list:
+            # REGISTER opcode = 0x0B
+            # Body: string list count = 1 (uint16) then a string with declared length = 5 but only 3 bytes provided -> truncated
+            body = b'\x00\x01' + b'\x00\x05' + b'ABC'
+            _send_frame(s, opcode=0x0B, stream=2, body=body)
+            resp = _recv_frame(s)
+            # Expect ERROR frame (opcode 0x00)
+            assert bool(resp) and resp[4] == 0x00
 
     finally:
         s.close()
@@ -197,11 +274,35 @@ def test_invalid_kind_in_batch_message(scylla_only, no_ssl, host):
 def test_unexpected_message_during_auth(scylla_only, no_ssl, host):
     _test_impl(host, "trigger_unexpected_auth")
 
+# STARTUP with an invalid/missing string-map entry should produce a protocol error.
+def test_process_startup_invalid_string_map(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_startup_invalid_string_map")
+
 # STARTUP with unknown COMPRESSION option should produce a protocol error.
 def test_unknown_compression_algorithm(scylla_only, no_ssl, host):
     _test_impl(host, "trigger_unknown_compression")
 
-# Test if the protocol exceptions do not decrease after running the test.
+# QUERY long-string truncation: declared length > provided bytes triggers protocol error.
+def test_process_query_internal_malformed_query(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_query_internal_malformed_query")
+
+# QUERY options malformed: PAGE_SIZE flag set but page_size truncated triggers protocol error.
+def test_process_query_internal_fail_read_options(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_query_internal_fail_read_options")
+
+# PREPARE long-string truncation: declared length > provided bytes triggers protocol error.
+def test_process_prepare_malformed_query(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_prepare_malformed_query")
+
+# EXECUTE cache-key malformed: short-bytes length > provided bytes triggers protocol error.
+def test_process_execute_internal_malformed_cache_key(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_execute_internal_malformed_cache_key")
+
+# REGISTER malformed string list: declared string length > provided bytes triggers protocol error.
+def test_process_register_malformed_string_list(scylla_only, no_ssl, host):
+    _test_impl(host, "trigger_process_register_malformed_string_list")
+
+# Test if the protocol exceptions do not decrease after running the test happy path.
 # This is to ensure that the protocol exceptions are not cleared or reset
 # during the test execution.
 def test_no_protocol_exceptions(scylla_only, no_ssl, host):
