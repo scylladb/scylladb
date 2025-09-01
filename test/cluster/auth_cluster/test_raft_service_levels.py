@@ -11,7 +11,7 @@ from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
-        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created
+        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, find_server_by_host_id
 from test.cluster.conftest import skip_mode
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
@@ -498,3 +498,80 @@ async def test_reload_service_levels_after_auth_service_is_stopped(manager: Mana
     config = {**auth_config, "error_injections_at_startup": ["reload_service_level_cache_after_auth_service_is_stopped"]}
     s1 = await manager.server_add(config=config)
     await manager.server_stop_gracefully(s1.server_id)
+
+@pytest.mark.asyncio
+async def test_driver_service_level(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    logger.info("Verify that sl:driver is created properly on system startup")
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(service_levels) == 1
+    assert service_levels[0].service_level == "driver"
+    assert service_levels[0].workload_type == "batch"
+    assert service_levels[0].shares == 200
+    assert (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'service_level_driver_created'"))[0].value == "true"
+
+    logger.info("Verify that sl:driver can be removed")
+    await cql.run_async(f"DROP SERVICE LEVEL driver")
+    assert len(await cql.run_async("LIST ALL SERVICE LEVELS")) == 0
+
+    logger.info("Add a new server so that the Raft state machine snapshot is used")
+    new_servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
+
+    logger.info("Verify that sl:driver is not re-created even after topology coordinator reload")
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
+
+    hosts = await wait_for_cql_and_get_hosts(cql, servers + new_servers, time.time() + 60)
+    for host in hosts:
+        assert len(await cql.run_async("LIST ALL SERVICE LEVELS", host=host)) == 0
+
+@pytest.mark.asyncio
+async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    logger.info("Drop sl:driver to prepare the system state and re-create it later")
+    await cql.run_async(f"DROP SERVICE LEVEL driver")
+
+    logger.info("Create new service levels to occupy all slots, including the slot of the removed sl:driver")
+    for i in range(MAX_USER_SERVICE_LEVELS + 1):
+        await cql.run_async(f"CREATE SERVICE_LEVEL new_sl_{i}")
+
+    logger.info("Verify that all newly created service levels exist")
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    service_level_names = [sl.service_level for sl in service_levels]
+    for i in range(MAX_USER_SERVICE_LEVELS + 1):
+        assert f"new_sl_{i}" in service_level_names
+    assert "driver" not in service_level_names
+
+    logger.info("Check the logs to see that sl:driver creation failed")
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    log_file = await manager.server_open_log(coord_serv.server_id)
+    mark = await log_file.mark()
+
+    logger.info("Set service_level_driver_created=false in system.scylla_local and reload topology coordinator")
+    for host in hosts:
+        await cql.run_async(f"UPDATE system.scylla_local SET value = 'false' WHERE key = 'service_level_driver_created'", host=host)
+    await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
+    await log_file.wait_for("Failed to create service level for driver", from_mark=mark)
+
+    logger.info("Verify topology coordinator is not blocked despite the failure")
+    mark = await log_file.mark()
+    await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
+    await log_file.wait_for("topology coordinator fiber has nothing to do. Sleeping.", from_mark=mark)
+
+    logger.info("Double-check that the driver is not re-created")
+    for host in hosts:
+        service_levels = await cql.run_async("LIST ALL SERVICE LEVELS", host=host)
+        service_level_names = [sl.service_level for sl in service_levels]
+        assert "driver" not in service_level_names
