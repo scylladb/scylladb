@@ -3202,6 +3202,14 @@ future<std::optional<group0_guard>> topology_coordinator::maybe_migrate_system_t
         co_return std::nullopt;
     }
 
+    if (_sl_controller.is_v2() && _feature_service.driver_service_level) {
+        const auto sl_driver_created = (co_await _sys_ks.get_service_level_driver_created());
+        if (!sl_driver_created.value_or(false)) {
+            co_await _sl_controller.create_driver_service_level(std::move(guard), _sys_ks);
+            co_return std::nullopt;
+        }
+    }
+
     co_return std::move(guard);
 }
 
