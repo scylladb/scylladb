@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <exception>
 #include <iterator>
 #include <ranges>
 #include <seastar/core/coroutine.hh>
@@ -181,6 +182,8 @@ future<> view_building_worker::run_staging_sstables_registrator() {
             vbw_logger.warn("Got group0_concurrent_modification while creating staging sstable tasks");
         } catch (raft::request_aborted&) {
             vbw_logger.warn("Got raft::request_aborted while creating staging sstable tasks");
+        } catch (...) {
+            vbw_logger.error("Exception while creating staging sstable tasks: {}", std::current_exception());
         }
     }
 }
