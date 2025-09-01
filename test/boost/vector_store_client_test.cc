@@ -14,10 +14,12 @@
 #include "cql3/statements/select_statement.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
+#include <boost/test/tools/old/interface.hpp>
 #include <functional>
 #include <chrono>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/net/api.hh>
 #include <seastar/http/function_handlers.hh>
 #include <seastar/http/httpd.hh>
@@ -111,6 +113,30 @@ auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) 
     )",
             ks, cf));
     co_return env.local_db().find_schema(ks, cf);
+}
+
+auto create_vs_server(lw_shared_ptr<std::queue<std::tuple<sstring, sstring>>> ann_replies) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    return new_http_server([ann_replies](routes& r) {
+        auto ann = [ann_replies](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+            BOOST_REQUIRE(!ann_replies->empty());
+            auto [req_exp, rep_inp] = ann_replies->front();
+            auto const req_inp = co_await util::read_entire_stream_contiguous(*req->content_stream);
+            BOOST_CHECK_EQUAL(req_inp, req_exp);
+            ann_replies->pop();
+            rep->set_status(status_type::ok);
+            rep->write_body("json", rep_inp);
+            co_return rep;
+        };
+        r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
+    });
+}
+
+auto get_metrics_value(sstring metric_name, const auto& all_metrics) {
+    const auto& all_metadata = *all_metrics->metadata;
+    const auto m = find_if(cbegin(all_metadata), cend(all_metadata), [&metric_name](const auto& x) {
+        return x.mf.name == metric_name;
+    });
+    return all_metrics->values[distance(cbegin(all_metadata), m)].cbegin();
 }
 
 class configure {
@@ -433,19 +459,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
     auto ann_replies = make_lw_shared<std::queue<std::tuple<sstring, sstring>>>();
-    auto [server, addr] = co_await new_http_server([ann_replies](routes& r) {
-        auto ann = [ann_replies](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-            BOOST_REQUIRE(!ann_replies->empty());
-            auto [req_exp, rep_inp] = ann_replies->front();
-            auto const req_inp = co_await util::read_entire_stream_contiguous(*req->content_stream);
-            BOOST_CHECK_EQUAL(req_inp, req_exp);
-            ann_replies->pop();
-            rep->set_status(status_type::ok);
-            rep->write_body("json", rep_inp);
-            co_return rep;
-        };
-        r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
-    });
+    auto [server, addr] = co_await create_vs_server(ann_replies);
 
     auto cfg = cql_test_config();
     cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr.port()));
@@ -633,4 +647,41 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
             cfg);
     co_await s1->stop();
     co_await s2->stop();
+}
+
+SEASTAR_TEST_CASE(vector_search_metrics_test) {
+    auto ann_replies = make_lw_shared<std::queue<std::tuple<sstring, sstring>>>();
+    auto [server, addr] = co_await create_vs_server(ann_replies);
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr.port()));
+    co_await do_with_cql_env(
+            [&ann_replies](cql_test_env& env) -> future<> {
+                auto as = abort_source();
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+                result.get()->throw_if_exception();
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
+
+                vs.start_background_tasks();
+
+                ann_replies->emplace(std::make_tuple(R"({"embedding":[0.1,0.2,0.3],"limit":2})",
+                        R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as);
+
+                auto all_metrics = seastar::metrics::impl::get_values();
+                auto latencies = get_metrics_value("vector_store_ann_latencies", all_metrics);
+                BOOST_CHECK_EQUAL(latencies->get_histogram().sample_count, 1);
+                auto limits = get_metrics_value("vector_store_ann_limit_histogram", all_metrics);
+                BOOST_CHECK_EQUAL(limits->get_histogram().sample_count, 1);
+                auto bucket = find_if(cbegin(limits->get_histogram().buckets), cend(limits->get_histogram().buckets), [](const auto& x) {
+                    return x.upper_bound == 2;
+                });
+                BOOST_CHECK_EQUAL(bucket->count, 1);
+                auto dns = get_metrics_value("vector_store_dns_refreshes", all_metrics);
+                BOOST_CHECK_EQUAL(dns->i(), 0);
+            },
+            cfg);
+    co_await server->stop();
 }
