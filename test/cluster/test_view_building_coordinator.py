@@ -5,17 +5,19 @@
 #
 from test.pylib.manager_client import ManagerClient
 
+import os
 import asyncio
 import pytest
 import time
 import logging
+import re
 
 from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for_first_completed, gather_safely, wait_for
 from test.pylib.internal_types import ServerInfo, HostID
-from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replica
+from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replica, get_tablet_replicas
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
-from test.cluster.util import new_test_keyspace, get_topology_coordinator, trigger_stepdown
+from test.cluster.util import new_test_keyspace, get_topology_coordinator, trigger_stepdown, wait_for_cql_and_get_hosts
 from test.pylib.scylla_cluster import ReplaceConfig
 
 from cassandra.cluster import Session, ConsistencyLevel, EXEC_PROFILE_DEFAULT # type: ignore
@@ -615,3 +617,121 @@ async def test_concurrent_tablet_migrations(manager: ManagerClient):
 
         await unpause_view_building_tasks(manager)
         await wait_for_view(cql, "mv", len(servers))
+
+async def get_table_dir(manager: ManagerClient, server: ServerInfo, ks: str, table: str):
+    workdir = await manager.server_get_workdir(server.server_id)
+    ks_dir = os.path.join(workdir, "data", ks)
+
+    table_pattern = re.compile(f"{table}-")
+    for root, dirs, files in os.walk(ks_dir):
+        for d in dirs:
+            if table_pattern.match(d):
+                return os.path.join(root, d)
+
+async def delete_table_sstables(manager: ManagerClient, server: ServerInfo, ks: str, table: str):
+    table_dir = await get_table_dir(manager, server, ks, table)
+    for root, dirs, files in os.walk(table_dir):
+        for file in files:
+            path = os.path.join(root, file)
+            os.remove(path)
+        break # break unconditionally here to remove only files in `table_dir`
+
+async def assert_row_count_on_host(cql, host, ks, table, row_count):
+    stmt = SimpleStatement(f"SELECT * FROM {ks}.{table}", consistency_level = ConsistencyLevel.LOCAL_ONE)
+    rows = await cql.run_async(stmt, host=host)
+    assert len(rows) == row_count
+
+# Reproducer for issue scylla-enterprise#4572
+# This test triggers file-based streaming of staging sstables
+# and expects that view updates are generated after the streaming is finished.
+# Staging sstables are created by removing table's normal sstables and repairing it.
+# Then processing staging sstables is prevented using error injection and the tablet is
+# migrated to a new node, which will receive the staging sstables via file streaming.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_file_streaming(manager: ManagerClient):
+    node_count = 2
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ])
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'initial': 1}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key))")
+
+        # Populate the base table
+        rows = 1000
+        for i in range(rows):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
+                        "WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key) ")
+        await wait_for_view(cql, 'mv', node_count)
+
+        # Flush on node0
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "tab")
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "mv")
+
+        # Delete sstables
+        await delete_table_sstables(manager, servers[0], ks, "tab")
+        await delete_table_sstables(manager, servers[0], ks, "mv")
+
+        # Restart node0
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+
+        # Assert that node0 has no data for base table and MV
+        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30)
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", 0)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
+        await manager.server_start(servers[1].server_id)
+
+        # Repair the base table
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable", one_shot=False)
+        await manager.api.repair(servers[0].ip_addr, ks, "tab")
+        await s0_log.wait_for(f"Processing {ks} failed for table tab", from_mark=s0_mark, timeout=60)
+        await s0_log.wait_for(f"Finished user-requested repair for tablet keyspace={ks}", from_mark=s0_mark, timeout=60)
+
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", 1000)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
+        await manager.server_start(servers[1].server_id)
+
+        # Add node3
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        new_server = await manager.server_add(cmdline=cmdline_loggers + ['--logger-log-level', 'view_update_generator=trace'], property_file={"dc": "dc1", "rack": "r1"})
+
+        s0_host_id = await manager.get_host_id(servers[0].server_id)
+        tablet_token = 0 # Doesn't matter since there is one tablet
+        async def get_tablet_replica_for_s0():
+            replicas = await get_tablet_replicas(manager, servers[0], ks, "tab", tablet_token)
+            for replica in replicas:
+                if replica[0] == s0_host_id:
+                    return replica
+            return None
+
+        s3_log = await manager.server_open_log(new_server.server_id)
+        s3_mark = await s3_log.mark()
+
+        # Move tablet from node0 to node3
+        src_replica = await get_tablet_replica_for_s0()
+        if not src_replica:
+            assert False, "no replica"
+        s3_host_id = await manager.get_host_id(new_server.server_id)
+        await manager.api.move_tablet(servers[0].ip_addr, ks, "tab", src_replica[0], src_replica[1], s3_host_id, 0, tablet_token)
+        # Without the fix for issue scylla-enterprise#4572 following line times out and ...
+        await s3_log.wait_for(f"Processed {ks}.tab:", from_mark=s3_mark, timeout=60)
+
+        new_hosts = await wait_for_cql_and_get_hosts(cql, [new_server], time.time() + 30)
+        await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
+        await assert_row_count_on_host(cql, new_hosts[0], ks, "tab", 1000)
+        # Start node0 here because view replica might not be migrated to the new node, since they are not colocated
+        await manager.server_start(servers[0].server_id)
+        # ... this check fails because the mv has 0 rows on the new host
+        await assert_row_count_on_host(cql, new_hosts[0], ks, "mv", 1000)
+        await manager.server_start(servers[1].server_id)
