@@ -1,3 +1,5 @@
+#pragma once
+
 #include <seastar/core/abort_source.hh>
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"
