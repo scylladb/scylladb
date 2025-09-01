@@ -309,6 +309,18 @@ endpoints_to_update get_view_natural_endpoint(
     bool use_tablets_basic_rack_aware_view_pairing,
     replica::cf_stats& cf_stats);
 
+/// Verify that the provided keyspace is eligible for storing materialized views.
+///
+/// Result:
+/// * If the keyspace is eligible, no effect.
+/// * If the keyspace is not eligible, an exception is thrown. Its type is not specified,
+///   and the user of this function cannot make any assumption about it. The carried exception
+///   message will be worded in a way that can be directly passed on to the end user.
+///
+/// Preconditions:
+/// * The provided `keyspace_name` must correspond to an existing keyspace.
+void validate_view_keyspace(const data_dictionary::database&, std::string_view keyspace_name);
+
 }
 
 }
