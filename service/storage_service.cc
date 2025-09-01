@@ -1215,6 +1215,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service,
+                    _sl_controller.local(),
                     _topology_cmd_rpc_tracker);
         }
     } catch (...) {
