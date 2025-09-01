@@ -617,7 +617,7 @@ CLUSTER_EVENTS: tuple[ClusterEventType, ...] = (
 
     # FIXME: We omit creating or dropping indexes because the random_failures
     # tests still haven't been adjusted to work with `rf_rack_valid_keyspaces`.
-    # That option is going to become a requirement for using materialized views
+    # That option is a requirement for using materialized views
     # in tablet-based keyspaces, so let's skip them.
     #
     # add_index,
