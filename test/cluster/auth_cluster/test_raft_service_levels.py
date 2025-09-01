@@ -498,3 +498,70 @@ async def test_reload_service_levels_after_auth_service_is_stopped(manager: Mana
     config = {**auth_config, "error_injections_at_startup": ["reload_service_level_cache_after_auth_service_is_stopped"]}
     s1 = await manager.server_add(config=config)
     await manager.server_stop_gracefully(s1.server_id)
+
+@pytest.mark.asyncio
+async def test_driver_service_level(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
+    s = servers[0]
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    logger.info("Verify that sl:driver is created properly on system startup")
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(service_levels) == 1
+    assert service_levels[0].service_level == "driver"
+    assert service_levels[0].workload_type == "batch"
+    assert service_levels[0].shares == 200
+    assert (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'service_level_driver_created'"))[0].value == "true"
+
+    logger.info("Verify that sl:driver can be removed")
+    await cql.run_async(f"DROP SERVICE LEVEL driver", host=h)
+    assert len(await cql.run_async("LIST ALL SERVICE LEVELS")) == 0
+
+    logger.info("Add a new server so that the Raft state machine snapshot is used")
+    servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
+
+    logger.info("Verify that sl:driver is not re-created even after a rolling restart")
+    await manager.rolling_restart(servers)
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
+    assert len(await cql.run_async("LIST ALL SERVICE LEVELS")) == 0
+
+@pytest.mark.asyncio
+async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
+    s = servers[0]
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [s], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    logger.info("Drop sl:driver to prepare the system state and re-create it later")
+    await cql.run_async(f"DROP SERVICE LEVEL driver", host=h)
+
+    max_user_service_levels = 7 # the limit of 7 user definied service level is explicitly declared in the documentation 
+    logger.info("Create new service levels to occupy all slots, including the slot of the removed sl:driver")
+    for i in range(max_user_service_levels + 1):
+        await cql.run_async(f"CREATE SERVICE_LEVEL new_sl_{i}", host=h)
+
+    logger.info("Verify that all newly created service levels exist")
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    service_level_names = [sl.service_level for sl in service_levels]
+    for i in range(max_user_service_levels + 1):
+        assert f"new_sl_{i}" in service_level_names
+    assert "driver" not in service_level_names
+
+    logger.info("Set service_level_driver_created=false in system.scylla_local and restart to force re-creation of sl:driver")
+    await cql.run_async(f"UPDATE system.scylla_local SET value = 'false' WHERE key  = 'service_level_driver_created'", host=h)
+    await manager.rolling_restart(servers)
+
+    logger.info("Check the logs to see that sl:driver creation failed")
+    log_file = await manager.server_open_log(s.server_id)
+    await log_file.wait_for("Failed to create service level for driver")
+
+    logger.info("Double-check that the driver is not re-created")
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    service_level_names = [sl.service_level for sl in service_levels]
+    assert "driver" not in service_level_names
