@@ -1007,6 +1007,61 @@ async def test_drop_keyspace_while_split(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
+async def test_drop_with_tablet_migration_cleanup(manager: ManagerClient):
+
+    # Reproducer for https://github.com/scylladb/scylladb/issues/25706
+
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True }
+    cmdline = ['--smp', '2' ]
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+
+    cql = manager.get_cql()
+
+    # We don't want the load balancer to migrate tablets during the test
+    await manager.api.disable_tablet_balancing(server.ip_addr)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        # Create the table, insert data and flush
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': 1}};")
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in range(100)])
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        # Get the current location of the tablet
+        token = 0
+        replica = await get_tablet_replica(manager, server, ks, "test", token)
+
+        await manager.api.enable_injection(server.ip_addr, "wait_before_stop_compaction_groups", one_shot=True)
+        await manager.api.enable_injection(server.ip_addr, "truncate_compaction_disabled_wait", one_shot=True)
+
+        slog = await manager.server_open_log(server.server_id)
+        smark = await slog.mark()
+
+        # Start migrating the tablet
+        dst_shard = 1 if replica[0] == 0 else 1
+        migration_task = asyncio.create_task(
+            manager.api.move_tablet(server.ip_addr, ks, "test", replica[0], replica[1], replica[0], dst_shard, token))
+
+        # Wait until the leaving replica is about to be cleaned up.
+        # storage_group's gate has been closed, but the compaction groups have not yet been stopped and disabled
+        await slog.wait_for("wait_before_stop_compaction_groups: wait", from_mark=smark)
+
+        # Start dropping the table
+        drop_future = cql.run_async(f"DROP TABLE {ks}.test;")
+
+        # Wait for truncate to complete disabling compaction
+        await slog.wait_for("truncate_compaction_disabled_wait: wait", from_mark=smark)
+
+        # Release the migration's tablet cleanup
+        await manager.api.message_injection(server.ip_addr, "wait_before_stop_compaction_groups")
+
+        # Release drop/truncate
+        await manager.api.message_injection(server.ip_addr, "truncate_compaction_disabled_wait")
+        await drop_future
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration(manager: ManagerClient):
     injection = "repair_shard_repair_task_impl_do_repair_ranges"
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
