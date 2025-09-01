@@ -121,15 +121,26 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, std::vector
         // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to create an RF-rack-invalid keyspace.
         // Verify that it's RF-rack-valid.
         // For more context, see: scylladb/scylladb#23071.
-        if (cfg.rf_rack_valid_keyspaces()) {
-            try {
-                // We hold a group0_guard, so it's correct to check this here.
-                // The topology or schema cannot change while we're performing this query.
-                locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
-            } catch (const std::exception& e) {
+        try {
+            // We hold a group0_guard, so it's correct to check this here.
+            // The topology or schema cannot change while we're performing this query.
+            locator::assert_rf_rack_valid_keyspace(_name, tmptr, *rs);
+        } catch (const std::exception& e) {
+            if (cfg.rf_rack_valid_keyspaces()) {
                 // There's no guarantee what the type of the exception will be, so we need to
                 // wrap it manually here in a type that can be passed to the user.
                 throw exceptions::invalid_request_exception(e.what());
+            } else {
+                // Even when the configuration option `rf_rack_valid_keyspaces` is set to false,
+                // we'd like to inform the user that the keyspace they're creating does not
+                // satisfy the restriction--but just as a warning.
+                // For more context, see issue: scylladb/scylladb#23330.
+                warnings.push_back(seastar::format(
+                    "Keyspace '{}' is not RF-rack-valid: the replication factor doesn't match "
+                    "the rack count in at least one datacenter. A rack failure may reduce availability. "
+                    "For more context, see: "
+                    "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace.",
+                    _name));
             }
         }
     } catch (const exceptions::already_exists_exception& e) {
