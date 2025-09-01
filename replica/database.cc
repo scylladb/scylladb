@@ -12,6 +12,7 @@
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 #include <seastar/core/rwlock.hh>
+#include "db/view/view.hh"
 #include "locator/network_topology_strategy.hh"
 #include "locator/tablets.hh"
 #include "locator/token_metadata_fwd.hh"
@@ -86,6 +87,7 @@
 #include "tracing/trace_keyspace_helper.hh"
 
 #include <algorithm>
+#include <flat_set>
 
 using namespace std::chrono_literals;
 using namespace db;
@@ -3481,6 +3483,37 @@ void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces
                 "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
                 "Those keyspaces are: {}", ks_list);
     }
+}
+
+void database::validate_tablet_views_indexes() const {
+    dblog.info("Verifying that all existing materialized views are valid");
+    const data_dictionary::database& db = this->as_data_dictionary();
+
+    std::flat_set<std::string_view> invalid_keyspaces;
+
+    for (const view_ptr& view : get_views()) {
+        const auto& ks = view->ks_name();
+        try {
+            db::view::validate_view_keyspace(db, ks);
+        } catch (...) {
+            invalid_keyspaces.emplace(ks);
+        }
+    }
+
+    if (invalid_keyspaces.empty()) {
+        dblog.info("All existing materialized views are valid");
+        return;
+    }
+
+    // `std::flat_set` guarantees iteration in the increasing order.
+    const std::string ks_list = invalid_keyspaces
+            | std::views::join_with(std::string_view(", "))
+            | std::ranges::to<std::string>();
+
+    dblog.warn("Some of the existing keyspaces violate the requirements "
+            "for using materialized views or secondary indexes. Those features require enabling "
+            "the experimental feature `views-with-tablets` and the configuration option "
+            "`rf_rack_valid_keyspaces`. The keyspaces that violate that condition: {}", ks_list);
 }
 
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
