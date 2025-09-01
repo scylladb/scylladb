@@ -22,17 +22,23 @@
 
 SEASTAR_THREAD_TEST_CASE(test_empty) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
     BOOST_REQUIRE_THROW(tools::load_schemas(dbcfg, "").get(), std::exception);
     BOOST_REQUIRE_THROW(tools::load_schemas(dbcfg, ";").get(), std::exception);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_keyspace_only) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};").get().size(), 0);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_single_table) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE TABLE ks.cf (pk int PRIMARY KEY, v int)").get().size(), 1);
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE TABLE ks.cf (pk int PRIMARY KEY, v map<int, int>)").get().size(), 1);
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}; CREATE TABLE ks.cf (pk int PRIMARY KEY, v int);").get().size(), 1);
@@ -40,6 +46,8 @@ SEASTAR_THREAD_TEST_CASE(test_single_table) {
 
 SEASTAR_THREAD_TEST_CASE(test_keyspace_replication_strategy) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}; CREATE TABLE ks.cf (pk int PRIMARY KEY, v int);").get().size(), 1);
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}; CREATE TABLE ks.cf (pk int PRIMARY KEY, v int);").get().size(), 1);
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'mydc1': 1, 'mydc2': 4}; CREATE TABLE ks.cf (pk int PRIMARY KEY, v int);").get().size(), 1);
@@ -47,6 +55,8 @@ SEASTAR_THREAD_TEST_CASE(test_keyspace_replication_strategy) {
 
 SEASTAR_THREAD_TEST_CASE(test_multiple_tables) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE TABLE ks.cf1 (pk int PRIMARY KEY, v int); CREATE TABLE ks.cf2 (pk int PRIMARY KEY, v int)").get().size(), 2);
     BOOST_REQUIRE_EQUAL(tools::load_schemas(dbcfg, "CREATE TABLE ks.cf1 (pk int PRIMARY KEY, v int); CREATE TABLE ks.cf2 (pk int PRIMARY KEY, v int);").get().size(), 2);
     BOOST_REQUIRE_EQUAL(tools::load_schemas(
@@ -67,6 +77,8 @@ SEASTAR_THREAD_TEST_CASE(test_multiple_tables) {
 
 SEASTAR_THREAD_TEST_CASE(test_udts) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
     BOOST_REQUIRE_EQUAL(tools::load_schemas(
                 dbcfg,
                 "CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}; "
@@ -104,6 +116,8 @@ SEASTAR_THREAD_TEST_CASE(test_udts) {
 
 SEASTAR_THREAD_TEST_CASE(test_dropped_columns) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
+
     BOOST_REQUIRE_EQUAL(tools::load_schemas(
                 dbcfg,
                 "CREATE TABLE ks.cf (pk int PRIMARY KEY, v1 int); "
@@ -174,6 +188,7 @@ void check_views(std::vector<schema_ptr> schemas, std::vector<view_type> views_t
 
 SEASTAR_THREAD_TEST_CASE(test_materialized_view) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
 
     check_views(
             tools::load_schemas(
@@ -216,6 +231,7 @@ SEASTAR_THREAD_TEST_CASE(test_materialized_view) {
 
 SEASTAR_THREAD_TEST_CASE(test_index) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
 
     check_views(
             tools::load_schemas(
@@ -266,6 +282,7 @@ SEASTAR_THREAD_TEST_CASE(test_index) {
 
 SEASTAR_THREAD_TEST_CASE(test_mv_index) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
 
     check_views(
             tools::load_schemas(
@@ -286,6 +303,7 @@ SEASTAR_THREAD_TEST_CASE(test_mv_index) {
 
 void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_path, const utils::chunked_vector<mutation>& mutations) {
     db::config dbcfg;
+    dbcfg.rf_rack_valid_keyspaces(true);
 
     auto schema = tools::load_schema_from_sstable(dbcfg, sst_path).get();
 
