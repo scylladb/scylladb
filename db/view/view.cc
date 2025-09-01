@@ -3687,5 +3687,14 @@ sstring build_status_to_sstring(build_status status) {
     on_internal_error(vlogger, fmt::format("Unknown view build status: {}", (int)status));
 }
 
+void validate_view_keyspace(const data_dictionary::database& db, std::string_view keyspace_name) {
+    const bool tablet_views_enabled = db.features().views_with_tablets;
+    const bool uses_tablets = db.find_keyspace(keyspace_name).get_replication_strategy().uses_tablets();
+
+    if (!tablet_views_enabled && uses_tablets) {
+        throw std::logic_error("Materialized views and secondary indexes are not supported on base tables with tablets");
+    }
+}
+
 } // namespace view
 } // namespace db
