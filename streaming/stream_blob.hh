@@ -27,6 +27,12 @@
 #include <fmt/core.h>
 #include <fmt/ostream.h>
 
+namespace db {
+namespace view {
+class view_building_worker;
+}
+}
+
 namespace streaming {
 
 using file_stream_id = utils::tagged_uuid<struct file_stream_id_tag>;
@@ -116,7 +122,7 @@ struct stream_blob_info {
 };
 
 // The handler for the STREAM_BLOB verb.
-seastar::future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms, locator::host_id from, streaming::stream_blob_meta meta, rpc::sink<streaming::stream_blob_cmd_data> sink, rpc::source<streaming::stream_blob_cmd_data> source);
+seastar::future<> stream_blob_handler(replica::database& db, db::view::view_building_worker& vbw, netw::messaging_service& ms, locator::host_id from, streaming::stream_blob_meta meta, rpc::sink<streaming::stream_blob_cmd_data> sink, rpc::source<streaming::stream_blob_cmd_data> source);
 
 // Exposed mainly for testing
 
