@@ -14,6 +14,7 @@
 
 #include "gms/feature_service.hh"
 #include "gms/gossiper.hh"
+#include "raft/raft.hh"
 #include "raft_group0.hh"
 
 namespace service {
@@ -513,7 +514,7 @@ future<> group0_voter_handler::update_nodes(
         for (const auto& host_id : nodes_set) {
             const raft::server_id id{host_id.uuid()};
             // We only allow transitioning nodes to be added if they are already voters.
-            const bool allow_transitioning = group0_config.can_vote(id);
+            const auto allow_transitioning = group0_config.can_vote(id) == raft::is_voter::yes;
             const auto* node = get_replica_state(id, allow_transitioning);
             if (!node) {
                 continue;

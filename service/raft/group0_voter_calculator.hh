@@ -39,7 +39,7 @@ public:
     struct node_descriptor {
         sstring datacenter;
         sstring rack;
-        bool is_voter;
+        raft::is_voter is_voter;
         bool is_alive;
         bool is_leader = false;
     };

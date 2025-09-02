@@ -7,10 +7,13 @@
  */
 
 #include <boost/test/data/test_case.hpp>
+#include <boost/test/tools/old/interface.hpp>
 #include <boost/test/unit_test.hpp>
 
 #include "service/raft/group0_voter_calculator.hh"
+#include "raft/raft.hh"
 
+using is_voter = raft::is_voter;
 
 BOOST_AUTO_TEST_SUITE(group0_voter_calculator_test)
 
@@ -44,7 +47,7 @@ BOOST_AUTO_TEST_CASE(single_node_is_selected_as_voter) {
     const std::array ids = {raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes{
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -67,9 +70,9 @@ BOOST_AUTO_TEST_CASE(multiple_nodes_are_selected_as_voters) {
     const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes{
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -94,8 +97,8 @@ BOOST_AUTO_TEST_CASE(no_voters_selected_when_all_nodes_are_dead) {
     const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = false}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = false}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -118,11 +121,11 @@ BOOST_AUTO_TEST_CASE(dead_nonvoters_dont_become_voters) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = false}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = false}},
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = false}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = false}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -131,7 +134,7 @@ BOOST_AUTO_TEST_CASE(dead_nonvoters_dont_become_voters) {
 
     BOOST_CHECK_EQUAL(voters.size(), 3);
     for (const auto id : voters) {
-        BOOST_CHECK(nodes.at(id).is_voter);
+        BOOST_CHECK_EQUAL(nodes.at(id).is_voter, is_voter::yes);
     }
 }
 
@@ -159,10 +162,10 @@ BOOST_AUTO_TEST_CASE(voter_limit_is_kept) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -187,12 +190,12 @@ BOOST_AUTO_TEST_CASE(limit_kept_on_voter_removal) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
             // the node being removed
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = false}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = false}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
             // the node being added
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     BOOST_ASSERT(nodes.size() > max_voters);
@@ -222,11 +225,11 @@ BOOST_AUTO_TEST_CASE(limit_is_kept_on_multiple_inserts) {
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
             // the initial set of nodes
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
             // nodes being added
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     BOOST_ASSERT(nodes.size() > max_voters);
@@ -254,12 +257,12 @@ BOOST_AUTO_TEST_CASE(limit_is_kept_on_removal_and_insert) {
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
             // the initial set of nodes (first being removed)
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = false}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = false}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
             // nodes being added
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -285,11 +288,11 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_kept) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -299,7 +302,7 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_kept) {
     BOOST_CHECK_EQUAL(voters.size(), max_voters);
 
     for (const auto& [id, node] : nodes | std::views::filter([](const auto& node) {
-             return node.second.is_voter;
+             return node.second.is_voter == is_voter::yes;
          })) {
         BOOST_CHECK(voters.contains(id));
     }
@@ -320,12 +323,12 @@ BOOST_AUTO_TEST_CASE(voters_are_distributed_across_dcs) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -357,13 +360,13 @@ BOOST_AUTO_TEST_CASE(voters_are_distributed_across_dcs_across_multiple_inserts) 
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
             // the initial set of nodes
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
             // nodes being added
-            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -397,12 +400,12 @@ BOOST_AUTO_TEST_CASE(voters_are_distributed_asymmetrically_across_two_dcs) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -440,9 +443,9 @@ BOOST_AUTO_TEST_CASE(voters_match_node_count) {
     const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -468,11 +471,11 @@ BOOST_AUTO_TEST_CASE(dc_cannot_have_half_or_more_of_voters) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -504,12 +507,12 @@ BOOST_AUTO_TEST_CASE(dc_cannot_have_half_or_more_of_voters_on_node_removal) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = false}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -543,13 +546,13 @@ BOOST_AUTO_TEST_CASE(dc_voters_increased_on_node_addition) {
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
             // the initial set of nodes
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
             // the node being added
-            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -585,14 +588,14 @@ BOOST_AUTO_TEST_CASE(all_nodes_become_voters_after_third_dc_removal) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
             // the nodes being removed
-            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = true, .is_alive = false}},
-            {ids[6], {.datacenter = "dc-3", .rack = "rack", .is_voter = true, .is_alive = false}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::yes, .is_alive = false}},
+            {ids[6], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::yes, .is_alive = false}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -620,15 +623,15 @@ BOOST_AUTO_TEST_CASE(voters_distributed_as_two_dc_asymmetric_after_third_dc_remo
             raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
             // the nodes being removed
-            {ids[6], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = false}},
-            {ids[7], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = false}},
+            {ids[6], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
+            {ids[7], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -668,9 +671,9 @@ BOOST_AUTO_TEST_CASE(dead_nodes_cannot_become_voters) {
     const std::array ids = {raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = false}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -696,11 +699,11 @@ BOOST_AUTO_TEST_CASE(dead_voters_kept_if_no_other_voters_are_available) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = false}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = false}},
-            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = false}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = false}},
+            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = false}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -711,7 +714,7 @@ BOOST_AUTO_TEST_CASE(dead_voters_kept_if_no_other_voters_are_available) {
     BOOST_CHECK_EQUAL(voters.size(), 3);
     for (const auto id : voters) {
         const auto& node = nodes.at(id);
-        BOOST_CHECK(node.is_voter);
+        BOOST_CHECK_EQUAL(node.is_voter, is_voter::yes);
     }
 }
 
@@ -730,12 +733,12 @@ BOOST_AUTO_TEST_CASE(dead_voters_moved_to_available_alive_nodes) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = false}},
-            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = false}},
+            {ids[4], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -762,13 +765,13 @@ BOOST_AUTO_TEST_CASE(voters_are_distributed_across_racks) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack-1", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack-1", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack-1", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc", .rack = "rack-3", .is_voter = false, .is_alive = true}},
-            {ids[6], {.datacenter = "dc", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack-1", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack-1", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack-1", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[6], {.datacenter = "dc", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -799,13 +802,13 @@ BOOST_AUTO_TEST_CASE(more_racks_preferred_over_more_nodes_in_two_dc) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[6], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[6], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -847,13 +850,13 @@ BOOST_AUTO_TEST_CASE(dcs_preferred_over_racks) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-2", .rack = "rack-4", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-4", .rack = "rack-6", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-3", .rack = "rack-5", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-1", .rack = "rack-3", .is_voter = false, .is_alive = true}},
-            {ids[6], {.datacenter = "dc-5", .rack = "rack-7", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-2", .rack = "rack-4", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-4", .rack = "rack-6", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack-5", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-1", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[6], {.datacenter = "dc-5", .rack = "rack-7", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -884,11 +887,11 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_retained_across_dcs) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-3", .rack = "rack", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-4", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-5", .rack = "rack", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-4", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-5", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -898,7 +901,7 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_retained_across_dcs) {
     BOOST_CHECK_EQUAL(voters.size(), max_voters);
 
     for (const auto& [id, node] : nodes | std::views::filter([](const auto& node) {
-             return node.second.is_voter;
+             return node.second.is_voter == is_voter::yes;
          })) {
         BOOST_CHECK(voters.contains(id));
     }
@@ -919,11 +922,11 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_kept_across_racks) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack-1", .is_voter = true, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack-2", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack-3", .is_voter = true, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack-4", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc", .rack = "rack-5", .is_voter = true, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack-1", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack-2", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack-3", .is_voter = is_voter::yes, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack-4", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc", .rack = "rack-5", .is_voter = is_voter::yes, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -933,7 +936,7 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_kept_across_racks) {
     BOOST_CHECK_EQUAL(voters.size(), max_voters);
 
     for (const auto& [id, node] : nodes | std::views::filter([](const auto& node) {
-             return node.second.is_voter;
+             return bool(node.second.is_voter);
          })) {
         BOOST_CHECK(voters.contains(id));
     }
@@ -955,14 +958,14 @@ BOOST_DATA_TEST_CASE(leader_is_retained_as_voter, boost::unit_test::data::make({
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
             // The initial nodes (just 2 DCs)
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 0}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 1}},
-            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 2}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 0}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 1}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 2}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
             // The new nodes (3rd DC)
             // - this will lead to 1 voter being removed from the DC-1
-            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -990,14 +993,14 @@ BOOST_DATA_TEST_CASE(leader_is_retained_as_voter_in_racks, boost::unit_test::dat
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
             // The initial nodes (just 2 DCs)
-            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 0}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 1}},
-            {ids[2], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack-4", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 3}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack-1", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 0}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack-2", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 1}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack-3", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack-4", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 3}},
             // The new nodes (3rd DC)
             // - this will lead to 1 voter being removed from the DC-1
-            {ids[4], {.datacenter = "dc-3", .rack = "rack-5", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-3", .rack = "rack-6", .is_voter = false, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack-5", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack-6", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -1027,8 +1030,8 @@ BOOST_DATA_TEST_CASE(leader_is_retained_as_voter_in_two_dc_asymmetric_setup, boo
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
             // The result nodes (just one per DC)
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 0}},
-            {ids[1], {.datacenter = "dc-2", .rack = "rack", .is_voter = true, .is_alive = true, .is_leader = leader_node_idx == 1}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 0}},
+            {ids[1], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::yes, .is_alive = true, .is_leader = leader_node_idx == 1}},
             // no other nodes - all removed
     };
 
@@ -1056,10 +1059,10 @@ BOOST_AUTO_TEST_CASE(enforces_odd_number_of_voters_for_single_dc) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);
@@ -1084,12 +1087,12 @@ BOOST_AUTO_TEST_CASE(enforces_odd_number_of_voters_for_multiple_dc) {
             raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id(), raft::server_id::create_random_id()};
 
     const service::group0_voter_calculator::nodes_list_t nodes = {
-            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
-            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = false, .is_alive = true}},
+            {ids[0], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[1], {.datacenter = "dc-1", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[2], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[3], {.datacenter = "dc-2", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[4], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
+            {ids[5], {.datacenter = "dc-3", .rack = "rack", .is_voter = is_voter::no, .is_alive = true}},
     };
 
     const auto& voters = voter_calc.distribute_voters(nodes);

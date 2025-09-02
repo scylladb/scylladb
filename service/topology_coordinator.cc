@@ -3625,7 +3625,7 @@ future<> topology_coordinator::rollback_current_topology_op(group0_guard&& guard
             // The node was removed already. We need to add it back. Lets do it as non voter.
             // If it ever boots again it will make itself a voter.
             release_node(std::move(node));
-            co_await _group0.group0_server().modify_config({raft::config_member{{id, {}}, false}}, {}, &_as);
+            co_await _group0.group0_server().modify_config({raft::config_member{{id, {}}, raft::is_voter::no}}, {}, &_as);
             node = retake_node(co_await start_operation(), id);
         }
             [[fallthrough]];

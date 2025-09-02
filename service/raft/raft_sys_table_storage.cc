@@ -10,6 +10,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/config.hh"
 #include "db/system_keyspace.hh"
+#include "raft/raft.hh"
 #include "utils/UUID.hh"
 #include "utils/error_injection.hh"
 
@@ -143,7 +144,7 @@ future<raft::snapshot_descriptor> raft_sys_table_storage::load_snapshot_descript
         cfg_part.insert(
             raft::config_member{
                 raft::server_address{raft::server_id{row.get_as<utils::UUID>("server_id")}, {}},
-                row.get_as<bool>("can_vote")}
+                raft::is_voter(row.get_as<bool>("can_vote"))}
         );
     }
 

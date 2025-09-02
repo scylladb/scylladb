@@ -121,6 +121,7 @@
 #include <csignal>
 #include "utils/labels.hh"
 #include "view_info.hh"
+#include "raft/raft.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -1844,7 +1845,7 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
     ::shared_ptr<group0_handshaker> handshaker =
             raft_topology_change_enabled() && !_db.local().get_config().recovery_leader.is_set()
             ? ::make_shared<join_node_rpc_handshaker>(*this, join_params)
-            : _group0->make_legacy_handshaker(can_vote::no);
+            : _group0->make_legacy_handshaker(raft::is_voter::no);
     co_await _group0->setup_group0(_sys_ks.local(), initial_contact_nodes, std::move(handshaker),
             raft_replace_info, *this, _qp, _migration_manager.local(), raft_topology_change_enabled(), join_params);
 
