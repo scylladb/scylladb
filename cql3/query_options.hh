@@ -18,6 +18,7 @@
 #include "service/query_state.hh"
 #include "service/pager/paging_state.hh"
 #include "cql3/values.hh"
+#include "utils/result.hh"
 #include "utils/small_vector.hh"
 #include "service/storage_proxy_fwd.hh"
 
@@ -204,7 +205,7 @@ public:
     }
 
     /**  Return serial consistency for conditional updates. Throws if the consistency is not set. */
-    db::consistency_level check_serial_consistency() const;
+    utils::result_with_exception_ptr<db::consistency_level> check_serial_consistency() const;
 
     api::timestamp_type get_timestamp(service::query_state& state) const {
         auto tstamp = get_specific_options().timestamp;

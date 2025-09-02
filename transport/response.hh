@@ -81,7 +81,7 @@ public:
 
     // Make a non-owning scattered_message of the response. Remains valid as long
     // as the response object is alive.
-    scattered_message<char> make_message(uint8_t version, cql_compression compression);
+    utils::result_with_exception_ptr<scattered_message<char>> make_message(uint8_t version, cql_compression compression);
 
     cql_binary_opcode opcode() const {
         return _opcode;
@@ -107,9 +107,9 @@ private:
         return frame_buf;
     }
 
-    sstring make_frame(uint8_t version, size_t length) {
+    utils::result_with_exception_ptr<sstring> make_frame(uint8_t version, size_t length) {
         if (version > 0x04) {
-            throw exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", version));
+            return bo::failure(std::make_exception_ptr(exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", version))));
         }
 
         return make_frame_one<cql_binary_frame_v3>(version, length);

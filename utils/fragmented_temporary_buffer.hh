@@ -19,6 +19,7 @@
 #include "bytes_ostream.hh"
 #include "contiguous_shared_buffer.hh"
 #include "fragment_range.hh"
+#include "result.hh"
 
 /// Fragmented buffer consisting of multiple Buffer objects.
 template <ContiguousSharedBuffer Buffer>
@@ -306,8 +307,8 @@ inline basic_fragmented_buffer<Buffer>::operator view() const noexcept
 namespace fragmented_temporary_buffer_concepts {
 
 template<typename T>
-concept ExceptionThrower = requires(T obj, size_t n) {
-    obj.throw_out_of_range(n, n);
+concept ExceptionCreator = requires(T obj, size_t n) {
+    { obj.out_of_range(n, n) } -> utils::ExceptionPtrResult;
 };
 
 }
@@ -334,20 +335,25 @@ private:
         }
     }
 
-    template<typename ExceptionThrower>
-    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
-    void check_out_of_range(ExceptionThrower& exceptions, size_t n) {
+    template<typename ExceptionCreator>
+    requires fragmented_temporary_buffer_concepts::ExceptionCreator<ExceptionCreator>
+    utils::result_with_exception_ptr<void>
+    check_out_of_range(ExceptionCreator& exceptions, size_t n) {
         if (bytes_left() < n) [[unlikely]] {
-            exceptions.throw_out_of_range(n, bytes_left());
+            return exceptions.out_of_range(n, bytes_left());
             // Let's allow skipping this check if the user trusts its input
             // data.
         }
+        return bo::success();
     }
 
-    template<typename T, typename ExceptionThrower>
+    template<typename T, typename ExceptionCreator>
     [[gnu::noinline]] [[gnu::cold]]
-    T read_slow(ExceptionThrower&& exceptions) {
-        check_out_of_range(exceptions, sizeof(T));
+    utils::result_with_exception_ptr<T> read_slow(ExceptionCreator&& exceptions) {
+        auto check = check_out_of_range(exceptions, sizeof(T));
+        if (!check) [[unlikely]] {
+            return bo::failure(std::move(check).assume_error());
+        }
 
         T obj;
         size_t left = sizeof(T);
@@ -378,13 +384,12 @@ private:
         }
     }
 public:
-    struct default_exception_thrower {
-        [[noreturn]] [[gnu::cold]]
-        static void throw_out_of_range(size_t attempted_read, size_t actual_left) {
-            throw std::out_of_range(format("attempted to read {:d} bytes from a {:d} byte buffer", attempted_read, actual_left));
+    struct default_exception_creator {
+        [[gnu::cold]]
+        static utils::result_with_exception_ptr<void> out_of_range(size_t attempted_read, size_t actual_left) {
+            return bo::failure(std::out_of_range(format("attempted to read {:d} bytes from a {:d} byte buffer", attempted_read, actual_left)));
         }
     };
-    static_assert(fragmented_temporary_buffer_concepts::ExceptionThrower<default_exception_thrower>);
 
     istream(const vector_type& fragments, size_t total_size) noexcept
         : _current(fragments.begin())
@@ -404,11 +409,11 @@ public:
         _current_position += n;
     }
 
-    template<typename T, typename ExceptionThrower = default_exception_thrower>
-    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
-    T read(ExceptionThrower&& exceptions = default_exception_thrower()) {
+    template<typename T, typename ExceptionCreator = default_exception_creator>
+    requires fragmented_temporary_buffer_concepts::ExceptionCreator<ExceptionCreator>
+    utils::result_with_exception_ptr<T> read(ExceptionCreator&& exceptions = default_exception_creator()) {
         if (contig_remain() < sizeof(T)) [[unlikely]] {
-            return read_slow<T>(std::forward<ExceptionThrower>(exceptions));
+            return read_slow<T>(std::forward<ExceptionCreator>(exceptions));
         }
         T obj;
         std::copy_n(_current_position, sizeof(T), reinterpret_cast<char*>(&obj));
@@ -416,15 +421,18 @@ public:
         return obj;
     }
 
-    template<typename Output, typename ExceptionThrower = default_exception_thrower>
-    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
-    Output read_to(size_t n, Output out, ExceptionThrower&& exceptions = default_exception_thrower()) {
+    template<typename Output, typename ExceptionCreator = default_exception_creator>
+    requires fragmented_temporary_buffer_concepts::ExceptionCreator<ExceptionCreator>
+    utils::result_with_exception_ptr<Output> read_to(size_t n, Output out, ExceptionCreator&& exceptions = default_exception_creator()) {
         if (contig_remain() >= n) [[likely]] {
             out = std::copy_n(_current_position, n, out);
             _current_position += n;
             return out;
         }
-        check_out_of_range(exceptions, n);
+        auto range = check_out_of_range(exceptions, n);
+        if (!range) [[unlikely]] {
+            return bo::failure(std::move(range).assume_error());
+        }
         out = std::copy(_current_position, _current_end, out);
         n -= _current_end - _current_position;
         next_fragment();
@@ -438,15 +446,18 @@ public:
         return out;
     }
 
-    template<typename ExceptionThrower = default_exception_thrower>
-    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
-    view read_view(size_t n, ExceptionThrower&& exceptions = default_exception_thrower()) {
+    template<typename ExceptionCreator = default_exception_creator>
+    requires fragmented_temporary_buffer_concepts::ExceptionCreator<ExceptionCreator>
+    utils::result_with_exception_ptr<view> read_view(size_t n, ExceptionCreator&& exceptions = default_exception_creator()) {
         if (contig_remain() >= n) [[likely]] {
             auto v = view(_current, _current_position - _current->get(), n);
             _current_position += n;
             return v;
         }
-        check_out_of_range(exceptions, n);
+        auto range = check_out_of_range(exceptions, n);
+        if (!range) [[unlikely]] {
+            return bo::failure(std::move(range).assume_error());
+        }
         auto v = view(_current, _current_position - _current->get(), n);
         n -= _current_end - _current_position;
         next_fragment();
@@ -458,17 +469,23 @@ public:
         return v;
     }
 
-    template<typename ExceptionThrower = default_exception_thrower>
-    requires fragmented_temporary_buffer_concepts::ExceptionThrower<ExceptionThrower>
-    bytes_view read_bytes_view(size_t n, bytes_ostream& linearization_buffer, ExceptionThrower&& exceptions = default_exception_thrower()) {
+    template<typename ExceptionCreator = default_exception_creator>
+    requires fragmented_temporary_buffer_concepts::ExceptionCreator<ExceptionCreator>
+    utils::result_with_exception_ptr<bytes_view> read_bytes_view(size_t n, bytes_ostream& linearization_buffer, ExceptionCreator&& exceptions = default_exception_creator()) {
         if (contig_remain() >= n) [[likely]] {
             auto v = bytes_view(reinterpret_cast<const bytes::value_type*>(_current_position), n);
             _current_position += n;
             return v;
         }
-        check_out_of_range(exceptions, n);
+        auto range = check_out_of_range(exceptions, n);
+        if (!range) [[unlikely]] {
+            return bo::failure(std::move(range).assume_error());
+        }
         auto ptr = linearization_buffer.write_place_holder(n);
-        read_to(n, ptr, std::forward<ExceptionThrower>(exceptions));
+        auto output = read_to(n, ptr, std::forward<ExceptionCreator>(exceptions));
+        if (!output) [[unlikely]] {
+            return bo::failure(std::move(output).assume_error());
+        }
         return bytes_view(reinterpret_cast<const bytes::value_type*>(ptr), n);
     }
 };

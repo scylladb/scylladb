@@ -59,4 +59,24 @@ concept ResultRebindableTo =
 template<typename T, ExceptionContainerResult R>
 using rebind_result = bo::result<T, typename R::error_type, exception_container_throw_policy>;
 
+struct result_with_exception_ptr_throw_policy : bo::policy::base {
+    template<class Impl> static constexpr void wide_value_check(Impl&& self) {
+        if (!base::_has_value(self)) {
+            std::rethrow_exception(base::_error(self));
+        }
+    }
+
+    template<class Impl> static constexpr void wide_error_check(Impl&& self) {
+        if (!base::_has_error(self)) {
+            throw bo::bad_result_access("no error");
+        }
+    }
+};
+
+template<typename T>
+using result_with_exception_ptr = bo::result<T, std::exception_ptr, result_with_exception_ptr_throw_policy>;
+
+template<typename R>
+concept ExceptionPtrResult = bo::is_basic_result<R>::value && std::same_as<typename R::error_type, std::exception_ptr>;
+
 }

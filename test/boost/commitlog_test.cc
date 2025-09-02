@@ -364,7 +364,7 @@ SEASTAR_TEST_CASE(test_commitlog_reader){
                 auto&& [buf, rp] = buf_rp;
                 auto linearization_buffer = bytes_ostream();
                 auto in = buf.get_istream();
-                auto str = to_string_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer));
+                auto str = to_string_view(in.read_bytes_view(buf.size_bytes(), linearization_buffer).value());
                 BOOST_CHECK_EQUAL(str, "hej bubba cow");
                 count++;
                 co_return;
@@ -671,8 +671,10 @@ SEASTAR_TEST_CASE(test_commitlog_replay_single_large_mutation){
                     auto in2 = rp_buf.get_istream();
                     for (size_t i = 0; i < size; ++i) {
                         auto c1 = in1.read<char>();
+                        BOOST_REQUIRE(c1);
                         auto c2 = in2.read<char>();
-                        BOOST_CHECK_EQUAL(c1, c2);
+                        BOOST_REQUIRE(c2);
+                        BOOST_CHECK_EQUAL(c1.value(), c2.value());
                     }
                     return make_ready_future<>();
                 });
@@ -740,8 +742,10 @@ SEASTAR_TEST_CASE(test_commitlog_replay_large_mutations){
                     auto in2 = rp_buf.get_istream();
                     for (size_t i = 0; i < size; ++i) {
                         auto c1 = in1.read<char>();
+                        BOOST_REQUIRE(c1);
                         auto c2 = in2.read<char>();
-                        BOOST_CHECK_EQUAL(c1, c2);
+                        BOOST_REQUIRE(c2);
+                        BOOST_CHECK_EQUAL(c1.value(), c2.value());
                     }
                     ++n;
                     return make_ready_future<>();
