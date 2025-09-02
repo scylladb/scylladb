@@ -42,7 +42,7 @@ def fprintln(f, *args):
 
 
 def print_cw(f):
-    fprintln(f, """
+    fprintln(f, """\
 /*
  * Copyright 2016-present ScyllaDB
  */
@@ -53,7 +53,8 @@ def print_cw(f):
   * This is an auto-generated code, do not modify directly.
   */
 #pragma once
- """)
+             
+""")
 
 
 ###
