@@ -42,6 +42,10 @@ the administrator. The tablet load balancer decides where to migrate
 the tablets, either within the same node to balance the shards or across 
 the nodes to balance the global load in the cluster.
 
+The number of tablets the load balancer maintains on a node is directly
+proportional to the node's storage capacity. A node with twice
+the storage will have twice the number of tablets located on it.
+
 As a table grows, each tablet can split into two, creating a new tablet.
 The load balancer can migrate the split halves independently to different nodes
 or shards.
