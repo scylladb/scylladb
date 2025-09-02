@@ -114,6 +114,16 @@ class view_builder final : public service::migration_listener::only_view_notific
         std::optional<dht::token> next_token;
     };
 
+    /**
+     * view build progress status that is loaded from the table and used during initialization.
+     * similar to view_build_status except it may have null first_token if the shard didn't register itself yet.
+     */
+    struct view_build_init_status final {
+        view_ptr view;
+        std::optional<dht::token> first_token;
+        std::optional<dht::token> next_token;
+    };
+
     struct stats {
         uint64_t steps_performed = 0;
         uint64_t steps_failed = 0;
@@ -180,7 +190,7 @@ class view_builder final : public service::migration_listener::only_view_notific
 
     struct view_builder_init_state {
         std::vector<future<>> bookkeeping_ops;
-        std::vector<std::vector<view_build_status>> status_per_shard;
+        std::vector<std::vector<view_build_init_status>> status_per_shard;
         std::unordered_set<table_id> built_views;
     };
 
@@ -246,8 +256,8 @@ public:
 private:
     build_step& get_or_create_build_step(table_id);
     future<> initialize_reader_at_current_token(build_step&);
-    void load_view_status(view_build_status, std::unordered_set<table_id>&);
-    void reshard(std::vector<std::vector<view_build_status>>, std::unordered_set<table_id>&);
+    void load_view_status(view_build_init_status, std::unordered_set<table_id>&);
+    void reshard(std::vector<std::vector<view_build_init_status>>, std::unordered_set<table_id>&);
     void setup_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace_view_name>, std::vector<system_keyspace_view_build_progress>);
     future<> calculate_shard_build_step(view_builder_init_state& vbi);
     future<> add_new_view(view_ptr, build_step&);

@@ -863,12 +863,14 @@ SEASTAR_THREAD_TEST_CASE(test_view_update_generator_buffering) {
 // (e.g. first_token) are always present in every row, which lead to using
 // freed memory. In order to check for regressions, a row with missing
 // values is inserted and ensured that it produces a status without any
-// views in progress.
+// views in progress, or a status with no next_token, indicating no progress
+// made on this view.
 SEASTAR_TEST_CASE(test_load_view_build_progress_with_values_missing) {
     return do_with_cql_env_thread([] (cql_test_env& e) {
         cquery_nofail(e, format("INSERT INTO system.{} (keyspace_name, view_name, cpu_id) VALUES ('ks', 'v', {})",
                 db::system_keyspace::v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS, this_shard_id()));
-        BOOST_REQUIRE(e.get_system_keyspace().local().load_view_build_progress().get().empty());
+        auto vb_progress = e.get_system_keyspace().local().load_view_build_progress().get();
+        BOOST_REQUIRE(vb_progress.empty() || (vb_progress.size() == 1 && !vb_progress[0].first_token && !vb_progress[0].next_token));
     });
 }
 

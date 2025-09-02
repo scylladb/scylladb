@@ -26,7 +26,7 @@ using system_keyspace_view_name = std::pair<sstring, sstring>;
 
 struct system_keyspace_view_build_progress {
     system_keyspace_view_name view;
-    dht::token first_token;
+    std::optional<dht::token> first_token;
     std::optional<dht::token> next_token;
     shard_id cpu_id;
 };
