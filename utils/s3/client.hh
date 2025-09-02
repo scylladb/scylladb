@@ -19,7 +19,6 @@
 #include "utils/lister.hh"
 #include "utils/s3/creds.hh"
 #include "credentials_providers/aws_credentials_provider_chain.hh"
-#include "retryable_http_client.hh"
 #include "utils/s3/client_fwd.hh"
 
 using namespace seastar;
@@ -127,19 +126,19 @@ class client : public enable_shared_from_this<client> {
         }
     };
     struct group_client {
-        aws::retryable_http_client retryable_client;
+        seastar::http::experimental::client http;
         io_stats read_stats;
         io_stats write_stats;
         uint64_t prefetch_bytes = 0;
         seastar::metrics::metric_groups metrics;
-        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy);
+        group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn);
         void register_metrics(std::string class_name, std::string host);
     };
     std::unordered_map<seastar::scheduling_group, group_client> _https;
     using global_factory = std::function<shared_ptr<client>(std::string)>;
     global_factory _gf;
     semaphore& _memory;
-    std::unique_ptr<aws::retry_strategy> _retry_strategy;
+    std::unique_ptr<seastar::http::experimental::retry_strategy> _retry_strategy;
 
     struct private_tag {};
 
@@ -154,7 +153,7 @@ class client : public enable_shared_from_this<client> {
     future<> get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* = nullptr);
 public:
 
-    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs = nullptr);
+    client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<seastar::http::experimental::retry_strategy> rs = nullptr);
     static shared_ptr<client> make(std::string endpoint, endpoint_config_ptr cfg, semaphore& memory, global_factory gf = {});
 
     future<uint64_t> get_object_size(sstring object_name, seastar::abort_source* = nullptr);
