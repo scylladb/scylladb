@@ -294,8 +294,6 @@ client::group_client& client::find_or_create_client() {
         }
 
         throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
-    } catch (const filler_exception&) {
-        throw;
     } catch (...) {
         auto e = std::current_exception();
         throw storage_io_error {EIO, format("S3 error ({})", e)};
@@ -346,8 +344,6 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
                     aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
             }
             co_return co_await handler(rep, std::move(_in));
-        } catch (const filler_exception&) {
-            throw;
         } catch (...) {
             eptr = std::current_exception();
         }

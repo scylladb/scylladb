@@ -89,12 +89,6 @@ struct stats {
     std::time_t last_modified;
 };
 
-struct filler_exception final : std::exception {
-    filler_exception(std::exception_ptr original_exception, bool should_abort) : _original_exception(std::move(original_exception)), _should_abort(should_abort) {}
-    std::exception_ptr _original_exception;
-    bool _should_abort{false};
-};
-
 future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_);
 [[noreturn]] void map_s3_client_exception(std::exception_ptr ex);
 
