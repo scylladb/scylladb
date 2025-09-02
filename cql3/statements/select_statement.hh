@@ -361,6 +361,7 @@ private:
 class ordered_by_ann_of_select_statement : public select_statement {
     secondary_index::index _index;
     prepared_ann_ordering_type _prepared_ann_ordering;
+    mutable gc_clock::time_point _query_start_time_point;
 
 public:
     static constexpr std::string_view ann_custom_index_option = "vector_index";
@@ -381,7 +382,15 @@ public:
 private:
     future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
             query_processor& qp, service::query_state& state, const query_options& options) const override;
-};
 
+    void update_stats() const;
+
+    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options) const;
+
+    std::vector<float> get_ann_ordering_vector(const query_options& options) const;
+
+    future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(
+            query_processor& qp, service::query_state& state, const query_options& options, const std::vector<primary_key>& pkeys) const;
+};
 }
 }

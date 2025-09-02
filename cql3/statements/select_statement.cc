@@ -1949,8 +1949,8 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
 
     auto indexes = sim.list_indexes();
     auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
-        return (ind.metadata().options().contains(db::index::secondary_index::custom_index_option_name) &&
-                       ind.metadata().options().at(db::index::secondary_index::custom_index_option_name) == ann_custom_index_option) &&
+        return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
+                       ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == ann_custom_index_option) &&
                (ind.target_column() == prepared_ann_ordering.first->name_as_text());
     });
 
@@ -1982,61 +1982,78 @@ ordered_by_ann_of_select_statement::ordered_by_ann_of_select_statement(schema_pt
     , _prepared_ann_ordering(std::move(prepared_ann_ordering)) {
 }
 
-future<shared_ptr<cql_transport::messages::result_message>>
-ordered_by_ann_of_select_statement::do_execute(query_processor& qp,
-                             service::query_state& state,
-                             const query_options& options) const
-{
+namespace {
+
+std::vector<dht::partition_range> to_partition_ranges(const std::vector<primary_key>& pkeys) {
+    std::vector<dht::partition_range> partition_ranges;
+    std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
+        return dht::partition_range::make_singular(pkey.partition);
+    });
+
+    return partition_ranges;
+}
+
+} // namespace
+
+future<shared_ptr<cql_transport::messages::result_message>> ordered_by_ann_of_select_statement::do_execute(
+        query_processor& qp, service::query_state& state, const query_options& options) const {
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
     validate_for_read(options.get_consistency());
 
-    auto now = gc_clock::now();
+    _query_start_time_point = gc_clock::now();
 
-    ++_stats.secondary_index_reads;
-    ++_stats.query_cnt(source_selector::USER, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
+    update_stats();
 
     auto limit = get_limit(options, _limit);
+
     if (limit > max_ann_query_limit) {
         co_await coroutine::return_exception(exceptions::invalid_request_exception(
                 fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
     }
 
-    auto [ann_column, ann_vector_expr] = _prepared_ann_ordering;
-
-    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
-    auto ann_vector = util::to_vector<float>(values);
-
     auto as = abort_source();
-    auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema, std::move(ann_vector), limit, as);
+    auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, as);
     if (!pkeys.has_value()) {
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(
-            std::visit(service::vector_store_client::ann_error_visitor{}, pkeys.error())
-        ));
+        co_await coroutine::return_exception(
+                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
     }
 
-    std::vector<dht::partition_range> partition_ranges;
-    std::ranges::transform(pkeys.value(), std::back_inserter(partition_ranges), [](const auto& pkey) {
-        return dht::partition_range::make_singular(pkey.partition);
-    });
-
-    auto slice = make_partition_slice(options);
-    
-    lw_shared_ptr<query::read_command> command = ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(slice),
-            qp.proxy().get_max_result_size(slice), query::tombstone_limit(qp.proxy().get_tombstone_limit()),
-            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())), query::partition_limit(query::max_partitions), now,
-            tracing::make_trace_info(state.get_trace_state()), query_id::create_null_id(), query::is_first_page::no, options.get_timestamp(state));
-
-    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
-
-    co_return co_await qp.proxy()
-            .query_result(_query_schema, command, std::move(partition_ranges), options.get_consistency(),
-                    {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
-                    std::nullopt)
-            .then(wrap_result_to_error_message([this, &options, now, command](service::storage_proxy::coordinator_query_result qr) {
-                return this->process_results(std::move(qr.query_result), command, options, now);
-            }));
+    co_return co_await query_base_table(qp, state, options, pkeys.value());
 }
 
+void ordered_by_ann_of_select_statement::update_stats() const {
+    ++_stats.secondary_index_reads;
+    ++_stats.query_cnt(source_selector::USER, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
+}
+
+lw_shared_ptr<query::read_command> ordered_by_ann_of_select_statement::prepare_command_for_base_query(
+        query_processor& qp, service::query_state& state, const query_options& options) const {
+    auto slice = make_partition_slice(options);
+    return ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(slice), qp.proxy().get_max_result_size(slice),
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
+            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())), query::partition_limit(query::max_partitions),
+            _query_start_time_point, tracing::make_trace_info(state.get_trace_state()), query_id::create_null_id(), query::is_first_page::no,
+            options.get_timestamp(state));
+}
+
+std::vector<float> ordered_by_ann_of_select_statement::get_ann_ordering_vector(const query_options& options) const {
+    auto [ann_column, ann_vector_expr] = _prepared_ann_ordering;
+    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
+    return util::to_vector<float>(values);
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>> ordered_by_ann_of_select_statement::query_base_table(
+        query_processor& qp, service::query_state& state, const query_options& options, const std::vector<primary_key>& pkeys) const {
+    auto command = prepare_command_for_base_query(qp, state, options);
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+    co_return co_await qp.proxy()
+            .query_result(_query_schema, command, to_partition_ranges(pkeys), options.get_consistency(),
+                    {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
+                    std::nullopt)
+            .then(wrap_result_to_error_message([this, &options, command](service::storage_proxy::coordinator_query_result qr) {
+                return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point);
+            }));
+}
 
 namespace raw {
 
