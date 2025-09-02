@@ -82,6 +82,9 @@ target_link_libraries(utils
     rapidxml::rapidxml
     yaml-cpp::yaml-cpp
     GnuTLS::gnutls)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(utils REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers utils
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

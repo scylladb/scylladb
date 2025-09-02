@@ -15,6 +15,9 @@ target_link_libraries(raft
     xxHash::xxhash
   PRIVATE
     absl::headers)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(raft REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers raft
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

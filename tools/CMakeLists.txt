@@ -23,6 +23,9 @@ target_link_libraries(tools
     xxHash::xxhash
   PRIVATE
     db)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(tools REUSE_FROM scylla-precompiled-header)
+endif()
 
 include(build_submodule)
 build_submodule(cqlsh cqlsh)

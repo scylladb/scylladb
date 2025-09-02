@@ -18,6 +18,9 @@ target_link_libraries(transport
   PRIVATE
     cql3
     Snappy::snappy)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(transport REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers transport
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

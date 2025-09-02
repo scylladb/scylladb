@@ -15,6 +15,9 @@ target_link_libraries(index
     xxHash::xxhash
   PRIVATE
     cql3)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(index REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers index
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
