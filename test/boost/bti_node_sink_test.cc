@@ -594,8 +594,9 @@ SEASTAR_THREAD_TEST_CASE(test_max_offset_from_child_consistent_across_write) {
         interesting_transitions.push_back(tests::random::get_bytes(i));
     }
     std::vector<size_t> interesting_payload_sizes;
-    interesting_payload_sizes.emplace_back(1);
-    interesting_payload_sizes.emplace_back(20);
+    for (size_t i = 1; i <= 20; ++i) {
+        interesting_payload_sizes.push_back(i);
+    }
 
     for (const auto& transition : interesting_transitions)
     for (const auto& payload_size : interesting_payload_sizes) {

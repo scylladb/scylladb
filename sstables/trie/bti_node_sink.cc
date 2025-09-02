@@ -34,10 +34,19 @@ sink_offset max_offset_from_child(const writer_node& x, sink_pos xpos) {
             // and the node size of `*it`.
             auto delta = offset;
             auto chain_length = (*it)->_transition_length;
+            // Note: _node_size include both the size of the body of the node and the size of its transition chain nodes.
+            // Here, we want to compute the offset from the end of the chain to the last (highest/rootmost) node in the chain.
             if (chain_length > 2) {
+                // The highest node in the chain must be SINGLE_NOPAYLOAD_4 in this case.
                 delta = delta + sink_offset(2);
             } else if (chain_length == 2) {
-                delta = delta + ((*it)->_node_size.value < 16 ? sink_offset(2) : sink_offset(3));
+                // If the body of the node is smaller than 16 bytes, then the first (and only) node
+                // in the chain above it will be a SINGLE_NOPAYLOAD_4 and will take up 2 bytes.
+                // Otherwise, it will be a SINGLE_NOPAYLOAD_12 and will take up 3 bytes.
+                //
+                // The first case covers _node_size values in range [1; 17],
+                // while the second case covers [19; 4096].
+                delta = delta + ((*it)->_node_size.value < 19 ? sink_offset(2) : sink_offset(3));
             } else {
                 delta = delta + (*it)->_node_size;
             }
