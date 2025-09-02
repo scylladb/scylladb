@@ -17,6 +17,9 @@ target_link_libraries(scylla_tracing
   PRIVATE
     service
     scylla-main)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(scylla_tracing REUSE_FROM scylla-precompiled-header)
+endif()
 
 add_whole_archive(tracing scylla_tracing)
 

@@ -13,6 +13,9 @@ target_link_libraries(repair
     absl::headers
     Seastar::seastar
     xxHash::xxhash)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(repair REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers repair
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

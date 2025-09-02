@@ -30,6 +30,9 @@ target_link_libraries(scylla_locator
     xxHash::xxhash
   PRIVATE
     db)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(scylla_locator REUSE_FROM scylla-precompiled-header)
+endif()
 
 add_whole_archive(locator scylla_locator)
 

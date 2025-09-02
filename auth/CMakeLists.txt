@@ -44,5 +44,8 @@ target_link_libraries(scylla_auth
 
 add_whole_archive(auth scylla_auth)
 
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(scylla_auth REUSE_FROM scylla-precompiled-header)
+endif()
 check_headers(check-headers scylla_auth
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)
