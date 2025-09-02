@@ -7,38 +7,23 @@
  */
 
 #pragma once
-#include <chrono>
-#include <seastar/core/future.hh>
+#include <seastar/http/retry_strategy.hh>
 
 namespace aws {
 
 class aws_error;
 
-class retry_strategy {
-public:
-    virtual ~retry_strategy() = default;
-    // Returns true if the error can be retried given the error and the number of times already tried.
-    virtual seastar::future<bool> should_retry(const aws_error& error, unsigned attempted_retries) const = 0;
-
-    // Calculates the time in milliseconds the client should wait before attempting another request based on the error and attemptedRetries count.
-    [[nodiscard]] virtual std::chrono::milliseconds delay_before_retry(const aws_error& error, unsigned attempted_retries) const = 0;
-
-    [[nodiscard]] virtual unsigned get_max_retries() const = 0;
-};
-
-class default_retry_strategy : public retry_strategy {
+class default_aws_retry_strategy : public seastar::http::experimental::default_retry_strategy {
 protected:
+    [[nodiscard]] unsigned get_max_retries() const noexcept override { return _max_retries; }
+
     unsigned _max_retries;
     unsigned _scale_factor;
 
 public:
-    explicit default_retry_strategy(unsigned max_retries = 10, unsigned scale_factor = 25);
+    explicit default_aws_retry_strategy(unsigned max_retries = 10, unsigned scale_factor = 25);
 
-    seastar::future<bool> should_retry(const aws_error& error, unsigned attempted_retries) const override;
-
-    [[nodiscard]] std::chrono::milliseconds delay_before_retry(const aws_error& error, unsigned attempted_retries) const override;
-
-    [[nodiscard]] unsigned get_max_retries() const override { return _max_retries; }
+    seastar::future<bool> should_retry(std::exception_ptr error, unsigned attempted_retries) const override;
 };
 
 } // namespace aws
