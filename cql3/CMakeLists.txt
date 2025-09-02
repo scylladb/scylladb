@@ -138,5 +138,8 @@ target_link_libraries(cql3
     lang
     transport)
 
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(cql3 REUSE_FROM scylla-precompiled-header)
+endif()
 check_headers(check-headers cql3
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

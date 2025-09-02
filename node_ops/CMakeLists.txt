@@ -11,6 +11,9 @@ target_link_libraries(node_ops
     Seastar::seastar
   PRIVATE
     service)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(node_ops REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers node_ops
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

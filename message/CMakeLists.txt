@@ -18,6 +18,9 @@ target_link_libraries(message
     absl::headers
   PRIVATE
     idl)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(message REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers message
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

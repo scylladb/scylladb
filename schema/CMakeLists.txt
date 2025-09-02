@@ -18,6 +18,9 @@ target_link_libraries(schema
     absl::headers
   PRIVATE
     alternator)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(schema REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers schema
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

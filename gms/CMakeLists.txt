@@ -22,6 +22,9 @@ target_link_libraries(gms
   PRIVATE
     db
     absl::headers)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(gms REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers gms
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

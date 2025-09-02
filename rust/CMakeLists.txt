@@ -79,6 +79,9 @@ target_include_directories(wasmtime_bindings
     ${scylla_gen_build_dir})
 target_link_libraries(wasmtime_bindings
   INTERFACE Rust::rust_combined)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(wasmtime_bindings REUSE_FROM scylla-precompiled-header)
+endif()
 
 # only for testing
 generate_cxxbridge(inc
@@ -97,3 +100,6 @@ target_include_directories(inc
     ${scylla_gen_build_dir})
 target_link_libraries(inc
   INTERFACE Rust::rust_combined)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(inc REUSE_FROM scylla-precompiled-header)
+endif()
