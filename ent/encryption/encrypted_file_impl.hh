@@ -7,6 +7,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#pragma once
+
 #include <seastar/core/file.hh>
 #include <seastar/core/iostream.hh>
 #include <seastar/core/shared_ptr.hh>

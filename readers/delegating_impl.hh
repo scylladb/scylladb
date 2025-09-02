@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#pragma once
+
 #include "readers/mutation_reader.hh"
 
 class delegating_reader : public mutation_reader::impl {

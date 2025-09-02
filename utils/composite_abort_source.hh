@@ -1,3 +1,13 @@
+/*
+* Copyright (C) 2024-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
 #include <seastar/core/abort_source.hh>
 #include "utils/assert.hh"
 #include "utils/small_vector.hh"

@@ -1,3 +1,13 @@
+/*
+* Copyright (C) 2024-present ScyllaDB
+ */
+
+/*
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+ */
+
+#pragma once
+
 #include "locator/host_id.hh"
 #include "utils/enum_option.hh"
 #include "utils/updateable_value.hh"
