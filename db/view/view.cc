@@ -2638,8 +2638,72 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
         co_await utils::get_local_injector().inject("add_new_view_pause_last_shard", utils::wait_for_message(5min));
     }
 
-    co_await _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token());
+    co_await register_view_for_building(view, step);
+
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
+}
+
+future<> view_builder::register_view_for_building(view_ptr view, build_step& step) {
+    // registers all shards atomically.
+    // each shard puts its registration request and waits until it's registered.
+    // shard 0 coordinates the registration for all shards. it waits for all shards
+    // to be ready and collect their tokens, and then registers all atomically.
+    //
+    // we assume that when a view needs to be registered by some shard, then it needs to be
+    // registered by all shards at around the same time. this is based on:
+    // * registration is always atomic for all shards
+    // * if a shard already registered a view, it won't try to register it again
+    // * view registration is called when a view is created or when the view builder
+    //   starts, events that happen on all shards.
+
+    auto register_fut = _view_registration.register_view(view->id(), step.current_token());
+
+    if (this_shard_id() == 0) {
+        // Wait for all shards to be ready and collect their tokens
+        auto all_tokens = co_await container().map([id = view->id()] (view_builder& vb) -> future<dht::token> {
+            return vb._view_registration.get_register_request(id);
+        });
+
+        // Register all tokens for all shards atomically
+        co_await _sys_ks.register_view_for_building_for_all_shards(view->ks_name(), view->cf_name(), all_tokens);
+
+        // Set the promise on all shards to wake them up
+        co_await container().invoke_on_all([id = view->id()] (view_builder& vb) {
+            return vb._view_registration.set_registered(id);
+        });
+    }
+
+    co_await std::move(register_fut);
+}
+
+future<> view_builder::view_registration::register_view(table_id id, dht::token current_token) {
+    // Wait if an entry already exists until it is removed
+    co_await _registration_cv.wait([&] {
+        return !_view_registration_map.contains(id);
+    });
+
+    auto [it, inserted] = _view_registration_map.emplace(id, view_registration_state{current_token, {}});
+    _registration_cv.broadcast();
+
+    co_await it->second.ready_promise.get_future();
+
+    _view_registration_map.erase(it);
+    _registration_cv.broadcast();
+}
+
+future<dht::token> view_builder::view_registration::get_register_request(table_id id) {
+    co_await _registration_cv.wait([&] {
+        return _view_registration_map.contains(id);
+    });
+    co_return _view_registration_map.at(id).current_token;
+}
+
+future<> view_builder::view_registration::set_registered(table_id id) {
+    auto it = _view_registration_map.find(id);
+    if (it != _view_registration_map.end()) {
+        it->second.ready_promise.set_value();
+    }
+    return make_ready_future();
 }
 
 static bool should_ignore_tablet_keyspace(const replica::database& db, const sstring& ks_name) {

@@ -2782,6 +2782,21 @@ future<> system_keyspace::register_view_for_building(sstring ks_name, sstring vi
             token.to_sstring()).discard_result();
 }
 
+future<> system_keyspace::register_view_for_building_for_all_shards(sstring ks_name, sstring view_name, const std::vector<dht::token>& tokens) {
+    auto&& schema = db::system_keyspace::v3::scylla_views_builds_in_progress();
+    auto timestamp = api::new_timestamp();
+    mutation m{schema, partition_key::from_single_value(*schema, utf8_type->decompose(ks_name))};
+
+    for (size_t s = 0; s < tokens.size(); s++) {
+        auto ck = clustering_key_prefix(std::vector<bytes>{
+                utf8_type->decompose(view_name),
+                int32_type->decompose(int32_t(s))});
+        m.set_clustered_cell(ck, "generation_number", int32_t(0), timestamp);
+        m.set_clustered_cell(ck, "first_token", tokens[s].to_sstring(), timestamp);
+    }
+    return apply_mutation(std::move(m));
+}
+
 future<> system_keyspace::update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, next_token, cpu_id) VALUES (?, ?, ?, ?)",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
