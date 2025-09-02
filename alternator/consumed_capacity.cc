@@ -43,7 +43,7 @@ bool consumed_capacity_counter::should_add_capacity(const rjson::value& request)
 }
 
 void consumed_capacity_counter::add_consumed_capacity_to_response_if_needed(rjson::value& response) const noexcept {
-    if (_should_add_to_reponse) {
+    if (_should_add_to_response) {
         auto consumption = rjson::empty_object();
         rjson::add(consumption, "CapacityUnits", get_consumed_capacity_units());
         rjson::add(response, "ConsumedCapacity", std::move(consumption));
