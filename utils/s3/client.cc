@@ -34,6 +34,7 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
+#include "default_aws_retry_strategy.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
@@ -50,6 +51,7 @@
 #include "utils/log.hh"
 
 using namespace std::chrono_literals;
+using namespace aws;
 template <>
 struct fmt::formatter<s3::tag> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
@@ -87,7 +89,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::experimental::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -120,7 +122,7 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
 
     _creds_update_timer.arm(lowres_clock::now());
     if (!_retry_strategy) {
-        _retry_strategy = std::make_unique<aws::default_retry_strategy>();
+        _retry_strategy = std::make_unique<aws::default_aws_retry_strategy>();
     }
 }
 
@@ -202,8 +204,7 @@ future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::no, retry_strategy) {
+client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -211,11 +212,11 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     auto ep_label = sm::label("endpoint")(host);
     auto sg_label = sm::label("class")(class_name);
     metrics.add_group("s3", {
-        sm::make_gauge("nr_connections", [this] { return retryable_client.get_http_client().connections_nr(); },
+        sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
                 sm::description("Total number of connections"), {ep_label, sg_label}),
-        sm::make_gauge("nr_active_connections", [this] { return retryable_client.get_http_client().connections_nr() - retryable_client.get_http_client().idle_connections_nr(); },
+        sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
                 sm::description("Total number of connections with running requests"), {ep_label, sg_label}),
-        sm::make_counter("total_new_connections", [this] { return retryable_client.get_http_client().total_new_connections_nr(); },
+        sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
                 sm::description("Total number of new connections created so far"), {ep_label, sg_label}),
         sm::make_counter("total_read_requests", [this] { return read_stats.ops; },
                 sm::description("Total number of object read requests"), {ep_label, sg_label}),
@@ -250,7 +251,7 @@ client::group_client& client::find_or_create_client() {
         unsigned max_connections = _cfg->max_connections.has_value() ? *_cfg->max_connections : std::max((unsigned)(sg.get_shares() / 100), 1u);
         it = _https.emplace(std::piecewise_construct,
             std::forward_as_tuple(sg),
-            std::forward_as_tuple(std::move(factory), max_connections, *_retry_strategy)
+            std::forward_as_tuple(std::move(factory), max_connections)
         ).first;
 
         it->second.register_metrics(sg.name(), _host);
@@ -301,42 +302,70 @@ client::group_client& client::find_or_create_client() {
     }
 }
 
-future<> client::make_request(http::request req,
-                              http::experimental::client::reply_handler handle,
-                              std::optional<http::reply::status_type> expected,
-                              seastar::abort_source* as) {
-    auto request = std::move(req);
-    constexpr size_t max_attempts = 3;
-    size_t attempts = 0;
-    while (true) {
-        co_await authorize(request);
-        auto& gc = find_or_create_client();
-        try {
-            co_return co_await gc.retryable_client.make_request(
-                request, [&handle](const http::reply& reply, input_stream<char>&& body) { return handle(reply, std::move(body)); }, expected, as);
-        } catch (const aws::aws_exception& ex) {
-            if (++attempts <= max_attempts) {
-                if (ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
-                    s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
-                             utils::aws::format_time_point(db_clock::now()),
-                             request.get_header("x-amz-date"));
-                    continue;
-                }
-                if (ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
-                    s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
-                    _credentials = {};
-                    continue;
-                }
+http::experimental::client::reply_handler client::wrap_handler(http::request& request,
+                                                               http::experimental::client::reply_handler handler,
+                                                               std::optional<http::reply::status_type> expected) {
+    return [this, &request, expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
+        auto _in = std::move(in);
+        auto status_class = seastar::http::reply::classify_status(rep._status);
+        std::optional<aws_error> possible_error;
+        if (status_class != seastar::http::reply::status_class::informational && status_class != seastar::http::reply::status_class::success) {
+            possible_error = aws_error::parse(co_await seastar::util::read_entire_stream_contiguous(_in));
+            if (!possible_error) {
+                possible_error = aws_error::from_http_code(rep._status);
             }
-            map_s3_client_exception(std::current_exception());
-        } catch (const storage_io_error&) {
-            throw;
-        } catch (const abort_requested_exception&) {
+        }
+
+        if (possible_error) {
+            auto should_retry = possible_error->is_retryable();
+            if (possible_error->get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
+                s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
+                         utils::aws::format_time_point(db_clock::now()),
+                         request.get_header("x-amz-date"));
+                should_retry = aws::retryable::yes;
+                co_await authorize(request);
+            }
+            if (possible_error->get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
+                _credentials = {};
+                should_retry = aws::retryable::yes;
+                co_await authorize(request);
+            }
+            co_await coroutine::return_exception_ptr(std::make_exception_ptr(
+                aws::aws_exception(aws_error(possible_error->get_error_type(), possible_error->get_error_message().c_str(), should_retry))));
+        }
+
+        if (expected && rep._status != *expected) {
+            throw seastar::httpd::unexpected_status_error(rep._status);
+        }
+        std::exception_ptr eptr;
+        try {
+            // We need to be able to simulate a retry in s3 tests
+            if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
+                throw aws::aws_exception(
+                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
+            }
+            co_return co_await handler(rep, std::move(_in));
+        } catch (const filler_exception&) {
             throw;
         } catch (...) {
-            map_s3_client_exception(std::current_exception());
+            eptr = std::current_exception();
         }
-    }
+        if (eptr) {
+            co_await coroutine::return_exception_ptr(std::make_exception_ptr(aws::aws_exception(aws_error::from_exception_ptr(eptr))));
+        }
+    };
+}
+
+future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+    auto request = std::move(req);
+    auto handler = wrap_handler(request, std::move(handle), expected);
+    co_await authorize(request);
+    auto& gc = find_or_create_client();
+
+    co_await gc.http.make_request(request, handler, *_retry_strategy, std::nullopt, as).handle_exception([](auto ex) {
+        map_s3_client_exception(std::move(ex));
+    });
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
@@ -1771,7 +1800,7 @@ future<> client::close() {
         _creds_update_timer.cancel();
     }
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
-        co_await it.second.retryable_client.close();
+        co_await it.second.http.close();
     });
 }
 
