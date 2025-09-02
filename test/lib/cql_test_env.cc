@@ -285,7 +285,7 @@ public:
         cql3::prepared_cache_key_type id,
         std::unique_ptr<cql3::query_options> qo) override
     {
-        auto prepared = local_qp().get_prepared(id);
+        auto prepared = co_await local_qp().get_prepared(id);
         if (!prepared) {
             throw not_prepared_exception(id);
         }
@@ -296,7 +296,7 @@ public:
 
         auto qs = make_query_state();
         auto& lqo = *qo;
-        return local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), true)
+        co_return co_await local_qp().execute_prepared_without_checking_exception_message(*qs, std::move(stmt), lqo, std::move(prepared), std::move(id), true)
             .then([qs, qo = std::move(qo)] (auto msg) {
                 return cql_transport::messages::propagate_exception_as_future(std::move(msg));
             });
