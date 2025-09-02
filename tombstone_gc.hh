@@ -11,6 +11,8 @@
 #include <seastar/core/shared_ptr.hh>
 #include "gc_clock.hh"
 #include "dht/token.hh"
+#include "locator/abstract_replication_strategy.hh"
+#include "locator/token_metadata.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/interval.hh"
 #include "utils/chunked_vector.hh"
@@ -154,5 +156,7 @@ public:
     [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_shared_state, false); }
 };
 
-std::map<sstring, sstring> get_default_tombstonesonte_gc_mode(data_dictionary::database db, sstring ks_name);
+std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy&, const locator::token_metadata&);
+std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name);
+
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name);
