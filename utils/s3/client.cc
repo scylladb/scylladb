@@ -368,12 +368,40 @@ future<> client::make_request(http::request req, http::experimental::client::rep
     });
 }
 
-future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+future<> client::make_request(http::request req,
+                              http::experimental::client::reply_handler handle,
+                              const http::experimental::retry_strategy& rs,
+                              error_handler err_handler,
+                              std::optional<http::reply::status_type> expected,
+                              seastar::abort_source* as) {
+    auto request = std::move(req);
+    auto handler = wrap_handler(request, std::move(handle), expected);
+    co_await authorize(request);
+    auto& gc = find_or_create_client();
+
+    co_await gc.http.make_request(request, handler, rs, std::nullopt, as).handle_exception([err_handler = std::move(err_handler)](auto ex) {
+        err_handler(std::move(ex));
+    });
+}
+
+future<> client::make_request(http::request req,
+                              reply_handler_ext handle_ex,
+                              const http::experimental::retry_strategy& rs,
+                              error_handler err_handler,
+                              std::optional<http::reply::status_type> expected,
+                              seastar::abort_source* as) {
     auto& gc = find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    co_await make_request(std::move(req), std::move(handle), expected, as);
+    co_await make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
+}
+
+future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+    return make_request(
+        std::move(req), std::move(handle_ex), *_retry_strategy, [](std::exception_ptr ex) {
+            map_s3_client_exception(std::move(ex));
+        }, expected, as);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
