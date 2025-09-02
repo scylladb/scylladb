@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "raft/raft.hh"
 #include "utils/assert.hh"
 #include <fmt/ranges.h>
 #include <seastar/core/reactor.hh>
@@ -1249,7 +1250,7 @@ using reconfigure_result_t = std::variant<std::monostate,
     timed_out_error, raft::not_a_leader, raft::dropped_entry, raft::commit_status_unknown, raft::conf_change_in_progress, raft::stopped_error, raft::not_a_member>;
 
 future<reconfigure_result_t> reconfigure(
-        const std::vector<std::pair<raft::server_id, bool>>& ids,
+        const std::vector<std::pair<raft::server_id, raft::is_voter>>& ids,
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
         raft::server& server) {
@@ -1285,7 +1286,7 @@ future<reconfigure_result_t> reconfigure(
 }
 
 future<reconfigure_result_t> modify_config(
-        const std::vector<std::pair<raft::server_id, bool>>& added,
+        const std::vector<std::pair<raft::server_id, raft::is_voter>>& added,
         std::vector<raft::server_id> deleted,
         raft::logical_clock::time_point timeout,
         logical_timer& timer,
@@ -1502,7 +1503,7 @@ public:
     }
 
     future<reconfigure_result_t> reconfigure(
-            const std::vector<std::pair<raft::server_id, bool>>& ids,
+            const std::vector<std::pair<raft::server_id, raft::is_voter>>& ids,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         SCYLLA_ASSERT(_started);
@@ -1516,7 +1517,7 @@ public:
     }
 
     future<reconfigure_result_t> modify_config(
-            const std::vector<std::pair<raft::server_id, bool>>& added,
+            const std::vector<std::pair<raft::server_id, raft::is_voter>>& added,
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
@@ -1870,7 +1871,7 @@ public:
 
     future<reconfigure_result_t> reconfigure(
             raft::server_id id,
-            const std::vector<std::pair<raft::server_id, bool>>& ids,
+            const std::vector<std::pair<raft::server_id, raft::is_voter>>& ids,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
         auto& n = _routes.at(id);
@@ -1898,16 +1899,16 @@ public:
             const std::vector<raft::server_id>& ids,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
-        std::vector<std::pair<raft::server_id, bool>> ids_voters;
+        std::vector<std::pair<raft::server_id, raft::is_voter>> ids_voters;
         for (auto srv: ids) {
-            ids_voters.emplace_back(srv, true);
+            ids_voters.emplace_back(srv, raft::is_voter::yes);
         }
         co_return co_await reconfigure(id, ids_voters, timeout, timer);
     }
 
     future<reconfigure_result_t> modify_config(
             raft::server_id id,
-            const std::vector<std::pair<raft::server_id, bool>>& added,
+            const std::vector<std::pair<raft::server_id, raft::is_voter>>& added,
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
@@ -1937,9 +1938,9 @@ public:
             std::vector<raft::server_id> deleted,
             raft::logical_clock::time_point timeout,
             logical_timer& timer) {
-        std::vector<std::pair<raft::server_id, bool>> added_voters;
+        std::vector<std::pair<raft::server_id, raft::is_voter>> added_voters;
         for (auto srv: added) {
-            added_voters.emplace_back(srv, true);
+            added_voters.emplace_back(srv, raft::is_voter::yes);
         }
         co_return co_await modify_config(id, added_voters, std::move(deleted), timeout, timer);
     }
@@ -2737,12 +2738,12 @@ struct reconfiguration {
 
     future<result_type> execute_modify_config(
             state_type& s, const operation::context& ctx, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
-        std::vector<std::pair<raft::server_id, bool>> added;
+        std::vector<std::pair<raft::server_id, raft::is_voter>> added;
         for (size_t i = 0; i < voters_end; ++i) {
-            added.emplace_back(nodes[i], true);
+            added.emplace_back(nodes[i], raft::is_voter::yes);
         }
         for (size_t i = voters_end; i < members_end; ++i) {
-            added.emplace_back(nodes[i], false);
+            added.emplace_back(nodes[i], raft::is_voter::no);
         }
 
         std::vector<raft::server_id> removed {nodes.begin() + members_end, nodes.end()};
@@ -2782,13 +2783,13 @@ struct reconfiguration {
 
     future<result_type> execute_reconfigure(
             state_type& s, const operation::context& ctx, std::vector<raft::server_id> nodes, size_t members_end, size_t voters_end) {
-        std::vector<std::pair<raft::server_id, bool>> nodes_voters;
+        std::vector<std::pair<raft::server_id, raft::is_voter>> nodes_voters;
         nodes_voters.reserve(members_end);
         for (size_t i = 0; i < voters_end; ++i) {
-            nodes_voters.emplace_back(nodes[i], true);
+            nodes_voters.emplace_back(nodes[i], raft::is_voter::yes);
         }
         for (size_t i = voters_end; i < members_end; ++i) {
-            nodes_voters.emplace_back(nodes[i], false);
+            nodes_voters.emplace_back(nodes[i], raft::is_voter::no);
         }
 
         auto contact = *s.known.begin();

@@ -33,7 +33,7 @@ struct server_address {
 
 struct config_member {
     raft::server_address addr;
-    bool can_vote;
+    raft::is_voter can_vote;
 };
 
 struct configuration {

@@ -24,6 +24,7 @@
 #include <seastar/testing/random.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
+#include "raft/raft.hh"
 #include "raft/server.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"
@@ -197,9 +198,9 @@ struct wait_log {
 
 struct set_config_entry {
     size_t node_idx;
-    bool can_vote;
+    raft::is_voter can_vote;
 
-    set_config_entry(size_t idx, bool can_vote = true)
+    set_config_entry(size_t idx, raft::is_voter can_vote = raft::is_voter::yes)
         : node_idx(idx), can_vote(can_vote)
     {}
 };

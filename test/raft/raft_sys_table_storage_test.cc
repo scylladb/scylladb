@@ -9,6 +9,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/core/coroutine.hh>
 
+#include "raft/raft.hh"
 #include "utils/UUID_gen.hh"
 
 #include "service/raft/raft_sys_table_storage.hh"
@@ -65,7 +66,7 @@ static std::vector<raft::log_entry_ptr> create_test_log() {
         make_lw_shared(raft::log_entry{
             .term = raft::term_t(2),
             .idx = raft::index_t(2),
-            .data = raft::configuration{{raft::config_member{raft::server_address{raft::server_id::create_random_id(), {}}, true}}}}),
+            .data = raft::configuration{{raft::config_member{raft::server_address{raft::server_id::create_random_id(), {}}, raft::is_voter::yes}}}}),
         // dummy
         make_lw_shared(raft::log_entry{
             .term = raft::term_t(3),
@@ -100,7 +101,7 @@ SEASTAR_TEST_CASE(test_store_load_snapshot) {
         raft::config_member srv{raft::server_address{
                 raft::server_id::create_random_id(),
                 ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
-            }, true};
+            }, raft::is_voter::yes};
         raft::configuration snp_cfg({std::move(srv)});
         auto snp_id = raft::snapshot_id::create_random_id();
 
@@ -167,7 +168,7 @@ SEASTAR_TEST_CASE(test_store_snapshot_truncate_log_tail) {
         raft::config_member srv{raft::server_address{
                 raft::server_id::create_random_id(),
                 ser::serialize_to_buffer<bytes>(gms::inet_address("localhost"))
-            }, true};
+            }, raft::is_voter::yes};
         raft::configuration snp_cfg({std::move(srv)});
         auto snp_id = raft::snapshot_id::create_random_id();
 

@@ -73,12 +73,15 @@ struct server_address {
     }
 };
 
+struct is_voter_tag {};
+using is_voter = bool_class<is_voter_tag>;
+
 struct config_member {
     server_address addr;
-    bool can_vote;
+    is_voter can_vote;
 
-    config_member(server_address addr, bool can_vote)
-        : addr(std::move(addr)), can_vote(can_vote) {
+    config_member(server_address addr, is_voter can_vote)
+        : addr{std::move(addr)}, can_vote{can_vote} {
     }
 
     bool operator==(const config_member& rhs) const {
@@ -154,7 +157,8 @@ struct configuration {
 
     // Count the number of voters in a configuration
     static size_t voter_count(const config_member_set& c_new) {
-        return std::count_if(c_new.begin(), c_new.end(), [] (const config_member& s) { return s.can_vote; });
+        return std::count_if(c_new.begin(), c_new.end(), [] (const config_member& s) { 
+            return s.can_vote == is_voter::yes; });
     }
 
     // Check if transitioning to a proposed configuration is safe.
@@ -200,16 +204,14 @@ struct configuration {
     }
 
     // Same as contains() but true only if the member can vote.
-    bool can_vote(server_id id) const {
-        bool can_vote = false;
-        auto it = current.find(id);
-        if (it != current.end()) {
-            can_vote |= it->can_vote;
+    is_voter can_vote(server_id id) const {
+        auto can_vote = is_voter::no;
+        if (auto it = current.find(id); it != current.end()) {
+            can_vote = it->can_vote;
         }
 
-        it = previous.find(id);
-        if (it != previous.end()) {
-            can_vote |= it->can_vote;
+        if (auto it = previous.find(id); it != previous.end()) {
+            can_vote = can_vote || it->can_vote;
         }
 
         return can_vote;

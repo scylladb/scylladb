@@ -10,6 +10,7 @@
 #include <fmt/ranges.h>
 
 #include "mutation/async_utils.hh"
+#include "raft/raft.hh"
 #include "service/raft/group0_fwd.hh"
 #include "service/raft/raft_group0.hh"
 #include "service/raft/raft_rpc.hh"
@@ -562,7 +563,7 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
                 // We were chosen as the discovery leader.
                 // We should start a new group with this node as voter.
                 group0_log.info("Server {} chosen as discovery leader; bootstrapping group 0 from scratch", my_id);
-                initial_configuration.current.emplace(my_addr, true);
+                initial_configuration.current.emplace(my_addr, raft::is_voter::yes);
 
                 // Initializes system tables for the first group 0 member. Nodes joining group 0 henceforth would apply them via snapshots.
                 // We should not change system tables on the recovery leader (the discovery leader of the new group 0
@@ -636,13 +637,13 @@ future<> raft_group0::join_group0(std::vector<gms::inet_address> seeds, shared_p
     group0_log.info("server {} joined group 0 with group id {}", my_id, group0_id);
 }
 
-shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(can_vote can_vote) {
+shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(raft::is_voter can_vote) {
     struct legacy_handshaker : public group0_handshaker {
         service::raft_group0& _group0;
         netw::messaging_service& _ms;
-        service::can_vote _can_vote;
+        raft::is_voter _can_vote;
 
-        legacy_handshaker(service::raft_group0& group0, netw::messaging_service& ms, service::can_vote can_vote)
+        legacy_handshaker(service::raft_group0& group0, netw::messaging_service& ms, raft::is_voter can_vote)
             : _group0(group0)
             , _ms(ms)
             , _can_vote(can_vote) {
@@ -659,7 +660,7 @@ shared_ptr<service::group0_handshaker> raft_group0::make_legacy_handshaker(can_v
             raft::server_address my_addr{my_id, {}};
             try {
                 co_await ser::group0_rpc_verbs::send_group0_modify_config(
-                        &_ms, locator::host_id{g0_info.id.uuid()}, timeout, g0_info.group0_id, {{my_addr, static_cast<bool>(_can_vote)}}, {});
+                        &_ms, locator::host_id{g0_info.id.uuid()}, timeout, g0_info.group0_id, {{my_addr, _can_vote}}, {});
                 co_return true;
             } catch (std::runtime_error& e) {
                 group0_log.warn("failed to modify config at peer {}: {}. Retrying.", g0_info.id, e.what());
@@ -851,7 +852,7 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
                 raft::server_address my_addr{my_id, {}};
                 co_await run_op_with_retry(_abort_source, [this, my_addr]() -> future<operation_result> {
                     try {
-                        co_await _raft_gr.group0().modify_config({{my_addr, true}}, {}, &_abort_source);
+                        co_await _raft_gr.group0().modify_config({{my_addr, raft::is_voter::yes}}, {}, &_abort_source);
                     } catch (const raft::commit_status_unknown& e) {
                         group0_log.info("finish_setup_after_join({}): modify_config returned \"{}\", retrying", my_addr, e);
                         co_return operation_result::failure;
@@ -1034,7 +1035,7 @@ future<> raft_group0::modify_raft_voter_status(const std::unordered_set<raft::se
 
         for (const auto& id: voters_add) {
             if (is_member(id, false)) {
-                add.push_back(raft::config_member{{id, {}}, true});
+                add.push_back(raft::config_member{{id, {}}, raft::is_voter::yes});
             } else {
                 group0_log.warn("modify_raft_voter_config({}, {}): tried to mark non-member {} as a voter, ignoring",
                         voters_add, voters_del, id);
@@ -1043,7 +1044,7 @@ future<> raft_group0::modify_raft_voter_status(const std::unordered_set<raft::se
 
         for (const auto& id: voters_del) {
             if (is_member(id, false)) {
-                add.push_back(raft::config_member{{id, {}}, false});
+                add.push_back(raft::config_member{{id, {}}, raft::is_voter::no});
             } else {
                 group0_log.warn("modify_raft_voter_config({}, {}): tried to mark non-member {} as a non-voter, ignoring",
                         voters_add, voters_del, id);
@@ -1770,7 +1771,7 @@ future<> raft_group0::do_upgrade_to_group0(group0_upgrade_state start_state, ser
 
     if (!joined_group0()) {
         upgrade_log.info("Joining group 0...");
-        auto handshaker = make_legacy_handshaker(can_vote::yes); // Voter
+        auto handshaker = make_legacy_handshaker(raft::is_voter::yes); // Voter
         co_await join_group0(co_await _sys_ks.load_peers(), std::move(handshaker), ss, qp, mm, _sys_ks, topology_change_enabled, join_node_request_params{});
     } else {
         upgrade_log.info(

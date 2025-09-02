@@ -349,7 +349,7 @@ RAFT_TEST_CASE(rpc_voter_non_voter_transision, (test_case{
                              rpc_address_set{node_id{0},node_id{1},node_id{2}}},
             rpc_reset_counters{{node_id{0},node_id{1},node_id{2}}},
             // Make C a non-voting member.
-            set_config{0, 1, set_config_entry(2, false)},
+            set_config{0, 1, set_config_entry(2, raft::is_voter::no)},
             // Check that RPC configuration didn't change.
             check_rpc_added{{node_id{0},node_id{1},node_id{2}},0},
             check_rpc_removed{{node_id{0},node_id{1},node_id{2}},0},

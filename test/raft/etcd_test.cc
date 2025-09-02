@@ -926,7 +926,7 @@ BOOST_AUTO_TEST_CASE(test_leader_transfer_one_node_cluster) {
 BOOST_AUTO_TEST_CASE(test_leader_transfer_one_voter) {
     discrete_failure_detector fd;
     raft::server_id A_id = id(), B_id = id();
-    raft::config_member_set set{{server_addr_from_id(A_id), true}, {server_addr_from_id(B_id), false}};
+    raft::config_member_set set{{server_addr_from_id(A_id), raft::is_voter::yes}, {server_addr_from_id(B_id), raft::is_voter::no}};
     raft::configuration cfg(set);
 
 
