@@ -2317,13 +2317,9 @@ future<> view_builder::initialize_reader_at_current_token(build_step& step) {
 }
 
 void view_builder::load_view_status(view_builder::view_build_status status, std::unordered_set<table_id>& loaded_views) {
-    if (!status.next_token) {
-        // No progress was made on this view, so we'll treat it as new.
-        return;
-    }
-    vlogger.info0("Resuming to build view {}.{} at {}", status.view->ks_name(), status.view->cf_name(), *status.next_token);
+    vlogger.info0("Resuming to build view {}.{} at {}", status.view->ks_name(), status.view->cf_name(), status.next_token);
     loaded_views.insert(status.view->id());
-    if (status.first_token == *status.next_token) {
+    if (status.first_token == status.next_token) {
         // Completed, so nothing to do for this shard. Consider the view
         // as loaded and not as a new view.
         _built_views.emplace(status.view->id());
@@ -2466,10 +2462,14 @@ future<> view_builder::calculate_shard_build_step(view_builder_init_state& vbi) 
 
     for (auto& [_, build_step] : _base_to_build_step) {
         std::ranges::sort(build_step.build_status, std::ranges::less(), [] (const view_build_status& s) {
-            return *s.next_token;
+            return s.next_token;
         });
-        if (!build_step.build_status.empty()) {
-            build_step.current_key = dht::decorated_key{*build_step.build_status.front().next_token, partition_key::make_empty()};
+        // find the smallest non-nullopt next_token, if any, and set it as current_key
+        for (const auto& s : build_step.build_status) {
+            if (s.next_token) {
+                build_step.current_key = dht::decorated_key{*s.next_token, partition_key::make_empty()};
+                break;
+            }
         }
     }
 
