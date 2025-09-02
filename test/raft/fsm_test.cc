@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "raft/raft.hh"
 #define BOOST_TEST_MODULE raft
 
 #include "raft/tracker.hh"
@@ -14,6 +15,9 @@
 using namespace raft;
 
 namespace raft {
+
+const auto& yes = can_vote_t::yes;
+const auto& no = can_vote_t::no;   
 
 std::ostream& boost_test_print_type(std::ostream& os, const vote_result& v) {
     fmt::print(os, "{}", v);
@@ -91,15 +95,15 @@ BOOST_AUTO_TEST_CASE(test_votes) {
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::LOST);
     // Basic voting test with tree voters and one no-voter
     votes = raft::votes(raft::configuration({
-            {server_addr_from_id(id1), true}, {server_addr_from_id(id2), true},
-            {server_addr_from_id(id3), true}, {server_addr_from_id(id4), false}}));
+            {server_addr_from_id(id1), yes}, {server_addr_from_id(id2), yes},
+            {server_addr_from_id(id3), yes}, {server_addr_from_id(id4), no}}));
     votes.register_vote(id1, true);
     votes.register_vote(id2, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Basic test that non-voting votes are ignored
     votes = raft::votes(raft::configuration({
-            {server_addr_from_id(id1), true}, {server_addr_from_id(id2), true},
-            {server_addr_from_id(id3), true}, {server_addr_from_id(id4), false}}));
+            {server_addr_from_id(id1), yes}, {server_addr_from_id(id2), yes},
+            {server_addr_from_id(id3), yes}, {server_addr_from_id(id4), no}}));
     votes.register_vote(id1, true);
     votes.register_vote(id4, true);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
@@ -107,8 +111,8 @@ BOOST_AUTO_TEST_CASE(test_votes) {
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Joint configuration with non voting members
     votes = raft::votes(raft::configuration(
-            {{server_addr_from_id(id1), true}},
-            {{server_addr_from_id(id2), true}, {server_addr_from_id(id3), true}, {server_addr_from_id(id4), false}}));
+            {{server_addr_from_id(id1), yes}},
+            {{server_addr_from_id(id2), yes}, {server_addr_from_id(id3), yes}, {server_addr_from_id(id4), no}}));
     BOOST_CHECK_EQUAL(votes.voters().size(), 3);
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::UNKNOWN);
     votes.register_vote(id2, true);
@@ -119,8 +123,8 @@ BOOST_AUTO_TEST_CASE(test_votes) {
     BOOST_CHECK_EQUAL(votes.tally_votes(), raft::vote_result::WON);
     // Same node is voting in one config and non voting in another
     votes = raft::votes(raft::configuration(
-            {{server_addr_from_id(id1), true}, {server_addr_from_id(id4), true}},
-            {{server_addr_from_id(id2), true}, {server_addr_from_id(id3), true}, {server_addr_from_id(id4), false}}));
+            {{server_addr_from_id(id1), yes}, {server_addr_from_id(id4), yes}},
+            {{server_addr_from_id(id2), yes}, {server_addr_from_id(id3), yes}, {server_addr_from_id(id4), no}}));
     votes.register_vote(id2, true);
     votes.register_vote(id1, true);
     votes.register_vote(id4, true);
@@ -224,7 +228,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{18}), index_t{19});
 
     // Check that non voting member is not counted for the quorum in simple config
-    cfg.enter_joint({{server_addr_from_id(id1), true}, {server_addr_from_id(id2), true}, {server_addr_from_id(id3), false}});
+    cfg.enter_joint({{server_addr_from_id(id1), yes}, {server_addr_from_id(id2), yes}, {server_addr_from_id(id3), no}});
     cfg.leave_joint();
     tracker.set_configuration(cfg, index_t{1});
     pr(id1)->accepted(index_t{30});
@@ -233,7 +237,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
 
     // Check that non voting member is not counted for the quorum in joint config
-    cfg.enter_joint({{server_addr_from_id(id4), true}, {server_addr_from_id(id5), true}});
+    cfg.enter_joint({{server_addr_from_id(id4), yes}, {server_addr_from_id(id5), yes}});
     tracker.set_configuration(cfg, index_t{1});
     pr(id4)->accepted(index_t{30});
     pr(id5)->accepted(index_t{30});
@@ -241,7 +245,7 @@ BOOST_AUTO_TEST_CASE(test_tracker) {
 
     // Check the case where the same node is in both config but different voting rights
     cfg.leave_joint();
-    cfg.enter_joint({{server_addr_from_id(id1), true}, {server_addr_from_id(id2), true}, {server_addr_from_id(id5), false}});
+    cfg.enter_joint({{server_addr_from_id(id1), yes}, {server_addr_from_id(id2), yes}, {server_addr_from_id(id5), no}});
     BOOST_CHECK_EQUAL(tracker.committed(index_t{0}), index_t{25});
 }
 
@@ -936,7 +940,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     server_id id1 = id(), id2 = id(), id3 = id();
 
     raft::configuration cfg({
-        {server_addr_from_id(id1), true}, {server_addr_from_id(id2), true}, {server_addr_from_id(id3), false}});
+        {server_addr_from_id(id1), yes}, {server_addr_from_id(id2), yes}, {server_addr_from_id(id3), no}});
     raft::log log(raft::snapshot_descriptor{.config = cfg});
 
     fsm_debug fsm(id1, term_t{1}, /* voted for */ server_id{}, std::move(log), trivial_failure_detector, fsm_cfg);
@@ -1019,7 +1023,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     fsm.step(id2, raft::append_reply{fsm.get_current_term(), idx, raft::append_reply::accepted{idx}});
 
     // Drop the leader from the current config and see that stepdown message is sent
-    raft::configuration newcfg({{server_addr_from_id(id2), true}, {server_addr_from_id(id3), false}});
+    raft::configuration newcfg({{server_addr_from_id(id2), yes}, {server_addr_from_id(id3), no}});
     fsm.add_entry(newcfg);
     output = fsm.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
@@ -1041,7 +1045,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
 
     /// Check that leader stepdown works when the leader is removed from the config and there are entries above C_new in its log
     raft::configuration cfg2({
-        {server_addr_from_id(id1), true}, {server_addr_from_id(id2), true}, {server_addr_from_id(id3), true}});
+        {server_addr_from_id(id1), yes}, {server_addr_from_id(id2), yes}, {server_addr_from_id(id3), yes}});
     raft::log log2(raft::snapshot_descriptor{.config = cfg});
 
     fsm_debug fsm2(id1, term_t{1}, /* voted for */ server_id{}, std::move(log2), trivial_failure_detector, fsm_cfg);
@@ -1059,7 +1063,7 @@ BOOST_AUTO_TEST_CASE(test_leader_stepdown) {
     fsm2.step(id3, raft::append_reply{fsm2.get_current_term(), idx, raft::append_reply::accepted{idx}});
 
     // Drop the leader from the current config and see that stepdown message is sent
-    raft::configuration newcfg2({{server_addr_from_id(id2), true}, {server_addr_from_id(id3), true}});
+    raft::configuration newcfg2({{server_addr_from_id(id2), yes}, {server_addr_from_id(id3), yes}});
     fsm2.add_entry(newcfg2);
     output = fsm2.get_output();
     append = std::get<raft::append_request>(output.messages.back().second);
@@ -1442,7 +1446,7 @@ BOOST_AUTO_TEST_CASE(test_leader_read_quorum) {
 
     // 4 nodes 3 voting 1 non voting (quorum is 2)
     raft::config_member_set nodes{config_member_from_id(A_id), config_member_from_id(B_id),
-            config_member_from_id(C_id), raft::config_member{server_addr_from_id(D_id), false}};
+            config_member_from_id(C_id), raft::config_member{server_addr_from_id(D_id), no}};
 
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = raft::configuration(nodes)});
     auto A = create_follower(A_id, log, fd);
@@ -1545,8 +1549,8 @@ BOOST_AUTO_TEST_CASE(test_non_voter_stays_pipeline) {
     // through configuration changes.
     server_id A_id = id(), B_id = id();
     raft::config_member_set addrset{
-        raft::config_member{server_addr_from_id(A_id), true},
-        raft::config_member{server_addr_from_id(B_id), false}};
+        raft::config_member{server_addr_from_id(A_id), yes},
+        raft::config_member{server_addr_from_id(B_id), no}};
     raft::configuration cfg(addrset);
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log);
@@ -1565,7 +1569,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_stays_pipeline) {
     A.add_entry(newcfg);
     communicate(A, B);
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
-    BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(B_id))->can_vote, true);
+    BOOST_CHECK_EQUAL(bool(A.get_configuration().current.find(config_member_from_id(B_id))->can_vote), true);
     BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
     A.add_entry(cfg);
     auto tick_occasionally = [&A, &B]() {
@@ -1576,7 +1580,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_stays_pipeline) {
     };
     communicate_until(tick_occasionally, A, B);
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
-    BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(B_id))->can_vote, false);
+    BOOST_CHECK_EQUAL(bool(A.get_configuration().current.find(config_member_from_id(B_id))->can_vote), false);
     BOOST_CHECK(A.get_progress(B_id).state == raft::follower_progress::state::PIPELINE);
 }
 
@@ -1584,8 +1588,8 @@ BOOST_AUTO_TEST_CASE(test_leader_change_to_non_voter) {
     // Test a two-node cluster, change a leader to a non-voter.
     server_id A_id = id(), B_id = id();
     raft::config_member_set oldset{
-        raft::config_member{server_addr_from_id(A_id), true},
-        raft::config_member{server_addr_from_id(B_id), false}};
+        raft::config_member{server_addr_from_id(A_id), yes},
+        raft::config_member{server_addr_from_id(B_id), no}};
     raft::configuration cfg(oldset);
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log);
@@ -1594,8 +1598,8 @@ BOOST_AUTO_TEST_CASE(test_leader_change_to_non_voter) {
     communicate(A, B);
     BOOST_CHECK(A.is_leader());
     raft::config_member_set newset{
-        raft::config_member{server_addr_from_id(A_id), false},
-        raft::config_member{server_addr_from_id(B_id), true}};
+        raft::config_member{server_addr_from_id(A_id), no},
+        raft::config_member{server_addr_from_id(B_id), yes}};
     raft::configuration newcfg(newset);
     A.add_entry(newcfg);
     A.tick();
@@ -1604,12 +1608,12 @@ BOOST_AUTO_TEST_CASE(test_leader_change_to_non_voter) {
     BOOST_CHECK(B.is_leader());
     // Try to switch the leader to a non-voter, leaving no other voters.
     newset = raft::config_member_set{
-        raft::config_member{server_addr_from_id(A_id), false},
-        raft::config_member{server_addr_from_id(B_id), false}};
+        raft::config_member{server_addr_from_id(A_id), no},
+        raft::config_member{server_addr_from_id(B_id), no}};
     newcfg = raft::configuration(newset);
     BOOST_CHECK_THROW(B.add_entry(newcfg), std::invalid_argument);
     // Try to remove the last remaining voter
-    newset = raft::config_member_set{raft::config_member{server_addr_from_id(B_id), false}};
+    newset = raft::config_member_set{raft::config_member{server_addr_from_id(B_id), no}};
     newcfg = raft::configuration(newset);
     BOOST_CHECK_THROW(B.add_entry(newcfg), std::invalid_argument);
 }
@@ -1621,9 +1625,9 @@ BOOST_AUTO_TEST_CASE(test_non_voter_gets_timeout_now) {
     // leader's having to increase its term).
     server_id A_id = id(), B_id = id(), C_id = id();
     raft::configuration cfg(raft::config_member_set{
-            raft::config_member{server_addr_from_id(A_id), true},
-            raft::config_member{server_addr_from_id(B_id), true},
-            raft::config_member{server_addr_from_id(C_id), false}});
+            raft::config_member{server_addr_from_id(A_id), yes},
+            raft::config_member{server_addr_from_id(B_id), yes},
+            raft::config_member{server_addr_from_id(C_id), no}});
 
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log);
@@ -1651,9 +1655,9 @@ BOOST_AUTO_TEST_CASE(test_non_voter_election_timeout) {
     discrete_failure_detector fd;
     server_id A_id = id(), B_id = id(), C_id = id();
     raft::configuration cfg(raft::config_member_set{
-            raft::config_member{server_addr_from_id(A_id), true},
-            raft::config_member{server_addr_from_id(B_id), true},
-            raft::config_member{server_addr_from_id(C_id), false}});
+            raft::config_member{server_addr_from_id(A_id), yes},
+            raft::config_member{server_addr_from_id(B_id), yes},
+            raft::config_member{server_addr_from_id(C_id), no}});
 
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log, fd);
@@ -1675,9 +1679,9 @@ BOOST_AUTO_TEST_CASE(test_non_voter_voter_loop) {
 
     raft::configuration cfg = config_from_ids({A_id, B_id, C_id});
     raft::configuration cfg_with_non_voter(raft::config_member_set{
-            raft::config_member{server_addr_from_id(A_id), true},
-            raft::config_member{server_addr_from_id(B_id), true},
-            raft::config_member{server_addr_from_id(C_id), false}});
+            raft::config_member{server_addr_from_id(A_id), yes},
+            raft::config_member{server_addr_from_id(B_id), yes},
+            raft::config_member{server_addr_from_id(C_id), no}});
 
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log);
@@ -1729,16 +1733,16 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     BOOST_CHECK(A.is_leader());
     A.add_entry(log_entry::dummy{});
     raft::configuration cfg_with_non_voter(raft::config_member_set{
-            raft::config_member{server_addr_from_id(A_id), true},
-            raft::config_member{server_addr_from_id(B_id), true},
-            raft::config_member{server_addr_from_id(C_id), false}});
+            raft::config_member{server_addr_from_id(A_id), yes},
+            raft::config_member{server_addr_from_id(B_id), yes},
+            raft::config_member{server_addr_from_id(C_id), no}});
     A.tick();
     A.add_entry(cfg_with_non_voter);
     A.tick();
     // Majority commits the configuration change
     communicate(A, B);
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
-    BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote, false);
+    BOOST_CHECK_EQUAL(bool(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote), false);
     A.tick();
     raft::snapshot_descriptor A_snp{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
     A.apply_snapshot(A_snp, 0, 0, true);
@@ -1763,7 +1767,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_confchange_in_snapshot) {
     // Majority commits the configuration change
     communicate(A, B);
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
-    BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote, true);
+    BOOST_CHECK_EQUAL(bool(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote), true);
     A.tick();
     A_snp = raft::snapshot_descriptor{.idx = A.log_last_idx(), .term = A.log_last_term(), .config = A.get_configuration()};
     A.apply_snapshot(A_snp, 0, 0, true);
@@ -1788,9 +1792,9 @@ BOOST_AUTO_TEST_CASE(test_non_voter_can_vote) {
     server_id A_id = id(), B_id = id(), C_id = id();
 
     raft::configuration cfg(raft::config_member_set{
-            raft::config_member{server_addr_from_id(A_id), true},
-            raft::config_member{server_addr_from_id(B_id), true},
-            raft::config_member{server_addr_from_id(C_id), false}});
+            raft::config_member{server_addr_from_id(A_id), yes},
+            raft::config_member{server_addr_from_id(B_id), yes},
+            raft::config_member{server_addr_from_id(C_id), no}});
 
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log, fd);
@@ -1805,7 +1809,7 @@ BOOST_AUTO_TEST_CASE(test_non_voter_can_vote) {
     // Majority commits the configuration change
     communicate(A, B);
     BOOST_CHECK_EQUAL(A.get_configuration().is_joint(), false);
-    BOOST_CHECK_EQUAL(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote, true);
+    BOOST_CHECK_EQUAL(bool(A.get_configuration().current.find(config_member_from_id(C_id))->can_vote), true);
     BOOST_CHECK_EQUAL(A.log_last_idx(), B.log_last_idx());
     fd.mark_dead(A_id);
     election_timeout(B);
@@ -2299,9 +2303,9 @@ BOOST_AUTO_TEST_CASE(test_ping_leader) {
     discrete_failure_detector fd;
     server_id A_id = id(), B_id = id(), C_id = id();
     raft::configuration cfg(raft::config_member_set{
-            raft::config_member{server_addr_from_id(A_id), true},
-            raft::config_member{server_addr_from_id(B_id), true},
-            raft::config_member{server_addr_from_id(C_id), false}});
+            raft::config_member{server_addr_from_id(A_id), yes},
+            raft::config_member{server_addr_from_id(B_id), yes},
+            raft::config_member{server_addr_from_id(C_id), no}});
 
     raft::log log(raft::snapshot_descriptor{.idx = index_t{0}, .config = cfg});
     auto A = create_follower(A_id, log, fd);
@@ -2334,8 +2338,8 @@ BOOST_AUTO_TEST_CASE(test_state_change_notifications) {
 
     server_id id1 = id(), id2 = id();
 
-    raft::configuration cfg(raft::config_member_set{raft::config_member{server_addr_from_id(id1), true},
-                                                    raft::config_member{server_addr_from_id(id2), true}});
+    raft::configuration cfg(raft::config_member_set{raft::config_member{server_addr_from_id(id1), yes},
+                                                    raft::config_member{server_addr_from_id(id2), yes}});
     raft::log log{raft::snapshot_descriptor{.config = cfg}};
 
     auto fsm = create_follower(id1, std::move(log), fd);

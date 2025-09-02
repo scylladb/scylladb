@@ -18,6 +18,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "utils/UUID.hh"
 #include <seastar/net/byteorder.hh>
+#include <seastar/util/bool_class.hh>
 #include "db_clock.hh"
 #include "bytes.hh"
 #include "duration.hh"
@@ -254,6 +255,8 @@ public:
     data_value(std::optional<NativeType>);
     template <typename NativeType>
     data_value(const std::unordered_set<NativeType>&);
+    template <typename Tag>
+    data_value(bool_class<Tag>);
 
     data_value& operator=(const data_value&);
     data_value& operator=(data_value&&);
@@ -984,6 +987,12 @@ data_value::data_value(std::optional<bytes> v)
 template <typename NativeType>
 data_value::data_value(std::optional<NativeType> v)
         : data_value(v ? data_value(*v) : data_value::make_null(data_type_for<NativeType>())) {
+}
+
+//in this case we want to turn it automatically to bool 
+template <typename Tag> 
+data_value::data_value(bool_class<Tag> v) : data_value(bool(v)) {
+
 }
 
 template<>
