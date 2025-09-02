@@ -970,6 +970,10 @@ class sstring:
         else:
             return self.ref['u']['external']['str']
 
+    def as_bytes(self):
+        inf = gdb.selected_inferior()
+        return bytes(inf.read_memory(self.data(), len(self)))
+
     def __str__(self):
         return self.as_hex()
 
@@ -6349,6 +6353,43 @@ class scylla_tablet_metadata(gdb.Command):
                         t['session_id']))
 
 
+class scylla_prepared_statements(gdb.Command):
+    """Print known prepared statements.
+
+    Example output:
+
+    (gdb) scylla prepared-statements
+    (cql3::cql_statement*)(0x600003d71050): SELECT * FROM ks.ks WHERE pk = ?
+    (cql3::cql_statement*)(0x600003972b50): SELECT pk FROM ks.ks WHERE pk = ?
+
+    """
+
+    def __init__(self):
+        gdb.Command.__init__(self, 'scylla prepared-statements', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
+
+    def invoke(self, arg, for_tty):
+        parser = argparse.ArgumentParser(description="scylla prepared-statements")
+        try:
+            args = parser.parse_args(arg.split())
+        except SystemExit:
+            return
+
+        qp = sharded(gdb.parse_and_eval("debug::the_query_processor").dereference()).local()
+        for lst in ['_lru_list', '_unprivileged_lru_list']:
+            for x in intrusive_list(qp['_prepared_cache']['_cache'][lst]):
+                e = seastar_lw_shared_ptr(x["_ts_val_ptr"]["_e"]).get().dereference()
+                val = std_optional(e['_val'])
+                if val:
+                    value = std_unique_ptr(val.get()['_value']).get().dereference()
+                    stmt = seastar_shared_ptr(value['statement']).get().dereference()
+                    try:
+                        gdb.write("(cql3::cql_statement*)({}): {}\n".format(stmt.address, sstring(stmt['raw_cql_statement']).as_bytes().decode("utf-8", "replace")))
+                    except Exception as e:
+                        gdb.write("Error: {}\n".format(e))
+                        gdb.write("(cql3::cql_statement*)({}): {}\n".format(stmt.address, sstring(stmt['raw_cql_statement']).as_bytes()))
+                else:
+                    gdb.write("{}\n".format(val))
+
 class scylla_gdb_func_collection_element(gdb.Function):
     """Return the element at the specified index/key from the container.
 
@@ -6556,6 +6597,7 @@ scylla_range_tombstones()
 scylla_sstable_promoted_index()
 scylla_sstable_dump_cached_index()
 scylla_tablet_metadata()
+scylla_prepared_statements()
 
 
 # Convenience functions
