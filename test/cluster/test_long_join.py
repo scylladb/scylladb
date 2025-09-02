@@ -35,7 +35,7 @@ async def test_long_join_drop_entries_on_bootstrapping(manager: ManagerClient) -
        on the joining node between placement of the join request and its processing"""
     servers = await manager.servers_add(2)
     inj = 'topology_coordinator_pause_before_processing_backlog'
-    [await manager.api.enable_injection(s.ip_addr, inj, one_shot=True) for s in servers]
+    await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, inj, one_shot=True) for s in servers))
     s = await manager.server_add(start=False,  config={
         'error_injections_at_startup': ['pre_server_start_drop_expiring']
     })
@@ -60,5 +60,5 @@ async def test_long_join_drop_entries_on_bootstrapping(manager: ManagerClient) -
     servers.append(s)
     await manager.servers_see_each_other(servers, interval=300)
     await manager.api.enable_injection(s.ip_addr, 'join_node_response_drop_expiring', one_shot=True)
-    [await manager.api.message_injection(s.ip_addr, inj) for s in servers[:-1]]
+    await asyncio.gather(*(manager.api.message_injection(s.ip_addr, inj) for s in servers[:-1]))
     await asyncio.gather(task)
