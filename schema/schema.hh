@@ -17,6 +17,7 @@
 #include <boost/dynamic_bitset.hpp>
 
 #include "cql3/column_specification.hh"
+#include "cql3/statements/index_prop_defs.hh"
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/backtrace.hh>
 #include <seastar/core/sstring.hh>
@@ -174,8 +175,6 @@ public:
     }
     bool operator==(const speculative_retry& other) const = default;
 };
-
-typedef std::unordered_map<sstring, sstring> index_options_map;
 
 enum class index_metadata_kind {
     keys,

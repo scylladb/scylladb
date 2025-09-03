@@ -12,7 +12,7 @@
 
 #include "property_definitions.hh"
 #include <seastar/core/sstring.hh>
-#include "schema/schema.hh"
+#include "schema/schema_fwd.hh"
 
 #include <unordered_map>
 #include <optional>
