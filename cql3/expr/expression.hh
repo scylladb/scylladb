@@ -430,6 +430,11 @@ struct collection_constructor {
     friend bool operator==(const collection_constructor&, const collection_constructor&) = default;
 };
 
+// Called with error message string.
+using error_sink_fn = std::function<void(const std::string&)>;
+
+std::map<sstring, sstring> convert_property_map(const collection_constructor&, error_sink_fn);
+
 // Constructs an object of a user-defined type
 // For example: "{field1: 23343, field2: ?}"
 // During preparation usertype constructors with constant values are converted to expr::constant.
