@@ -431,6 +431,8 @@ future<std::tuple<shared_ptr<encryption::symmetric_key>, encryption::kms_host::i
         throw;
     } catch (std::system_error& e) {
         std::throw_with_nested(network_error(e.what()));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(e.what()));
     } catch (...) {
         std::throw_with_nested(service_error(fmt::format("get_key_by_id: {}", std::current_exception())));
     }
@@ -455,6 +457,8 @@ future<shared_ptr<encryption::symmetric_key>> encryption::kms_host::impl::get_ke
         std::throw_with_nested(network_error(e.what()));
     } catch (std::invalid_argument& e) {
         std::throw_with_nested(configuration_error(fmt::format("get_key_by_id: {}", e.what())));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(e.what()));
     } catch (...) {
         std::throw_with_nested(service_error(fmt::format("get_key_by_id: {}", std::current_exception())));
     }

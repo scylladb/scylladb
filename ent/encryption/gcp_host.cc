@@ -295,6 +295,8 @@ future<std::tuple<shared_ptr<encryption::symmetric_key>, encryption::gcp_host::i
         throw;
     } catch (std::invalid_argument& e) {
         std::throw_with_nested(configuration_error(fmt::format("get_or_create_key: {}", e.what())));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(fmt::format("get_or_create_key: {}", e.what())));
     } catch (...) {
         std::throw_with_nested(service_error(fmt::format("get_or_create_key: {}", std::current_exception())));
     }
@@ -318,6 +320,8 @@ future<shared_ptr<encryption::symmetric_key>> encryption::gcp_host::impl::get_ke
         throw;
     } catch (std::invalid_argument& e) {
         std::throw_with_nested(configuration_error(fmt::format("get_key_by_id: {}", e.what())));
+    } catch (rjson::malformed_value& e) {
+        std::throw_with_nested(malformed_response_error(fmt::format("get_or_create_key: {}", e.what())));
     } catch (...) {
         std::throw_with_nested(service_error(fmt::format("get_key_by_id: {}", std::current_exception())));
     }
