@@ -15,15 +15,37 @@ def test_create_and_drop_keyspace(cql, this_dc):
     cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
-# Trying to create a keyspace without specifying the replication strategy
+def assert_keyspace(cql, keyspace, expected_class, rf_key):
+    row = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
+    rep = row.replication
+    assert rep["class"] == expected_class
+    assert rep[rf_key] == "1"
+
+# Trying to create a keyspace specifying replication options without replication strategy
 # should result in NetworkTopologyStrategy being set by default.
 def test_create_and_drop_keyspace_with_default_replication_class(cql, this_dc):
-    ksdef = "WITH REPLICATION = { 'replication_factor' : '1' }"
-    with new_test_keyspace(cql, ksdef) as keyspace:
-        row = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
-        rep = row.replication
-        assert rep["class"] == "org.apache.cassandra.locator.NetworkTopologyStrategy"
-        assert rep[this_dc] == "1"
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'replication_factor' : '1' }") as keyspace:
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
+
+# Trying to create a keyspace specifying replication options without replication factor
+# should fail since SimpleStrategy does not support default replication factor
+def test_create_and_drop_keyspace_simple_strategy_with_default_replication_factor(cql, this_dc):
+    # create and drop a keyspace with SimpleStrategy and default replication factor
+    with pytest.raises(ConfigurationException):
+        with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'SimpleStrategy' }") as keyspace:
+            pass
+
+# Trying to create a keyspace specifying replication options without replication factor
+# should result in a replication factor of 1 being set by default.
+def test_create_and_drop_keyspace_network_topology_strategy_with_default_replication_factor(cql, this_dc):
+    with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy' }") as keyspace:
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
+
+# Trying to create a keyspace specifying empty replication options
+# should result in NetworkTopologyStrategy and replication factor of 1 being set by default.
+def test_create_and_drop_keyspace_with_default_replication_options(cql, this_dc):
+    with new_test_keyspace(cql, "WITH REPLICATION = {}") as keyspace:
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
 
 # Trying to create the same keyspace - even if with identical parameters -
 # should result in an AlreadyExists error.
