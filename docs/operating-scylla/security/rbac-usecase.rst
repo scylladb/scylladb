@@ -41,6 +41,11 @@ When creating a role, you grant it permissions and resources. The permission is 
    * "ALL ROLES"
    * Note that An unqualified table name  assumes the current keyspace
 
+Materialized views and CDC logs cannot be granted separate permissions -
+they inherit their permissions from the base table. It is not possible
+to give different permissions to different materialized views of the
+same base table.
+
 .. _rbac-usecase-use-case:
 
 Use case

@@ -10,7 +10,7 @@ import pytest
 import time
 from . import rest_api
 from cassandra.protocol import SyntaxException, InvalidRequest, Unauthorized, ConfigurationException
-from .util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type
+from .util import new_test_table, new_function, new_user, new_session, new_test_keyspace, unique_name, new_type, new_materialized_view, is_scylla
 from contextlib import contextmanager
 
 # Figure out which keyspace contains the roles table (its location changed
@@ -77,6 +77,16 @@ def eventually_unauthorized(fun, timeout_s=10):
         pytest.fail(f"Function {fun} was not refused as unauthorized")
     except Unauthorized as e:
         return
+
+# Some tests can't use eventually_authorized/unauthorized() because they
+# need to check that GRANT or REVOKE does not change the behavior, so can't
+# wait for it to change. So these tests need a way to make sure that the
+# old permissions are no longer cached. These tests can use this function.
+def ensure_updated_permissions(cql):
+    if is_scylla(cql):
+        rest_api.post_request(cql, "authorization_cache/reset")
+    else:
+        time.sleep(4)
 
 def grant(cql, permission, resource, username):
     cql.execute(f"GRANT {permission} ON {resource} TO {username}")
@@ -542,20 +552,13 @@ def test_non_superuser_with_modify_all_keyspaces_permissions_cannot_modify_syste
 # Test that permissions on a table are not granted to a user as a creator if the table already exists when the user
 # tries to create it. Reproduces GHSA-ww5v-p45p-3vhq
 def test_create_on_existing_table(cql):
-    names = [row.table_name for row in cql.execute("SELECT table_name FROM system_schema.tables WHERE keyspace_name = 'system'")]
-    is_scylla = any('scylla' in name for name in names)
-    def ensure_updated_permissions():
-        if is_scylla:
-            rest_api.post_request(cql, "authorization_cache/reset")
-        else:
-            time.sleep(4)
     schema = "a int primary key"
     with new_user(cql) as username:
         with new_session(cql, username) as user_session:
             with new_test_keyspace(cql, "WITH REPLICATION = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 1 }") as keyspace:
                 grant(cql, 'CREATE', f"KEYSPACE {keyspace}", username)
                 # Wait until the CREATE permission appears in the permissions cache
-                ensure_updated_permissions()
+                ensure_updated_permissions(cql)
                 with new_test_table(cql, keyspace, schema) as table:
                     def ensure_all_table_permissions_unauthorized(user_session):
                         def ensure_unauthorized(fun):
@@ -572,7 +575,7 @@ def test_create_on_existing_table(cql):
                         # the missing AUTHORIZE permission. Wait until the permissions cache registers the SELECT permission,
                         # and then revoke it after confirming the user doesn't have the AUTHORIZE permission.
                         grant(cql, 'SELECT', table, username)
-                        ensure_updated_permissions()
+                        ensure_updated_permissions(cql)
                         rest_api.post_request(cql, "authorization_cache/reset")
                         ensure_unauthorized(lambda: user_session.execute(f"GRANT SELECT ON {table} TO cassandra"))
                         revoke(cql, 'SELECT', table, username)
@@ -584,10 +587,10 @@ def test_create_on_existing_table(cql):
                         pass
                     # As a result of the CREATE query, user could be granted invalid permissions but they may still be not
                     # visible in the permissions cache. Sleep until permissions cache is refreshed.
-                    ensure_updated_permissions()
+                    ensure_updated_permissions(cql)
                     ensure_all_table_permissions_unauthorized(user_session)
                     user_session.execute(f"CREATE TABLE IF NOT EXISTS {table}(a int primary key)")
-                    ensure_updated_permissions()
+                    ensure_updated_permissions(cql)
                     ensure_all_table_permissions_unauthorized(user_session)
 
 # Test that native functions permissions are always implicitly granted.
@@ -784,6 +787,67 @@ def test_auto_revoke_cdc(cql, test_keyspace, scylla_only):
                 # no longer has permissions on this table.
                 eventually_authorized(lambda: user2_session.execute(f'SELECT * FROM {table}_scylla_cdc_log')) # Reproduces #19798
                 eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {table}_scylla_cdc_log'))
+
+# This test confirms that it is not possible to set separate permissions on a
+# materialized view - rather, the SELECT statement checks the permissions of
+# the base table instead of those on the view table. To make a view readable
+# you need to give read permissions on the base table. Consequently, it is
+# not possible to make different views of the same base table have different
+# permissions. Reproduces #25800.
+def test_view_permissions_from_base(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'a int primary key') as table:
+        with new_materialized_view(cql, table, '*', 'a', 'a is not null') as mv:
+            with new_user(cql) as username:
+                with new_session(cql, username) as user_session:
+                    # The new user will not have permissions to read either
+                    # the base table or the view, since we haven't granted
+                    # any permissions.
+                    eventually_unauthorized(lambda: user_session.execute(f'SELECT * FROM {table}'), timeout_s=0)
+                    eventually_unauthorized(lambda: user_session.execute(f'SELECT * FROM {mv}'), timeout_s=0)
+                    # Try to grant SELECT permission on the
+                    # *materialized view*. This operation is allowed
+                    # (no error thrown, currently), but has NO EFFECT:
+                    # the view is still unreadable for the user!
+                    grant(cql, 'SELECT', mv, username)
+                    ensure_updated_permissions(cql)
+                    eventually_unauthorized(lambda: user_session.execute(f'SELECT * FROM {mv}'), timeout_s=0)
+                    # Turns out that to make the view readable, we
+                    # must grant SELECT permissions on the base table.
+                    # If we do that, the view becomes readable:
+                    grant(cql, 'SELECT', table, username)
+                    eventually_authorized(lambda: user_session.execute(f'SELECT * FROM {mv}'))
+
+# This test confirms that it is not possible to set separate permissions on a
+# CDC log - rather, the SELECT statement checks the permissions of the base
+# table instead of those on the CDC log table. To make a CDC log readable
+# you need to give read permissions on the base table.
+# Reproduces #19798 and #25800.
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_cdc_permissions_from_base(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'a int primary key', "with cdc={'enabled':true}") as table:
+        cdc_log = table + '_scylla_cdc_log'
+        with new_user(cql) as username:
+            with new_session(cql, username) as user_session:
+                # The new user does not have permissions to read either the
+                # base table or the CDC log, since we haven't granted it any
+                # permissions.
+                eventually_unauthorized(lambda: user_session.execute(f'SELECT * FROM {table}'), timeout_s=0)
+                eventually_unauthorized(lambda: user_session.execute(f'SELECT * FROM {cdc_log}'), timeout_s=0)
+                # Try to grant SELECT permission on the CDC log table. This
+                # operation is allowed (no error thrown, currently), but has
+                # no effect: the CDC log is still unreadable for the user!
+                grant(cql, 'SELECT', cdc_log, username)
+                ensure_updated_permissions(cql)
+                eventually_unauthorized(lambda: user_session.execute(f'SELECT * FROM {cdc_log}'), timeout_s=0)
+                # To make the CDC log really readable, we must grant SELECT
+                # permissions on the *base* table. If we do that, the CDC log
+                # becomes readable:
+                grant(cql, 'SELECT', table, username)
+                eventually_authorized(lambda: user_session.execute(f'SELECT * FROM {cdc_log}'))
+                # Of course the base table became readable too:
+                eventually_authorized(lambda: user_session.execute(f'SELECT * FROM {table}'))
 
 # Test that an unprivileged user can read from *some* system tables, such
 # as system_schema.tables, but cannot read from *other* system tables - most
