@@ -174,6 +174,10 @@ replication_factor_data abstract_replication_strategy::parse_replication_factor(
     return replication_factor_data(rf);
 }
 
+size_t get_replication_factor(const replication_strategy_config_option& opt) {
+    return replication_factor_data(opt).count();
+}
+
 static
 void
 insert_token_range_to_sorted_container_while_unwrapping(

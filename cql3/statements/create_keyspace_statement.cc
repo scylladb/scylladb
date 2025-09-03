@@ -252,7 +252,12 @@ std::vector<sstring> check_against_restricted_replication_strategies(
     // these are checked and reported elsewhere.
     for (auto opt : attrs.get_replication_options()) {
         try {
-            auto rf = std::stol(opt.second);
+            long rf = 0;
+            try {
+                rf = locator::get_replication_factor(opt.second);
+            } catch (const exceptions::configuration_exception&) {
+            }
+
             if (rf > 0) {
                 if (auto min_fail = qp.proxy().data_dictionary().get_config().minimum_replication_factor_fail_threshold();
                     min_fail >= 0 && rf < min_fail) {
