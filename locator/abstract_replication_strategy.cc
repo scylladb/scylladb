@@ -169,7 +169,7 @@ size_t replication_factor_data::parse(const sstring& rf) {
     }
 }
 
-replication_factor_data abstract_replication_strategy::parse_replication_factor(sstring rf)
+replication_factor_data abstract_replication_strategy::parse_replication_factor(const replication_strategy_config_option& rf)
 {
     return replication_factor_data(rf);
 }

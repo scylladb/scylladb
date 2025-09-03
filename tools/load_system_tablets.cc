@@ -11,6 +11,7 @@
 #include <seastar/core/thread.hh>
 #include <seastar/util/closeable.hh>
 
+#include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
 #include "data_dictionary/keyspace_metadata.hh"
 #include "db/cql_type_parser.hh"
@@ -71,7 +72,7 @@ tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
 
     auto ks = make_lw_shared<data_dictionary::keyspace_metadata>(keyspace_name,
                                                                  "org.apache.cassandra.locator.LocalStrategy",
-                                                                 std::map<sstring, sstring>{},
+                                                                 locator::replication_strategy_config_options{},
                                                                  std::nullopt, false);
     db::cql_type_parser::raw_builder ut_builder(*ks);
 

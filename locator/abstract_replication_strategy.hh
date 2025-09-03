@@ -44,7 +44,9 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
-using replication_strategy_config_options = std::map<sstring, sstring>;
+using replication_strategy_config_option = sstring;
+using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
+
 struct replication_strategy_params {
     const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;
@@ -130,7 +132,7 @@ public:
     static ptr_type create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology& topo) {
         return create_replication_strategy(strategy_name, std::move(params), &topo);
     }
-    static replication_factor_data parse_replication_factor(sstring rf);
+    static replication_factor_data parse_replication_factor(const replication_strategy_config_option& rf);
 
     static sstring to_qualified_class_name(std::string_view strategy_class_name);
 

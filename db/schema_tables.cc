@@ -1295,7 +1295,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
     // (or screw up shared pointers)
     const auto& replication = row.get_nonnull<map_type_impl::native_type>("replication");
 
-    std::map<sstring, sstring> strategy_options;
+    cql3::statements::property_definitions::map_type strategy_options;
     for (auto& p : replication) {
         strategy_options.emplace(value_cast<sstring>(p.first), value_cast<sstring>(p.second));
     }
