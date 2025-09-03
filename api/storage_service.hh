@@ -61,6 +61,7 @@ struct scrub_info {
     sstables::compaction_type_options::scrub opts;
     sstring keyspace;
     std::vector<sstring> column_families;
+    sstring snapshot_tag;
 };
 
 future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req);
