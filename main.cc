@@ -2257,6 +2257,13 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             const qualified_name qualified_authenticator_name(auth::meta::AUTH_PACKAGE_NAME, cfg->authenticator());
             const qualified_name qualified_role_manager_name(auth::meta::AUTH_PACKAGE_NAME, cfg->role_manager());
 
+            // Reproducer of scylladb/scylladb#24792.
+            auto i24792_reproducer = defer([] {
+                if (utils::get_local_injector().enter("reload_service_level_cache_after_auth_service_is_stopped")) {
+                    sl_controller.local().update_cache(qos::update_both_cache_levels::yes).get();
+                }
+            });
+
             checkpoint(stop_signal, "starting auth service");
             auth::service_config auth_config;
             auth_config.authorizer_java_name = qualified_authorizer_name;
@@ -2278,6 +2285,17 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_authorization_cache(ctx, auth_service).get();
             auto stop_authorization_cache_api = defer_verbose_shutdown("authorization cache api", [&ctx] {
                 api::unset_server_authorization_cache(ctx).get();
+            });
+
+            // Precondition: we can only call this after `auth::service` has been initialized and started on all shards.
+            sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+                controller.register_auth_integration(auth_service.local());
+            }).get();
+
+            auto unregister_sl_controller_integration = defer([] {
+                sl_controller.invoke_on_all([] (qos::service_level_controller& controller) {
+                    return controller.unregister_auth_integration();
+                }).get();
             });
 
             // update the service level cache after the SL data accessor and auth service are initialized.
