@@ -84,7 +84,7 @@ static future<> check_ranges_are_sorted(static_effective_replication_map_ptr erm
 void strategy_sanity_check(
     replication_strategy_ptr ars_ptr,
     const token_metadata_ptr& tm,
-    const std::map<sstring, sstring>& options) {
+    const replication_strategy_config_options& options) {
 
     const network_topology_strategy* nts_ptr =
         dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
@@ -157,7 +157,7 @@ void endpoints_check(
  * Run in a seastar thread.
  */
 void full_ring_check(const std::vector<ring_point>& ring_points,
-                     const std::map<sstring, sstring>& options,
+                     replication_strategy_config_options& options,
                      replication_strategy_ptr ars_ptr,
                      locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
@@ -310,7 +310,7 @@ void simple_test() {
 
     /////////////////////////////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options323 = {
+    std::map<sstring, replication_strategy_config_option> options323 = {
         {"100", "3"},
         {"101", "2"},
         {"102", "3"}
@@ -324,7 +324,7 @@ void simple_test() {
 
     ///////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options320 = {
+    std::map<sstring, replication_strategy_config_option> options320 = {
         {"100", "3"},
         {"101", "2"},
         {"102", "0"}
@@ -371,7 +371,7 @@ void heavy_origin_test() {
     std::vector<int> dc_endpoints = {128, 256, 512};
     std::vector<int> dc_replication = {2, 6, 6};
 
-    std::map<sstring, sstring> config_options;
+    replication_strategy_config_options config_options;
     std::unordered_map<inet_address, std::unordered_set<token>> tokens;
     std::vector<ring_point> ring_points;
 
@@ -500,7 +500,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 
         auto make_random_options = [&] () {
             auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
-            std::map<sstring, sstring> options;
+            std::map<sstring, replication_strategy_config_option> options;
             std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
             size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
             for (size_t i = 0; i < num_option_dcs; ++i) {
@@ -596,7 +596,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     auto rf_per_dc = tests::random::get_int<size_t>(1, nodes_per_dc, rand);
 
     auto make_options = [&] (size_t rf_per_dc) {
-        std::map<sstring, sstring> options;
+        replication_strategy_config_options options;
         for (const auto& dc : dcs) {
             options.emplace(dc, fmt::to_string(rf_per_dc));
         }
@@ -828,7 +828,7 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
                                                                     [](const std::pair<sstring, size_t>& p) {
                                                                         return std::make_pair(p.first, to_sstring(p.second));
                                                                     })
-                                                | std::ranges::to<std::map<sstring, sstring>>(),
+                                                | std::ranges::to<std::map<sstring, replication_strategy_config_option>>(),
                                     std::nullopt),
                                     &topo);
 
@@ -1289,7 +1289,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     auto make_random_options = [&] () {
         auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
         std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-        std::map<sstring, sstring> options;
+        std::map<sstring, replication_strategy_config_option> options;
         for (const auto& dc : option_dcs) {
             auto num_racks = node_count_per_rack.at(dc).size();
             auto max_rf_factor = std::ranges::min(std::ranges::views::transform(node_count_per_rack.at(dc), [] (auto& x) { return x.second; }));
@@ -1441,7 +1441,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     auto make_random_options = [&] () {
         auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
         std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-        std::map<sstring, sstring> options;
+        std::map<sstring, replication_strategy_config_option> options;
         for (const auto& dc : option_dcs) {
             auto num_racks = node_count_per_rack.at(dc).size();
             auto rf = more_or_less ?

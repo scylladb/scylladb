@@ -12,6 +12,7 @@
 
 #include "cql3/statements/property_definitions.hh"
 #include "data_dictionary/storage_options.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -60,7 +61,7 @@ public:
     explicit ks_prop_defs(std::map<sstring, sstring> options);
 
     void validate();
-    std::map<sstring, sstring> get_replication_options() const;
+    locator::replication_strategy_config_options get_replication_options() const;
     std::optional<sstring> get_replication_strategy_class() const;
     void set_default_replication_strategy_class_option();
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets = false) const;
