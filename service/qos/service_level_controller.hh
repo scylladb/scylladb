@@ -105,7 +105,10 @@ using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
 class service_level_controller : public peering_sharded_service<service_level_controller>, public service::endpoint_lifecycle_subscriber {
 public:
     static inline const int32_t default_shares = 1000;
-    static inline const seastar::sstring driver_service_level_name = "driver";
+    static constexpr std::string driver_service_level_name = "driver";
+    static constexpr std::string scheduling_group_name_prefix = "sl:";
+    static constexpr std::string scheduling_group_name_pattern = scheduling_group_name_prefix + "{}";
+    static constexpr std::string driver_service_level_name_with_prefix = scheduling_group_name_prefix + driver_service_level_name;
 
     class service_level_distributed_data_accessor {
     public:

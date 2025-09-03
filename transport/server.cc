@@ -12,6 +12,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
+#include "seastar/coroutine/switch_to.hh"
 #include "types/collection.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -447,6 +448,22 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
         }
     }
 
+    if (current_scheduling_group().name() == qos::service_level_controller::driver_service_level_name_with_prefix && client_state.get_service_level_state() != service::client_state::service_level_state::CONTROL_CONNECTION) {
+        if (cqlop == cql_binary_opcode::REGISTER) {
+            // Keep using `sl:driver` that we are already using
+            client_state.set_sl_state(service::client_state::service_level_state::CONTROL_CONNECTION);
+        } else if (cqlop == cql_binary_opcode::QUERY || cqlop == cql_binary_opcode::PREPARE || cqlop == cql_binary_opcode::EXECUTE || cqlop == cql_binary_opcode::BATCH) {
+            // It is possible to reach this point even if service_level_state is already USER.
+            // That is because `update_to_user_scheduling_group()` doesn't affect already
+            // started requests processed in parallel
+            if (client_state.get_service_level_state() != service::client_state::service_level_state::CONTROL_CONNECTION) {
+                client_state.set_sl_state(service::client_state::service_level_state::USER);
+                update_to_user_scheduling_group();
+            }
+            co_await coroutine::switch_to(co_await _server._sl_controller.get_user_scheduling_group(_client_state.user()));
+        }
+    }
+
     cql_sg_stats::request_kind_stats& cql_stats = _server.get_cql_opcode_stats(cqlop);
     tracing::set_request_size(trace_state, fbuf.bytes_left());
     cql_stats.request_size += fbuf.bytes_left();
@@ -454,7 +471,7 @@ future<foreign_ptr<std::unique_ptr<cql_server::response>>>
 
     auto linearization_buffer = std::make_unique<bytes_ostream>();
     auto linearization_buffer_ptr = linearization_buffer.get();
-    return futurize_invoke([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
+    co_return co_await futurize_invoke([this, cqlop, stream, &fbuf, &client_state, linearization_buffer_ptr, permit = std::move(permit), trace_state] () mutable {
         // When using authentication, we need to ensure we are doing proper state transitions,
         // i.e. we cannot simply accept any query/exec ops unless auth is complete
         switch (client_state.get_auth_state()) {
@@ -982,11 +999,14 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
 }
 
 void cql_server::connection::update_to_user_scheduling_group() {
+    if (_client_state.get_service_level_state() == service::client_state::service_level_state::USER 
+            || _client_state.get_service_level_state() == service::client_state::service_level_state::NO_DRIVER_SL) {
         switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
             auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
             _current_scheduling_group = shg;
             co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
         });
+    }
 }
 
 void cql_server::connection::update_to_driver_scheduling_group() {
@@ -1008,7 +1028,13 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_au
             return audit::inspect_login(sasl_challenge->get_username(), client_state.get_client_address().addr(), failed).then(
                     [this, stream, challenge = std::move(challenge), &client_state, sasl_challenge, ff = std::move(f), trace_state = std::move(trace_state)] () mutable {
                 client_state.set_login(ff.get());
-                update_to_user_scheduling_group();
+
+                // If there is no `sl:driver` just switch to user's service level
+                if (!_server._sl_controller.has_service_level(qos::service_level_controller::driver_service_level_name)) {
+                    _client_state.set_sl_state(service::client_state::service_level_state::NO_DRIVER_SL);
+                    update_to_user_scheduling_group();
+                }
+
                 auto f = client_state.check_user_can_login();
                 f = f.then([&client_state] {
                     return client_state.maybe_update_per_service_level_params();
@@ -1384,6 +1410,14 @@ future<std::unique_ptr<cql_server::response>>
 cql_server::connection::process_register(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
     using ret_type = std::unique_ptr<cql_server::response>;
+
+    if (client_state.get_service_level_state() != service::client_state::service_level_state::CONTROL_CONNECTION
+            && client_state.get_service_level_state() != service::client_state::service_level_state::NO_DRIVER_SL) {
+        clogger.warn("Client {} registers for events, but it is not in {} service level state.", 
+                     client_state.get_client_address(), static_cast<int>(client_state.get_service_level_state()));
+        _client_state.set_sl_state(service::client_state::service_level_state::CONTROL_CONNECTION);
+        update_to_driver_scheduling_group();
+    }
 
     std::vector<sstring> event_types;
     in.read_string_list(event_types);

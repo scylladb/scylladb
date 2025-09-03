@@ -39,7 +39,6 @@ namespace qos {
 static logging::logger sl_logger("service_level_controller");
 
 sstring service_level_controller::default_service_level_name = "default";
-constexpr const char* scheduling_group_name_pattern = "sl:{}";
 constexpr const char* deleted_scheduling_group_name_pattern = "sl_deleted:{}";
 constexpr const char* temp_scheduling_group_name_pattern = "sl_temp:{}";
 
