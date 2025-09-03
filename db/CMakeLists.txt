@@ -44,7 +44,9 @@ target_sources(db
     rate_limiter.cc
     per_partition_rate_limit_options.cc
     row_cache.cc
-    tablet_options.cc)
+    tablet_options.cc
+    object_storage_endpoint_param.cc
+    )
 target_include_directories(db
   PUBLIC
     ${CMAKE_SOURCE_DIR})

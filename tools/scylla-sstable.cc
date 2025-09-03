@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "gms/feature_service.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/combined.hh"
@@ -354,11 +355,13 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         auto ed = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
 
         if (s3::is_s3_fqn(sst_path)) {
-            if (sst_man.config().object_storage_endpoints().empty()) {
+            using osp = db::object_storage_endpoint_param;
+            auto s3_endpoints = sst_man.config().object_storage_endpoints() | std::views::filter(&osp::is_s3_storage) | std::views::transform(&osp::get_s3_storage);
+            if (s3_endpoints.empty()) {
                 throw std::invalid_argument("Unable to open SSTable in S3: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
                                             "valid AWS object storage configuration.");
             }
-            auto endpoint = sst_man.config().object_storage_endpoints().front().endpoint;
+            auto endpoint = (*s3_endpoints.begin()).endpoint;
             options = data_dictionary::make_s3_options(endpoint, sst_path);
         } else {
             sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
