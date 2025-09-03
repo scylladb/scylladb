@@ -86,7 +86,7 @@ async def test_gossiper_race_on_decommission(manager: ManagerClient):
 
     # test that the coordinator node didn't abort
     empty_host_found = await coordinator_log.grep(
-        "gossip - adding a state with empty host id",
+        "gossip - attempting to add a state with empty host id",
         from_mark=coordinator_log_mark,
     )
 
