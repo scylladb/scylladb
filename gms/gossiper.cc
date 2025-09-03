@@ -2204,19 +2204,6 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         sleep_abortable(std::chrono::seconds(1), _abort_source).get();
         logger.info("Connect nodes={} again ... ({} seconds passed)",
                 nodes, std::chrono::duration_cast<std::chrono::seconds>(clk::now() - start_time).count());
-        if (!nodes_talked.empty()) {
-            break;
-        }
-        if (nodes_down == nodes.size() && !is_mandatory) {
-            logger.warn("All nodes={} are down for get_endpoint_states verb. Skip ShadowRound.", nodes);
-            break;
-        }
-        if (clk::now() > start_time + std::chrono::milliseconds(_gcfg.shadow_round_ms)) {
-            throw std::runtime_error(fmt::format("Unable to gossip with any nodes={} (ShadowRound).", nodes));
-        }
-        sleep_abortable(std::chrono::seconds(1), _abort_source).get();
-        logger.info("Connect nodes={} again ... ({} seconds passed)",
-                nodes, std::chrono::duration_cast<std::chrono::seconds>(clk::now() - start_time).count());
     }
     logger.info("Gossip shadow round finished with nodes_talked={}", nodes_talked);
 }
