@@ -15,6 +15,7 @@
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
 #include "db/config.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
@@ -68,11 +69,13 @@ void sstables_manager::subscribe(sstables_manager_event_handler& handler) {
     }));
 }
 
+using osp = db::object_storage_endpoint_param;
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
-    for (auto& e : cfg.object_storage_endpoints()) {
+    for (auto& e : cfg.object_storage_endpoints() | std::views::filter(&osp::is_s3_storage) | std::views::transform(&osp::get_s3_storage)) {
         _s3_endpoints.emplace(std::make_pair(std::move(e.endpoint), make_lw_shared<s3::endpoint_config>(std::move(e.config))));
     }
 
@@ -106,7 +109,7 @@ future<> storage_manager::update_config(const db::config& cfg) {
     // This was split in two loops to guarantee the code is exception safe with
     // regards to _s3_endpoints content.
     std::unordered_set<sstring> updates;
-    for (auto& e : cfg.object_storage_endpoints()) {
+    for (auto& e : cfg.object_storage_endpoints() | std::views::filter(&osp::is_s3_storage) | std::views::transform(&osp::get_s3_storage)) {
         updates.insert(e.endpoint);
 
         auto s3_cfg = make_lw_shared<s3::endpoint_config>(std::move(e.config));

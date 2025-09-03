@@ -30,6 +30,7 @@
 #include "db/per_partition_rate_limit_extension.hh"
 #include "db/paxos_grace_seconds_extension.hh"
 #include "db/tags/extension.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "config.hh"
 #include "extensions.hh"
 #include "sstables/compressor.hh"
@@ -85,7 +86,7 @@ json::json_return_type
 object_storage_endpoints_to_json(const std::vector<db::object_storage_endpoint_param> &endpoints) {
     std::unordered_map<sstring, sstring> m;
     for (auto& e : endpoints) {
-        m[e.endpoint] = e.to_json_string();
+        m[e.key()] = e.to_json_string();
     }
     return value_to_json(m);
 }
@@ -510,11 +511,7 @@ public:
 template<>
 struct convert<db::object_storage_endpoint_param> {
     static bool decode(const Node& node, db::object_storage_endpoint_param& ep) {
-        ep.endpoint = node["name"].as<std::string>();
-        ep.config.port = node["port"].as<unsigned>();
-        ep.config.use_https = node["https"].as<bool>(false);
-        ep.config.region = node["aws_region"] ? node["aws_region"].as<std::string>() : std::getenv("AWS_DEFAULT_REGION");
-        ep.config.role_arn = node["iam_role_arn"] ? node["iam_role_arn"].as<std::string>() : "";
+        ep = db::object_storage_endpoint_param::decode(node);
         return true;
     }
 };
@@ -1655,11 +1652,6 @@ auto fmt::formatter<db::error_injection_at_startup>::format(const db::error_inje
     -> decltype(ctx.out()) {
     return fmt::format_to(ctx.out(), "error_injection_at_startup{{name={}, one_short={}, parameters={}}}",
                           eias.name, eias.one_shot, eias.parameters);
-}
-
-auto fmt::formatter<db::object_storage_endpoint_param>::format(const db::object_storage_endpoint_param& e, fmt::format_context& ctx) const
-    -> decltype(ctx.out()) {
-    return fmt::format_to(ctx.out(), "object_storage_endpoint_param{{}}", e.to_json_string());
 }
 
 namespace utils {

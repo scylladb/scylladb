@@ -13,6 +13,7 @@
 #include "test/lib/test_utils.hh"
 #include "init.hh"
 #include "db/config.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
 #include "dht/i_partitioner.hh"
