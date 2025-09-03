@@ -15,6 +15,7 @@
 #include <vector>
 #include "alter_keyspace_statement.hh"
 #include "locator/tablets.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "mutation/canonical_mutation.hh"
 #include "prepared_statement.hh"
 #include "service/migration_manager.hh"
@@ -49,7 +50,7 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
     return state.has_keyspace_access(_name, auth::permission::ALTER);
 }
 
-static unsigned get_abs_rf_diff(const std::string& curr_rf, const std::string& new_rf) {
+static unsigned get_abs_rf_diff(const locator::replication_strategy_config_option& curr_rf, const locator::replication_strategy_config_option& new_rf) {
     try {
         return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
     } catch (std::invalid_argument const& ex) {
@@ -91,12 +92,12 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
             const auto& topo = tmptr->get_topology();
 
             if (ks.get_replication_strategy().uses_tablets()) {
-                const std::map<sstring, sstring>& current_rf_per_dc = ks.metadata()->strategy_options();
+                auto& current_rf_per_dc = ks.metadata()->strategy_options();
                 auto new_rf_per_dc = _attrs->get_replication_options();
                 new_rf_per_dc.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
                 unsigned total_abs_rfs_diff = 0;
                 for (const auto& [new_dc, new_rf] : new_rf_per_dc) {
-                    sstring old_rf = "0";
+                    auto old_rf = locator::replication_strategy_config_option(sstring("0"));
                     if (auto new_dc_in_current_mapping = current_rf_per_dc.find(new_dc);
                              new_dc_in_current_mapping != current_rf_per_dc.end()) {
                         old_rf = new_dc_in_current_mapping->second;
@@ -146,15 +147,18 @@ namespace {
 // so that the output map contains entries like: "replication:dc1" -> "3".
 // This is done to avoid key conflicts and to be able to de-flatten the map back into the original structure.
 
-void add_prefixed_key(const sstring& prefix, const std::map<sstring, sstring>& in, std::map<sstring, sstring>& out) {
+void add_prefixed_key(const sstring& prefix,
+                      const cql3::statements::property_definitions::map_type& in,
+                      cql3::statements::property_definitions::map_type& out) {
     for (const auto& [in_key, in_value]: in) {
         out[prefix + ":" + in_key] = in_value;
     }
 };
 
-std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::statements::ks_prop_defs>& ks,
-                                                         const gms::feature_service& feat) {
-    std::map<sstring, sstring> all_options;
+cql3::statements::property_definitions::map_type get_current_options_flattened(
+        const shared_ptr<cql3::statements::ks_prop_defs>& ks,
+        const gms::feature_service& feat) {
+    cql3::statements::property_definitions::map_type all_options;
 
     add_prefixed_key(ks->KW_REPLICATION, ks->get_replication_options(), all_options);
     add_prefixed_key(ks->KW_STORAGE, ks->get_storage_options().to_map(), all_options);
@@ -163,31 +167,33 @@ std::map<sstring, sstring> get_current_options_flattened(const shared_ptr<cql3::
     if (ks->has_property(ks->KW_TABLETS)) {
         auto initial_tablets = ks->get_initial_tablets(std::nullopt);
         add_prefixed_key(ks->KW_TABLETS,
-                         {{"enabled", initial_tablets ? "true" : "false"},
-                         {"initial", std::to_string(initial_tablets.value_or(0))}},
+                         cql3::statements::property_definitions::map_type{
+                            {"enabled", initial_tablets ? "true" : "false"},
+                            {"initial", std::to_string(initial_tablets.value_or(0))}},
                          all_options);
     }
     add_prefixed_key(ks->KW_DURABLE_WRITES,
-                     {{sstring(ks->KW_DURABLE_WRITES), to_sstring(ks->get_boolean(ks->KW_DURABLE_WRITES, true))}},
+                     cql3::statements::property_definitions::map_type{{sstring(ks->KW_DURABLE_WRITES), to_sstring(ks->get_boolean(ks->KW_DURABLE_WRITES, true))}},
                      all_options);
 
     return all_options;
 }
 
-std::map<sstring, sstring> get_old_options_flattened(const data_dictionary::keyspace& ks) {
-    std::map<sstring, sstring> all_options;
+cql3::statements::property_definitions::map_type get_old_options_flattened(const data_dictionary::keyspace& ks) {
+    cql3::statements::property_definitions::map_type all_options;
 
     using namespace cql3::statements;
     add_prefixed_key(ks_prop_defs::KW_REPLICATION, ks.get_replication_strategy().get_config_options(), all_options);
     add_prefixed_key(ks_prop_defs::KW_STORAGE, ks.metadata()->get_storage_options().to_map(), all_options);
     if (ks.metadata()->initial_tablets()) {
         add_prefixed_key(ks_prop_defs::KW_TABLETS,
-                         {{"enabled", ks.metadata()->initial_tablets() ? "true" : "false"},
-                          {"initial", std::to_string(ks.metadata()->initial_tablets().value_or(0))}},
+                         cql3::statements::property_definitions::map_type{
+                            {"enabled", ks.metadata()->initial_tablets() ? "true" : "false"},
+                            {"initial", std::to_string(ks.metadata()->initial_tablets().value_or(0))}},
                          all_options);
     }
     add_prefixed_key(ks_prop_defs::KW_DURABLE_WRITES,
-                     {{sstring(ks_prop_defs::KW_DURABLE_WRITES), to_sstring(ks.metadata()->durable_writes())}},
+                     cql3::statements::property_definitions::map_type{{sstring(ks_prop_defs::KW_DURABLE_WRITES), to_sstring(ks.metadata()->durable_writes())}},
                      all_options);
 
     return all_options;

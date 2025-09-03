@@ -16,6 +16,7 @@
 #include "cql3/statements/ks_prop_defs.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
+#include "locator/abstract_replication_strategy.hh"
 
 namespace audit {
 
@@ -65,7 +66,7 @@ future<> audit_cf_storage_helper::migrate_audit_table(service::group0_guard grou
             cql3::statements::ks_prop_defs old_ks_prop_defs;
             auto old_ks_metadata = old_ks_prop_defs.as_ks_metadata_update(
                     ks->metadata(), *_qp.proxy().get_token_metadata_ptr(), db.features());
-            std::map<sstring, sstring> strategy_opts;
+            locator::replication_strategy_config_options strategy_opts;
             for (const auto &dc: _qp.proxy().get_token_metadata_ptr()->get_topology().get_datacenters())
                 strategy_opts[dc] = "3";
 

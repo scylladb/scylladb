@@ -25,11 +25,11 @@ namespace statements {
 
 static logging::logger logger("ks_prop_defs");
 
-static std::map<sstring, sstring> prepare_options(
+static locator::replication_strategy_config_options prepare_options(
         const sstring& strategy_class,
         const locator::token_metadata& tm,
-        std::map<sstring, sstring> options,
-        const std::map<sstring, sstring>& old_options = {}) {
+        locator::replication_strategy_config_options options,
+        const locator::replication_strategy_config_options& old_options = {}) {
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
@@ -147,12 +147,12 @@ void ks_prop_defs::validate() {
     }
 }
 
-std::map<sstring, sstring> ks_prop_defs::get_replication_options() const {
+locator::replication_strategy_config_options ks_prop_defs::get_replication_options() const {
     auto replication_options = get_map(KW_REPLICATION);
     if (replication_options) {
         return replication_options.value();
     }
-    return std::map<sstring, sstring>{};
+    return {};
 }
 
 data_dictionary::storage_options ks_prop_defs::get_storage_options() const {
@@ -240,7 +240,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat) {
-    std::map<sstring, sstring> options;
+    locator::replication_strategy_config_options options;
     const auto& old_options = old->strategy_options();
     auto sc = get_replication_strategy_class();
     if (sc) {

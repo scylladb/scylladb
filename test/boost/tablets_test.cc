@@ -3919,8 +3919,8 @@ struct calculate_tablet_replicas_for_new_rf_config
         host_id id = host_id::create_random_id();
     };
     std::vector<ring_point> ring_points;
-    std::map<sstring, sstring> options;
-    std::map<sstring, sstring> new_dc_rep_factor;
+    replication_strategy_config_options options;
+    replication_strategy_config_options new_dc_rep_factor;
     std::map<sstring, size_t> expected_rep_factor;
 };
 
