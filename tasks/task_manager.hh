@@ -229,7 +229,6 @@ public:
             future<> finish_failed(std::exception_ptr ex, std::string error) noexcept;
             future<> finish_failed(std::exception_ptr ex) noexcept;
             virtual future<std::optional<double>> expected_total_workload() const;
-            task_manager::task::progress get_binary_progress() const;
 
             friend task;
         };

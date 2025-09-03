@@ -860,6 +860,7 @@ private:
         _input_sstables_basic_info.reserve(_sstables.size());
         int64_t repaired_at = 0;
         std::vector<int64_t> repaired_at_for_compacted_sstables;
+        uint64_t compaction_size = 0;
         for (auto& sst : _sstables) {
             co_await coroutine::maybe_yield();
             auto& sst_stats = sst->get_stats_metadata();
@@ -883,7 +884,7 @@ private:
             }
             _stats_collector.update(sst->get_encoding_stats_for_compaction());
 
-            _cdata.compaction_size += sst->data_size();
+            compaction_size += sst->data_size();
             // We also capture the sstable, so we keep it alive while the read isn't done
             ssts->insert(sst);
             // FIXME: If the sstables have cardinality estimation bitmaps, use that
@@ -897,6 +898,7 @@ private:
                 _rp = std::max(_rp, sst_stats.position);
             }
         }
+        _cdata.compaction_size += compaction_size;        
         log_debug("{} [{}]", report_start_desc(), fmt::join(_sstables | std::views::transform([] (auto sst) { return to_string(sst, true); }), ","));
         if (repaired_at) {
             _output_repaired_at = repaired_at;
