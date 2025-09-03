@@ -3060,6 +3060,7 @@ const std::vector<operation_option> global_options {
     typed_option<sstring>("scylla-yaml-file", "path to the scylla.yaml config file, to obtain the data directory path from,"
             " this can be also provided directly with --scylla-data-dir"),
     typed_option<sstring>("scylla-data-dir", "path to the scylla data dir (usually /var/lib/scylla/data), to read the schema tables from"),
+    typed_option<>("disable-rf-rack-valid-keyspaces", "do not enforce RF-rack-valid keyspaces when using the tool"),
 };
 
 const std::vector<operation_option> global_positional_options{
@@ -3535,6 +3536,14 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
 
         dbcfg.enable_cache(false);
         dbcfg.volatile_system_keyspace_for_testing(true);
+
+        const bool rf_rack_valid_keyspaces = !app_config.count("disable-rf-rack-valid-keyspaces");
+        dbcfg.rf_rack_valid_keyspaces(rf_rack_valid_keyspaces);
+
+        if (rf_rack_valid_keyspaces) {
+            sst_log.info("Enforcing RF-rack-valid keyspaces is enabled by default. "
+                    "If you want to disable it for the tool, use --disable-rf-rack-valid-keyspaces");
+        }
 
         {
             unsigned schema_sources = 0;
