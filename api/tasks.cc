@@ -91,7 +91,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
 
     t::scrub_async.set(r, [&ctx, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto info = co_await parse_scrub_options(ctx, snap_ctl, std::move(req));
+        auto info = parse_scrub_options(ctx, std::move(req));
 
         if (!info.snapshot_tag.empty()) {
             co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, db::snapshot_ctl::skip_flush::no);
