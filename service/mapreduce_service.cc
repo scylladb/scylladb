@@ -670,14 +670,14 @@ public:
             const auto& tablet_info = tablets.get_tablet_info(tablet_id);
 
             size_t skipped_replicas = 0;
-            for (auto& replica : tablet_info.replicas) {
+            for (auto& replica : tablet_info.replicas()) {
                 bool is_alive = _mapreducer._proxy.is_alive(*erm, replica.host);
                 bool has_correct_locality = !db::is_datacenter_local(_req.cl) || topo.get_datacenter(replica.host) == topo.get_datacenter();
                 if (is_alive && has_correct_locality) {
                     ranges_per_tablet_replica_map[replica].push_back(range);
                 } else {
                     ++skipped_replicas;
-                    if (skipped_replicas == tablet_info.replicas.size()) {
+                    if (skipped_replicas == tablet_info.replicas().size()) {
                         throw std::runtime_error("No live endpoint available");
                     }
                 }

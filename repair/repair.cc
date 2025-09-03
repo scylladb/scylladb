@@ -2255,20 +2255,21 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto myhostid = guard.get_token_metadata()->get_my_id();
 
     auto range = tmap.get_token_range(tablet_id);
-    auto& info = tmap.get_tablet_info(tablet_id);
-    auto replicas = rebuild_replicas.value_or(info.replicas);
+    auto&& info = tmap.get_tablet_info(tablet_id);
+    const auto& repair_task_info = info.repair_task_info();
+    auto replicas = rebuild_replicas.value_or(info.replicas());
     std::vector<locator::host_id> nodes;
     std::vector<shard_id> shards;
     std::optional<shard_id> master_shard_id;
     auto& topology = guard.get_token_metadata()->get_topology();
-    auto hosts_filter = info.repair_task_info.repair_hosts_filter;
-    auto dcs_filter = info.repair_task_info.repair_dcs_filter;
+    auto hosts_filter = repair_task_info.repair_hosts_filter;
+    auto dcs_filter = repair_task_info.repair_dcs_filter;
     for (auto& r : replicas) {
         auto shard = r.shard;
         if (r.host != myhostid) {
             if (!hosts_filter.empty() || !dcs_filter.empty()) {
                 auto dc = topology.get_datacenter(r.host);
-                if (!info.repair_task_info.selected_by_filters(r, topology)) {
+                if (!repair_task_info.selected_by_filters(r, topology)) {
                     rlogger.debug("repair[{}]: Check node={} from dc={} hosts_filter={} dcs_filter={} skipped",
                         id.uuid(), r.host, dc, hosts_filter, dcs_filter);
                     continue;
