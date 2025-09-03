@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 
+# This script makes it easy to start Cassandra an run cqlpy tests against
+# it. This capability is useful for checking that a new cqlpy test that aims
+# to ensure behavior compatible with Cassandra - is actually compatible with
+# Cassandra.
+# Please refer to README.md for instructions how to get your choice of
+# Cassandra version and the Java needed to run it, and how to run this script.
+
 import sys
 import os
 import shutil
@@ -132,6 +139,42 @@ def run_cassandra_cmd(pid, dir):
               '--add-opens java.base/jdk.internal.util.jar=ALL-UNNAMED\n'
               '--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED\n',
               file=f)
+    # On JVM 17 and above, Cassandra 5's cassandra.in.sh reads the
+    # following file instead:
+    with open(os.path.join(confdir, 'jvm17-server.options'), 'w') as f:
+        print('-Djdk.attach.allowAttachSelf=true\n'
+              '-Djava.security.manager=allow\n'
+              '--add-exports java.base/jdk.internal.misc=ALL-UNNAMED\n'
+              '--add-exports java.base/jdk.internal.ref=ALL-UNNAMED\n'
+              '--add-exports java.base/sun.nio.ch=ALL-UNNAMED\n'
+              '--add-exports java.management.rmi/com.sun.jmx.remote.internal.rmi=ALL-UNNAMED\n'
+              '--add-exports java.rmi/sun.rmi.registry=ALL-UNNAMED\n'
+              '--add-exports java.rmi/sun.rmi.server=ALL-UNNAMED\n'
+              '--add-exports java.sql/java.sql=ALL-UNNAMED\n'
+              '--add-exports java.base/java.lang.ref=ALL-UNNAMED\n'
+              '--add-exports java.base/java.lang.reflect=ALL-UNNAMED\n'
+              '--add-opens java.base/java.lang.module=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.loader=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.ref=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.reflect=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.math=ALL-UNNAMED\n'
+              '--add-opens java.base/jdk.internal.module=ALL-UNNAMED\n'
+              '--add-opens jdk.management/com.sun.management.internal=ALL-UNNAMED\n'
+              '--add-opens java.base/sun.nio.ch=ALL-UNNAMED\n'
+              '--add-opens java.base/java.io=ALL-UNNAMED\n'
+              '--add-opens java.base/java.nio=ALL-UNNAMED\n'
+              '--add-opens java.base/java.util.concurrent=ALL-UNNAMED\n'
+              '--add-opens java.base/java.util=ALL-UNNAMED\n'
+              '--add-opens java.base/java.util.concurrent.atomic=ALL-UNNAMED\n'
+              '--add-opens java.base/java.lang=ALL-UNNAMED\n'
+              '--add-opens java.base/java.math=ALL-UNNAMED\n'
+              '--add-opens java.base/java.lang.reflect=ALL-UNNAMED\n'
+              '--add-opens java.base/java.net=ALL-UNNAMED\n'
+              '--add-opens java.rmi/sun.rmi.transport.tcp=ALL-UNNAMED\n'
+              ,file=f)
+    # Current versions of Cassandra 5 refuse to run on Java 21
+    # without this environment variable.
+    env['CASSANDRA_JDK_UNSUPPORTED'] = 'true'
     return ([cassandra, '-f'], env)
 
 # Same as run_cassandra_cmd, just use SSL encryption for the CQL port (same
