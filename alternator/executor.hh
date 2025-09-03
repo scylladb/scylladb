@@ -24,6 +24,7 @@
 #include "utils/updateable_value.hh"
 
 #include "tracing/trace_state.hh"
+#include "db/tri_mode_restriction.hh"
 
 namespace db {
     class system_distributed_keyspace;
@@ -139,7 +140,7 @@ class executor : public peering_sharded_service<executor> {
     service::migration_manager& _mm;
     db::system_distributed_keyspace& _sdks;
     cdc::metadata& _cdc_metadata;
-    utils::updateable_value<bool> _enforce_authorization;
+    utils::updateable_value<db::tri_mode_restriction> _enforce_authorization;
     // An smp_service_group to be used for limiting the concurrency when
     // forwarding Alternator request between shards - if necessary for LWT.
     smp_service_group _ssg;
@@ -263,7 +264,7 @@ bool is_big(const rjson::value& val, int big_size = 100'000);
 // Check CQL's Role-Based Access Control (RBAC) permission (MODIFY,
 // SELECT, DROP, etc.) on the given table. When permission is denied an
 // appropriate user-readable api_error::access_denied is thrown.
-future<> verify_permission(bool enforce_authorization, const service::client_state&, const schema_ptr&, auth::permission);
+future<> verify_permission(db::tri_mode_restriction enforce_authorization, const service::client_state&, const schema_ptr&, auth::permission, alternator::stats& stats);
 
 /**
  * Make return type for serializing the object "streamed",
