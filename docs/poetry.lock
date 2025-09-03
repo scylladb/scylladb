@@ -922,20 +922,20 @@ sphinx-markdown-tables = "0.0.17"
 
 [[package]]
 name = "sphinx-scylladb-theme"
-version = "1.8.7"
+version = "1.8.8"
 description = "A Sphinx Theme for ScyllaDB documentation projects"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "sphinx_scylladb_theme-1.8.7-py3-none-any.whl", hash = "sha256:64c86e86737e16d8bbdbec492622865ec1e9c0c3a5915d747a9c109fd69145f1"},
-    {file = "sphinx_scylladb_theme-1.8.7.tar.gz", hash = "sha256:7b84fc99e1156ebf14149f5c1f88b61b5ea852e367fb3940eb99f514db0a6c41"},
+    {file = "sphinx_scylladb_theme-1.8.8-py3-none-any.whl", hash = "sha256:9b37f58b745bfc818b6f0869cbcc414a3ad6658023b22a6abbec44da5c09cf80"},
+    {file = "sphinx_scylladb_theme-1.8.8.tar.gz", hash = "sha256:15af599424f8b2ddbf14644b267c0bd31bc3fbbd64bca5b97d7b31bdb84d2c3d"},
 ]
 
 [package.dependencies]
 beautifulsoup4 = ">=4.12.3,<5.0.0"
 pyyaml = ">=6.0.1,<7.0.0"
-setuptools = ">=70.1.1,<80.0.0"
+setuptools = ">=70.1.1,<81.0.0"
 sphinx-collapse = ">=0.1.1,<0.2.0"
 sphinx-copybutton = ">=0.5.2,<0.6.0"
 sphinx-notfound-page = ">=1.0.4,<2.0.0"
@@ -1456,4 +1456,4 @@ files = [
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "002f76df17d0713029a1d3f132a1e4c03143cb1aeacbd4ae636f93cf5869adcf"
+content-hash = "cb3e2e2481811e76cdb1fd3bb9fa68bdf255930749acffa09c2a148f21eb44e6"
