@@ -57,6 +57,7 @@ struct raft_topology_cmd_result {
         success
     };
     service::raft_topology_cmd_result::command_status status;
+    std::optional<db_clock::time_point> local_time [[version 2025.4]];
 };
 
 struct raft_snapshot {

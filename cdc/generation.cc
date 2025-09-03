@@ -13,6 +13,7 @@
 #include <seastar/core/sleep.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/all.hh>
 
 #include "gms/endpoint_state.hh"
 #include "gms/versioned_value.hh"
@@ -22,6 +23,7 @@
 #include "db/system_distributed_keyspace.hh"
 #include "dht/token-sharding.hh"
 #include "locator/token_metadata.hh"
+#include "cql3/query_processor.hh"
 #include "types/set.hh"
 #include "gms/application_state.hh"
 #include "gms/inet_address.hh"
@@ -30,6 +32,7 @@
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/stall_free.hh"
 #include "utils/to_string.hh"
 
 #include "cdc/generation.hh"
@@ -64,6 +67,15 @@ api::timestamp_clock::duration get_generation_leeway() {
     });
 
     return generation_leeway;
+}
+
+stream_state read_stream_state(int8_t val) {
+    if (val != std::to_underlying(stream_state::current)
+            && val != std::to_underlying(stream_state::closed)
+            && val != std::to_underlying(stream_state::opened)) {
+        throw std::runtime_error(format("invalid value {} for stream state", val));
+    }
+    return static_cast<stream_state>(val);
 }
 
 static void copy_int_to_bytes(int64_t i, size_t offset, bytes& b) {
@@ -1155,6 +1167,381 @@ shared_ptr<db::system_distributed_keyspace> generation_service::get_sys_dist_ks(
 
 db_clock::time_point get_ts(const generation_id& gen_id) {
     return std::visit([] (auto& id) { return id.ts; }, gen_id);
+}
+
+future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const locator::tablet_map& map, api::timestamp_type ts) {
+    auto s = db::system_keyspace::cdc_streams_state();
+
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.set_static_cell("timestamp", stream_ts, ts);
+
+    for (auto tid : map.tablet_ids()) {
+        auto sid = cdc::stream_id(map.get_last_token(tid), 0);
+        auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return std::move(m);
+}
+
+future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const std::vector<cdc::stream_id>& stream_ids, api::timestamp_type ts) {
+    auto s = db::system_keyspace::cdc_streams_state();
+
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.set_static_cell("timestamp", stream_ts, ts);
+
+    for (const auto& sid : stream_ids) {
+        auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return std::move(m);
+}
+
+utils::chunked_vector<mutation>
+make_drop_table_streams_mutations(table_id table, api::timestamp_type ts) {
+    utils::chunked_vector<mutation> mutations;
+    mutations.reserve(3);
+    for (auto s : {db::system_keyspace::cdc_streams_state(),
+                   db::system_keyspace::cdc_streams_history(),
+                   db::system_keyspace::cdc_pending_streams()}) {
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        m.partition().apply(tombstone(ts, gc_clock::now()));
+        mutations.emplace_back(std::move(m));
+    }
+    return mutations;
+}
+
+future<> generation_service::load_cdc_tablet_streams(std::optional<std::unordered_set<table_id>> changed_tables) {
+    // track which tables we expect to get data for, and which we actually get.
+    // when a table is dropped we won't get any streams for it. we will use this to
+    // know which tables are dropped and remove their stream map from the metadata.
+    std::unordered_set<table_id> tables_to_process;
+    if (changed_tables) {
+        tables_to_process = *changed_tables;
+    } else {
+        tables_to_process = _cdc_metadata.get_tables_with_cdc_tablet_streams() | std::ranges::to<std::unordered_set<table_id>>();
+    }
+
+    auto read_streams_state = [this] (const std::optional<std::unordered_set<table_id>>& tables, noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f) -> future<> {
+        if (tables) {
+            for (auto table : *tables) {
+                co_await _sys_ks.local().read_cdc_streams_state(table, [&] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+                    return f(table, base_ts, std::move(base_stream_set));
+                });
+            }
+        } else {
+            co_await _sys_ks.local().read_cdc_streams_state(std::nullopt, [&] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+                return f(table, base_ts, std::move(base_stream_set));
+            });
+        }
+    };
+
+    co_await read_streams_state(changed_tables, [this, &tables_to_process] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+        table_streams new_table_map;
+
+        auto append_stream = [&new_table_map] (db_clock::time_point stream_tp, std::vector<cdc::stream_id> stream_set) {
+            auto ts = std::chrono::duration_cast<api::timestamp_clock::duration>(stream_tp.time_since_epoch()).count();
+            new_table_map.committed[ts] = committed_stream_set {stream_tp, std::move(stream_set)};
+        };
+
+        append_stream(base_ts, std::move(base_stream_set));
+
+        co_await _sys_ks.local().read_cdc_streams_history(table, [&] (table_id tid, db_clock::time_point ts, cdc_stream_diff diff) -> future<> {
+            const auto& prev_stream_set = std::crbegin(new_table_map.committed)->second.streams;
+
+            append_stream(ts, co_await cdc::metadata::construct_next_stream_set(
+                    prev_stream_set, std::move(diff.opened_streams), diff.closed_streams));
+        });
+
+        auto pd = co_await _sys_ks.local().read_cdc_pending_streams(table);
+        if (pd.contains(table)) {
+            auto&& pending_stream = pd[table];
+
+            // it is possible the pending stream is equal to the last stream according to the history table.
+            // it happens when the pending stream is committed and not closed yet.
+            const auto& last_stream_set = std::crbegin(new_table_map.committed)->second;
+            std::optional<db_clock::time_point> committed_time;
+            if (std::ranges::equal(pending_stream, last_stream_set.streams)) {
+                committed_time = last_stream_set.ts;
+            }
+
+            new_table_map.pending = pending_stream_entry {std::move(pending_stream), committed_time};
+        }
+
+        auto map_ptr = make_foreign(make_lw_shared<const table_streams>(std::move(new_table_map)));
+
+        co_await container().invoke_on_all([&] (generation_service& svc) -> future<>{
+            svc._cdc_metadata.load_tablet_streams_map(table, co_await map_ptr.copy());
+        });
+
+        tables_to_process.erase(table);
+    });
+
+    // the remaining tables have no streams - remove them from the metadata
+    co_await container().invoke_on_all([&] (generation_service& svc) {
+        for (auto table : tables_to_process) {
+            svc._cdc_metadata.remove_tablet_streams_map(table);
+        }
+    });
+}
+
+future<mutation> get_insert_pending_stream_mutation(table_id table, const std::vector<stream_id>& streams, api::timestamp_type ts) {
+    auto pending_schema = db::system_keyspace::cdc_pending_streams();
+    mutation m(pending_schema, partition_key::from_single_value(*pending_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    for (const auto& sid : streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_singular(*pending_schema, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+    }
+    co_return std::move(m);
+}
+
+mutation get_delete_pending_streams_mutation(table_id table, api::timestamp_type ts) {
+    auto pending_schema = db::system_keyspace::cdc_pending_streams();
+    mutation m(pending_schema, partition_key::from_single_value(*pending_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.partition().apply(tombstone(ts, gc_clock::now()));
+    return m;
+}
+
+future<mutation> get_open_and_close_streams_mutation(table_id table, const cdc_stream_diff& diff, db_clock::time_point stream_ts, api::timestamp_type ts) {
+    auto history_schema = db::system_keyspace::cdc_streams_history();
+
+    auto decomposed_ts = timestamp_type->decompose(stream_ts);
+    auto closed_kind = byte_type->decompose(std::to_underlying(stream_state::closed));
+    auto opened_kind = byte_type->decompose(std::to_underlying(stream_state::opened));
+
+    mutation m(history_schema, partition_key::from_single_value(*history_schema,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+
+    for (const auto& sid : diff.closed_streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, closed_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+    }
+
+    for (const auto& sid : diff.opened_streams) {
+        co_await coroutine::maybe_yield();
+        auto ck = clustering_key::from_exploded(*history_schema, { decomposed_ts, opened_kind, long_type->decompose(dht::token::to_int64(sid.token())) });
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+    }
+
+    co_return std::move(m);
+}
+
+future<> generation_service::query_cdc_timestamps(table_id table, bool ascending, noncopyable_function<future<>(db_clock::time_point)> f) {
+    const auto& all_tables = _cdc_metadata.get_all_tablet_streams();
+    auto table_it = all_tables.find(table);
+    if (table_it == all_tables.end()) {
+        co_return;
+    }
+    const auto table_streams_ptr = co_await table_it->second.copy(); // copy shared ptr to keep alive
+    const auto& table_streams = *table_streams_ptr;
+
+    if (ascending) {
+        for (auto it = table_streams.committed.cbegin(); it != table_streams.committed.cend(); ++it) {
+            co_await f(it->second.ts);
+        }
+    } else {
+        for (auto it = table_streams.committed.crbegin(); it != table_streams.committed.crend(); ++it) {
+            co_await f(it->second.ts);
+        }
+    }
+}
+
+future<> generation_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
+    const auto& all_tables = _cdc_metadata.get_all_tablet_streams();
+    auto table_it = all_tables.find(table);
+    if (table_it == all_tables.end()) {
+        co_return;
+    }
+    const auto table_streams_ptr = co_await table_it->second.copy(); // copy shared ptr to keep alive
+    const auto& table_streams = *table_streams_ptr;
+
+    auto it_prev = table_streams.committed.end();
+    auto it = table_streams.committed.begin();
+    while (it != table_streams.committed.end()) {
+        const auto& entry = it->second;
+
+        if (it_prev != table_streams.committed.end()) {
+            const auto& prev_entry = it_prev->second;
+            auto diff = co_await cdc::metadata::generate_stream_diff(prev_entry.streams, entry.streams);
+            co_await f(entry.ts, entry.streams, std::move(diff));
+        } else {
+            co_await f(entry.ts, entry.streams, cdc::cdc_stream_diff{.closed_streams = {}, .opened_streams = entry.streams});
+        }
+        it_prev = it;
+        ++it;
+    }
+}
+
+future<> generation_service::commit_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, db_clock::time_point stream_ts, api::timestamp_type ts) {
+    for (const auto& [table, table_streams] : _cdc_metadata.get_all_tablet_streams()) {
+        co_await coroutine::maybe_yield();
+
+        const auto& pending = table_streams->pending;
+        if (!pending || pending->committed_time) {
+            continue;
+        }
+
+        // ensure the timestamps are always increasing
+        auto table_stream_ts = stream_ts;
+        db_clock::time_point prev_ts = std::crbegin(table_streams->committed)->second.ts;
+        if (table_stream_ts <= prev_ts) {
+            table_stream_ts = prev_ts + std::chrono::milliseconds(1);
+        }
+
+        auto diff = co_await _cdc_metadata.generate_stream_diff(_cdc_metadata.get_current_tablet_stream_set(table), pending->stream_set);
+        auto mut = co_await get_open_and_close_streams_mutation(table, diff, table_stream_ts, ts);
+        muts.emplace_back(std::move(mut));
+    }
+}
+
+future<> generation_service::close_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, cql3::query_processor& qp, api::timestamp_type ts) {
+    for (const auto& [table, table_streams] : _cdc_metadata.get_all_tablet_streams()) {
+        co_await coroutine::maybe_yield();
+
+        const auto& pending = table_streams->pending;
+        if (!pending || !pending->committed_time) {
+            continue;
+        }
+
+        auto log_schema = qp.db().find_schema(table);
+
+        const sstring query = seastar::format("UPDATE {}.{} SET \"{}\" = ? WHERE \"{}\" = ?",
+                log_schema->ks_name(), log_schema->cf_name(),
+                log_meta_column_name("closed_time"), log_meta_column_name("stream_id"));
+
+        // The pending stream is committed, it means it's the last entry in all_table_streams, and
+        // the closed stream set is the one before last entry.
+        const auto& all_table_streams = table_streams->committed;
+        if (all_table_streams.size() < 2) {
+            on_internal_error(cdc_log, format("close_cdc_streams: expecting at least 2 stream sets but got {}", all_table_streams.size()));
+        }
+        auto it = std::prev(all_table_streams.end(), 2);
+
+        co_await coroutine::parallel_for_each(it->second.streams, [&] (auto sid) -> future<> {
+            return qp.execute_internal(query, db::consistency_level::ALL, {*pending->committed_time, data_value(sid.to_bytes())}, cql3::query_processor::cache_internal::no).discard_result();
+        });
+
+        muts.emplace_back(get_delete_pending_streams_mutation(table, ts));
+    }
+}
+
+future<std::vector<cdc::stream_id>> generation_service::generate_new_streams(table_id table, const locator::tablet_map& new_tablet_map) {
+    std::vector<cdc::stream_id> new_streams;
+    // check if it's a CDC table. if not, return empty vector.
+    if (_cdc_metadata.get_all_tablet_streams().contains(table)) {
+        new_streams.reserve(new_tablet_map.tablet_count());
+        for (auto tid : new_tablet_map.tablet_ids()) {
+            new_streams.emplace_back(new_tablet_map.get_last_token(tid), 0);
+            co_await coroutine::maybe_yield();
+        }
+    }
+    co_return std::move(new_streams);
+}
+
+future<utils::chunked_vector<mutation>> get_cdc_stream_compaction_mutations(table_id table, db_clock::time_point base_ts, const std::vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts) {
+    utils::chunked_vector<mutation> muts;
+    muts.reserve(2);
+
+    auto gc_now = gc_clock::now();
+    auto tombstone_ts = ts - 1;
+
+    {
+        // write the new base stream set to cdc_streams_state
+        auto s = db::system_keyspace::cdc_streams_state();
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        m.partition().apply(tombstone(tombstone_ts, gc_now));
+        m.set_static_cell("timestamp", data_value(base_ts), ts);
+
+        for (const auto& sid : base_stream_set) {
+            co_await coroutine::maybe_yield();
+            auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+            m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+        }
+        muts.emplace_back(std::move(m));
+    }
+
+    {
+        // remove all entries from cdc_streams_history up to the new base
+        auto s = db::system_keyspace::cdc_streams_history();
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        auto range = query::clustering_range::make_ending_with({
+                clustering_key_prefix::from_single_value(*s, timestamp_type->decompose(base_ts)), true});
+        auto bv = bound_view::from_range(range);
+        m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{ts, gc_now}});
+        muts.emplace_back(std::move(m));
+    }
+
+    co_return std::move(muts);
+}
+
+future<> generation_service::compact_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, api::timestamp_type ts) {
+    for (const auto& [table, table_streams] : _cdc_metadata.get_all_tablet_streams()) {
+        co_await coroutine::maybe_yield();
+
+        // skip if the table has a pending stream
+        if (table_streams->pending) {
+            continue;
+        }
+
+        const auto& committed_streams = table_streams->committed;
+
+        auto base_schema = cdc::get_base_table(_db, *_db.find_schema(table));
+        auto ttl_seconds = base_schema->cdc_options().ttl();
+        if (ttl_seconds <= 0) {
+            continue;
+        }
+        auto ts_upper_bound = db_clock::now() - std::chrono::seconds(ttl_seconds);
+
+        // find the most recent timestamp that is older than ttl_seconds, which will become the new base.
+        // all streams with older timestamps can be removed because they are closed for more than ttl_seconds
+        // (they are all replaced by streams with the newer timestamp).
+
+        auto first_nonobsolete_it = committed_streams.begin();
+        while (first_nonobsolete_it != committed_streams.end()) {
+            auto next_it = std::next(first_nonobsolete_it);
+            if (next_it == committed_streams.end()) {
+                break;
+            }
+
+            auto next_tp = next_it->second.ts;
+            if (next_tp <= ts_upper_bound) {
+                // the next timestamp is older than ttl_seconds, so the current one is obsolete
+                first_nonobsolete_it = next_it;
+            } else {
+                break;
+            }
+        }
+
+        if (first_nonobsolete_it == committed_streams.begin()) {
+            // no streams to compact
+            continue;
+        }
+
+        auto table_muts = co_await get_cdc_stream_compaction_mutations(table, first_nonobsolete_it->second.ts, first_nonobsolete_it->second.streams, ts);
+        for (auto&& m : table_muts) {
+            muts.emplace_back(std::move(m));
+        }
+    }
 }
 
 } // namespace cdc

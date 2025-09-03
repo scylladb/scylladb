@@ -24,6 +24,7 @@
 
 #include "auth/service.hh"
 #include "cdc/generation.hh"
+#include "cdc/generation_service.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "db/system_distributed_keyspace.hh"
 #include "db/system_keyspace.hh"
@@ -113,6 +114,11 @@ sstring get_application_state_gently(const gms::application_state_map& epmap, gm
 }
 } // namespace
 
+template<typename Result>
+concept HasCombineResult = requires(Result r, raft_topology_cmd_result&& res) {
+    { r.combine_result(std::move(res)) } -> std::same_as<void>;
+};
+
 class topology_coordinator : public endpoint_lifecycle_subscriber {
     sharded<db::system_distributed_keyspace>& _sys_dist_ks;
     gms::gossiper& _gossiper;
@@ -137,10 +143,14 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     tablet_allocator& _tablet_allocator;
     std::unique_ptr<db::view::view_building_coordinator> _vb_coordinator;
 
+    cdc::generation_service& _cdc_gens;
+
     // The reason load_stats_ptr is a shared ptr is that load balancer can yield, and we don't want it
     // to suffer lifetime issues when stats refresh fiber overrides the current stats.
     std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
+
+    static constexpr std::chrono::seconds cdc_stream_compaction_refresh_interval = std::chrono::seconds(60);
 
     std::chrono::milliseconds _ring_delay;
 
@@ -386,7 +396,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return service::topology::parse_replaced_node(req_param);
     }
 
-    future<> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
+    future<raft_topology_cmd_result> exec_direct_command_helper(raft::server_id id, uint64_t cmd_index, const raft_topology_cmd& cmd) {
         rtlogger.debug("send {} command with term {} and index {} to {}",
             cmd.cmd, _term, cmd_index, id);
         _topology_cmd_rpc_tracker.active_dst.emplace(id);
@@ -400,6 +410,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await coroutine::exception(std::make_exception_ptr(
                     std::runtime_error(::format("failed status returned from {}", id))));
         }
+
+        co_return std::move(result);
     };
 
     future<node_to_work_on> exec_direct_command(node_to_work_on&& node, const raft_topology_cmd& cmd) {
@@ -412,23 +424,31 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_return retake_node(co_await start_operation(), id);
     };
 
-    future<> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
+    template <HasCombineResult Result>
+    future<Result> exec_global_command_helper(auto nodes, const raft_topology_cmd& cmd) {
         const auto cmd_index = ++_last_cmd_index;
         _topology_cmd_rpc_tracker.current = cmd.cmd;
         _topology_cmd_rpc_tracker.index = cmd_index;
+        Result global_result;
         auto f = co_await coroutine::as_future(
-                seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index] (raft::server_id id) {
-            return exec_direct_command_helper(id, cmd_index, cmd);
-        }));
+                seastar::parallel_for_each(std::move(nodes), [this, &cmd, cmd_index, &global_result] (raft::server_id id) {
+                    return exec_direct_command_helper(id, cmd_index, cmd)
+                        .then([&global_result] (raft_topology_cmd_result result) {
+                            global_result.combine_result(std::move(result));
+                        });
+                }));
 
         if (f.failed()) {
             co_await coroutine::return_exception(std::runtime_error(
                 ::format("raft topology: exec_global_command({}) failed with {}",
                     cmd.cmd, f.get_exception())));
         }
+
+        co_return std::move(global_result);
     };
 
-    future<group0_guard> exec_global_command(
+    template <HasCombineResult Result>
+    future<std::pair<group0_guard, Result>> exec_global_command_with_result(
             group0_guard guard, const raft_topology_cmd& cmd,
             const std::unordered_set<raft::server_id>& exclude_nodes,
             drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
@@ -445,10 +465,26 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         if (drop_and_retake) {
             release_guard(std::move(guard));
         }
-        co_await exec_global_command_helper(std::move(nodes), cmd);
+        auto result = co_await exec_global_command_helper<Result>(std::move(nodes), cmd);
         if (drop_and_retake) {
             guard = co_await start_operation();
         }
+        co_return std::make_pair(std::move(guard), std::move(result));
+    }
+
+    future<group0_guard> exec_global_command(
+            group0_guard guard, const raft_topology_cmd& cmd,
+            const std::unordered_set<raft::server_id>& exclude_nodes,
+            drop_guard_and_retake drop_and_retake = drop_guard_and_retake::yes) {
+
+        struct empty_global_raft_command_result {
+            void combine_result(raft_topology_cmd_result&&) {}
+        };
+
+        auto result = co_await exec_global_command_with_result<empty_global_raft_command_result>(
+                std::move(guard), cmd, exclude_nodes, drop_and_retake);
+        guard = std::move(result.first);
+
         co_return guard;
     }
 
@@ -759,6 +795,42 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
             }
             co_await coroutine::maybe_yield();
+        }
+    }
+
+    future<> cdc_stream_compaction_fiber() {
+        auto can_proceed = [this] { return !_async_gate.is_closed() && !_as.abort_requested(); };
+        while (can_proceed()) {
+            bool sleep = true;
+            try {
+                auto guard = co_await start_operation();
+                utils::chunked_vector<canonical_mutation> updates;
+
+                co_await _cdc_gens.compact_cdc_streams(updates, guard.write_timestamp());
+
+                if (!updates.empty()) {
+                    co_await update_topology_state(std::move(guard), std::move(updates), "CDC stream compaction");
+                } else {
+                    release_guard(std::move(guard));
+                }
+            } catch (raft::request_aborted&) {
+                rtlogger.debug("CDC stream compaction fiber aborted");
+                sleep = false;
+            } catch (seastar::abort_requested_exception&) {
+                rtlogger.debug("CDC stream compaction fiber aborted");
+                sleep = false;
+            } catch (...) {
+                rtlogger.warn("CDC stream compaction fiber got error {}", std::current_exception());
+            }
+            auto refresh_interval = utils::get_local_injector().is_enabled("short_cdc_stream_compaction_refresh_interval") ?
+                    std::chrono::seconds(1) : cdc_stream_compaction_refresh_interval;
+            if (sleep && can_proceed()) {
+                try {
+                    co_await seastar::sleep_abortable(refresh_interval, _as);
+                } catch (...) {
+                    rtlogger.debug("CDC stream compaction: sleep failed: {}", std::current_exception());
+                }
+            }
         }
     }
 
@@ -1296,6 +1368,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             co_await coroutine::maybe_yield();
             generate_resize_update(out, guard, table_id, resize_decision);
         }
+    }
+
+    future<bool> generate_new_cdc_streams(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, const locator::tablet_map& new_tablet_map) {
+        auto tm = get_token_metadata_ptr();
+        auto new_streams = co_await _cdc_gens.generate_new_streams(table_id, new_tablet_map);
+        if (new_streams.size() > 0) {
+            auto mut = co_await cdc::get_insert_pending_stream_mutation(table_id, new_streams, guard.write_timestamp());
+            out.emplace_back(std::move(mut));
+            co_return true;
+        }
+        co_return false;
     }
 
     // When "drain" is true, we migrate tablets only as long as there are nodes to drain
@@ -1850,6 +1933,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
+        bool has_new_cdc_streams = false;
 
         for (auto& table_id : plan.resize_plan().finalize_resize) {
             auto s = _db.find_schema(table_id);
@@ -1887,13 +1971,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
                 });
             }
+
+            for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
+                if (co_await generate_new_cdc_streams(updates, guard, table_id, new_tablet_map)) {
+                    has_new_cdc_streams = true;
+                }
+            }
         }
 
-        updates.emplace_back(
-            topology_mutation_builder(guard.write_timestamp())
-                .del_transition_state()
-                .set_version(_topo_sm._topology.version + 1)
-                .build());
+        auto builder = topology_mutation_builder(guard.write_timestamp())
+            .set_version(_topo_sm._topology.version + 1);
+        if (has_new_cdc_streams) {
+            builder.set_transition_state(topology::transition_state::commit_cdc_streams);
+        } else {
+            builder.del_transition_state();
+        }
+        updates.emplace_back(builder.build());
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet split finalization"));
     }
 
@@ -2386,6 +2479,61 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 updates.push_back(builder.build());
                 auto str = ::format("committed new CDC generation, ID: {}", cdc_gen_id);
                 co_await update_topology_state(std::move(guard), std::move(updates), std::move(str));
+            }
+                break;
+            case topology::transition_state::commit_cdc_streams: {
+                auto max_local_time = db_clock::now();
+                try {
+
+                    struct raft_command_result_with_max_local_time {
+                        db_clock::time_point max_local_time = db_clock::time_point::min();
+
+                        void combine_result(raft_topology_cmd_result&& result) {
+                            if (result.status == raft_topology_cmd_result::command_status::success && result.local_time) {
+                                max_local_time = std::max(max_local_time, *result.local_time);
+                            }
+                        }
+                    };
+
+                    auto result = co_await exec_global_command_with_result<raft_command_result_with_max_local_time>(
+                            std::move(guard),
+                            raft_topology_cmd{raft_topology_cmd::command::barrier},
+                            {_raft.id()});
+
+                    guard = std::move(result.first);
+                    max_local_time = std::max(max_local_time, result.second.max_local_time);
+                } catch (term_changed_error&) {
+                    throw;
+                } catch (group0_concurrent_modification&) {
+                    throw;
+                } catch (...) {
+                    rtlogger.error("transition_state::commit_cdc_streams, "
+                                    "raft_topology_cmd::command::barrier failed, error {}", std::current_exception());
+                    break;
+                }
+
+                utils::chunked_vector<canonical_mutation> muts;
+
+                auto t1 = max_local_time + duration_cast<db_clock::duration>(cdc::get_generation_leeway());
+                co_await _cdc_gens.commit_cdc_streams(muts, t1, guard.write_timestamp());
+
+                muts.emplace_back(topology_mutation_builder(guard.write_timestamp())
+                        .set_transition_state(topology::transition_state::close_cdc_streams)
+                        .build());
+
+                co_await update_topology_state(std::move(guard), std::move(muts), "committed new CDC streams");
+            }
+                break;
+            case topology::transition_state::close_cdc_streams: {
+                utils::chunked_vector<canonical_mutation> muts;
+
+                co_await _cdc_gens.close_cdc_streams(muts, _sys_ks.query_processor(), guard.write_timestamp());
+
+                auto builder = topology_mutation_builder(guard.write_timestamp())
+                        .del_transition_state();
+                muts.emplace_back(builder.build());
+
+                co_await update_topology_state(std::move(guard), std::move(muts), "closing CDC streams");
             }
                 break;
             case topology::transition_state::tablet_draining:
@@ -3142,6 +3290,7 @@ public:
             service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, abort_source& as, raft::server& raft_server,
             raft_topology_cmd_handler_type raft_topology_cmd_handler,
             tablet_allocator& tablet_allocator,
+            cdc::generation_service& cdc_gens,
             std::chrono::milliseconds ring_delay,
             gms::feature_service& feature_service, endpoint_lifecycle_notifier& lifecycle_notifier,
             topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
@@ -3154,6 +3303,7 @@ public:
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
         , _vb_coordinator(std::make_unique<db::view::view_building_coordinator>(_db, _raft, _group0, _sys_ks, _gossiper, _messaging, _vb_sm, _topo_sm, _term, _as))
+        , _cdc_gens(cdc_gens)
         , _tablet_load_stats_refresh([this] { return refresh_tablet_load_stats(); })
         , _ring_delay(ring_delay)
         , _group0_holder(_group0.hold_group0_gate())
@@ -3685,6 +3835,7 @@ future<> topology_coordinator::run() {
 
     co_await fence_previous_coordinator();
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
+    auto cdc_stream_compaction = cdc_stream_compaction_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
     auto group0_voter_refresher = group0_voter_refresher_fiber();
@@ -3728,6 +3879,7 @@ future<> topology_coordinator::run() {
     co_await std::move(tablet_load_stats_refresher);
     co_await _tablet_load_stats_refresh.join();
     co_await std::move(cdc_generation_publisher);
+    co_await std::move(cdc_stream_compaction);
     co_await std::move(gossiper_orphan_remover);
     co_await std::move(group0_voter_refresher);
     co_await std::move(vb_coordinator_fiber);
@@ -3776,6 +3928,7 @@ future<> run_topology_coordinator(
         service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
+        cdc::generation_service& cdc_gens,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
@@ -3786,6 +3939,7 @@ future<> run_topology_coordinator(
             sys_ks, db, group0, topo_sm, vb_sm, as, raft,
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
+            cdc_gens,
             ring_delay,
             feature_service, lifecycle_notifier,
             topology_cmd_rpc_tracker};

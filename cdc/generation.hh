@@ -44,6 +44,10 @@ namespace gms {
     class gossiper;
 } // namespace gms
 
+namespace locator {
+    class tablet_map;
+} // namespace locator
+
 namespace cdc {
 
 api::timestamp_clock::duration get_generation_leeway();
@@ -118,6 +122,37 @@ public:
     {}
 };
 
+enum class stream_state : int8_t {
+    current = 0,
+    closed = 1,
+    opened = 2,
+};
+
+stream_state read_stream_state(int8_t val);
+
+struct committed_stream_set {
+    db_clock::time_point ts;
+    std::vector<cdc::stream_id> streams;
+};
+
+struct cdc_stream_diff {
+    std::vector<stream_id> closed_streams;
+    std::vector<stream_id> opened_streams;
+};
+
+using base_streams_state = std::unordered_map<table_id, committed_stream_set>;
+using pending_streams = std::unordered_map<table_id, std::vector<cdc::stream_id>>;
+
+struct pending_stream_entry {
+    std::vector<cdc::stream_id> stream_set;
+    std::optional<db_clock::time_point> committed_time;
+};
+
+struct table_streams {
+    std::map<api::timestamp_type, committed_stream_set> committed;
+    std::optional<pending_stream_entry> pending;
+};
+
 class no_generation_data_exception : public std::runtime_error {
 public:
     no_generation_data_exception(cdc::generation_id generation_ts)
@@ -183,5 +218,14 @@ static constexpr auto CDC_GENERATIONS_V3_KEY = "cdc_generations";
 future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
     schema_ptr, utils::UUID gen_uuid, const cdc::topology_description&,
     size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
+
+future<mutation> create_table_streams_mutation(table_id, db_clock::time_point, const locator::tablet_map&, api::timestamp_type);
+future<mutation> create_table_streams_mutation(table_id, db_clock::time_point, const std::vector<cdc::stream_id>&, api::timestamp_type);
+utils::chunked_vector<mutation> make_drop_table_streams_mutations(table_id, api::timestamp_type ts);
+
+future<mutation> get_insert_pending_stream_mutation(table_id table, const std::vector<stream_id>& streams, api::timestamp_type ts);
+mutation get_delete_pending_streams_mutation(table_id table, api::timestamp_type ts);
+future<mutation> get_open_and_close_streams_mutation(table_id table, const cdc_stream_diff& diff, db_clock::time_point stream_ts, api::timestamp_type ts);
+future<utils::chunked_vector<mutation>> get_cdc_stream_compaction_mutations(table_id table, db_clock::time_point base_ts, const std::vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts);
 
 } // namespace cdc

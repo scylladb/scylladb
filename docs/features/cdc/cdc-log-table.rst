@@ -25,6 +25,7 @@ Since CDC was enabled using ``WITH cdc = {'enabled':true}``, ScyllaDB automatica
         "cdc$stream_id" blob,
         "cdc$time" timeuuid,
         "cdc$batch_seq_no" int,
+        "cdc$closed_time" timeuuid STATIC,
         "cdc$operation" tinyint,
         "cdc$ttl" bigint,
         pk1 int, pk2 int,
@@ -48,6 +49,7 @@ The rules are:
 
   * ``cdc$stream_id`` of type ``blob``, which is the partition key,
   * ``cdc$time`` of type ``timeuuid`` and ``cdc$batch_seq_no`` of type ``int``, which together form the clustering key,
+  * ``cdc$closed_time`` of type ``timeuuid`` which is a static column, used to mark the end of a stream,
   * ``cdc$operation`` of type ``tinyint``,
   * and ``cdc$ttl`` of type ``bigint``.
 
@@ -81,11 +83,12 @@ The ``cdc$stream_id`` column, of type ``blob``, is the log table's partition key
 When a change is performed in the base table, a stream identifier is chosen for the corresponding log entries depending on two things:
 
 * the base write's partition key,
-* the currently operating **CDC generation** which is a global property of the ScyllaDB cluster (similar to tokens).
+* in a vnode-based keyspace, the currently operating **CDC generation** which is a global property of the ScyllaDB cluster (similar to tokens).
+* in a tablets-based keyspace, the current stream set associated with the base table, which depends on the tablets shape of the base table.
 
 Partitions in the log table are called *streams*; within one stream, all entries are sorted according to the base table writes' timestamps, using standard clustering key properties (note that ``cdc$time``, which represents the time of the write, is the first part of the clustering key).
 
-If you want to use CDC efficiently, it's important to understand how stream IDs are managed and chosen. Consult the :doc:`./cdc-streams` document for basic definitions and properties, :doc:`./cdc-stream-generations` document to understand how streams are managed and how they change over time, and finally :doc:`./cdc-querying-streams` to learn how streams can be queried efficiently, and how to find out which streams to query. Reading these documents is not a prerequisite for understanding the rest of the log table related sections.
+If you want to use CDC efficiently, it's important to understand how stream IDs are managed and chosen. Consult the :doc:`./cdc-streams` document for basic definitions and properties, :doc:`./cdc-stream-changes` document to understand how streams are managed and how they change over time, and finally :doc:`./cdc-querying-streams` to learn how streams can be queried efficiently, and how to find out which streams to query. Reading these documents is not a prerequisite for understanding the rest of the log table related sections.
 
 Time column
 ^^^^^^^^^^^
