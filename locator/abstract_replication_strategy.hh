@@ -47,6 +47,10 @@ enum class replication_strategy_type {
 using replication_strategy_config_option = sstring;
 using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
 
+// Returns the number of replicas inferred by the option.
+// Throws configuration_exception when option is not a valid replication factor specifier.
+size_t get_replication_factor(const replication_strategy_config_option&);
+
 struct replication_strategy_params {
     const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;

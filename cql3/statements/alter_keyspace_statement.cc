@@ -51,15 +51,7 @@ future<> cql3::statements::alter_keyspace_statement::check_access(query_processo
 }
 
 static unsigned get_abs_rf_diff(const locator::replication_strategy_config_option& curr_rf, const locator::replication_strategy_config_option& new_rf) {
-    try {
-        return std::abs(std::stoi(curr_rf) - std::stoi(new_rf));
-    } catch (std::invalid_argument const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
-    } catch (std::out_of_range const& ex) {
-        on_internal_error(mylogger, fmt::format("get_abs_rf_diff expects integer arguments to fit into `int` type, "
-                                                "but got curr_rf:{} and new_rf:{}", curr_rf, new_rf));
-    }
+    return std::abs(ssize_t(locator::get_replication_factor(curr_rf)) - ssize_t(locator::get_replication_factor(new_rf)));
 }
 
 void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, const service::client_state& state) const {
