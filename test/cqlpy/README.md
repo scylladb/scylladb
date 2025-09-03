@@ -241,14 +241,18 @@ install it manually, and this section explains how. It's very easy, and
 don't worry - you don't even need to learn how to run Cassandra, as the
 "test/cqlpy/run-cassandra" tool will do it for you.
 
-To be able to run Cassandra, you'll need either Java 8 or 11 installed on
-your system - Cassandra does not support more recent versions of Java.
+To be able to run Cassandra, it is recommended that you have either Java 8
+or 11 installed on your system. run-cassandra can actually run Cassandra 5
+(under protest) on Java 21, Cassandra 3 or 4 cannot.
 However, this old Java only needs to be installed *alongside* your favorite
 version of Java - it does not need to be the default Java on your system.
 The "run-cassandra" script will automatically pick the right version of
-Java from multiple versions installed on your system. On modern Fedora,
-installing Java 11 as a secondary Java is as simple as
-`sudo dnf install java-11`.
+Java from multiple versions installed on your system.
+
+On Fedora 41 and earlier, installing Java 11 as a secondary Java is as
+simple as `dnf install java-11`. On Fedora 42, to install java-11 alongside
+the system's default Java you need to ask to install it from Fedora 41:
+`dnf install --releasever=41 java-11-openjdk-headless.x86_64`
 
 ## Precompiled Cassandra
 The easiest way to get Cassandra is to get a pre-compiled tar.
