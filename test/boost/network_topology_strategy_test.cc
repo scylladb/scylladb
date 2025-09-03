@@ -11,6 +11,7 @@
 #include "db/tablet_options.hh"
 #include "gms/inet_address.hh"
 #include "inet_address_vectors.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/host_id.hh"
 #include "locator/types.hh"
 #include "locator/snitch_base.hh"
@@ -95,7 +96,7 @@ void strategy_sanity_check(
     //
     size_t total_rf = 0;
     for (auto& val : options) {
-        size_t rf = std::stol(val.second);
+        auto rf = locator::get_replication_factor(val.second);
         BOOST_CHECK(nts_ptr->get_replication_factor(val.first) == rf);
 
         total_rf += rf;
@@ -1529,7 +1530,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
         }
     }
     for (const auto& [dc, rf_opt] : options) {
-        auto rf = std::stol(rf_opt);
+        auto rf = locator::get_replication_factor(rf_opt);
         BOOST_REQUIRE_EQUAL(same_rack_pairs[dc] + cross_rack_pairs[dc], rf);
     }
 }

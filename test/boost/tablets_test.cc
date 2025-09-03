@@ -3912,7 +3912,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
 
     std::map<sstring, size_t> initial_rep_factor;
     for (auto const& [dc, shard_count] : test_config.options) {
-        initial_rep_factor[dc] = std::stoul(shard_count);
+        initial_rep_factor[dc] = locator::get_replication_factor(shard_count);
     }
 
     auto tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
