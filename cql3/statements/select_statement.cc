@@ -771,9 +771,9 @@ view_indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(partition_ranges), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.db().get_config().select_internal_page_size()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd) {
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     }));
 }
 
@@ -851,9 +851,9 @@ view_indexed_table_select_statement::execute_base_query(
         gc_clock::time_point now,
         lw_shared_ptr<const service::pager::paging_state> paging_state) const {
     return do_execute_base_query(qp, std::move(primary_keys), state, options, now, paging_state).then(wrap_result_to_error_message(
-            [this, &state, &options, now, paging_state = std::move(paging_state), internal_page_size = qp.db().get_config().select_internal_page_size()] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
+            [this, &state, &options, now, paging_state = std::move(paging_state)] (std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>> result_and_cmd){
         auto&& [result, cmd] = result_and_cmd;
-        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state), internal_page_size);
+        return process_base_query_results(std::move(result), std::move(cmd), state, options, now, std::move(paging_state));
     }));
 }
 
@@ -917,11 +917,17 @@ view_indexed_table_select_statement::process_base_query_results(
         service::query_state& state,
         const query_options& options,
         gc_clock::time_point now,
-        lw_shared_ptr<const service::pager::paging_state> paging_state,
-        uint32_t internal_page_size) const
+        lw_shared_ptr<const service::pager::paging_state> paging_state) const
 {
     if (paging_state) {
-        paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
+        auto remaining_from_prev_page = [&] {
+            auto old_paging_state = options.get_paging_state();
+            if (old_paging_state) {
+                return old_paging_state->get_remaining();
+            }
+            return cmd->get_row_limit();
+        }();
+        paging_state = generate_view_paging_state_from_base_query_results(remaining_from_prev_page, paging_state, results, state, options);
         _selection->get_result_metadata()->maybe_set_paging_state(std::move(paging_state));
     }
     return process_results(std::move(results), std::move(cmd), options, now);
@@ -1115,8 +1121,8 @@ bytes view_indexed_table_select_statement::compute_idx_token(const partition_key
     return cdef.get_computation().compute_value(*_schema, key);
 }
 
-lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size) const {
+lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_statement::generate_view_paging_state_from_base_query_results(uint64_t remaining_from_prev_page, lw_shared_ptr<const service::pager::paging_state> paging_state,
+        const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
     if (!cdef) {
         throw exceptions::invalid_request_exception("Indexed column not found in schema");
@@ -1163,7 +1169,13 @@ lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_stat
     }
 
     auto paging_state_copy = make_lw_shared<service::pager::paging_state>(service::pager::paging_state(*paging_state));
-    paging_state_copy->set_remaining(internal_page_size);
+    if (!(results->row_count() && *results->row_count() <= remaining_from_prev_page)) {
+        on_internal_error(logger, seastar::format(
+                "generate_view_paging_state_from_base_query_results: Paging state invariant violated: results->row_count()={}, remaining_from_prev_page={}",
+                results->row_count(), remaining_from_prev_page)
+        );
+    }
+    paging_state_copy->set_remaining(remaining_from_prev_page - *results->row_count());
     paging_state_copy->set_partition_key(std::move(index_pk));
     paging_state_copy->set_clustering_key(std::move(index_ck));
     return paging_state_copy;
@@ -1256,9 +1268,16 @@ view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto internal_page_size = qp.db().get_config().select_internal_page_size();
         internal_options.reset(new cql3::query_options(std::move(internal_options), options.get_paging_state(), internal_page_size));
         do {
-            auto consume_results = [this, &builder, &options, &internal_options, &state, internal_page_size] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
+            auto consume_results = [this, &builder, &options, &internal_options, &state] (foreign_ptr<lw_shared_ptr<query::result>> results, lw_shared_ptr<query::read_command> cmd, lw_shared_ptr<const service::pager::paging_state> paging_state) -> stop_iteration {
                 if (paging_state) {
-                    paging_state = generate_view_paging_state_from_base_query_results(paging_state, results, state, options, internal_page_size);
+                    auto remaining_from_prev_page = [&] {
+                        auto old_paging_state = options.get_paging_state();
+                        if (old_paging_state) {
+                            return old_paging_state->get_remaining();
+                        }
+                        return cmd->get_row_limit();
+                    }();
+                    paging_state = generate_view_paging_state_from_base_query_results(remaining_from_prev_page, paging_state, results, state, options);
                 }
                 internal_options.reset(new cql3::query_options(std::move(internal_options), paging_state ? make_lw_shared<service::pager::paging_state>(*paging_state) : nullptr));
                 if (_restrictions_need_filtering) {
