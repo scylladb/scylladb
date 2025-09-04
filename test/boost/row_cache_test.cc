@@ -4774,7 +4774,7 @@ SEASTAR_TEST_CASE(test_compact_range_tombstones_on_read) {
         s.add_row(m, ck3, "v3");
         cache.populate(m);
 
-        tombstone_gc_state gc_state(nullptr);
+        tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
 
         cache_entry& entry = cache.lookup(pk);
         auto& cp = entry.partition().version()->partition();
@@ -4852,7 +4852,7 @@ SEASTAR_THREAD_TEST_CASE(test_cache_reader_semaphore_oom_kill) {
     cache.populate(m);
 
     auto pr = dht::partition_range::make_singular(pk);
-    tombstone_gc_state gc_state(nullptr);
+    tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
 
     BOOST_REQUIRE_EQUAL(semaphore.get_stats().total_reads_killed_due_to_kill_limit, 0);
     auto kill_limit_before = 0;
@@ -5026,7 +5026,7 @@ SEASTAR_THREAD_TEST_CASE(test_reproduce_18045) {
     // Before the fix for issue #18045, this caused a (ASAN-triggering) use-after-free,
     // because _latest_it was deferenced during the population.
 
-    tombstone_gc_state gc_state(nullptr);
+    tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
     auto slice = query::reverse_slice(*s, s->full_slice());
     auto rd = cache.make_reader(
         s->make_reversed(),
