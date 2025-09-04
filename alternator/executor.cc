@@ -3579,16 +3579,14 @@ future<std::vector<rjson::value>> executor::describe_multi_item(schema_ptr schem
         shared_ptr<cql3::selection::selection> selection,
         foreign_ptr<lw_shared_ptr<query::result>> query_result,
         shared_ptr<const std::optional<attrs_to_get>> attrs_to_get,
-        uint64_t& rcu_half_units) {
+        uint64_t& response_size) {
     cql3::selection::result_set_builder builder(*selection, gc_clock::now());
     query::result_view::consume(*query_result, slice, cql3::selection::result_set_builder::visitor(builder, *schema, *selection));
     auto result_set = builder.build();
     std::vector<rjson::value> ret;
     for (auto& result_row : result_set->rows()) {
         rjson::value item = rjson::empty_object();
-        rcu_consumed_capacity_counter consumed_capacity;
-        describe_single_item(*selection, result_row, *attrs_to_get, item, &consumed_capacity._total_bytes);
-        rcu_half_units += consumed_capacity.get_half_units();
+        describe_single_item(*selection, result_row, *attrs_to_get, item, &response_size);
         ret.push_back(std::move(item));
         co_await coroutine::maybe_yield();
     }
