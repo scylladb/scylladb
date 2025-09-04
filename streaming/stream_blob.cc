@@ -656,11 +656,12 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     blogger.debug("stream_sstables[{}] Started sending sstable_nr={} files_nr={} files={} range={}",
             req.ops_id, sstables.size(), files.size(), files, req.range);
     auto ops_start_time = std::chrono::steady_clock::now();
+    auto files_nr = files.size();
     size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), req.targets, req.table, req.ops_id, req.topo_guard);
     resp.stream_bytes = stream_bytes;
     auto duration = std::chrono::steady_clock::now() - ops_start_time;
-    blogger.info("stream_sstables[{}] Finished sending sstable_nr={} files_nr={} files={} range={} stream_bytes={} stream_time={} stream_bw={}",
-            req.ops_id, sstables.size(), files.size(), files, req.range, stream_bytes, duration, get_bw(stream_bytes, ops_start_time));
+    blogger.info("stream_sstables[{}] Finished sending sstable_nr={} files_nr={} range={} stream_bytes={} stream_time={} stream_bw={}",
+            req.ops_id, sstables.size(), files_nr, req.range, stream_bytes, duration, get_bw(stream_bytes, ops_start_time));
     co_return resp;
 }
 
