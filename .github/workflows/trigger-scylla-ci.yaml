@@ -6,7 +6,7 @@ on:
 
 jobs:
   trigger-jenkins:
-    if: contains(github.event.comment.body, '@scylladbbot') && contains(github.event.comment.body, 'trigger-ci')
+    if: github.event.comment.user.login != 'scylladbbot' && contains(github.event.comment.body, '@scylladbbot') && contains(github.event.comment.body, 'trigger-ci')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Scylla-CI-Route Jenkins Job
