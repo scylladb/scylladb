@@ -3185,9 +3185,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // or, if we performed a read-before-write, on the larger of the operation size
     // and the previous item's size.
     for (const auto& w : per_table_wcu) {
+        uint64_t items_size = 0;
         total_wcu = 0;
         // The following loop goes over all items from the same table
         while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
+            items_size += mutation_builders[pos].second.length_in_bytes();
             size_t wcu = wcu_consumed_capacity_counter::get_units((mutation_builders[pos].second.length_in_bytes())? mutation_builders[pos].second.length_in_bytes() : 1);
             total_wcu += wcu;
             if (mutation_builders[pos].second.is_put_item()) {
@@ -3204,6 +3206,9 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             rjson::add(entry, "TableName", rjson::from_string(w.second->cf_name()));
             rjson::add(entry, "CapacityUnits", total_wcu);
             rjson::push_back(consumed_capacity, std::move(entry));
+        }
+        if (items_size > 0) {
+            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kib_ceil(items_size));
         }
     }
     _stats.wcu_total[stats::PUT_ITEM] += wcu_put_units;
@@ -4373,6 +4378,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->operation_sizes.update_item_op_size_kb.add(bytes_to_kib_ceil(op->consumed_capacity()._total_bytes));
     per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
