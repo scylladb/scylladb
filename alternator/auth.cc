@@ -11,7 +11,6 @@
 #include "utils/log.hh"
 #include <string>
 #include <string_view>
-#include "bytes.hh"
 #include "alternator/auth.hh"
 #include <fmt/format.h>
 #include "auth/password_authenticator.hh"

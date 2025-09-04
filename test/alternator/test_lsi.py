@@ -529,7 +529,7 @@ def test_lsi_and_gsi(test_table_lsi_gsi):
     assert(sorted([gsi['IndexName'] for gsi in gsis]) == ['hello_g1'])
 
     items = [{'p': random_string(), 'c': random_string(), 'x1': random_string()} for i in range(17)]
-    p1, c1, x1 = items[0]['p'], items[0]['c'], items[0]['x1']
+    p1, x1 = items[0]['p'], items[0]['x1']
     with test_table_lsi_gsi.batch_writer() as batch:
         for item in items:
             batch.put_item(item)
