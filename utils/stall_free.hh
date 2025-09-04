@@ -113,6 +113,7 @@ template <HasClearGentlyMethod T>
 future<> clear_gently(T& o) noexcept;
 
 template <typename T>
+requires (SmartPointer<T> || SharedPointer<T>)
 future<> clear_gently(foreign_ptr<T>& o) noexcept;
 
 template <SharedPointer T>
@@ -177,20 +178,12 @@ future<> clear_gently(T& o) noexcept {
     return futurize_invoke(std::bind(&T::clear_gently, &o));
 }
 
-template <SharedPointer T>
+template <typename T>
+requires (SmartPointer<T> || SharedPointer<T>)
 future<> clear_gently(foreign_ptr<T>& o) noexcept {
     return smp::submit_to(o.get_owner_shard(), [&o] {
-        if (o.unwrap_on_owner_shard().use_count() == 1) {
-            return internal::clear_gently(const_cast<std::remove_const_t<typename foreign_ptr<T>::element_type>&>(*o));
-        }
-        return make_ready_future<>();
-    });
-}
-
-template <SmartPointer T>
-future<> clear_gently(foreign_ptr<T>& o) noexcept {
-    return smp::submit_to(o.get_owner_shard(), [&o] {
-        return internal::clear_gently(const_cast<std::remove_const_t<typename foreign_ptr<T>::element_type>&>(*o));
+        auto wrapped = o.release();
+        return internal::clear_gently(wrapped).then([wrapped = std::move(wrapped)] {});
     });
 }
 
@@ -203,17 +196,18 @@ future<> clear_gently(T&&... o) {
 }
 
 template <SharedPointer T>
-future<> clear_gently(T& o) noexcept {
+future<> clear_gently(T& ptr) noexcept {
+    auto o = std::exchange(ptr, nullptr);
     if (o.use_count() == 1) {
-        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o));
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o)).then([o = std::move(o)] {});
     }
     return make_ready_future<>();
 }
 
 template <SmartPointer T>
-future<> clear_gently(T& o) noexcept {
-    if (auto p = o.get()) {
-        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*p));
+future<> clear_gently(T& ptr) noexcept {
+    if (auto o = std::exchange(ptr, nullptr)) {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o)).then([o = std::move(o)] {});
     } else {
         return make_ready_future<>();
     }

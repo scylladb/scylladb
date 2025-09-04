@@ -12,6 +12,8 @@
 #include <unordered_set>
 
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/random_utils.hh"
+
 #include "utils/stall_free.hh"
 #include "utils/small_vector.hh"
 #include "utils/chunked_vector.hh"
@@ -62,7 +64,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_trivial_unique_ptr) {
     std::unique_ptr<int> p = std::make_unique<int>(0);
 
     utils::clear_gently(p).get();
-    BOOST_CHECK(p);
+    BOOST_REQUIRE(!p);
 }
 
 template <typename T>
@@ -128,7 +130,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_non_trivial_unique_ptr) {
     });
 
     utils::clear_gently(p).get();
-    BOOST_CHECK(p);
+    BOOST_REQUIRE(!p);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
     cleared_gently = 0;
@@ -145,7 +147,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_unique_ptr_const_payload) {
     });
 
     utils::clear_gently(p).get();
-    BOOST_CHECK(p);
+    BOOST_REQUIRE(!p);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
     cleared_gently = 0;
@@ -181,7 +183,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr) {
     foreign_ptr<std::unique_ptr<clear_gently_tracker<int>>> p0 = make_foreign_ptr();
 
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
@@ -199,7 +201,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr_const_payload) {
     foreign_ptr<std::unique_ptr<const clear_gently_tracker<int>>> p0 = make_foreign_ptr();
 
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
@@ -214,22 +216,29 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr) {
             return make_foreign<lw_shared_ptr<clear_gently_tracker<int>>>(std::move(p));
         }).get();
     };
-    foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>> p0 = make_foreign_ptr();
-
-    utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-
+    std::array<foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>>, 2> ptrs;
+    auto& p0 = ptrs[0];
     p0 = make_foreign_ptr();
-    auto p1 = p0.copy().get();
 
     utils::clear_gently(p0).get();
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    p0.reset();
-    utils::clear_gently(p1).get();
+    // Test re-clearing the already-reset foreign shared ptr
+    utils::clear_gently(p0).get();
+    BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test clearing of foreign shared ptrs
+    p0 = make_foreign_ptr();
+    ptrs[1] = p0.copy().get();
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
@@ -244,63 +253,96 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr_const_payload) {
             return make_foreign<lw_shared_ptr<const clear_gently_tracker<int>>>(std::move(p));
         }).get();
     };
-    foreign_ptr<lw_shared_ptr<const clear_gently_tracker<int>>> p0 = make_foreign_ptr();
-
-    utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-
+    std::array<foreign_ptr<lw_shared_ptr<const clear_gently_tracker<int>>>, 2> ptrs;
+    auto& p0 = ptrs[0];
     p0 = make_foreign_ptr();
-    auto p1 = p0.copy().get();
 
     utils::clear_gently(p0).get();
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    p0.reset();
-    utils::clear_gently(p1).get();
+    // Test re-clearing the already-reset foreign shared ptr
+    utils::clear_gently(p0).get();
+    BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test clearing of foreign shared ptrs
+    p0 = make_foreign_ptr();
+    ptrs[1] = p0.copy().get();
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr) {
     int cleared_gently = 0;
-    lw_shared_ptr<clear_gently_tracker<int>> p0 = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
-        cleared_gently++;
-    });
+    auto make_shared_ptr = [&cleared_gently] () {
+        return make_lw_shared<clear_gently_tracker<int>>(cleared_gently, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+            cleared_gently++;
+        });
+    };
+    std::array<lw_shared_ptr<clear_gently_tracker<int>>, 2> ptrs;
+    auto& p0 = ptrs[0];
+    p0 = make_shared_ptr();
 
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    lw_shared_ptr<clear_gently_tracker<int>> p1 = p0;
-
+    // Test re-clearing the already-reset foreign shared ptr
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
-    BOOST_CHECK(p1);
+
+    // Test clearing of shared ptrs
+    p0 = make_shared_ptr();
+    ptrs[1] = p0;
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr_const_payload) {
     int cleared_gently = 0;
-    auto p0 = make_lw_shared<const clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
-        cleared_gently++;
-    });
+    auto make_shared_ptr = [&cleared_gently] () {
+        return make_lw_shared<const clear_gently_tracker<int>>(cleared_gently, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+            cleared_gently++;
+        });
+    };
+    std::array<lw_shared_ptr<const clear_gently_tracker<int>>, 2> ptrs;
+    auto& p0 = ptrs[0];
+    p0 = make_shared_ptr();
 
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    auto p1 = p0;
-
+    // Test re-clearing the already-reset foreign shared ptr
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
-    BOOST_CHECK(p1);
+
+    // Test clearing of shared ptrs
+    p0 = make_shared_ptr();
+    ptrs[1] = p0;
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_trivial_array) {
@@ -328,7 +370,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_non_trivial_array) {
     utils::clear_gently(a).get();
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 
-    BOOST_REQUIRE(std::ranges::none_of(a, std::mem_fn(&clear_gently_tracker<int>::operator bool)));
+    BOOST_REQUIRE(std::ranges::none_of(a, std::mem_fn(&std::unique_ptr<clear_gently_tracker<int>>::operator bool)));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_array_const_payload) {
