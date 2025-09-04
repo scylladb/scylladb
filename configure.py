@@ -590,6 +590,7 @@ scylla_tests = set([
     'test/manual/partition_data_test',
     'test/manual/row_locker_test',
     'test/manual/streaming_histogram_test',
+    'test/manual/bti_cassandra_compatibility_test',
     'test/manual/sstable_scan_footprint_test',
     'test/perf/memory_footprint_test',
     'test/perf/perf_cache_eviction',
