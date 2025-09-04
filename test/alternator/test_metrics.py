@@ -512,6 +512,49 @@ def test_get_item_size_item_falls_into_appropriate_bucket(dynamodb, test_table_s
             test_table_s.get_item(Key={'p': pk})
         check_histogram_metric_increases('GetItem', 'operation_size_kb', metrics, do_test, [(0, bucket(17)), (1, bucket(17.1)), (1, bucket(INF))])
 
+def test_batch_get_item_size_no_items_increases_zero_interval(test_table_s, metrics):
+    def do_test():
+        # An item whose size rounds down to 0 KB shouldn't increase any metric.
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {
+                'Keys': [{'p': random_string()}],
+                'ConsistentRead': True,
+            }
+        })
+    check_histogram_metric_increases('BatchGetItem', 'operation_size_kb', metrics, do_test, [(0, bucket(INF))])
+
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_batch_get_item_size_256kb_item_falls_into_appropriate_bucket(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        def do_test():
+            pk = random_string()
+            test_table_s.put_item(Item={'p': pk, 'a': 'a' * 256 * KB})
+            test_table_s.meta.client.batch_get_item(RequestItems={
+                test_table_s.name: {
+                    'Keys': [{'p': pk}],
+                    'ConsistentRead': True,
+                }
+            })
+        check_histogram_metric_increases('BatchGetItem', 'operation_size_kb', metrics, do_test, [(0, prev_bucket(256.1)), (1, bucket(256.1)), (1, bucket(INF))])
+
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_batch_get_item_size_many_items_fall_into_appropriate_buckets(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        def do_test():
+            pk = random_string()
+            pk2 = random_string()
+            pk3 = random_string()
+            test_table_s.put_item(Item={'p': pk, 'a': 'a' * 2 * KB, 'b': 'b' * 8 * KB})
+            test_table_s.put_item(Item={'p': pk3, 'a': 'a' * 7 * KB})
+            test_table_s.meta.client.batch_get_item(RequestItems={
+                test_table_s.name: {
+                    'Keys': [{'p': pk}, {'p': pk2}, {'p': pk3}],
+                    'ConsistentRead': True,
+                }
+            })
+        check_histogram_metric_increases('BatchGetItem', 'operation_size_kb', metrics, do_test, [(0, prev_bucket(7.1)), (1, bucket(7.1)),
+                                                                                                 (1, prev_bucket(10.1)), (2, bucket(10.1)), (2, bucket(INF))])
+
 ### Test isolation of operation_size_kb metrics between multiple tables:
 # The tests check if operations on two different tables don't affect each 
 # others' metrics.
@@ -537,6 +580,34 @@ def test_get_item_size_separate_tables_track_metrics_independently(test_table_s,
     check_table_histogram_metric_increases('GetItem', metrics, do_test, {
         test_table_s.name: [(0, prev_bucket(12.1)), (1, bucket(12.1)), (1, bucket(INF))],
         test_table_s_2.name: [(0, prev_bucket(35.1)), (1, bucket(35.1)), (1, bucket(INF))],
+    })
+
+def test_batch_get_item_size_separate_tables_track_metrics_independently(test_table_s, test_table_s_2, metrics):
+    # Prepare items in both tables
+    pk_1 = random_string()
+    pk_2 = random_string()
+    test_table_s.put_item(Item={'p': pk_1, 'a': 'a' * 72 * KB})  # 72KB item
+    test_table_s_2.put_item(Item={'p': pk_2, 'a': 'a' * 86 * KB})  # 86KB item
+    
+    def do_test():
+        # Table1: BatchGet 72KB+ item. Should fall in (72.000000, 86.000000] buckets
+        test_table_s.meta.client.batch_get_item(RequestItems={
+            test_table_s.name: {
+                'Keys': [{'p': pk_1}],
+                'ConsistentRead': True,
+            }
+        })
+        # Table2: BatchGet 86KB item. Should fall in (86.000000, 103.000000] bucket
+        test_table_s_2.meta.client.batch_get_item(RequestItems={
+            test_table_s_2.name: {
+                'Keys': [{'p': pk_2}],
+                'ConsistentRead': True,
+            }
+        })
+
+    check_table_histogram_metric_increases('BatchGetItem', metrics, do_test, {
+        test_table_s.name: [(0, prev_bucket(72.1)), (1, bucket(72.1)), (1, bucket(INF))],
+        test_table_s_2.name: [(0, prev_bucket(86.1)), (1, bucket(86.1)), (1, bucket(INF))],
     })
 
 ###### Test for other metrics, not counting specific DynamoDB API operations:
