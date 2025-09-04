@@ -1442,7 +1442,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
 
 static mutation compacted(const mutation& m, gc_clock::time_point now) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, tombstone_gc_state(nullptr));
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, tombstone_gc_state::no_gc());
     return result;
 }
 
@@ -3499,7 +3499,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("non-paged v2");
     {
         mutation res_mut(s, pk);
-        auto c = compact_for_query<consumer>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state(nullptr), consumer{permit, res_mut, max_rows});
+        auto c = compact_for_query<consumer>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state::no_gc(), consumer{permit, res_mut, max_rows});
         auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
@@ -3511,7 +3511,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("limited pages v2");
     {
         mutation res_mut(s, pk);
-        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions, tombstone_gc_state(nullptr));
+        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions, tombstone_gc_state::no_gc());
         auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
@@ -3527,7 +3527,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("short pages v2");
     {
         mutation res_mut(s, pk);
-        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state(nullptr));
+        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state::no_gc());
         auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
@@ -3552,7 +3552,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
             if (detached_state) {
                 restore_state(reader, std::move(*detached_state));
             }
-            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions, tombstone_gc_state(nullptr));
+            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions, tombstone_gc_state::no_gc());
             auto c = consumer{permit, res_mut, max_rows};
             reader.consume(compact_for_query<consumer>(compaction_state, std::move(c))).get();
             detached_state = std::move(*compaction_state).detach_state();
@@ -3573,7 +3573,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
             if (detached_state) {
                 restore_state(reader, std::move(*detached_state));
             }
-            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state(nullptr));
+            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state::no_gc());
             auto c = consumer{permit, res_mut, 2};
             reader.consume(compact_for_query<consumer>(compaction_state, std::move(c))).get();
             detached_state = std::move(*compaction_state).detach_state();
