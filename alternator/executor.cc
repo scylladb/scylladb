@@ -34,7 +34,6 @@
 #include "serialization.hh"
 #include "expressions.hh"
 #include "conditions.hh"
-#include "cql3/util.hh"
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
@@ -2636,6 +2635,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
     }
+
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
@@ -3714,7 +3714,7 @@ static size_t estimate_value_size(const rjson::value& value) {
     return size;
 }
 
-class update_item_operation  : public rmw_operation {
+class update_item_operation : public rmw_operation {
 public:
     // Some information parsed during the constructor to check for input
     // errors, and cached to be used again during apply().
@@ -4650,7 +4650,6 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         size_t pos = 0;
         rcu_half_units = 0;
         for (const auto &r : rs.requests) {
-            auto& pk = r.first;
             auto& cks = r.second;
             auto& fut = *fut_it;
             ++fut_it;
