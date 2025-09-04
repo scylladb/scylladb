@@ -4496,6 +4496,10 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
     per_table_stats->rcu_half_units_total += rcu_half_units;
     _stats.rcu_half_units_total += rcu_half_units;
+    // Update item size metrics only if we found an item.
+    if (qr.query_result->row_count().value_or(0) > 0) {
+        per_table_stats->operation_sizes.get_item_op_size_kb.add(bytes_to_kb_ceil(add_capacity._total_bytes));
+    }
     co_return rjson::print(std::move(res));
 }
 

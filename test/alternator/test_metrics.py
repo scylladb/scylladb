@@ -25,14 +25,16 @@
 
 import re
 import time
+from bisect import bisect_left
 from contextlib import contextmanager
+from functools import lru_cache
 
 import pytest
 import requests
 from botocore.exceptions import ClientError
 
 from test.alternator.test_manual_requests import get_signed_request
-from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read
+from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
 # are not available on AWS (of course), but may also not be available for
@@ -140,6 +142,50 @@ def check_table_increases_operation(metrics, operation_names, table, metric_name
             assert expected_value == get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics) - saved_metrics[op]
         else:
             assert saved_metrics[op] < get_metric(metrics, metric_name, {'op': op, 'cf': table}, the_metrics)
+
+@lru_cache
+def histogram_bucket_offsets(size, ratio=1.2):
+    """
+    Generate bucket offsets for an estimated histogram.
+    
+    Args:
+        size (int): Number of bucket offsets to generate
+        ratio (float): The multiplier for the exponential growth (default is 1.2)
+        
+    Returns:
+        list: List of bucket offset values
+    """
+    if size == 0:
+        return []
+
+    bucket_offsets = [1]
+    last = 1
+    for _ in range(size - 1):
+        current = round(last * ratio)
+        if current == last:
+            current += 1
+        bucket_offsets.append(current)
+        last = current
+    return bucket_offsets
+
+def bucket_idx(size_in_kb, bucket_count=30, ratio=1.2):
+    buckets = histogram_bucket_offsets(bucket_count, ratio)
+    return bisect_left(buckets, size_in_kb)
+
+def bucket(size_in_kb, bucket_count=30, ratio=1.2):
+    buckets = histogram_bucket_offsets(bucket_count, ratio)
+    idx = bucket_idx(size_in_kb, bucket_count, ratio)
+    return str(buckets[idx]) + '.000000' if size_in_kb <= buckets[-1] else '+Inf'
+
+def next_bucket(size_in_kb, bucket_count=30, ratio=1.2):
+    buckets = histogram_bucket_offsets(bucket_count, ratio)
+    idx = bucket_idx(size_in_kb, bucket_count, ratio)
+    return str(buckets[idx + 1]) + '.000000' if idx + 1 < bucket_count else None
+
+def prev_bucket(size_in_kb, bucket_count=30, ratio=1.2):
+    buckets = histogram_bucket_offsets(bucket_count, ratio)
+    idx = bucket_idx(size_in_kb, bucket_count, ratio)
+    return str(buckets[idx - 1]) + '.000000' if idx > 0 else None
 
 ###### Test for metrics that count DynamoDB API operations:
 
@@ -438,6 +484,60 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
         it = dynamodbstreams.get_shard_iterator(StreamArn=arn, ShardId=shard_id, ShardIteratorType='LATEST')['ShardIterator']
         with check_sets_latency(metrics, ['GetRecords']):
             dynamodbstreams.get_records(ShardIterator=it)
+
+###### Test metrics that are item size histograms of DynamoDB API operations which manipulate data:
+# Tests for histogram metrics operation_size_kb.
+
+INF = float('inf')
+
+def check_histogram_metric_increases(op, name, metrics, do_test, probes):
+    points = [[value, {'op': op, 'le': le}] for value, le in probes]
+    metric_bucket = f'scylla_alternator_table_{name}_bucket'
+    with check_increases_metric_exact(metrics, metric_bucket, points):
+        do_test()
+
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_get_item_size_not_found_doesnt_increase_the_metric(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        def do_test():
+            test_table_s.get_item(Key={'p': random_string()})
+        check_histogram_metric_increases('GetItem', 'operation_size_kb', metrics, do_test, [(0, bucket(INF))])
+
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_get_item_size_item_falls_into_appropriate_bucket(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 7 * KB, 'b': 'b' * 10 * KB})
+        def do_test():
+            test_table_s.get_item(Key={'p': pk})
+        check_histogram_metric_increases('GetItem', 'operation_size_kb', metrics, do_test, [(0, bucket(17)), (1, bucket(17.1)), (1, bucket(INF))])
+
+### Test isolation of operation_size_kb metrics between multiple tables:
+# The tests check if operations on two different tables don't affect each 
+# others' metrics.
+
+def check_table_histogram_metric_increases(op, metrics, do_test, table_name_and_probes):
+    points = [[value, {'op': op, 'le': le, 'cf': table_name}] for table_name in table_name_and_probes for value, le in table_name_and_probes[table_name]]
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_operation_size_kb_bucket', points):
+        do_test()
+
+def test_get_item_size_separate_tables_track_metrics_independently(test_table_s, test_table_s_2, metrics):
+    # Prepare items in both tables
+    pk_1 = random_string()
+    pk_2 = random_string()
+    test_table_s.put_item(Item={'p': pk_1, 'a': 'a' * 12 * KB})  # 12KB item
+    test_table_s_2.put_item(Item={'p': pk_2, 'a': 'a' * 35 * KB})  # 35KB item
+    
+    def do_test():
+        # Table1: Get 12KB+ item. Should fall in (12.000000, 14.000000] bucket
+        test_table_s.get_item(Key={'p': pk_1})
+        # Table2: Get 35KB+ item. Should fall in (35.000000, 42.000000] bucket
+        test_table_s_2.get_item(Key={'p': pk_2})
+
+    check_table_histogram_metric_increases('GetItem', metrics, do_test, {
+        test_table_s.name: [(0, prev_bucket(12.1)), (1, bucket(12.1)), (1, bucket(INF))],
+        test_table_s_2.name: [(0, prev_bucket(35.1)), (1, bucket(35.1)), (1, bucket(INF))],
+    })
 
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 

@@ -79,6 +79,13 @@ public:
         utils::estimated_histogram batch_get_item_histogram{22}; // a histogram that covers the range 1 - 100
         utils::estimated_histogram batch_write_item_histogram{22}; // a histogram that covers the range 1 - 100
     } api_operations;
+    // Operation size metrics
+    struct {
+        // Item size statistics collected per table and aggregated per node.
+        // Each histogram covers the range 0 - 446. Resolves #25143.
+        // A size is the retrieved item's size.
+        utils::estimated_histogram get_item_op_size_kb{30};
+    } operation_sizes;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;
@@ -125,5 +132,9 @@ struct table_stats {
     lw_shared_ptr<stats> _stats;
 };
 void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats);
+
+inline uint64_t bytes_to_kb_ceil(uint64_t bytes) {
+    return (bytes + 1023) / 1024;
+}
 
 }
