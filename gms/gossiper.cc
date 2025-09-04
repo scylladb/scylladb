@@ -2077,6 +2077,8 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         local_state.add_application_state(entry.first, entry.second);
     }
 
+    co_await utils::get_local_injector().inject("gossiper_publish_local_state_pause", utils::wait_for_message(5min));
+
     co_await replicate(get_broadcast_address(), local_state, permit.id());
 
     logger.info("Gossip started with local state: {}", local_state);
