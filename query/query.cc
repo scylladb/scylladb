@@ -362,8 +362,12 @@ static void write_partial_partition(ser::writer_of_qr_partition<bytes_ostream>&&
 }
 
 foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
+    // Return a lone result as is only if it is within the limits.
     if (_partial.size() == 1) {
-        return std::move(_partial[0]);
+        _partial[0]->ensure_counts();
+        if (*_partial[0]->row_count() <= _max_rows && *_partial[0]->partition_count() <= _max_partitions) {
+            return std::move(_partial[0]);
+        }
     }
 
     bytes_ostream w;
