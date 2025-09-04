@@ -320,7 +320,6 @@ def test_long_update(test_table):
 # according to that setting, and the total consumed capacity is their sum.
 def test_simple_batch_get_items(test_table_sb):
     p1 = random_string()
-    val = random_string()
     c1 = random_bytes()
     test_table_sb.put_item(Item={'p': p1, 'c': c1})
 

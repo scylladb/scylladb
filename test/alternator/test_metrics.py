@@ -42,7 +42,7 @@ from test.alternator.util import random_string, new_test_table, is_aws, scylla_c
 # Tests using this fixture may call get_metrics(metrics).
 @pytest.fixture(scope="module")
 def metrics(dynamodb):
-    if dynamodb.meta.client._endpoint.host.endswith('.amazonaws.com'):
+    if is_aws(dynamodb):
         pytest.skip('Scylla-only feature not supported by AWS')
     url = dynamodb.meta.client._endpoint.host
     # The Prometheus API is on port 9180, and always http, not https.
