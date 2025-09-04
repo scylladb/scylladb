@@ -197,16 +197,6 @@ value_list get_IN_values(
     return to_sorted_vector(std::move(list_elems) | non_null | deref, comparator);
 }
 
-/// Returns possible values for k-th column from t, which must be RHS of IN.
-value_list get_IN_values(const expression& e, size_t k, const query_options& options,
-                         const serialized_compare& comparator) {
-    const cql3::raw_value in_list = evaluate(e, options);
-    const auto split_values = get_list_of_tuples_elements(in_list, *type_of(e)); // Need lvalue from which to make std::view.
-    const auto result_range = split_values
-            | std::views::transform([k] (const std::vector<managed_bytes_opt>& v) { return v[k]; }) | non_null | deref;
-    return to_sorted_vector(std::move(result_range), comparator);
-}
-
 static constexpr bool inclusive = true, exclusive = false;
 
 } // anonymous namespace
@@ -309,32 +299,9 @@ static value_set possible_lhs_values(const column_definition* cdef,
                             throw std::logic_error(format("possible_lhs_values: unhandled operator {}", oper));
                         },
                         [&] (const tuple_constructor& tuple) -> value_set {
-                            if (!cdef) {
-                                return unbounded_value_set;
-                            }
-                            const auto found = std::ranges::find_if(
-                                    tuple.elements, [&] (const expression& c) { return expr::as<column_value>(c).col == cdef; });
-                            if (found == tuple.elements.end()) {
-                                return unbounded_value_set;
-                            }
-                            const auto column_index_on_lhs = std::distance(tuple.elements.begin(), found);
-                            if (is_compare(oper.op)) {
-                                // RHS must be a tuple due to upstream checks.
-                                managed_bytes_opt val = get_tuple_elements(evaluate(oper.rhs, options), *type_of(oper.rhs)).at(column_index_on_lhs);
-                                if (!val) {
-                                    return empty_value_set; // All NULL comparisons fail; no column values match.
-                                }
-                                if (oper.op == oper_t::EQ) {
-                                    return value_list{std::move(*val)};
-                                }
-                                // While an inequality like (ck1, ck2) >= (:v1, v2) implies that ck1 >= :v1 (but does
-                                // not imply an independent constrain on ck2), we can't make use of this constraint downstream.
-                                // We don't in fact call here when this happens, so just error out.
-                                on_internal_error(rlogger, "possible_lhs_values: trying to solve for single column on tuple inequality");
-                            } else if (oper.op == oper_t::IN) {
-                                return get_IN_values(oper.rhs, column_index_on_lhs, options, type->as_less_comparator());
-                            }
-                            return unbounded_value_set;
+                            on_internal_error(rlogger,
+                                    fmt::format("possible_lhs_values: trying to solve for {} on tuple inequality",
+                                            cdef ? "single column" : "token"));
                         },
                         [&] (const function_call& token_fun_call) -> value_set {
                             if (!is_partition_token_for_schema(token_fun_call, *table_schema_opt)) {
