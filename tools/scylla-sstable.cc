@@ -3536,6 +3536,14 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         dbcfg.enable_cache(false);
         dbcfg.volatile_system_keyspace_for_testing(true);
 
+        // Override whatever value the option has. Setting this to `true` is correct because
+        // schema loader doesn't attempt to create any keyspace and doesn't go through any
+        // validation code; there is no topology either. Thanks to that, we won't run into
+        // any problems due to enforcing RF-rack-valid keyspaces.
+        //
+        // On the other hand, we gain access to the code hidden behind the option
+        dbcfg.rf_rack_valid_keyspaces(true, ::utils::config_file::config_source::CommandLine);
+
         {
             unsigned schema_sources = 0;
             schema_sources += !app_config["schema-file"].defaulted();
