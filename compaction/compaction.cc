@@ -2006,7 +2006,11 @@ static future<compaction_result> scrub_sstables_validate_mode(sstables::compacti
     using scrub = sstables::compaction_type_options::scrub;
     if (validation_errors != 0 && descriptor.options.as<scrub>().quarantine_sstables == scrub::quarantine_invalid_sstables::yes) {
         for (auto& sst : descriptor.sstables) {
-            co_await sst->change_state(sstables::sstable_state::quarantine);
+            try {
+                co_await sst->change_state(sstables::sstable_state::quarantine);
+            } catch (...) {
+                clogger.error("Moving {} to quarantine failed due to {}, continuing.", sst->get_filename(), std::current_exception());
+            }
         }
     }
 
