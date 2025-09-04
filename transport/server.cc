@@ -257,7 +257,7 @@ cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& au
         service::memory_limiter& ml, cql_server_config config, const db::config& db_cfg,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket)
-    : server("CQLServer", clogger, generic_server::config{db_cfg.uninitialized_connections_semaphore_cpu_concurrency})
+    : server("CQLServer", clogger, generic_server::config{db_cfg.uninitialized_connections_semaphore_cpu_concurrency, db_cfg.request_timeout_on_shutdown_in_seconds})
     , _query_processor(qp)
     , _config(std::move(config))
     , _max_request_size(_config.max_request_size)
@@ -422,6 +422,9 @@ cql_server::connection::read_frame() {
 future<foreign_ptr<std::unique_ptr<cql_server::response>>> cql_server::connection::sleep_until_timeout_passes(const seastar::lowres_clock::time_point& timeout, std::unique_ptr<cql_server::response>&& resp) const {
     auto time_left = timeout - seastar::lowres_clock::now();
     return seastar::sleep_abortable(time_left, _server._abort_source).then_wrapped([resp = std::move(resp)](auto&& f) mutable {
+        if (f.failed()) {
+            clogger.debug("Got exception {} while waiting for a request timeout.", f.get_exception());
+        }
         // Return timeout error no matter if sleep was aborted or not
         return utils::result_into_future<result_with_foreign_response_ptr>(std::move(resp));
     });
