@@ -978,28 +978,6 @@ rest_drain(sharded<service::storage_service>& ss, std::unique_ptr<http::request>
 }
 
 static
-json::json_return_type
-rest_get_keyspaces(http_context& ctx, const_req req) {
-        auto type = req.get_query_param("type");
-        auto replication = req.get_query_param("replication");
-        std::vector<sstring> keyspaces;
-        if (type == "user") {
-            keyspaces = ctx.db.local().get_user_keyspaces();
-        } else if (type == "non_local_strategy") {
-            keyspaces = ctx.db.local().get_non_local_strategy_keyspaces();
-        } else {
-            keyspaces = ctx.db.local().get_all_keyspaces();
-        }
-        if (replication.empty() || replication == "all") {
-            return keyspaces;
-        }
-        const auto want_tablets = replication == "tablets";
-        return keyspaces | std::views::filter([&ctx, want_tablets] (const sstring& ks) {
-            return ctx.db.local().find_keyspace(ks).get_replication_strategy().uses_tablets() == want_tablets;
-        }) | std::ranges::to<std::vector>();
-}
-
-static
 future<json::json_return_type>
 rest_stop_gossiping(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("stop_gossiping");
@@ -1858,7 +1836,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::is_starting.set(r, rest_bind(rest_is_starting, ss));
     ss::get_drain_progress.set(r, rest_bind(rest_get_drain_progress, ss));
     ss::drain.set(r, rest_bind(rest_drain, ss));
-    ss::get_keyspaces.set(r, rest_bind(rest_get_keyspaces, ctx));
     ss::stop_gossiping.set(r, rest_bind(rest_stop_gossiping, ss));
     ss::start_gossiping.set(r, rest_bind(rest_start_gossiping, ss));
     ss::is_gossip_running.set(r, rest_bind(rest_is_gossip_running, ss));
@@ -1941,7 +1918,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::is_starting.unset(r);
     ss::get_drain_progress.unset(r);
     ss::drain.unset(r);
-    ss::get_keyspaces.unset(r);
     ss::stop_gossiping.unset(r);
     ss::start_gossiping.unset(r);
     ss::is_gossip_running.unset(r);
