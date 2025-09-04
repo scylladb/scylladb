@@ -2023,7 +2023,7 @@ SEASTAR_TEST_CASE(sstable_expired_data_ratio) {
         BOOST_REQUIRE(stats.estimated_tombstone_drop_time.bin.size() == sstables::TOMBSTONE_HISTOGRAM_BIN_SIZE);
         auto uncompacted_size = sst->data_size();
         // Asserts that two keys are equal to within a positive delta
-        tombstone_gc_state gc_state(nullptr);
+        tombstone_gc_state gc_state = tombstone_gc_state::for_tests();
         BOOST_REQUIRE(std::fabs(sst->estimate_droppable_tombstone_ratio(now, gc_state, stcs_schema) - expired) <= 0.1);
         sstable_run run;
         BOOST_REQUIRE(run.insert(sst));
@@ -3859,7 +3859,7 @@ SEASTAR_TEST_CASE(purged_tombstone_consumer_sstable_test) {
             gc_before = gc_now - s->gc_grace_seconds();
 
             auto cfc = compact_for_compaction<compacting_sstable_writer_test, compacting_sstable_writer_test>(
-                *s, gc_now, max_purgeable_func, tombstone_gc_state(nullptr), std::move(cr), std::move(purged_cr));
+                *s, gc_now, max_purgeable_func, tombstone_gc_state::for_tests(), std::move(cr), std::move(purged_cr));
 
             auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
             auto compacting = make_lw_shared<sstables::sstable_set>(env.make_sstable_set(cs, s));

@@ -77,7 +77,7 @@ public:
             , _maintenance_set(sstables::make_partitioned_sstable_set(_schema, token_range()))
             , _compaction_strategy(compaction::make_compaction_strategy(_schema->compaction_strategy(), _schema->compaction_strategy_options()))
             , _compaction_strategy_state(compaction::compaction_strategy_state::make(_compaction_strategy))
-            , _tombstone_gc_state(nullptr)
+            , _tombstone_gc_state(tombstone_gc_state::for_tests())
             , _backlog_tracker(_compaction_strategy.make_backlog_tracker())
             , _sstable_factory(std::move(sstable_factory))
     {
