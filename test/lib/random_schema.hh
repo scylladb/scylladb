@@ -139,7 +139,7 @@ timestamp_generator default_timestamp_generator();
 /// Use this to generate mutations that cannot be compacted
 ///
 /// Tombstones will not cover lower level tombstones, or data.
-timestamp_generator uncompactible_timestamp_generator(uint32_t seed);
+timestamp_generator uncompactible_timestamp_generator(uint32_t seed, api::timestamp_type min_timestamp = api::min_timestamp);
 
 struct expiry_info {
     gc_clock::duration ttl;
