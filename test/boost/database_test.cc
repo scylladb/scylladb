@@ -1736,7 +1736,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
     // state, while gc-before against the snapshot yields the before state.
 
     const auto now = gc_clock::now() + gc_clock::duration(std::chrono::hours(6));
-    const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
+    const auto gc_state = tombstone_gc_state(shared_state, 1).with_commitlog_check_disabled();
 
     const auto second_repair_time = gc_clock::now() + gc_clock::duration(std::chrono::hours(3));
 

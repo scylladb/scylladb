@@ -4580,7 +4580,7 @@ SEASTAR_TEST_CASE(test_cache_compacts_expired_tombstones_on_read) {
         }
 
         shared_tombstone_gc_state gc_shared_state;
-        tombstone_gc_state gc_state(gc_shared_state);
+        tombstone_gc_state gc_state(gc_shared_state, 1);
 
         // emulate commitlog behaivor
         gc_shared_state.set_gc_time_min_source([&s](const table_id& id) {
