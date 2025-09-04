@@ -512,6 +512,49 @@ def test_get_item_size_item_falls_into_appropriate_bucket(dynamodb, test_table_s
             test_table_s.get_item(Key={'p': pk})
         check_histogram_metric_increases('GetItem', 'operation_size_kb', metrics, do_test, [(0, bucket(17)), (1, bucket(17.1)), (1, bucket(INF))])
 
+def test_put_item_many_items_fall_into_appropriate_buckets(test_table_s, metrics):
+    def do_test():
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 1 * KB, 'b': 'b' * 5 * KB})
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 6 * KB})
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 401 * KB})
+    check_histogram_metric_increases('PutItem', 'operation_size_kb', metrics, do_test, [(0, prev_bucket(6.1)), (2, bucket(6.1)), (2, prev_bucket(401.1)), (3, bucket(401.1)), (3, bucket(INF))])
+
+# Verify that only the new item size is counted in the histogram. The WCU is
+# calculated as the maximum of the old and new item sizes, but the histogram
+# should log only the new item size.
+def test_put_item_increases_metrics_for_new_item_size_only(test_table_s, metrics):
+    pk = random_string()
+    points = [[value, {'op': 'PutItem', 'le': le}] for value, le in [(0, prev_bucket(6.1)), (1, bucket(6.1)), (1, bucket(INF))]]
+
+    test_table_s.put_item(Item={'p': pk, 'b': 'b' * 3 * KB})
+    with check_increases_metric_exact(metrics, 'scylla_alternator_table_operation_size_kb_bucket', points):
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 6 * KB})
+
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_delete_item_is_zero_for_nonexistent_item(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        def do_test():
+            test_table_s.delete_item(Key={'p': random_string()})
+        check_histogram_metric_increases('DeleteItem', 'operation_size_kb', metrics, do_test, [(0, bucket(INF))])
+
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_delete_item_many_items_fall_into_appropriate_buckets(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        if force_rbw:
+            points = [[value, {'op': 'DeleteItem', 'le': le}] for value, le in [(0, prev_bucket(24.1)), (1, bucket(24.1)), (1, prev_bucket(378.1)), (2, bucket(378.1)), (3, bucket(INF))]]
+        else:
+            points = [[0, {'op': 'DeleteItem', 'le': bucket(INF)}]]
+
+        # ~378KB, ~24KB, ~401KB
+        pks = [random_string() for _ in range(3)]
+        test_table_s.put_item(Item={'p': pks[0], 'a': 'a' * 128 * KB, 'b': 'b' * 250 * KB})
+        test_table_s.put_item(Item={'p': pks[1], 'a': 'a' * 24 * KB})
+        test_table_s.put_item(Item={'p': pks[2], 'a': 'a' * 447 * KB})
+        with check_increases_metric_exact(metrics, 'scylla_alternator_table_operation_size_kb_bucket', points):
+            for pk in pks:
+                test_table_s.delete_item(Key={'p': pk})
+
 def test_batch_get_item_size_no_items_increases_zero_interval(test_table_s, metrics):
     def do_test():
         # An item whose size rounds down to 0 KB shouldn't increase any metric.
@@ -581,6 +624,39 @@ def test_get_item_size_separate_tables_track_metrics_independently(test_table_s,
         test_table_s.name: [(0, prev_bucket(12.1)), (1, bucket(12.1)), (1, bucket(INF))],
         test_table_s_2.name: [(0, prev_bucket(35.1)), (1, bucket(35.1)), (1, bucket(INF))],
     })
+
+def test_put_item_size_separate_tables_track_metrics_independently(test_table_s, test_table_s_2, metrics):
+    def do_test():
+        # Table1: Put 8KB item. Should fall in (8.000000, 10.000000] bucket
+        pk_1 = random_string()
+        test_table_s.put_item(Item={'p': pk_1, 'a': 'a' * 8 * KB})
+        # Table2: Put 50KB item. Should fall in (50.000000, 60.000000] bucket
+        pk_2 = random_string()
+        test_table_s_2.put_item(Item={'p': pk_2, 'a': 'a' * 50 * KB})
+
+    check_table_histogram_metric_increases('PutItem', metrics, do_test, {
+        test_table_s.name: [(0, prev_bucket(8.1)), (1, bucket(8.1)), (1, bucket(INF))],
+        test_table_s_2.name: [(0, prev_bucket(50.1)), (1, bucket(50.1)), (1, bucket(INF))],
+    })
+
+def test_delete_item_size_separate_tables_track_metrics_independently(dynamodb, test_table_s, test_table_s_2, metrics):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        # Prepare items in both tables
+        pk_1 = random_string()
+        pk_2 = random_string()
+        test_table_s.put_item(Item={'p': pk_1, 'a': 'a' * 60 * KB})  # 60KB item
+        test_table_s_2.put_item(Item={'p': pk_2, 'a': 'a' * 86 * KB})  # 86KB item
+        
+        def do_test():
+            # Table1: Delete 60KB+ item. Should fall in (60.000000, 72.000000] bucket
+            test_table_s.delete_item(Key={'p': pk_1})
+            # Table2: Delete 86KB item. Should fall in (86.000000, 103.000000] bucket
+            test_table_s_2.delete_item(Key={'p': pk_2})
+
+        check_table_histogram_metric_increases('DeleteItem', metrics, do_test, {
+            test_table_s.name: [(0, prev_bucket(60.1)), (1, bucket(60.1)), (1, bucket(INF))],
+            test_table_s_2.name: [(0, prev_bucket(86.1)), (1, bucket(86.1)), (1, bucket(INF))],
+        })
 
 def test_batch_get_item_size_separate_tables_track_metrics_independently(test_table_s, test_table_s_2, metrics):
     # Prepare items in both tables

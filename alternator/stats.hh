@@ -85,6 +85,13 @@ public:
         // Each histogram covers the range 0 - 446. Resolves #25143.
         // A size is the retrieved item's size.
         utils::estimated_histogram get_item_op_size_kb{30};
+        // A size is the maximum of the new item's size and the old item's size.
+        utils::estimated_histogram put_item_op_size_kb{30};
+        // A size is the deleted item's size. If the deleted item's size is
+        // unknown (i.e. read-before-write wasn't necessary and it wasn't
+        // forced by a configuration option), it won't be recorded on the
+        // histogram.
+        utils::estimated_histogram delete_item_op_size_kb{30};
 
         // A size is the sum of the sizes of all items per table. This means
         // that a single BatchGetItem / BatchWriteItem updates the histogram

@@ -2818,6 +2818,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     per_table_stats->api_operations.put_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->operation_sizes.put_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
     per_table_stats->wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -2921,6 +2922,9 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     per_table_stats->api_operations.delete_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    if (op->consumed_capacity()._total_bytes > 1) {
+        per_table_stats->operation_sizes.delete_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
+    }
     per_table_stats->wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
