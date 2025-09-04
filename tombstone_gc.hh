@@ -139,8 +139,6 @@ public:
     tombstone_gc_state() = delete;
     explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept
         : tombstone_gc_state(mode::gc_expired, &shared_state, check_commitlog) {}
-    explicit tombstone_gc_state(std::nullptr_t) noexcept
-        : tombstone_gc_state(mode::gc_expired, nullptr, true) {}
 
     static tombstone_gc_state no_gc() { return tombstone_gc_state(mode::no_gc, nullptr, false); }
 
@@ -151,10 +149,6 @@ public:
 
     bool is_gc_enabled() const noexcept {
         return _mode != mode::no_gc;
-    }
-
-    explicit operator bool() const noexcept {
-        return _shared_state != nullptr;
     }
 
     // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
