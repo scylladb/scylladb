@@ -228,7 +228,7 @@ seastar::future<json::json_return_type> run_toppartitions_query(db::toppartition
     });
 }
 
-future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req) {
+scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req) {
     scrub_info info;
     auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
     info.keyspace = std::move(keyspace);
@@ -257,8 +257,7 @@ future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snap
     }
 
     if (!req_param<bool>(*req, "disable_snapshot", false) && !info.column_families.empty()) {
-        auto tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
-        co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, tag, db::snapshot_ctl::skip_flush::no);
+        info.snapshot_tag = format("pre-scrub-{:d}", db_clock::now().time_since_epoch().count());
     }
 
     info.opts = {
@@ -275,7 +274,7 @@ future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snap
         throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
     }
 
-    co_return info;
+    return info;
 }
 
 void set_transport_controller(http_context& ctx, routes& r, cql_transport::controller& ctl) {
@@ -2098,7 +2097,11 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
 
     ss::scrub.set(r, [&ctx, &snap_ctl] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto& db = ctx.db;
-        auto info = co_await parse_scrub_options(ctx, snap_ctl, std::move(req));
+        auto info = parse_scrub_options(ctx, std::move(req));
+
+        if (!info.snapshot_tag.empty()) {
+            co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, db::snapshot_ctl::skip_flush::no);
+        }
 
         sstables::compaction_stats stats;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();

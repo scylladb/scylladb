@@ -61,9 +61,10 @@ struct scrub_info {
     sstables::compaction_type_options::scrub opts;
     sstring keyspace;
     std::vector<sstring> column_families;
+    sstring snapshot_tag;
 };
 
-future<scrub_info> parse_scrub_options(const http_context& ctx, sharded<db::snapshot_ctl>& snap_ctl, std::unique_ptr<http::request> req);
+scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::request> req);
 
 void set_storage_service(http_context& ctx, httpd::routes& r, sharded<service::storage_service>& ss, service::raft_group0_client&);
 void unset_storage_service(http_context& ctx, httpd::routes& r);
