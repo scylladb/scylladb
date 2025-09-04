@@ -257,6 +257,48 @@ public:
     }
 };
 
+// interval_data specialization targeting trivial types
+// where copying _start is cheaper than checking _start_exists and
+// conditionally copying
+template <class T>
+requires std::is_trivially_destructible_v<T> && std::is_default_constructible_v<T>
+class interval_data<T> {
+    using bound = interval_bound<T>;
+    template <typename U>
+    using optional = std::optional<U>;
+protected:
+    bool _start_exists = false;
+    bool _start_inclusive = false;
+    bool _end_exists = false;
+    bool _end_inclusive = false;
+    bool _singular = false;
+    T _start_value;
+    T _end_value;
+public:
+    constexpr interval_data() noexcept = default;
+    interval_data(optional<bound> start, optional<bound> end, bool singular = false) {
+        _singular = singular;
+        if (start) {
+            _start_exists = true;
+            _start_inclusive = start->is_inclusive();
+            _start_value = std::move(start->value());
+        }
+        if (!_singular) {
+            if (end) {
+                _end_exists = true;
+                _end_inclusive = end->is_inclusive();
+                _end_value = std::move(end->value());
+            }
+        }
+    }
+    interval_data(T value) {
+        _start_exists = true;
+        _start_inclusive = true;
+        _singular = true;
+        _start_value = std::move(value);
+    }
+};
+
 template<typename T>
 class interval;
 
