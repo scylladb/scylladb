@@ -1096,6 +1096,26 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     ss::get_metrics_load.set(r, [&db] (std::unique_ptr<http::request> req) {
         return get_cf_stats(db, &replica::column_family_stats::live_disk_space_used);
     });
+
+    ss::get_keyspaces.set(r, [&db] (const_req req) {
+        auto type = req.get_query_param("type");
+        auto replication = req.get_query_param("replication");
+        std::vector<sstring> keyspaces;
+        if (type == "user") {
+            keyspaces = db.local().get_user_keyspaces();
+        } else if (type == "non_local_strategy") {
+            keyspaces = db.local().get_non_local_strategy_keyspaces();
+        } else {
+            keyspaces = db.local().get_all_keyspaces();
+        }
+        if (replication.empty() || replication == "all") {
+            return keyspaces;
+        }
+        const auto want_tablets = replication == "tablets";
+        return keyspaces | std::views::filter([&db, want_tablets] (const sstring& ks) {
+            return db.local().find_keyspace(ks).get_replication_strategy().uses_tablets() == want_tablets;
+        }) | std::ranges::to<std::vector>();
+    });
 }
 
 void unset_column_family(http_context& ctx, routes& r) {
@@ -1211,5 +1231,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     cf::force_major_compaction.unset(r);
     ss::get_load.unset(r);
     ss::get_metrics_load.unset(r);
+    ss::get_keyspaces.unset(r);
 }
 }
