@@ -3220,7 +3220,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         total_wcu = 0;
         // The following loop goes over all items from the same table
         while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
-            size_t wcu = wcu_consumed_capacity_counter::get_units((mutation_builders[pos].second.length_in_bytes())? mutation_builders[pos].second.length_in_bytes() : 1);
+            uint64_t item_size = mutation_builders[pos].second.length_in_bytes();
+            size_t wcu = wcu_consumed_capacity_counter::get_units(item_size ? item_size : 1);
             total_wcu += wcu;
             if (mutation_builders[pos].second.is_put_item()) {
                 w.first->wcu_total[stats::PUT_ITEM] += wcu;
@@ -3229,6 +3230,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 w.first->wcu_total[stats::DELETE_ITEM] += wcu;
                 wcu_delete_units += wcu;
             }
+            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
             pos++;
         }
         if (should_add_wcu) {
@@ -4402,6 +4404,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->operation_sizes.update_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
     per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);

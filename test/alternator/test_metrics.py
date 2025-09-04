@@ -555,6 +555,47 @@ def test_delete_item_many_items_fall_into_appropriate_buckets(dynamodb, test_tab
             for pk in pks:
                 test_table_s.delete_item(Key={'p': pk})
 
+# The item does not exist, so only the new item size is counted in the histogram.
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_update_item_single_pk_item(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        def do_test():
+            test_table_s.update_item(Key={'p': random_string()})
+        check_histogram_metric_increases('UpdateItem', 'operation_size_kb', metrics, do_test, [(1, bucket(0.1)), (1, bucket(INF))])
+
+@pytest.mark.xfail(reason="Updates doesn't add up the existing parameters and the new parameters. This issue will be fixed in a next PR.")
+def test_update_item_many_items_fall_into_appropriate_buckets(dynamodb, test_table_s, metrics):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a'})
+
+        def do_test():
+            # Update 1: item becomes ~216KB
+            test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET b = :b, c = :c", ExpressionAttributeValues={':b': 'b' * 47 * KB, ':c': 'c' * 169 * KB})
+            # Update 2: item becomes ~250KB, 34KB + 216KB = 250KB logged
+            test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET a = :a", ExpressionAttributeValues={':a': 'a' * 34 * KB})
+            # Update 3: item becomes ~550KB, 250KB + 300KB = 550KB logged
+            test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET a = :a", ExpressionAttributeValues={':a': 'a' * 300 * KB})
+        check_histogram_metric_increases('UpdateItem', 'operation_size_kb', metrics, do_test, [(0, prev_bucket(216.1)), (2, bucket(250.1)), (2, prev_bucket(550.1)), (3, bucket(INF))])
+
+# Verify that only the new item size is counted in the histogram if RBW is
+# disabled, and both sizes if it is enabled. The WCU is calculated as the
+# maximum of the old and new item sizes.
+@pytest.mark.xfail(reason="Updates don't consider the larger of the old item size and the new item size. This will be fixed in a next PR.")
+@pytest.mark.parametrize("force_rbw", [True, False])
+def test_update_item_increases_metrics_for_new_item_size_only(dynamodb, test_table_s, metrics, force_rbw):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', str(force_rbw).lower()):
+        if force_rbw:
+            points = [(0, prev_bucket(32.1)), (1, bucket(32.1)), (1, bucket(INF))]
+        else:
+            points = [(0, prev_bucket(22.1)), (1, bucket(22.1)), (1, bucket(INF))]
+
+        pk = random_string()
+        test_table_s.put_item(Item={'p': pk, 'a': 'a' * 10 * KB })
+        def do_test():
+            test_table_s.update_item(Key={'p': pk}, UpdateExpression="SET a = :a", ExpressionAttributeValues={':a': 'a' * 22 * KB})
+        check_histogram_metric_increases('UpdateItem', 'operation_size_kb', metrics, do_test, points)
+
 def test_batch_get_item_size_no_items_increases_zero_interval(test_table_s, metrics):
     def do_test():
         # An item whose size rounds down to 0 KB shouldn't increase any metric.
@@ -597,6 +638,27 @@ def test_batch_get_item_size_many_items_fall_into_appropriate_buckets(dynamodb, 
             })
         check_histogram_metric_increases('BatchGetItem', 'operation_size_kb', metrics, do_test, [(0, prev_bucket(7.1)), (1, bucket(7.1)),
                                                                                                  (1, prev_bucket(10.1)), (2, bucket(10.1)), (2, bucket(INF))])
+
+def test_batch_write_item_many_putitems_falls_into_appropriate_bucket(dynamodb, test_table_s, metrics):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        def do_test():
+            items = [
+                {'PutRequest': {'Item': {'p': random_string(), 'a': 'a' * 47 * KB, 'b': 'b' * 169 * KB}}},
+                {'PutRequest': {'Item': {'p': random_string(), 'a': 'a' * 80 * KB}}},
+            ]
+            test_table_s.meta.client.batch_write_item(RequestItems={test_table_s.name: items})
+        check_histogram_metric_increases('BatchWriteItem', 'operation_size_kb', metrics, do_test, [(0, prev_bucket(80.1)), (1, bucket(80.1)),
+                                                                                                   (1, prev_bucket(216.1)), (2, bucket(216.1)), (2, bucket(INF))])
+
+def test_batch_write_item_increases_metrics_for_bigger_item_only(dynamodb, test_table_s, metrics):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        pk = random_string()
+        probes = [[value, {'op': 'BatchWriteItem', 'le': le}] for value, le in [(0, prev_bucket(250.1)), (1, bucket(250.1)), (1, bucket(INF))]]
+        test_table_s.put_item(Item={'p': pk, 'a': 'a', 'b': 'b' * 250 * KB})
+        with check_increases_metric_exact(metrics, 'scylla_alternator_table_operation_size_kb_bucket', probes):
+            test_table_s.meta.client.batch_write_item(RequestItems={
+                test_table_s.name: [{'PutRequest': {'Item': {'p': pk, 'a': 'a' * 128 * KB}}}]
+            })
 
 ### Test isolation of operation_size_kb metrics between multiple tables:
 # The tests check if operations on two different tables don't affect each 
@@ -658,6 +720,27 @@ def test_delete_item_size_separate_tables_track_metrics_independently(dynamodb, 
             test_table_s_2.name: [(0, prev_bucket(86.1)), (1, bucket(86.1)), (1, bucket(INF))],
         })
 
+def test_update_item_size_separate_tables_track_metrics_independently(dynamodb, test_table_s, test_table_s_2, metrics):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        # Prepare items in both tables
+        pk_1 = random_string()
+        pk_2 = random_string()
+        test_table_s.put_item(Item={'p': pk_1})
+        test_table_s_2.put_item(Item={'p': pk_2})
+        
+        def do_test():
+            # Table1: Update to create 24KB+ item. Should fall in (24.000000, 29.000000] bucket
+            test_table_s.update_item(Key={'p': pk_1}, UpdateExpression="SET a = :a", 
+                                     ExpressionAttributeValues={':a': 'a' * 24 * KB})
+            # Table2: Update to create 72KB+ item. Should fall in (72.000000, 86.000000] bucket
+            test_table_s_2.update_item(Key={'p': pk_2}, UpdateExpression="SET b = :b", 
+                                       ExpressionAttributeValues={':b': 'b' * 72 * KB})
+
+        check_table_histogram_metric_increases('UpdateItem', metrics, do_test, {
+            test_table_s.name: [(0, prev_bucket(24.1)), (1, bucket(24.1)), (1, bucket(INF))],
+            test_table_s_2.name: [(0, prev_bucket(72.1)), (1, bucket(72.1)), (1, bucket(INF))],
+        })
+
 def test_batch_get_item_size_separate_tables_track_metrics_independently(test_table_s, test_table_s_2, metrics):
     # Prepare items in both tables
     pk_1 = random_string()
@@ -685,6 +768,21 @@ def test_batch_get_item_size_separate_tables_track_metrics_independently(test_ta
         test_table_s.name: [(0, prev_bucket(72.1)), (1, bucket(72.1)), (1, bucket(INF))],
         test_table_s_2.name: [(0, prev_bucket(86.1)), (1, bucket(86.1)), (1, bucket(INF))],
     })
+
+def test_batch_write_item_size_separate_tables_track_metrics_independently(dynamodb, test_table_s, test_table_s_2, metrics):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        def do_test():
+            # Table1: BatchWrite 60KB item. Should fall in (60.000000, 72.000000] bucket
+            items_1 = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'a' * 60 * KB}}}]
+            test_table_s.meta.client.batch_write_item(RequestItems={test_table_s.name: items_1})
+            # Table2: BatchWrite 86KB item. Should fall in (86.000000, 103.000000] bucket
+            items_2 = [{'PutRequest': {'Item': {'p': random_string(), 'a': 'a' * 86 * KB}}}]
+            test_table_s_2.meta.client.batch_write_item(RequestItems={test_table_s_2.name: items_2})
+
+        check_table_histogram_metric_increases('BatchWriteItem', metrics, do_test, {
+            test_table_s.name: [(0, prev_bucket(60.1)), (1, bucket(60.1)), (1, bucket(INF))],
+            test_table_s_2.name: [(0, prev_bucket(86.1)), (1, bucket(86.1)), (1, bucket(INF))],
+        })
 
 ###### Test for other metrics, not counting specific DynamoDB API operations:
 

@@ -92,12 +92,18 @@ public:
         // forced by a configuration option), it won't be recorded on the
         // histogram.
         utils::estimated_histogram delete_item_op_size_kb{30};
+        // A size is the maximum of existing item's size and the estimated size
+        // of the update. This will be changed to the maximum of the existing item's
+        // size and the new item's size in a subsequent PR.
+        utils::estimated_histogram update_item_op_size_kb{30};
 
         // A size is the sum of the sizes of all items per table. This means
         // that a single BatchGetItem / BatchWriteItem updates the histogram
         // for each table that it has items in.
         // The sizes are the retrieved items' sizes grouped per table.
         utils::estimated_histogram batch_get_item_op_size_kb{30};
+        // The sizes are the the written items' sizes grouped per table.
+        utils::estimated_histogram batch_write_item_op_size_kb{30};
     } operation_sizes;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
