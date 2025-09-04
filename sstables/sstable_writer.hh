@@ -44,6 +44,7 @@ public:
     stop_iteration consume_end_of_partition();
     void consume_end_of_stream();
     void set_repaired_at(int64_t repaired_at);
+    uint64_t data_file_position_for_tests() const;
 };
 
 } // namespace sstables
