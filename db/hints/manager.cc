@@ -505,20 +505,20 @@ bool manager::can_hint_for(endpoint_id ep) const noexcept {
     // hints where N is the total number nodes in the cluster.
     const auto hipf = hints_in_progress_for(ep);
     if (_stats.size_of_hints_in_progress > max_size_of_hints_in_progress() && hipf > 0) {
-        manager_logger.trace("size_of_hints_in_progress {} hints_in_progress_for({}) {}",
+        manager_logger.trace("can_hint_for: size_of_hints_in_progress {} hints_in_progress_for({}) {}",
                 _stats.size_of_hints_in_progress, ep, hipf);
         return false;
     }
 
     // Check that the destination DC is "hintable".
     if (!check_dc_for(ep)) {
-        manager_logger.trace("{}'s DC is not hintable", ep);
+        manager_logger.trace("can_hint_for: {}'s DC is not hintable", ep);
         return false;
     }
 
     const bool node_is_alive = local_gossiper().get_endpoint_downtime(ep) <= _max_hint_window_us;
     if (!node_is_alive) {
-        manager_logger.trace("{} has been down for too long, not hinting", ep);
+        manager_logger.trace("can_hint_for: {} has been down for too long, not hinting", ep);
         return false;
     }
 
