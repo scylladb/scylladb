@@ -1372,8 +1372,8 @@ static std::unordered_set<std::string> validate_attribute_definitions(std::strin
 }
 
 // The following "extract_from_attrs_column_computation" implementation is
-// what allows Alternator GSIs to use in a materialized view's key a member
-// from the ":attrs" map instead of a real column in the schema:
+// what allows Alternator GSIs and LSIs to use in a materialized view's key a
+// member from the ":attrs" map instead of a real column in the schema:
 
 const bytes extract_from_attrs_column_computation::MAP_NAME = executor::ATTRS_COLUMN_NAME;
 
@@ -1498,10 +1498,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     // any table.
     std::vector<schema_builder> view_builders;
     std::unordered_set<std::string> index_names;
-    // Remember the attributes used for LSI keys. Since LSI must be created
-    // with the table, we make these attributes real schema columns, and need
-    // to remember this below if the same attributes are used as GSI keys.
-    std::unordered_set<std::string> lsi_range_keys;
 
     const rjson::value* lsi = rjson::find(request, "LocalSecondaryIndexes");
     if (lsi) {
@@ -1539,10 +1535,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             if (view_range_key == hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
               }
-            if (view_range_key != range_key) {
-                add_column(builder, view_range_key, *attribute_definitions, column_kind::regular_column);
-            }
-            add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key);
+            add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, view_range_key != range_key);
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
             // key(s).
@@ -1559,7 +1552,6 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
             view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
             view_builders.emplace_back(std::move(view_builder));
-            lsi_range_keys.emplace(view_range_key);
         }
     }
 
@@ -1586,19 +1578,14 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             auto [view_hash_key, view_range_key] = parse_key_schema(g, "GlobalSecondaryIndexes");
 
             // If an attribute is already a real column in the base table
-            // (i.e., a key attribute) or we already made it a real column
-            // as an LSI key above, we can use it directly as a view key.
+            // (i.e., a key attribute), we can use it directly as a view key.
             // Otherwise, we need to add it as a "computed column", which
             // extracts and deserializes the attribute from the ":attrs" map.
-            bool view_hash_key_real_column =
-                partial_schema->get_column_definition(to_bytes(view_hash_key)) ||
-                lsi_range_keys.contains(view_hash_key);
+            bool view_hash_key_real_column = partial_schema->get_column_definition(to_bytes(view_hash_key));
             add_column(view_builder, view_hash_key, *attribute_definitions, column_kind::partition_key, !view_hash_key_real_column);
             unused_attribute_definitions.erase(view_hash_key);
             if (!view_range_key.empty()) {
-                bool view_range_key_real_column =
-                    partial_schema->get_column_definition(to_bytes(view_range_key)) ||
-                    lsi_range_keys.contains(view_range_key);
+                bool view_range_key_real_column = partial_schema->get_column_definition(to_bytes(view_range_key));
                 add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, !view_range_key_real_column);
                 if (!partial_schema->get_column_definition(to_bytes(view_range_key)) &&
                     !partial_schema->get_column_definition(to_bytes(view_hash_key))) {
@@ -1920,7 +1907,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                         schema_builder view_builder(keyspace_name, vname);
                         auto [view_hash_key, view_range_key] = parse_key_schema(it->value, "GlobalSecondaryIndexUpdates");
                         // If an attribute is already a real column in the base
-                        // table (i.e., a key attribute in the base table or LSI),
+                        // table (i.e., a key attribute in the base table),
                         // we can use it directly as a view key. Otherwise, we
                         // need to add it as a "computed column", which extracts
                         // and deserializes the attribute from the ":attrs" map.
@@ -2201,9 +2188,9 @@ std::unordered_map<bytes, std::string> si_key_attributes(data_dictionary::table 
     return ret;
 }
 
-// When an attribute is a key (hash or sort) of one of the GSIs on a table,
-// DynamoDB refuses an update to that attribute with an unsuitable value.
-// Unsuitable values are:
+// When an attribute is a key (hash or sort) of one of the GSIs or LSIs on a
+// table, DynamoDB refuses an update to that attribute with an unsuitable
+// value. Unsuitable values are:
 //   1. An empty string (those are normally allowed as values, but not allowed
 //      as keys, including GSI keys).
 //   2. A value with a type different than that declared for the GSI key.
@@ -2219,9 +2206,9 @@ std::unordered_map<bytes, std::string> si_key_attributes(data_dictionary::table 
 // thrown. The checking here is similar to the checking done in
 // get_key_from_typed_value() for the base table's key columns.
 //
-// validate_value_if_gsi_key() should only be called after validate_value()
+// validate_value_if_index_key() should only be called after validate_value()
 // already validated that the value itself has a valid form.
-static inline void validate_value_if_gsi_key(
+static inline void validate_value_if_index_key(
         std::unordered_map<bytes, std::string> key_attributes,
         const bytes& attribute,
         const rjson::value& value) {
@@ -2241,13 +2228,13 @@ static inline void validate_value_if_gsi_key(
     std::string_view value_type = rjson::to_string_view(value.MemberBegin()->name);
     if (expected_type != value_type) {
         throw api_error::validation(fmt::format(
-            "Type mismatch: expected type {} for GSI key attribute {}, got type {}",
+            "Type mismatch: expected type {} for GSI or LSI key attribute {}, got type {}",
             expected_type, to_string_view(attribute), value_type));
     }
     std::string_view value_content = rjson::to_string_view(value.MemberBegin()->value);
     if (value_content.empty()) {
         throw api_error::validation(fmt::format(
-            "GSI key attribute {} cannot be set to an empty string", to_string_view(attribute)));
+            "GSI or LSI key attribute {} cannot be set to an empty string", to_string_view(attribute)));
     }
 }
 
@@ -2262,9 +2249,9 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
         validate_attr_name_length("", column_name.size(), cdef && cdef->is_primary_key());
         _length_in_bytes += column_name.size();
         if (!cdef) {
-            // This attribute may be a key column of one of the GSI, in which
-            // case there are some limitations on the value
-            validate_value_if_gsi_key(key_attributes, column_name, it->value);
+            // This attribute may be a key column of one of the GSI or LSI,
+            // in which case there are some limitations on the value.
+            validate_value_if_index_key(key_attributes, column_name, it->value);
             bytes value = serialize_item(it->value);
             if (value.size()) {
                 // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
@@ -2272,10 +2259,11 @@ put_or_delete_item::put_or_delete_item(const rjson::value& item, schema_ptr sche
             }
             _cells->push_back({std::move(column_name), serialize_item(it->value)});
         } else if (!cdef->is_primary_key()) {
-            // Fixed-type regular column can be used for LSI key
+            // Fixed-type regular columns were used for LSIs and also (in the
+            // slightly more distant past) GSIs, before they were moved to
+            // :attrs. We keep this branch for backward compatibility.
             bytes value = get_key_from_typed_value(it->value, *cdef);
-            _cells->push_back({std::move(column_name),
-                    value});
+            _cells->push_back({std::move(column_name), value});
             if (value.size()) {
                 // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
                 _length_in_bytes += value.size() - 1;
@@ -3690,7 +3678,7 @@ public:
     attribute_path_map<parsed::update_expression::action> _update_expression;
 
     // Saved list of GSI keys in the table being updated, used for
-    // validate_value_if_gsi_key()
+    // validate_value_if_index_key()
     std::unordered_map<bytes, std::string> _key_attributes;
 
     parsed::condition_expression _condition_expression;
@@ -4087,9 +4075,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             bytes column_value = get_key_from_typed_value(json_value, *cdef);
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
         } else {
-            // This attribute may be a key column of one of the GSIs, in which
-            // case there are some limitations on the value.
-            validate_value_if_gsi_key(_key_attributes, column_name, json_value);
+            // This attribute may be a key column of one of the GSIs or LSIs,
+            // in which case there are some limitations on the value.
+            validate_value_if_index_key(_key_attributes, column_name, json_value);
             attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
         }
     };
