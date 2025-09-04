@@ -386,6 +386,8 @@ async def start_node(executable: PathLike, cluster_workdir: PathLike, addr: str,
         f"--cas-contention-timeout-in-ms=60000",
         f"--alternator-port=8000",
         f"--alternator-write-isolation=only_rmw_uses_lwt",
+        f"--authenticator=PasswordAuthenticator",
+        f"--authorizer=CassandraAuthorizer",
     ] + list(extra_opts)
     return await run(['bash', '-c', fr"""exec {shlex.join(command)} >{q(logfile)} 2>&1"""], cwd=cluster_workdir)
 
@@ -514,7 +516,7 @@ def cs_command(cmd: list[str], n: int, node: str, cl: str, pop: Optional[str] = 
         f"cl={cl}",
     ] + (["no-warmup"] if not warmup else []) + [
     ] + (["-pop", pop] if pop else []) + [
-        "-mode", "native", "cql3", "protocolVersion=4",
+        "-mode", "native", "cql3", "protocolVersion=4", "user=cassandra", "password=cassandra",
         "-node", node,
         "-rate", rate,
     ] + (["-schema", schema] if schema else []) + [
@@ -659,6 +661,33 @@ async def train_decommission(executable: PathLike, workdir: PathLike) -> None:
 trainers["decommission"] = ("decommission_dataset", train_decommission)
 populators["decommission_dataset"] = populate_decommission
 
+# AUTH CONNECTIONS STRESS ==================================================
+
+async def populate_auth_conns(executable: PathLike, workdir: PathLike) -> None:
+    # Create roles, table and permissions via CQL script.
+    async with with_cs_populate(executable=executable, workdir=workdir) as server:
+        await bash(fr"python3 ./exec_cql.py --file conf/auth.cql --host {server}")
+
+async def train_auth_conns(executable: PathLike, workdir: PathLike) -> None:
+    # Repeatedly connect as the reader user and perform simple reads to stress
+    # authentication, authorization and connection setup paths.
+    async with with_cluster(executable=executable, workdir=workdir) as (addrs, procs):
+        await asyncio.sleep(5) # FIXME: artificial gossip sleep, get rid of it.
+        # Run 30k connection requests.
+        await run_checked([
+            "python3", "./auth_conns_stress.py",
+            "--host", addrs[0],
+            "--user", "reader_role",
+            "--password", "password1",
+            "--processes", "30",
+            "--threads", "10",
+            "--iterations", "100"
+        ], cpuset=CS_CPUSET.get())
+    await merge_profraw(workdir)
+
+trainers["auth_conns"] = ("auth_conns_dataset", train_auth_conns)
+populators["auth_conns_dataset"] = populate_auth_conns
+
 # LWT ==================================================
 
 async def populate_lwt(executable: PathLike, workdir: PathLike) -> None:
@@ -690,7 +719,7 @@ populators["si_dataset"] = populate_si
 
 async def populate_counters(executable: PathLike, workdir: PathLike) -> None:
     async with with_cs_populate(executable=executable, workdir=workdir) as server:
-        await bash(fr"../tools/cqlsh/bin/cqlsh -f conf/counters.yaml {server}")
+        await bash(fr"python3 ./exec_cql.py --file conf/counters.cql --host {server}")
         # Sleeps added in reaction to schema disagreement errors.
         # FIXME: get rid of this sleep and find a sane way to wait for schema
         # agreement.
@@ -702,10 +731,7 @@ async def train_counters(executable: PathLike, workdir: PathLike) -> None:
         await cs(cmd=["counter_write"], n=50000, pop=f"dist=UNIFORM(1..1000000)", cl="local_quorum", node=server, schema="keyspace=counters")
         await cs(cmd=["counter_read"], n=50000, pop=f"dist=UNIFORM(1..1000000)", cl="local_quorum", node=server, schema="keyspace=counters")
 
-# This workload depends on cqlsh, so it's commented out until we merge
-# python3 support in cqlsh (which, at the moment of writing, is supposed
-# to be imminent).
-#trainers["counters"] = ("counters_dataset", train_counters)
+trainers["counters"] = ("counters_dataset", train_counters)
 populators["counters_dataset"] = populate_counters
 
 # REPAIR ==================================================

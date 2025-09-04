@@ -2,6 +2,7 @@
 keyspace: ks
 
 # The CQL for creating a keyspace (optional if it already exists)
+# FIXME: use tablets after https://github.com/scylladb/scylladb/issues/18068 is done.
 keyspace_definition: |
   CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND TABLETS = {'enabled': false};
 
