@@ -362,10 +362,6 @@ static void write_partial_partition(ser::writer_of_qr_partition<bytes_ostream>&&
 }
 
 foreign_ptr<lw_shared_ptr<query::result>> result_merger::get() {
-    if (_partial.size() == 1) {
-        return std::move(_partial[0]);
-    }
-
     bytes_ostream w;
     auto partitions = ser::writer_of_query_result<bytes_ostream>(w).start_partitions();
     uint64_t row_count = 0;
