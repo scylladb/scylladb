@@ -1282,3 +1282,19 @@ async def test_tablet_rebuild(manager: ManagerClient):
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_rebuild_failure(manager: ManagerClient):
     await check_tablet_rebuild_with_repair(manager, True)
+
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_repair_with_invalid_session_id(manager: ManagerClient):
+    injection = "handle_tablet_migration_repair_random_session"
+    token = -1
+    servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
+
+    logs = [await manager.server_open_log(s.server_id) for s in servers]
+    marks = [await log.mark() for log in logs]
+
+    [await manager.api.enable_injection(s.ip_addr, injection, one_shot=True) for s in servers]
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+
+    matches = [await log.grep("std::runtime_error \(Session not found", from_mark=mark) for log, mark in zip(logs, marks)]
+    assert sum(len(x) for x in matches) > 0
