@@ -36,7 +36,6 @@
 #include "serialization.hh"
 #include "expressions.hh"
 #include "conditions.hh"
-#include "cql3/util.hh"
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
@@ -117,7 +116,7 @@ enum class table_status {
 };
 
 static std::string_view table_status_to_sstring(table_status tbl_status) {
-    switch(tbl_status) {
+    switch (tbl_status) {
         case table_status::active:
             return "ACTIVE";
         case table_status::creating:
@@ -1580,12 +1579,12 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             unused_attribute_definitions.erase(view_range_key);
             if (view_range_key == hash_key) {
                 co_return api_error::validation("LocalSecondaryIndex sort key cannot be the same as hash key");
-              }
+            }
             add_column(view_builder, view_range_key, *attribute_definitions, column_kind::clustering_key, view_range_key != range_key);
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
             // key(s).
-            if  (!range_key.empty() && view_range_key != range_key) {
+            if (!range_key.empty() && view_range_key != range_key) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
             }
             view_builder.with_column(bytes(executor::ATTRS_COLUMN_NAME), attrs_type(), column_kind::regular_column);
@@ -1646,11 +1645,11 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             // key(s).
             // NOTE: DescribeTable's implementation depends on those keys being added AFTER user specified keys.
             bool spurious_base_key_added_as_range_key = false;
-            if  (hash_key != view_hash_key && hash_key != view_range_key) {
+            if (hash_key != view_hash_key && hash_key != view_range_key) {
                 add_column(view_builder, hash_key, *attribute_definitions, column_kind::clustering_key);
                 spurious_base_key_added_as_range_key = true;
             }
-            if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
+            if (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
                 spurious_base_key_added_as_range_key = true;
             }
@@ -2660,6 +2659,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
     }
+
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
@@ -3738,7 +3738,7 @@ static size_t estimate_value_size(const rjson::value& value) {
     return size;
 }
 
-class update_item_operation  : public rmw_operation {
+class update_item_operation : public rmw_operation {
 public:
     // Some information parsed during the constructor to check for input
     // errors, and cached to be used again during apply().
@@ -4619,9 +4619,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         bool is_quorum = rs.cl == db::consistency_level::LOCAL_QUORUM;
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
         per_table_stats->api_operations.batch_get_item_histogram.add(rs.requests.size());
-        for (const auto &r : rs.requests) {
-            auto& pk = r.first;
-            auto& cks = r.second;
+        for (const auto& [pk, cks] : rs.requests) {
             dht::partition_range_vector partition_ranges{dht::partition_range(dht::decorate_key(*rs.schema, pk))};
             std::vector<query::clustering_range> bounds;
             if (rs.schema->clustering_key_size() == 0) {
@@ -4666,9 +4664,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (size_t i = 0; i < requests.size(); i++) {
         const table_requests& rs = requests[i];
         std::string table = table_name(*rs.schema);
-        for (const auto &r : rs.requests) {
-            auto& pk = r.first;
-            auto& cks = r.second;
+        for (const auto& [_, cks] : rs.requests) {
             auto& fut = *fut_it;
             ++fut_it;
             try {
@@ -5130,7 +5126,7 @@ static future<executor::request_return_type> do_query(service::storage_proxy& pr
     if (paging_state) {
         rjson::add(items_descr, "LastEvaluatedKey", encode_paging_state(*table_schema, *paging_state));
     }
-    if (has_filter){
+    if (has_filter) {
         cql_stats.filtered_rows_read_total += p->stats().rows_read_total;
         // update our "filtered_row_matched_total" for all the rows matched, despited the filter
         cql_stats.filtered_rows_matched_total += size;
@@ -5900,7 +5896,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
             // initial_tablets to a disengaged optional.
             try {
                 initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
-            } catch(...) {
+            } catch (...) {
                 initial_tablets = std::nullopt;
             }
         }
@@ -5920,4 +5916,4 @@ future<> executor::stop() {
     return _parsed_expression_cache->stop();
 }
 
-}
+} // namespace alternator

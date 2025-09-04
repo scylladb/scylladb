@@ -13,7 +13,6 @@
 
 #include <seastar/json/formatter.hh>
 
-#include "auth/permission.hh"
 #include "db/config.hh"
 
 #include "cdc/log.hh"
@@ -127,7 +126,7 @@ public:
     }
 };
 
-}
+} // namespace alternator
 
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_arn>
@@ -297,7 +296,7 @@ sequence_number::sequence_number(std::string_view v)
     }())
 {}
 
-}
+} // namespace alternator
 
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::shard_id>
@@ -357,7 +356,7 @@ static stream_view_type cdc_options_to_steam_view_type(const cdc::options& opts)
     return type;
 }
 
-}
+} // namespace alternator
 
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::stream_view_type>
@@ -476,10 +475,10 @@ future<executor::request_return_type> executor::describe_stream(client_state& cl
         } else {
             status = "ENABLED";
         }
-    } 
+    }
 
     auto ttl = std::chrono::seconds(opts.ttl());
-    
+
     rjson::add(stream_desc, "StreamStatus", rjson::from_string(status));
 
     stream_view_type type = cdc_options_to_steam_view_type(opts);
@@ -715,7 +714,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 
     auto type = rjson::get<shard_iterator_type>(request, "ShardIteratorType");
     auto seq_num = rjson::get_opt<sequence_number>(request, "SequenceNumber");
-    
+
     if (type < shard_iterator_type::TRIM_HORIZON && !seq_num) {
         throw api_error::validation("Missing required parameter \"SequenceNumber\"");
     }
@@ -725,7 +724,7 @@ future<executor::request_return_type> executor::get_shard_iterator(client_state&
 
     auto stream_arn = rjson::get<alternator::stream_arn>(request, "StreamArn");
     auto db = _proxy.data_dictionary();
-    
+
     schema_ptr schema = nullptr;
     std::optional<shard_id> sid;
 
@@ -790,7 +789,7 @@ struct event_id {
         return os;
     }
 };
-}
+} // namespace alternator
 
 template<typename ValueType>
 struct rapidjson::internal::TypeHelper<ValueType, alternator::event_id>
@@ -1125,4 +1124,4 @@ void executor::supplement_table_stream_info(rjson::value& descr, const schema& s
     }
 }
 
-}
+} // namespace alternator
