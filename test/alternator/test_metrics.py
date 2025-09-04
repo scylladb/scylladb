@@ -100,7 +100,7 @@ def check_increases_metric(metrics, metric_names, requested_labels=None):
     yield
     the_metrics = get_metrics(metrics)
     for n in metric_names:
-        assert saved_metrics[n] < get_metric(metrics, n, requested_labels, the_metrics), f'metric {n} did not increase'
+        assert saved_metrics[n] < get_metric(metrics, n, requested_labels, the_metrics), f"Metric '{n}' with labels {requested_labels} did not increase"
 
 @contextmanager
 def check_increases_metric_exact(metrics, metric_name, value_and_labels):
@@ -108,8 +108,14 @@ def check_increases_metric_exact(metrics, metric_name, value_and_labels):
     saved_metric = [get_metric(metrics, metric_name, vl[1], the_metrics) for vl in value_and_labels]
     yield
     the_metrics = get_metrics(metrics)
-    for idx, m in enumerate(saved_metric):
-        assert get_metric(metrics, metric_name, value_and_labels[idx][1], the_metrics) - m == value_and_labels[idx][0], f'metric {metric_name} did not increase at expected value {m}'
+    for (expected_increase, labels), base_value in zip(value_and_labels, saved_metric):
+        actual_increase = get_metric(metrics, metric_name, labels, the_metrics) - base_value
+        assert actual_increase == expected_increase, (
+            f"Metric '{metric_name}' with labels {labels} did not increase by an exact value. "
+            f"Initial value: {base_value}. "
+            f"Expected increase: {expected_increase}. "
+            f"Actual increase: {actual_increase}."
+        )
 
 @contextmanager
 def check_increases_operation(metrics, operation_names, metric_name = 'scylla_alternator_operation', expected_value=None):
