@@ -1182,11 +1182,13 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
                 co_await _client->make_request(
                     std::move(req),
-                    [this](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+                    [this, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
                         }
+                        gc.read_stats.ops++;
+                        gc.read_stats.duration += s3_clock::now() - start;
                         if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
@@ -1200,7 +1202,6 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                     // Inject non-retryable error to emulate source failure
                                     throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
                                 });
-                                auto start = s3_clock::now();
                                 s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
                                 temporary_buffer<char> buf;
                                 auto units = try_get_units(_client->_memory, _socket_buff_size);
@@ -1214,7 +1215,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                     break;
                                 }
                                 auto buff_size = buf.size();
-                                gc.read_stats.update(buff_size, s3_clock::now() - start);
+                                gc.read_stats.bytes += buff_size;
                                 _range += buff_size;
                                 _buffers_size += buff_size;
                                 if (buff_size == 0 && _range.length() == 0) {
