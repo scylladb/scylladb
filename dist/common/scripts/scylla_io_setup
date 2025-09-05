@@ -178,7 +178,8 @@ def run_iotune():
                    "--properties-file", etcdir() + "/scylla.d/io_properties.yaml",
                    *(f"--get-best-iops-with-buffer-sizes={s}" for s in [512, 1024, 2048, 4096]),
                    f"--sequential_write_buffer_size={128<<10}",
-                   f"--sequential_read_buffer_size={128<<10}"] + iotune_args
+                   f"--sequential_read_buffer_size={128<<10}",
+                   "--duration=240"] + iotune_args
             try:
                 subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             except subprocess.CalledProcessError as e:
