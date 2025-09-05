@@ -580,16 +580,6 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<inet_address>
 
 
 future<> gossiper::do_apply_state_locally(gms::inet_address node, endpoint_state remote_state, bool shadow_round) {
-
-    co_await utils::get_local_injector().inject("delay_gossiper_apply", [&node, &remote_state](auto& handler) -> future<> {
-        const auto gossip_delay_node = handler.template get<std::string_view>("delay_node");
-        if (gossip_delay_node && !remote_state.get_host_id() && inet_address(sstring(gossip_delay_node.value())) == node) {
-            logger.debug("delay_gossiper_apply: suspend for node {}", node);
-            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
-            logger.debug("delay_gossiper_apply: resume for node {}", node);
-        }
-    });
-
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await lock_endpoint(node, null_permit_id);
@@ -1330,10 +1320,6 @@ void gossiper::make_random_gossip_digest(utils::chunked_vector<gossip_digest>& g
 }
 
 future<> gossiper::replicate(inet_address ep, endpoint_state es, permit_id pid) {
-    if (!es.get_host_id()) {
-        on_internal_error(logger, fmt::format("adding a state with empty host id for ip: {}", ep));
-    }
-
     verify_permit(ep, pid);
 
     // First pass: replicate the new endpoint_state on all shards.
