@@ -14,6 +14,8 @@ import asyncio
 import shlex
 from random import randint
 
+import pytest
+
 from types import SimpleNamespace
 
 import colorama
@@ -153,6 +155,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="timeout value for test.py/pytest session execution")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
+    parser.add_argument('--quiet', '-q', action='store_true', default=False,
+                        help='Quiet reporting')
     parser.add_argument('--jobs', '-j', action="store", type=int,
                         help="Number of jobs to use for running the tests")
     parser.add_argument('--save-log-on-success', "-s", default=False,
@@ -310,7 +314,6 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         logging.info(f'No boost found. Skipping pytest execution for boost tests.')
         return 0, []
     args = [
-        'pytest',
         "-s",  # don't capture print() output inside pytest
         '--color=yes',
         f'--repeat={options.repeat}',
@@ -327,8 +330,12 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
-            '-v' if options.verbose else '-q',
         ])
+    if options.verbose:
+        args.append('-v')
+    if options.quiet:
+        args.append('--quiet')
+        args.extend(['-p','no:sugar'])
     if options.pytest_arg:
         # If pytest_arg is provided, it should be a string with arguments to pass to pytest
         args.extend(shlex.split(options.pytest_arg))
@@ -353,30 +360,7 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.markers:
         args.append(f'-m={options.markers}')
     args.extend(files_to_run)
-    p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True)
-    try:
-        # Read output from pytest and print it to the console
-        if options.verbose:
-            for line in p.stdout:
-                print(line, end='', flush=True)
-        else:
-            # without verbose, pytest output only one line, so to have live progress, need to read it by char,
-            # because each char is a test result
-            while True:
-                char = p.stdout.read(1)
-                if char == '' and p.poll() is not None:
-                    break
-                if char:
-                    print(char, end='', flush=True)
-
-        # Wait for pytest to finish and get its return code
-        p.wait(timeout=60)
-    except subprocess.TimeoutExpired:
-        print('Timeout reached')
-        p.kill()
-    except KeyboardInterrupt:
-        p.kill()
-        raise
+    pytest.main(args=args)
 
     if options.list_tests:
         return 0, []
