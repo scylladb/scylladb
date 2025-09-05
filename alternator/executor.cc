@@ -2429,8 +2429,7 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
     , _returnvalues(parse_returnvalues(_request))
-    , _returnvalues_on_condition_check_failure(parse_returnvalues_on_condition_check_failure(_request))
-{
+    , _returnvalues_on_condition_check_failure(parse_returnvalues_on_condition_check_failure(_request)) {
     // _pk and _ck will be assigned later, by the subclass's constructor
     // (each operation puts the key in a slightly different location in
     // the request).
@@ -2441,14 +2440,11 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
         auto selection = cql3::selection::selection::wildcard(_schema);
         uint64_t item_length = 0;
         auto previous_item = executor::describe_single_item(_schema, slice, *selection, *qr, {}, &item_length);
-        if (_consumed_capacity._total_bytes < item_length) {
-            _consumed_capacity._total_bytes = item_length;
-        }
         if (previous_item) {
-            return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
+            return apply(std::make_unique<rjson::value>(std::move(*previous_item)), item_length, ts);
         }
     }
-    return apply(std::unique_ptr<rjson::value>(), ts);
+    return apply(std::unique_ptr<rjson::value>(), 0, ts);
 }
 
 rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
@@ -2587,17 +2583,17 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats).then(
                     [this, &proxy, &wcu_total, trace_state, permit = std::move(permit)] (item_with_size&& previous_item) mutable {
                 _consumed_capacity._total_bytes += previous_item.size;
-                std::optional<mutation> m = apply(std::move(previous_item.item), api::new_timestamp());
+                std::optional<mutation> m = apply(std::move(previous_item.item), previous_item.size, api::new_timestamp());
                 if (!m) {
                     return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
                 }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this,&wcu_total] () mutable {
+                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &wcu_total] () mutable {
                     return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
                 });
             });
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
-        std::optional<mutation> m = apply(nullptr, api::new_timestamp());
+        std::optional<mutation> m = apply(nullptr, 0, api::new_timestamp());
         SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
         return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &wcu_total] () mutable {
             return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
@@ -2706,7 +2702,7 @@ public:
                check_needs_read_before_write(_condition_expression) ||
                _returnvalues == returnvalues::ALL_OLD;
     }
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, uint64_t size, api::timestamp_type ts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
             if (previous_item && _returnvalues_on_condition_check_failure ==
@@ -2722,6 +2718,9 @@ public:
             _return_attributes = std::move(*previous_item);
         } else {
             _return_attributes = {};
+        }
+        if (_consumed_capacity._total_bytes < size) {
+            _consumed_capacity._total_bytes = size;
         }
         return _mutation_builder.build(_schema, ts);
     }
@@ -2805,7 +2804,7 @@ public:
                 check_needs_read_before_write(_condition_expression) ||
                 _returnvalues == returnvalues::ALL_OLD;
     }
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, uint64_t size, api::timestamp_type ts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
             if (previous_item && _returnvalues_on_condition_check_failure ==
@@ -2822,9 +2821,8 @@ public:
         } else {
             _return_attributes = {};
         }
-        if (_consumed_capacity._total_bytes == 0) {
-            _consumed_capacity._total_bytes = 1;
-        }
+        // Deleting a non-existent item should consume 1 RCU.
+        _consumed_capacity._total_bytes = std::max(size, uint64_t(1));
         return _mutation_builder.build(_schema, ts);
     }
     virtual ~delete_item_operation() = default;
@@ -3521,9 +3519,9 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                 }
                 if (include_all_embedded_attributes || !attrs_to_get || attrs_to_get->contains(attr_name)) {
                     bytes value = value_cast<bytes>(entry.second);
-                    if (item_length_in_bytes && value.length()) {
+                    if (item_length_in_bytes) {
                         // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
-                        (*item_length_in_bytes) += value.length() - 1;
+                        (*item_length_in_bytes) += value.length() ? value.length() - 1 : 0;
                     }
                     rjson::value v = deserialize_item(value);
                     if (attrs_to_get) {
@@ -3541,7 +3539,9 @@ void executor::describe_single_item(const cql3::selection::selection& selection,
                     // names are unique so add() makes sense
                     rjson::add_with_string_name(item, attr_name, std::move(v));
                 } else if (item_length_in_bytes) {
-                    (*item_length_in_bytes) += value_cast<bytes>(entry.second).length() - 1;
+                    // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+                    auto v = value_cast<bytes>(entry.second).length();
+                    (*item_length_in_bytes) += v ? v - 1 : 0;
                 }
             }
         }
@@ -3695,7 +3695,7 @@ private:
         bool any_updates = false;
         bool any_deletes = false;
 
-        uint64_t post_update_item_size = 0;
+        int64_t post_update_size_diff = 0;
     };
 
 public:
@@ -3715,7 +3715,7 @@ public:
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
     virtual ~update_item_operation() = default;
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override;
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, uint64_t size, api::timestamp_type ts) const override;
     bool needs_read_before_write() const;
 
 private:
@@ -3723,6 +3723,7 @@ private:
 
     void apply_attribute_updates(apply_state& state) const;
     void apply_update_expression(apply_state& state) const;
+    static void update_size_diff(apply_state& state, const std::string_view& column_name, const bytes& value);
     void update_field(apply_state& state, bytes&& column_name, const rjson::value& json_value,
             const attribute_path_map_node<parsed::update_expression::action>* h = nullptr) const;
 };
@@ -3803,15 +3804,15 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
         // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
         _consumed_capacity._total_bytes += _pk.representation().size() - 2;
     }
+    for (const auto& col : _schema->partition_key_columns()) {
+        _consumed_capacity._total_bytes += dynamo_field_size(col.name_as_text());
+    }
     if (_ck.representation().size() > 2) {
         // ScyllaDB uses two extra bytes compared to DynamoDB for the key bytes length
         _consumed_capacity._total_bytes += _ck.representation().size() - 2;
     }
-    if (expression_attribute_names) {
-        _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_names);
-    }
-    if (expression_attribute_values) {
-        _consumed_capacity._total_bytes += estimate_value_size(*expression_attribute_values);
+    for (const auto& col : _schema->clustering_key_columns()) {
+        _consumed_capacity._total_bytes += dynamo_field_size(col.name_as_text());
     }
 
     _key_attributes = si_key_attributes(proxy.data_dictionary().find_table(
@@ -4050,17 +4051,22 @@ static bool hierarchy_actions(
 
 void update_item_operation::delete_field(apply_state& state, bytes&& column_name) const {
     state.any_deletes = true;
+
+    std::string_view column_name_view = to_string_view(column_name);
     if (_returnvalues == returnvalues::ALL_NEW) {
-        rjson::remove_member(_return_attributes, to_string_view(column_name));
-    } else if (_returnvalues == returnvalues::UPDATED_OLD && state.previous_item) {
-        std::string_view cn = to_string_view(column_name);
-        const rjson::value* col = rjson::find(*state.previous_item, cn);
-        if (col) {
-            // In the UPDATED_OLD case the item starts empty and column
-            // names are unique, so we can use add()
-            rjson::add_with_string_name(_return_attributes, cn, rjson::copy(*col));
-        }
+        rjson::remove_member(_return_attributes, column_name_view);
     }
+
+    const rjson::value* col = state.previous_item ? rjson::find(*state.previous_item, column_name_view) : nullptr;
+    if (col) {
+        if (_returnvalues == returnvalues::UPDATED_OLD) {
+            // In the UPDATED_OLD case the item starts empty and column names
+            // are unique, so we can use add()
+            rjson::add_with_string_name(_return_attributes, column_name_view, rjson::copy(*col));
+        }
+        state.post_update_size_diff -= estimate_value_size(*col);
+    }
+
     const column_definition* cdef = find_attribute(*_schema, column_name);
     if (cdef) {
         state.row.cells().apply(*cdef, atomic_cell::make_dead(state.ts, gc_clock::now()));
@@ -4203,11 +4209,24 @@ inline void update_item_operation::apply_update_expression(apply_state& state) c
     }
 }
 
+inline void update_item_operation::update_size_diff(apply_state& state, const std::string_view& column_name, const bytes& value) {
+    size_t old_value_size = 0;
+    if (state.previous_item) {
+        const rjson::value* old_value = rjson::find(*state.previous_item, column_name);
+        if (old_value) {
+            old_value_size = estimate_value_size(*old_value) + column_name.size();
+        }
+    }
+    state.post_update_size_diff += dynamo_field_size(value) + column_name.size() - old_value_size;
+}
+
 void update_item_operation::update_field(
         apply_state& state, bytes&& column_name, const rjson::value& json_value, const attribute_path_map_node<parsed::update_expression::action>* h) const {
     state.any_updates = true;
+
+    std::string_view column_name_view = to_string_view(column_name);
     if (_returnvalues == returnvalues::ALL_NEW) {
-        rjson::replace_with_string_name(_return_attributes, to_string_view(column_name), rjson::copy(json_value));
+        rjson::replace_with_string_name(_return_attributes, column_name_view, rjson::copy(json_value));
     } else if (_returnvalues == returnvalues::UPDATED_NEW) {
         rjson::value&& v = rjson::copy(json_value);
         if (h) {
@@ -4217,14 +4236,13 @@ void update_item_operation::update_field(
                 // In the UPDATED_NEW case, _return_attributes starts
                 // empty and the attribute names are unique, so we can
                 // use add().
-                rjson::add_with_string_name(_return_attributes, to_string_view(column_name), std::move(v));
+                rjson::add_with_string_name(_return_attributes, column_name_view, std::move(v));
             }
         } else {
-            rjson::add_with_string_name(_return_attributes, to_string_view(column_name), std::move(v));
+            rjson::add_with_string_name(_return_attributes, column_name_view, std::move(v));
         }
     } else if (_returnvalues == returnvalues::UPDATED_OLD && state.previous_item) {
-        std::string_view cn = to_string_view(column_name);
-        const rjson::value* col = rjson::find(*state.previous_item, cn);
+        const rjson::value* col = rjson::find(*state.previous_item, column_name_view);
         if (col) {
             rjson::value&& v = rjson::copy(*col);
             if (h) {
@@ -4232,29 +4250,30 @@ void update_item_operation::update_field(
                     // In the UPDATED_OLD case, _return_attributes starts
                     // empty and the attribute names are unique, so we can
                     // use add().
-                    rjson::add_with_string_name(_return_attributes, cn, std::move(v));
+                    rjson::add_with_string_name(_return_attributes, column_name_view, std::move(v));
                 }
             } else {
-                rjson::add_with_string_name(_return_attributes, cn, std::move(v));
+                rjson::add_with_string_name(_return_attributes, column_name_view, std::move(v));
             }
         }
     }
+
     const column_definition* cdef = find_attribute(*_schema, column_name);
     if (cdef) {
         bytes column_value = get_key_from_typed_value(json_value, *cdef);
+        update_size_diff(state, column_name_view, column_value);
         state.row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, state.ts, column_value));
     } else {
         // This attribute may be a key column of one of the GSIs, in which
         // case there are some limitations on the value.
         validate_value_if_gsi_key(_key_attributes, column_name, json_value);
-        state.attrs_collector.put(std::move(column_name), serialize_item(json_value), state.ts);
+        bytes serialized = serialize_item(json_value);
+        update_size_diff(state, column_name_view, serialized);
+        state.attrs_collector.put(std::move(column_name), std::move(serialized), state.ts);
     }
 }
 
-std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const {
-    if (_consumed_capacity._total_bytes == 0) {
-        _consumed_capacity._total_bytes = 1;
-    }
+std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, uint64_t previous_item_size, api::timestamp_type ts) const {
     if (!verify_expected(_request, previous_item.get()) || !verify_condition_expression(_condition_expression, previous_item.get())) {
         if (previous_item && _returnvalues_on_condition_check_failure == returnvalues_on_condition_check_failure::ALL_OLD) {
             _return_attributes = std::move(*previous_item);
@@ -4327,6 +4346,17 @@ std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::valu
         }
     }
 
+    // If we have the previous item's size (i.e. the item exists and we do
+    // read-before-write), use the larger of the new and the old item to
+    // calculate WCU.
+    if (previous_item_size) {
+        int64_t new_item_size = (int64_t) previous_item_size + state.post_update_size_diff;
+        _consumed_capacity._total_bytes = std::max((int64_t) previous_item_size, new_item_size);
+    } else {
+        // We don't know if previous item exists, so let's include the PK in
+        // case it didn't.
+        _consumed_capacity._total_bytes += state.post_update_size_diff;
+    }
     return m;
 }
 
