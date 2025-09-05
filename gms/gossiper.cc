@@ -2089,7 +2089,9 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         generation_nbr = gms::generation_type(_gcfg.force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
-    endpoint_state local_state = my_endpoint_state();
+
+    // Create a new local state.
+    endpoint_state local_state{get_broadcast_address()};
     local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
     for (auto& entry : preload_local_states) {
         local_state.add_application_state(entry.first, entry.second);
@@ -2099,7 +2101,7 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
 
     co_await replicate(local_state, permit.id());
 
-    logger.info("Gossip started with local state: {}", local_state);
+    logger.info("Gossip started with local state: {}", my_endpoint_state());
     _enabled = true;
     _nr_run = 0;
     _scheduled_gossip_task.arm(INTERVAL);
