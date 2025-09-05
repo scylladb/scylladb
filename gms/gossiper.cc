@@ -2076,6 +2076,15 @@ void gossiper::examine_gossiper(utils::chunked_vector<gossip_digest>& g_digest_l
     }
 }
 
+endpoint_state gossiper::make_initial_endpoint_state(const gms::generation_type generation_nbr, const application_state_map& preload_local_states) {
+    endpoint_state& local_state = my_endpoint_state();
+    local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
+    for (auto& entry : preload_local_states) {
+        local_state.add_application_state(entry.first, entry.second);
+    }
+    return local_state;
+}
+
 future<> gossiper::start_gossiping(gms::generation_type generation_nbr, application_state_map preload_local_states) {
     auto permit = co_await lock_endpoint(my_host_id(), null_permit_id);
 
@@ -2084,15 +2093,12 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         generation_nbr = gms::generation_type(_gcfg.force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
-    endpoint_state& local_state = my_endpoint_state();
-    local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
-    for (auto& entry : preload_local_states) {
-        local_state.add_application_state(entry.first, entry.second);
-    }
+
+    endpoint_state local_state = make_initial_endpoint_state(generation_nbr, preload_local_states);
 
     co_await utils::get_local_injector().inject("gossiper_publish_local_state_pause", utils::wait_for_message(5min));
 
-    co_await replicate(local_state, permit.id());
+    co_await replicate(std::move(local_state), permit.id());
 
     logger.info("Gossip started with local state: {}", my_endpoint_state());
     _enabled = true;
