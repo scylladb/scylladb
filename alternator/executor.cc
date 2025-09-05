@@ -3766,6 +3766,16 @@ public:
     virtual ~update_item_operation() = default;
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const override;
     bool needs_read_before_write() const;
+
+private:
+    void delete_attribute(bytes&& column_name, const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts, deletable_row& row,
+            attribute_collector& modified_attrs) const;
+    void update_attribute(bytes&& column_name, const rjson::value& json_value, const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts,
+            deletable_row& row, attribute_collector& modified_attrs, const attribute_path_map_node<parsed::update_expression::action>* h = nullptr) const;
+    void apply_attribute_updates(const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts, deletable_row& row,
+            attribute_collector& modified_attrs, bool& any_updates, bool& any_deletes) const;
+    void apply_update_expression(const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts, deletable_row& row,
+            attribute_collector& modified_attrs, bool& any_updates, bool& any_deletes) const;
 };
 
 update_item_operation::update_item_operation(parsed::expression_cache& parsed_expression_cache, service::storage_proxy& proxy, rjson::value&& update_info)
@@ -4086,15 +4096,228 @@ static bool hierarchy_actions(
     return true;
 }
 
-std::optional<mutation>
-update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const {
+void update_item_operation::delete_attribute(bytes&& column_name, const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts,
+        deletable_row& row, attribute_collector& modified_attrs) const {
+    if (_returnvalues == returnvalues::ALL_NEW) {
+        rjson::remove_member(_return_attributes, to_string_view(column_name));
+    } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
+        std::string_view cn = to_string_view(column_name);
+        const rjson::value* col = rjson::find(*previous_item, cn);
+        if (col) {
+            // In the UPDATED_OLD case the item starts empty and column
+            // names are unique, so we can use add()
+            rjson::add_with_string_name(_return_attributes, cn, rjson::copy(*col));
+        }
+    }
+    const column_definition* cdef = find_attribute(*_schema, column_name);
+    if (cdef) {
+        row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
+    } else {
+        modified_attrs.del(std::move(column_name), ts);
+    }
+}
+
+void update_item_operation::update_attribute(bytes&& column_name, const rjson::value& json_value, const std::unique_ptr<rjson::value>& previous_item,
+        const api::timestamp_type ts, deletable_row& row, attribute_collector& modified_attrs,
+        const attribute_path_map_node<parsed::update_expression::action>* h) const {
+    if (_returnvalues == returnvalues::ALL_NEW) {
+        rjson::replace_with_string_name(_return_attributes, to_string_view(column_name), rjson::copy(json_value));
+    } else if (_returnvalues == returnvalues::UPDATED_NEW) {
+        rjson::value&& v = rjson::copy(json_value);
+        if (h) {
+            // If the operation was only on specific attribute paths,
+            // leave only them in _return_attributes.
+            if (hierarchy_filter(v, *h)) {
+                // In the UPDATED_NEW case, _return_attributes starts
+                // empty and the attribute names are unique, so we can
+                // use add().
+                rjson::add_with_string_name(_return_attributes, to_string_view(column_name), std::move(v));
+            }
+        } else {
+            rjson::add_with_string_name(_return_attributes, to_string_view(column_name), std::move(v));
+        }
+    } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
+        std::string_view cn = to_string_view(column_name);
+        const rjson::value* col = rjson::find(*previous_item, cn);
+        if (col) {
+            rjson::value&& v = rjson::copy(*col);
+            if (h) {
+                if (hierarchy_filter(v, *h)) {
+                    // In the UPDATED_OLD case, _return_attributes starts
+                    // empty and the attribute names are unique, so we can
+                    // use add().
+                    rjson::add_with_string_name(_return_attributes, cn, std::move(v));
+                }
+            } else {
+                rjson::add_with_string_name(_return_attributes, cn, std::move(v));
+            }
+        }
+    }
+    const column_definition* cdef = find_attribute(*_schema, column_name);
+    if (cdef) {
+        bytes column_value = get_key_from_typed_value(json_value, *cdef);
+        row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
+    } else {
+        // This attribute may be a key column of one of the GSIs or LSIs,
+        // in which case there are some limitations on the value.
+        validate_value_if_index_key(_key_attributes, column_name, json_value);
+        modified_attrs.put(std::move(column_name), serialize_item(json_value), ts);
+    }
+}
+
+inline void update_item_operation::apply_attribute_updates(const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts, deletable_row& row,
+        attribute_collector& modified_attrs, bool& any_updates, bool& any_deletes) const {
+    for (auto it = _attribute_updates->MemberBegin(); it != _attribute_updates->MemberEnd(); ++it) {
+        // Note that it.key() is the name of the column, *it is the operation
+        bytes column_name = to_bytes(it->name.GetString());
+        const column_definition* cdef = _schema->get_column_definition(column_name);
+        if (cdef && cdef->is_primary_key()) {
+            throw api_error::validation(format("UpdateItem cannot update key column {}", it->name.GetString()));
+        }
+        std::string action = (it->value)["Action"].GetString();
+        if (action == "DELETE") {
+            // The DELETE operation can do two unrelated tasks. Without a
+            // "Value" option, it is used to delete an attribute. With a
+            // "Value" option, it is used to delete a set of elements from
+            // a set attribute of the same type.
+            if (it->value.HasMember("Value")) {
+                // Subtracting sets needs a read of previous_item, so
+                // check_needs_read_before_write_attribute_updates()
+                // returns true in this case, and previous_item is
+                // available to us when the item exists.
+                const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
+                const rjson::value& v2 = (it->value)["Value"];
+                validate_value(v2, "AttributeUpdates");
+                const auto v2_type = get_item_type_string(v2);
+                if (v2_type != "SS" && v2_type != "NS" && v2_type != "BS") {
+                    throw api_error::validation(fmt::format("AttributeUpdates DELETE operation with Value only valid for sets, got type {}", v2_type));
+                }
+                if (v1) {
+                    std::optional<rjson::value> result = set_diff(*v1, v2);
+                    if (result) {
+                        any_updates = true;
+                        update_attribute(std::move(column_name), *result, previous_item, ts, row, modified_attrs);
+                    } else {
+                        // DynamoDB does not allow empty sets - if the
+                        // result is empty, delete the attribute.
+                        any_deletes = true;
+                        delete_attribute(std::move(column_name), previous_item, ts, row, modified_attrs);
+                    }
+                } else {
+                    // if the attribute or item don't exist, the DELETE
+                    // operation should silently do nothing - and not
+                    // create an empty item. It's a waste to call
+                    // do_delete() on an attribute we already know is
+                    // deleted, so we can just mark any_deletes = true.
+                    any_deletes = true;
+                }
+            } else {
+                any_deletes = true;
+                delete_attribute(std::move(column_name), previous_item, ts, row, modified_attrs);
+            }
+        } else if (action == "PUT") {
+            const rjson::value& value = (it->value)["Value"];
+            validate_value(value, "AttributeUpdates");
+            any_updates = true;
+            update_attribute(std::move(column_name), value, previous_item, ts, row, modified_attrs);
+        } else if (action == "ADD") {
+            // Note that check_needs_read_before_write_attribute_updates()
+            // made sure we retrieved previous_item (if exists) when there
+            // is an ADD action.
+            const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
+            const rjson::value& v2 = (it->value)["Value"];
+            validate_value(v2, "AttributeUpdates");
+            // An ADD can be used to create a new attribute (when
+            // !v1) or to add to a pre-existing attribute:
+            if (!v1) {
+                const auto v2_type = get_item_type_string(v2);
+                if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS" || v2_type == "L") {
+                    any_updates = true;
+                    update_attribute(std::move(column_name), v2, previous_item, ts, row, modified_attrs);
+                } else {
+                    throw api_error::validation(format("An operand in the AttributeUpdates ADD has an incorrect data type: {}", v2));
+                }
+            } else {
+                const auto v1_type = get_item_type_string(*v1);
+                const auto v2_type = get_item_type_string(v2);
+                if (v2_type != v1_type) {
+                    throw api_error::validation(fmt::format("Operand type mismatch in AttributeUpdates ADD. Expected {}, got {}", v1_type, v2_type));
+                }
+                if (v1_type == "N") {
+                    any_updates = true;
+                    update_attribute(std::move(column_name), number_add(*v1, v2), previous_item, ts, row, modified_attrs);
+                } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
+                    any_updates = true;
+                    update_attribute(std::move(column_name), set_sum(*v1, v2), previous_item, ts, row, modified_attrs);
+                } else if (v1_type == "L") {
+                    // The DynamoDB documentation doesn't say it supports
+                    // lists in ADD operations, but it turns out that it
+                    // does. Interestingly, this is only true for
+                    // AttributeUpdates (this code) - the similar ADD
+                    // in UpdateExpression doesn't support lists.
+                    any_updates = true;
+                    update_attribute(std::move(column_name), list_concatenate(*v1, v2), previous_item, ts, row, modified_attrs);
+                } else {
+                    throw api_error::validation(format("An operand in the AttributeUpdates ADD has an incorrect data type: {}", *v1));
+                }
+            }
+        } else {
+            throw api_error::validation(fmt::format("Unknown Action value '{}' in AttributeUpdates", action));
+        }
+    }
+}
+
+inline void update_item_operation::apply_update_expression(const std::unique_ptr<rjson::value>& previous_item, const api::timestamp_type ts, deletable_row& row,
+        attribute_collector& modified_attrs, bool& any_updates, bool& any_deletes) const {
+    for (auto& actions : _update_expression) {
+        // The actions of _update_expression are grouped by top-level
+        // attributes. Here, all actions in actions.second share the same
+        // top-level attribute actions.first.
+        std::string column_name = actions.first;
+        const column_definition* cdef = _schema->get_column_definition(to_bytes(column_name));
+        if (cdef && cdef->is_primary_key()) {
+            throw api_error::validation(fmt::format("UpdateItem cannot update key column {}", column_name));
+        }
+        if (actions.second.has_value()) {
+            // An action on a top-level attribute column_name. The single
+            // action is actions.second.get_value(). We can simply invoke
+            // the action and replace the attribute with its result:
+            std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
+            if (result) {
+                any_updates = true;
+                update_attribute(to_bytes(column_name), *result, previous_item, ts, row, modified_attrs, &actions.second);
+            } else {
+                any_deletes = true;
+                delete_attribute(to_bytes(column_name), previous_item, ts, row, modified_attrs);
+            }
+        } else {
+            // We have actions on a path or more than one path in the same
+            // top-level attribute column_name - but not on the top-level
+            // attribute as a whole. We already read the full top-level
+            // attribute (see check_needs_read_before_write()), and now we
+            // need to modify pieces of it and write back the entire
+            // top-level attribute.
+            if (!previous_item) {
+                throw api_error::validation(format("UpdateItem cannot update nested document path on non-existent item"));
+            }
+            const rjson::value* toplevel = rjson::find(*previous_item, column_name);
+            if (!toplevel) {
+                throw api_error::validation(fmt::format("UpdateItem cannot update document path: missing attribute {}", column_name));
+            }
+            rjson::value result = rjson::copy(*toplevel);
+            any_updates = true;
+            hierarchy_actions(result, actions.second, previous_item.get());
+            update_attribute(to_bytes(column_name), std::move(result), previous_item, ts, row, modified_attrs, &actions.second);
+        }
+    }
+}
+
+std::optional<mutation> update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const {
     if (_consumed_capacity._total_bytes == 0) {
         _consumed_capacity._total_bytes = 1;
     }
-    if (!verify_expected(_request, previous_item.get()) ||
-        !verify_condition_expression(_condition_expression, previous_item.get())) {
-        if (previous_item && _returnvalues_on_condition_check_failure ==
-            returnvalues_on_condition_check_failure::ALL_OLD) {
+    if (!verify_expected(_request, previous_item.get()) || !verify_condition_expression(_condition_expression, previous_item.get())) {
+        if (previous_item && _returnvalues_on_condition_check_failure == returnvalues_on_condition_check_failure::ALL_OLD) {
             _return_attributes = std::move(*previous_item);
         }
         // If the update is to be cancelled because of an unfulfilled
@@ -4102,82 +4325,6 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         // efficient than throwing an exception.
         return {};
     }
-
-    mutation m(_schema, _pk);
-    auto& row = m.partition().clustered_row(*_schema, _ck);
-    attribute_collector attrs_collector;
-    bool any_updates = false;
-    auto do_update = [&] (bytes&& column_name, const rjson::value& json_value,
-                          const attribute_path_map_node<parsed::update_expression::action>* h = nullptr) {
-        any_updates = true;
-        if (_returnvalues == returnvalues::ALL_NEW) {
-            rjson::replace_with_string_name(_return_attributes,
-                to_string_view(column_name), rjson::copy(json_value));
-        } else if (_returnvalues == returnvalues::UPDATED_NEW) {
-            rjson::value&& v = rjson::copy(json_value);
-            if (h) {
-                // If the operation was only on specific attribute paths,
-                // leave only them in _return_attributes.
-                if (hierarchy_filter(v, *h)) {
-                    // In the UPDATED_NEW case, _return_attributes starts
-                    // empty and the attribute names are unique, so we can
-                    // use add().
-                    rjson::add_with_string_name(_return_attributes,
-                        to_string_view(column_name), std::move(v));
-                }
-            } else {
-                rjson::add_with_string_name(_return_attributes,
-                    to_string_view(column_name), std::move(v));
-            }
-        } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
-            std::string_view cn =  to_string_view(column_name);
-            const rjson::value* col = rjson::find(*previous_item, cn);
-            if (col) {
-                rjson::value&& v = rjson::copy(*col);
-                if (h) {
-                    if (hierarchy_filter(v, *h)) {
-                        // In the UPDATED_OLD case, _return_attributes starts
-                        // empty and the attribute names are unique, so we can
-                        // use add().
-                        rjson::add_with_string_name(_return_attributes, cn, std::move(v));
-                    }
-                } else {
-                    rjson::add_with_string_name(_return_attributes, cn, std::move(v));
-                }
-            }
-        }
-        const column_definition* cdef = find_attribute(*_schema, column_name);
-        if (cdef) {
-            bytes column_value = get_key_from_typed_value(json_value, *cdef);
-            row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, column_value));
-        } else {
-            // This attribute may be a key column of one of the GSIs or LSIs,
-            // in which case there are some limitations on the value.
-            validate_value_if_index_key(_key_attributes, column_name, json_value);
-            attrs_collector.put(std::move(column_name), serialize_item(json_value), ts);
-        }
-    };
-    bool any_deletes = false;
-    auto do_delete = [&] (bytes&& column_name) {
-        any_deletes = true;
-        if (_returnvalues == returnvalues::ALL_NEW) {
-            rjson::remove_member(_return_attributes, to_string_view(column_name));
-        } else if (_returnvalues == returnvalues::UPDATED_OLD && previous_item) {
-            std::string_view cn =  to_string_view(column_name);
-            const rjson::value* col = rjson::find(*previous_item, cn);
-            if (col) {
-                // In the UPDATED_OLD case the item starts empty and column
-                // names are unique, so we can use add()
-                rjson::add_with_string_name(_return_attributes, cn, rjson::copy(*col));
-            }
-        }
-        const column_definition* cdef = find_attribute(*_schema, column_name);
-        if (cdef) {
-            row.cells().apply(*cdef, atomic_cell::make_dead(ts, gc_clock::now()));
-        } else {
-            attrs_collector.del(std::move(column_name), ts);
-        }
-    };
 
     // In the ReturnValues=ALL_NEW case, we make a copy of previous_item into
     // _return_attributes and parts of it will be overwritten by the new
@@ -4193,152 +4340,27 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             _return_attributes = rjson::copy(*previous_item);
         } else {
             // If there is no previous item, usually a new item is created
-            // and contains they given key. This may be cancelled at the end
+            // and contains the given key. This may be cancelled at the end
             // of this function if the update is just deletes.
-           _return_attributes = rjson::copy(rjson::get(_request, "Key"));
+            _return_attributes = rjson::copy(rjson::get(_request, "Key"));
         }
-    } else if (_returnvalues == returnvalues::UPDATED_OLD ||
-               _returnvalues == returnvalues::UPDATED_NEW) {
+    } else if (_returnvalues == returnvalues::UPDATED_OLD || _returnvalues == returnvalues::UPDATED_NEW) {
         _return_attributes = rjson::empty_object();
     }
 
+    mutation m(_schema, _pk);
+    bool any_updates = false;
+    bool any_deletes = false;
+    auto& row = m.partition().clustered_row(*_schema, _ck);
+    auto modified_attrs = attribute_collector();
     if (!_update_expression.empty()) {
-        for (auto& actions : _update_expression) {
-            // The actions of _update_expression are grouped by top-level
-            // attributes. Here, all actions in actions.second share the same
-            // top-level attribute actions.first.
-            std::string column_name = actions.first;
-            const column_definition* cdef = _schema->get_column_definition(to_bytes(column_name));
-            if (cdef && cdef->is_primary_key()) {
-                throw api_error::validation(fmt::format("UpdateItem cannot update key column {}", column_name));
-            }
-            if (actions.second.has_value()) {
-                // An action on a top-level attribute column_name. The single
-                // action is actions.second.get_value(). We can simply invoke
-                // the action and replace the attribute with its result:
-                std::optional<rjson::value> result = action_result(actions.second.get_value(), previous_item.get());
-                if (result) {
-                    do_update(to_bytes(column_name), *result);
-                } else {
-                    do_delete(to_bytes(column_name));
-                }
-            } else {
-                // We have actions on a path or more than one path in the same
-                // top-level attribute column_name - but not on the top-level
-                // attribute as a whole. We already read the full top-level
-                // attribute (see check_needs_read_before_write()), and now we
-                // need to modify pieces of it and write back the entire
-                // top-level attribute.
-                if (!previous_item) {
-                    throw api_error::validation(format("UpdateItem cannot update nested document path on non-existent item"));
-                }
-                const rjson::value *toplevel = rjson::find(*previous_item, column_name);
-                if (!toplevel) {
-                    throw api_error::validation(fmt::format("UpdateItem cannot update document path: missing attribute {}",
-                        column_name));
-                }
-                rjson::value result = rjson::copy(*toplevel);
-                hierarchy_actions(result, actions.second, previous_item.get());
-                do_update(to_bytes(column_name), std::move(result), &actions.second);
-            }
-        }
+        apply_update_expression(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
     }
     if (_attribute_updates) {
-        for (auto it = _attribute_updates->MemberBegin(); it != _attribute_updates->MemberEnd(); ++it) {
-            // Note that it.key() is the name of the column, *it is the operation
-            bytes column_name = to_bytes(it->name.GetString());
-            const column_definition* cdef = _schema->get_column_definition(column_name);
-            if (cdef && cdef->is_primary_key()) {
-                throw api_error::validation(
-                        format("UpdateItem cannot update key column {}", it->name.GetString()));
-            }
-            std::string action = (it->value)["Action"].GetString();
-            if (action == "DELETE") {
-                // The DELETE operation can do two unrelated tasks. Without a
-                // "Value" option, it is used to delete an attribute. With a
-                // "Value" option, it is used to delete a set of elements from
-                // a set attribute of the same type.
-                if (it->value.HasMember("Value")) {
-                    // Subtracting sets needs a read of previous_item, so
-                    // check_needs_read_before_write_attribute_updates()
-                    // returns true in this case, and previous_item is
-                    // available to us when the item exists.
-                    const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
-                    const rjson::value& v2 = (it->value)["Value"];
-                    validate_value(v2, "AttributeUpdates");
-                    const auto v2_type = get_item_type_string(v2);
-                    if (v2_type != "SS" && v2_type != "NS" && v2_type != "BS") {
-                        throw api_error::validation(fmt::format("AttributeUpdates DELETE operation with Value only valid for sets, got type {}", v2_type));
-                    }
-                    if (v1) {
-                        std::optional<rjson::value> result = set_diff(*v1, v2);
-                        if (result) {
-                            do_update(std::move(column_name), *result);
-                        } else {
-                            // DynamoDB does not allow empty sets - if the
-                            // result is empty, delete the attribute.
-                            do_delete(std::move(column_name));
-                        }
-                    } else {
-                        // if the attribute or item don't exist, the DELETE
-                        // operation should silently do nothing - and not
-                        // create an empty item. It's a waste to call
-                        // do_delete() on an attribute we already know is
-                        // deleted, so we can just mark any_deletes = true.
-                        any_deletes = true;
-                    }
-                } else {
-                    do_delete(std::move(column_name));
-                }
-            } else if (action == "PUT") {
-                const rjson::value& value = (it->value)["Value"];
-                validate_value(value, "AttributeUpdates");
-                do_update(std::move(column_name), value);
-            } else if (action == "ADD") {
-                // Note that check_needs_read_before_write_attribute_updates()
-                // made sure we retrieved previous_item (if exists) when there
-                // is an ADD action.
-                const rjson::value* v1 = previous_item ? rjson::find(*previous_item, to_string_view(column_name)) : nullptr;
-                const rjson::value& v2 = (it->value)["Value"];
-                validate_value(v2, "AttributeUpdates");
-                // An ADD can be used to create a new attribute (when
-                // !v1) or to add to a pre-existing attribute:
-                if (!v1) {
-                    const auto v2_type = get_item_type_string(v2);
-                    if (v2_type == "N" || v2_type == "SS" || v2_type == "NS" || v2_type == "BS" || v2_type == "L") {
-                        do_update(std::move(column_name), v2);
-                    } else {
-                        throw api_error::validation(format("An operand in the AttributeUpdates ADD has an incorrect data type: {}", v2));
-                    }
-                } else {
-                    const auto v1_type = get_item_type_string(*v1);
-                    const auto v2_type = get_item_type_string(v2);
-                    if (v2_type != v1_type) {
-                        throw api_error::validation(fmt::format("Operand type mismatch in AttributeUpdates ADD. Expected {}, got {}", v1_type, v2_type));
-                    }
-                    if (v1_type == "N") {
-                        do_update(std::move(column_name), number_add(*v1, v2));
-                    } else if (v1_type == "SS" || v1_type == "NS" || v1_type == "BS") {
-                        do_update(std::move(column_name), set_sum(*v1, v2));
-                    } else if (v1_type == "L") {
-                        // The DynamoDB documentation doesn't say it supports
-                        // lists in ADD operations, but it turns out that it
-                        // does. Interestingly, this is only true for
-                        // AttributeUpdates (this code) - the similar ADD
-                        // in UpdateExpression doesn't support lists.
-                        do_update(std::move(column_name), list_concatenate(*v1, v2));
-                    } else {
-                        throw api_error::validation(format("An operand in the AttributeUpdates ADD has an incorrect data type: {}", *v1));
-                    }
-                }
-            } else {
-                throw api_error::validation(
-                        fmt::format("Unknown Action value '{}' in AttributeUpdates", action));
-            }
-        }
+        apply_attribute_updates(previous_item, ts, row, modified_attrs, any_updates, any_deletes);
     }
-    if (!attrs_collector.empty()) {
-        auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
+    if (!modified_attrs.empty()) {
+        auto serialized_map = modified_attrs.to_mut().serialize(*attrs_type());
         row.cells().apply(attrs_column(*_schema), std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
