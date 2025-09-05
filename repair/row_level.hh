@@ -286,7 +286,8 @@ public:
             gc_clock::time_point compaction_time,
             abort_source& as,
             service::frozen_topology_guard topo_guard,
-            std::optional<int64_t> repaired_at);
+            std::optional<int64_t> repaired_at,
+            locator::tablet_repair_incremental_mode incremental_mode);
 
     future<>
     remove_repair_meta(const locator::host_id& from,

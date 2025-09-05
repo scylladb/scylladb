@@ -240,6 +240,7 @@ CREATE TABLE system.tablets (
     stage text,
     transition text,
     sstables_repaired_at bigint,
+    repair_incremental_mode text,
     PRIMARY KEY (table_id, last_token)
 )
 
@@ -283,6 +284,11 @@ Only tables which use tablet-based replication strategy have an entry here.
 `repair_time` is the last time the tablet has been repaired.
 
 `sstables_repaired_at` is the reapired_at number for the tablet. When repaired_at <= sstables_repaired_at (repaired_at is the on disk field of a SSTable), it means the sstable is repaired.
+
+`repair_incremental_mode` - The mode for incremental repair. Can be 'disabled', 'regular', or 'full'.
+  * `regular`: The incremental repair logic is enabled. Unrepaired sstables will be included for repair. Repaired sstables will be skipped. The incremental repair states will be updated after repair.
+  * `full`: The incremental repair logic is enabled. Both repaired and unrepaired sstables will be included for repair. The incremental repair states will be updated after repair.
+  * `disabled`: The incremental repair logic is disabled completely. The incremental repair states, e.g., `repaired_at` in sstables and `sstables_repaired_at` in the `system.tablets` table, will not be updated after repair.
 
 `repair_task_info` contains the metadata for the task manager. It contains the following values:
   * `request_type` - The type of the request. It could be user_repair and auto_repair.

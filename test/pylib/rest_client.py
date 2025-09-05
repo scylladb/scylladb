@@ -288,13 +288,15 @@ class ScyllaRESTAPIClient:
             "token": str(token)
         })
 
-    async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int, hosts_filter: Optional[str] = None, dcs_filter: Optional[str] = None, timeout: Optional[float] = None, await_completion: bool = True) -> None:
+    async def tablet_repair(self, node_ip: str, ks: str, table: str, token : int, hosts_filter: Optional[str] = None, dcs_filter: Optional[str] = None, timeout: Optional[float] = None, await_completion: bool = True, incremental_mode: Optional[str] = None) -> None:
         params={
             "ks": ks,
             "table": table,
             "tokens": str(token),
             "await_completion": str(await_completion).lower()
         }
+        if incremental_mode is not None:
+            params["incremental_mode"] = str(incremental_mode).lower()
         if hosts_filter:
             params["hosts_filter"] = hosts_filter
         if dcs_filter:

@@ -738,6 +738,33 @@ tablet_task_type tablet_task_type_from_string(const sstring& name) {
     return tablet_task_type_from_name.at(name);
 }
 
+// The names are persisted in system tables so should not be changed.
+static const std::unordered_map<locator::tablet_repair_incremental_mode, sstring> tablet_repair_incremental_mode_to_name = {
+    {locator::tablet_repair_incremental_mode::disabled, "disabled"},
+    {locator::tablet_repair_incremental_mode::regular, "regular"},
+    {locator::tablet_repair_incremental_mode::full, "full"},
+};
+
+static const std::unordered_map<sstring, tablet_repair_incremental_mode> tablet_repair_incremental_mode_from_name = std::invoke([] {
+    std::unordered_map<sstring, tablet_repair_incremental_mode> result;
+    for (auto&& [v, s] : tablet_repair_incremental_mode_to_name) {
+        result.emplace(s, v);
+    }
+    return result;
+});
+
+sstring tablet_repair_incremental_mode_to_string(tablet_repair_incremental_mode kind) {
+    auto i = tablet_repair_incremental_mode_to_name.find(kind);
+    if (i == tablet_repair_incremental_mode_to_name.end()) {
+        on_internal_error(tablet_logger, format("Invalid tablet repair incremental mode: {}", static_cast<int>(kind)));
+    }
+    return i->second;
+}
+
+tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const sstring& name) {
+    return tablet_repair_incremental_mode_from_name.at(name);
+}
+
 size_t tablet_map::external_memory_usage() const {
     size_t result = _tablets.external_memory_usage();
     for (auto&& tablet : _tablets) {
@@ -1300,6 +1327,11 @@ auto fmt::formatter<locator::tablet_task_type>::format(const locator::tablet_tas
     return fmt::format_to(ctx.out(), "{}", locator::tablet_task_type_to_string(kind));
 }
 
+auto fmt::formatter<locator::tablet_repair_incremental_mode>::format(const locator::tablet_repair_incremental_mode& mode, fmt::format_context& ctx) const
+        -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", locator::tablet_repair_incremental_mode_to_string(mode));
+}
+
 auto fmt::formatter<locator::tablet_map>::format(const locator::tablet_map& r, fmt::format_context& ctx) const
         -> decltype(ctx.out()) {
     auto out = ctx.out();
@@ -1375,6 +1407,7 @@ auto fmt::formatter<locator::tablet_task_info>::format(const locator::tablet_tas
         {"sched_time", fmt::to_string(db_clock::to_time_t(info.sched_time))},
         {"repair_hosts_filter", locator::tablet_task_info::serialize_repair_hosts_filter(info.repair_hosts_filter)},
         {"repair_dcs_filter", locator::tablet_task_info::serialize_repair_dcs_filter(info.repair_dcs_filter)},
+        {"repair_incremental_mode", fmt::to_string(info.repair_incremental_mode)},
     };
     return fmt::format_to(ctx.out(), "{}", rjson::print(rjson::from_string_map(ret)));
 };
@@ -1398,16 +1431,16 @@ bool locator::tablet_task_info::selected_by_filters(const tablet_replica& replic
     return true;
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
+locator::tablet_task_info locator::tablet_task_info::make_auto_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter, tablet_repair_incremental_mode mode) {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
+    return locator::tablet_task_info{locator::tablet_task_type::auto_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter, mode};
 }
 
-locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter) {
+locator::tablet_task_info locator::tablet_task_info::make_user_repair_request(std::unordered_set<locator::host_id> hosts_filter, std::unordered_set<sstring> dcs_filter, tablet_repair_incremental_mode mode) {
     long sched_nr = 0;
     auto tablet_task_id = locator::tablet_task_id(utils::UUID_gen::get_time_UUID());
-    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter};
+    return locator::tablet_task_info{locator::tablet_task_type::user_repair, tablet_task_id, db_clock::now(), sched_nr, db_clock::time_point(), hosts_filter, dcs_filter, mode};
 }
 
 sstring locator::tablet_task_info::serialize_repair_hosts_filter(std::unordered_set<locator::host_id> filter) {

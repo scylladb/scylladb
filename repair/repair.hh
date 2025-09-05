@@ -54,6 +54,8 @@ class migration_manager;
 }
 namespace gms { class gossiper; }
 
+namespace locator { enum class tablet_repair_incremental_mode : uint8_t; }
+
 class repair_exception : public std::exception {
 private:
     sstring _what;
@@ -293,6 +295,7 @@ struct tablet_repair_task_meta {
 struct tablet_repair_sched_info {
     bool sched_by_scheduler = false;
     bool for_tablet_rebuild = false;
+    locator::tablet_repair_incremental_mode incremental_mode;
 };
 
 namespace std {
