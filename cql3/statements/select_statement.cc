@@ -1490,7 +1490,8 @@ view_indexed_table_select_statement::find_index_partition_ranges(query_processor
         // to avoid outputting the same partition key twice, but luckily in
         // the sorted order, these will be adjacent.
         std::optional<dht::decorated_key> last_dk;
-        if (_options.get_paging_state()) {
+        if (_index.target_type() == cql3::statements::index_target::target_type::collection_values &&
+                _options.get_paging_state()) {
             auto paging_state = _options.get_paging_state();
             auto base_pk = generate_base_key_from_index_pk<partition_key>(paging_state->get_partition_key(),
                 paging_state->get_clustering_key(), *_schema, *_view_schema);

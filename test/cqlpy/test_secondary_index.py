@@ -2211,7 +2211,6 @@ def test_limit_partition_slice_across_pages(cql, test_keyspace):
 # completely ignores it when preparing the second page. This logic is
 # implemented in `find_index_partition_ranges()` during the construction of the
 # partition range vector.
-@pytest.mark.xfail(reason="issue #25839")
 def test_short_read(cql, test_keyspace):
     page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
     row_size = page_memory_limit // 2  # will cause short read after 2 rows
@@ -2242,7 +2241,7 @@ def test_short_read(cql, test_keyspace):
 # The test is also affected by #25839, which causes the last row of the
 # first partition to be missing from the result, but this is not the main point
 # of this test.
-@pytest.mark.xfail(reason="issues #22158, #25839")
+@pytest.mark.xfail(reason="issue #22158")
 def test_limit_partition_slice_short_read(cql, test_keyspace):
     page_memory_limit = 1024 * 1024  # 1MiB
     row_size = page_memory_limit // 2  # will cause short read after 2 rows
@@ -2258,6 +2257,27 @@ def test_limit_partition_slice_short_read(cql, test_keyspace):
         rs = list(cql.execute(stmt))
         rows = [(col[0], col[1]) for col in rs]
         assert rows == [(1,1), (1,2), (1,3)]
+
+
+# Same as test_short_read above, but with an index on a map column's values.
+# Reproduces #16295 and #25839.
+# NOTE: Currently marked with skip instead of xfail because of a bug that causes
+# the INSERT statement to trigger `std::bad_alloc`, which in turn causes Scylla
+# to abort due to the `--abort-on-seastar-bad-alloc` flag which is always enabled in tests.
+# The bug is tracked in issue #16295.
+@pytest.mark.skip(reason="issues #16295, #25839")
+def test_short_read_static_column_map_values(cql, test_keyspace):
+    page_memory_limit = 1024 * 1024  # 1MiB
+    row_size = page_memory_limit // 2  # will cause short read after 2 rows
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, m map<int, int> static, data text, primary key (pk, ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(m)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, m, data) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, {1: 2}, 'A' * row_size])
+        cql.execute(stmt, [1, 2, {1: 2}, 'B' * row_size])
+        cql.execute(stmt, [1, 3, {1: 2}, 'C' * row_size])
+        rs = cql.execute(f'SELECT pk, ck, data FROM {table} WHERE m CONTAINS 2')
+        rows = [(col[0], col[1]) for col in list(rs)]
+        assert sorted(rows) == [(1,1), (1,2), (1,3)]
 
 
 def test_index_metrics(cql, test_keyspace, scylla_only):
