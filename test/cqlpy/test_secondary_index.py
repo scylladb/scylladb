@@ -2149,6 +2149,54 @@ def test_static_column_index_with_limit(cql, test_keyspace, use_paging):
         assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
 
 
+# Same as test_limit_partition_slice above, except that it uses a page size
+# smaller than the limit to check if the limit is correctly enforced across pages.
+#
+# Reproduces #22158 - The test fails for all values of LIMIT because the limit
+# is always exceeded.
+#
+# Root cause:
+#
+# When `generate_view_paging_state_from_base_query_results()` re-adjusts the
+# paging state after detecting a drift between the base table read and the
+# index view read, it completely discards the current value of the "remaining"
+# field of the paging state (to be precise, it sets it to 10000), so the limit
+# can no longer be tracked across pages. This drift may happen in two scenarios:
+#
+# * {rows from base table read} > {rows from index view read}
+#
+#     Can happen when the index view read hits the page size (like in this test).
+#     Recall that paging applies only to index view reads, i.e., base table
+#     reads are unpaged and therefore not limited by the page size.
+#
+# * {rows from base table read} < {rows from index view read}
+#
+#     Can happen in case of a short read from a replica (e.g., base table has
+#     large regular columns).
+#     Can also happen if the coordinator's accumulated result exceeds 1MiB
+#     (enforced in `do_execute_base_query()`).
+#
+@pytest.mark.xfail(reason="issue #22158")
+def test_limit_partition_slice_across_pages(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 1, 2])
+        cql.execute(stmt, [1, 1, 3])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 1, 2])
+        cql.execute(stmt, [2, 1, 3])
+        num_rows = 6
+        for page_size in range(1, num_rows - 1):  # {1..4}
+            for limit in range(page_size + 1, num_rows):  # {[page_size+1]..5}
+                print(f"page_size={page_size}, limit={limit}")
+                stmt = SimpleStatement(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT {limit}', fetch_size=page_size)
+                result = list(cql.execute(stmt))
+                expected_all = [(1,1), (1,2), (1,3), (2,1), (2,2), (2,3)]
+                assert sorted(result) == sorted(expected_all[:limit])
+
+
 # Test that a query using a secondary index can handle "short reads".
 #
 # A read is short when the query is paged and the page size (in bytes) hits an
