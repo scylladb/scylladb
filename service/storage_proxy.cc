@@ -153,7 +153,7 @@ seastar::metrics::label_instance current_scheduling_group_label() {
 }
 
 template<typename ResultType>
-static future<ResultType> encode_replica_exception_for_rpc(gms::feature_service& features, std::exception_ptr eptr) {
+static future<ResultType> encode_replica_exception_for_rpc(const gms::feature_service& features, std::exception_ptr eptr) {
     if (features.typed_errors_in_read_rpc) {
         if (auto ex = replica::try_encode_replica_exception(eptr); ex) {
             if constexpr (std::is_same_v<ResultType, replica::exception_variant>) {
@@ -169,7 +169,7 @@ static future<ResultType> encode_replica_exception_for_rpc(gms::feature_service&
 }
 
 template<utils::Tuple ResultTuple, utils::Tuple SourceTuple>
-static future<ResultTuple> add_replica_exception_to_query_result(gms::feature_service& features, future<SourceTuple>&& f) {
+static future<ResultTuple> add_replica_exception_to_query_result(const gms::feature_service& features, future<SourceTuple>&& f) {
     if (!f.failed()) {
         return make_ready_future<ResultTuple>(utils::tuple_insert<ResultTuple>(f.get(), replica::exception_variant{}));
     }
@@ -438,31 +438,31 @@ public:
 
     future<service::paxos::prepare_response> send_paxos_prepare(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            const query::read_command& cmd, const partition_key& key, utils::UUID ballot, bool only_digest, query::digest_algorithm da) {
+            const query::read_command& cmd, const partition_key& key, utils::UUID ballot, bool only_digest, query::digest_algorithm da, fencing_token fence) {
         tracing::trace(tr_state, "prepare_ballot: sending prepare {} to {}", ballot, addr);
         return ser::storage_proxy_rpc_verbs::send_paxos_prepare(
-                &_ms, addr, timeout, cmd, key, ballot, only_digest, da, tracing::make_trace_info(tr_state));
+                &_ms, addr, timeout, cmd, key, ballot, only_digest, da, tracing::make_trace_info(tr_state), fence);
     }
 
     future<bool> send_paxos_accept(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            const service::paxos::proposal& proposal) {
+            const service::paxos::proposal& proposal, fencing_token fence) {
         tracing::trace(tr_state, "accept_proposal: send accept {} to {}", proposal, addr);
-        return ser::storage_proxy_rpc_verbs::send_paxos_accept(&_ms, std::move(addr), timeout, proposal, tracing::make_trace_info(tr_state));
+        return ser::storage_proxy_rpc_verbs::send_paxos_accept(&_ms, std::move(addr), timeout, proposal, tracing::make_trace_info(tr_state), fence);
     }
 
     future<> send_paxos_learn(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, const std::optional<tracing::trace_info>& trace_info,
             const service::paxos::proposal& decision, const host_id_vector_replica_set& forward,
-            gms::inet_address reply_to_ip, locator::host_id reply_to, unsigned shard, uint64_t response_id) {
+            gms::inet_address reply_to_ip, locator::host_id reply_to, unsigned shard, uint64_t response_id, fencing_token fence) {
         return ser::storage_proxy_rpc_verbs::send_paxos_learn(
-                &_ms, addr, timeout, decision, {}, reply_to_ip, shard, response_id, trace_info, forward, reply_to);
+                &_ms, addr, timeout, decision, {}, reply_to_ip, shard, response_id, trace_info, forward, reply_to, fence);
     }
 
     future<> send_paxos_prune(
             locator::host_id addr, storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state,
-            table_schema_version schema_id, const partition_key& key, utils::UUID ballot) {
-        return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_ms, addr, timeout, schema_id, key, ballot, tracing::make_trace_info(tr_state));
+            table_schema_version schema_id, const partition_key& key, utils::UUID ballot, fencing_token fence) {
+        return ser::storage_proxy_rpc_verbs::send_paxos_prune(&_ms, addr, timeout, schema_id, key, ballot, tracing::make_trace_info(tr_state), fence);
     }
 
     future<> truncate_with_tablets(sstring ks_name, sstring cf_name, std::chrono::milliseconds timeout_in_ms) {
@@ -538,10 +538,8 @@ private:
         // fenced writes.
         auto op = _sp.start_write();
 
-        const auto fence = fence_opt.value_or(fencing_token{});
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
-                make_exception_ptr(std::move(*stale)));
+        if (auto f = _sp.apply_fence_result<replica::exception_variant>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
 
         utils::chunked_vector<frozen_mutation_and_schema> mutations;
@@ -556,10 +554,11 @@ private:
         });
         auto& sp = _sp;
         co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(_sp.features(),
-                make_exception_ptr(std::move(*stale)));
+
+        if (auto f = _sp.apply_fence_result<replica::exception_variant>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
+
         co_return replica::exception_variant{};
     }
 
@@ -613,7 +612,7 @@ private:
 
         co_await utils::get_local_injector().inject("storage_proxy_write_response_pause", utils::wait_for_message(5min));
 
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
+        if (auto stale = _sp.check_fence(fence, src_addr)) {
             errors.count += (forward_host_id.size() + 1);
             errors.local = std::move(*stale);
         } else {
@@ -699,7 +698,7 @@ private:
                 fence.value_or(fencing_token{}),
                 /* apply_fn */ [smp_grp, rate_limit_info, src_addr] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
                         clock_type::time_point timeout, fencing_token fence) {
-                    return p->apply_fence(p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info), fence, src_addr);
+                    return p->apply_fence_on_ready(p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info), fence, src_addr);
                 },
                 /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, locator::host_id addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
@@ -727,22 +726,23 @@ private:
             const rpc::client_info& cinfo, rpc::opt_time_point t,
             paxos::proposal decision, inet_address_vector_replica_set forward, gms::inet_address reply_to, unsigned shard,
             storage_proxy::response_id_type response_id, std::optional<tracing::trace_info> trace_info,
-            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id) {
+            rpc::optional<host_id_vector_replica_set> forward_id, rpc::optional<locator::host_id> reply_to_id,
+            rpc::optional<fencing_token> fence) {
         tracing::trace_state_ptr trace_state_ptr;
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
 
         auto schema_version = decision.update.schema_version();
         return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, std::move(forward_id),reply_to_id, shard,
                 response_id, trace_info,
-                fencing_token{},
-               /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
-                       const paxos::proposal& decision, clock_type::time_point timeout, fencing_token) {
-                     return paxos::paxos_state::learn(*p, paxos_store(), std::move(s), decision, timeout, tr_state);
+                fence.value_or(fencing_token{}),
+               /* apply_fn */ [this, src_addr] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
+                       const paxos::proposal& decision, clock_type::time_point timeout, fencing_token fence) {
+                    return p->apply_fence_on_ready(paxos::paxos_state::learn(*p, paxos_store(), std::move(s), decision, timeout, tr_state), fence, src_addr);
               },
               /* forward_fn */ [this] (shared_ptr<storage_proxy>&, locator::host_id addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
-                      const std::optional<tracing::trace_info>& trace_info, fencing_token) {
-                    return send_paxos_learn(addr, timeout, trace_info, m, {}, ip, reply_to, shard, response_id);
+                      const std::optional<tracing::trace_info>& trace_info, fencing_token fence) {
+                    return send_paxos_learn(addr, timeout, trace_info, m, {}, ip, reply_to, shard, response_id, fence);
               });
     }
 
@@ -911,17 +911,15 @@ private:
             }
         };
 
-        const auto fence = fence_opt.value_or(fencing_token{});
-
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), std::make_exception_ptr(std::move(*stale)));
+        if (auto f = _sp.apply_fence_result<Result>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
 
         auto f = co_await coroutine::as_future(do_query());
         tracing::trace(trace_state_ptr, "{} handling is done, sending a response to /{}", verb, src_addr);
 
-        if (auto stale = _sp.apply_fence(fence, src_addr)) {
-            co_return co_await encode_replica_exception_for_rpc<Result>(p->features(), std::make_exception_ptr(std::move(*stale)));
+        if (auto f = _sp.apply_fence_result<Result>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
         }
 
         co_return co_await add_replica_exception_to_query_result<Result>(p->features(), std::move(f));
@@ -971,7 +969,8 @@ private:
     handle_paxos_prepare(
             const rpc::client_info& cinfo, rpc::opt_time_point timeout,
             query::read_command cmd, partition_key key, utils::UUID ballot,
-            bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info) {
+            bool only_digest, query::digest_algorithm da, std::optional<tracing::trace_info> trace_info,
+            rpc::optional<fencing_token> fence_opt) {
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
 
@@ -981,6 +980,9 @@ private:
             tracing::begin(tr_state);
             tracing::trace(tr_state, "paxos_prepare: message received from /{} ballot {}", src_addr, ballot);
         }
+
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         if (!cmd.max_result_size) {
             cmd.max_result_size.emplace(cinfo.retrieve_auxiliary<uint64_t>("max_result_size"));
         }
@@ -990,7 +992,7 @@ private:
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
-        co_return co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
+        auto result = co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, [gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(std::move(tr_state)),
                                     cmd = make_lw_shared<query::read_command>(std::move(cmd)), key = std::move(key),
                                     ballot, only_digest, da, timeout, src_addr, &paxos_store = _paxos_store] (storage_proxy& sp) -> future<foreign_ptr<std::unique_ptr<service::paxos::prepare_response>>> {
             tracing::trace_state_ptr tr_state = gt;
@@ -998,11 +1000,16 @@ private:
             tracing::trace(tr_state, "paxos_prepare: handling is done, sending a response to /{}", src_addr);
             co_return make_foreign(std::make_unique<paxos::prepare_response>(std::move(r)));
         });
+
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
+        co_return std::move(result);
     }
 
     future<bool> handle_paxos_accept(
             const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            paxos::proposal proposal, std::optional<tracing::trace_info> trace_info) {
+            paxos::proposal proposal, std::optional<tracing::trace_info> trace_info,
+            rpc::optional<fencing_token> fence_opt) {
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
         auto src_shard = cinfo.retrieve_auxiliary<uint32_t>("src_cpu_id");
 
@@ -1012,6 +1019,9 @@ private:
             tracing::begin(tr_state);
             tracing::trace(tr_state, "paxos_accept: message received from /{} ballot {}", src_addr, proposal);
         }
+
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
         auto handling_done = defer([tr_state, src_addr] {
             if (tr_state) {
                 tracing::trace(tr_state, "paxos_accept: handling is done, sending a response to /{}", src_addr);
@@ -1022,15 +1032,20 @@ private:
         unsigned shard = schema->table().shard_for_reads(token);
         bool local = shard == this_shard_id();
         _sp.get_stats().replica_cross_shard_ops += !local;
-        co_return co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, coroutine::lambda([gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(tr_state),
+        auto result = co_await _sp.container().invoke_on(shard, _sp._write_smp_service_group, coroutine::lambda([gs = global_schema_ptr(schema), gt = tracing::global_trace_state_ptr(tr_state),
                                    proposal = std::move(proposal), timeout, token, this] (storage_proxy& sp) {
             return paxos::paxos_state::accept(sp, paxos_store(), gt, gs, token, proposal, *timeout);
         }));
+
+        co_await _sp.apply_fence(fence_opt, src_addr);
+
+        co_return std::move(result);
     }
 
     future<rpc::no_wait_type> handle_paxos_prune(
             const rpc::client_info& cinfo, rpc::opt_time_point timeout,
-            table_schema_version schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info) {
+            table_schema_version schema_id, partition_key key, utils::UUID ballot, std::optional<tracing::trace_info> trace_info,
+            rpc::optional<fencing_token> fence_opt) {
         static thread_local uint16_t pruning = 0;
         static constexpr uint16_t pruning_limit = 1000; // since PRUNE verb is one way replica side has its own queue limit
         auto src_addr = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
@@ -1042,6 +1057,8 @@ private:
             tracing::begin(tr_state);
             tracing::trace(tr_state, "paxos_prune: message received from /{} ballot {}", src_addr, ballot);
         }
+
+        co_await _sp.apply_fence(fence_opt, src_addr);
 
         if (pruning >= pruning_limit) {
             _sp.get_stats().cas_replica_dropped_prune++;
@@ -1306,7 +1323,7 @@ public:
         auto m = _mutations[my_id];
         if (m) {
             tracing::trace(tr_state, "Executing a mutation locally");
-            return sp.apply_fence(sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, my_id);
+            return sp.apply_fence_on_ready(sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, my_id);
         }
         return make_ready_future<>();
     }
@@ -1358,7 +1375,7 @@ public:
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
             const locator::effective_replication_map& erm, fencing_token fence) override {
         tracing::trace(tr_state, "Executing a mutation locally");
-        return sp.apply_fence(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, sp.my_address());
+        return sp.apply_fence_on_ready(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, sp.my_host_id(erm));
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1390,7 +1407,7 @@ public:
             const locator::effective_replication_map& erm, fencing_token fence) override {
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
-        return sp.apply_fence(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, sp.my_address());
+        return sp.apply_fence_on_ready(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, sp.my_host_id(erm));
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1495,6 +1512,10 @@ public:
     const locator::effective_replication_map_ptr& get_effective_replication_map() const noexcept {
         return _token_guard.get_erm();
     }
+
+    fencing_token get_fence() const {
+        return storage_proxy::get_fence(*get_effective_replication_map());
+    }
 };
 
 thread_local uint64_t paxos_response_handler::next_id = 0;
@@ -1514,18 +1535,18 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm, fencing_token) override {
+            const locator::effective_replication_map& erm, fencing_token fence) override {
         tracing::trace(tr_state, "Executing a learn locally");
         // TODO: Enforce per partition rate limiting in paxos
-        return paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state);
+        return sp.apply_fence_on_ready(paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state), fence, sp.my_host_id(erm));
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
-            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token) override {
+            tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info, fencing_token fence) override {
         tracing::trace(tr_state, "Sending a learn to /{}", ep);
         // TODO: Enforce per partition rate limiting in paxos
         return sp.remote().send_paxos_learn(ep, timeout, tracing::make_trace_info(tr_state),
-                *_proposal, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(), response_id);
+                *_proposal, forward, sp.my_address(), sp.get_token_metadata_ptr()->get_my_id(), this_shard_id(), response_id, fence);
     }
     virtual bool is_shared() override {
         return true;
@@ -2222,8 +2243,9 @@ future<paxos::prepare_summary> paxos_response_handler::prepare_ballot(utils::UUI
                 if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "prepare_ballot: prepare {} locally", ballot);
                     response = co_await paxos::paxos_state::prepare(*_proxy, _proxy->remote().paxos_store(), tr_state, _schema, *_cmd, _key.key(), ballot, only_digest, da, _timeout);
+                    co_await _proxy->apply_fence(get_fence(), peer);
                 } else {
-                    response = co_await _proxy->remote().send_paxos_prepare(peer, _timeout, tr_state, *_cmd, _key.key(), ballot, only_digest, da);
+                    response = co_await _proxy->remote().send_paxos_prepare(peer, _timeout, tr_state, *_cmd, _key.key(), ballot, only_digest, da, get_fence());
                 }
             } catch (...) {
                 if (request_tracker.p) {
@@ -2386,8 +2408,9 @@ future<bool> paxos_response_handler::accept_proposal(lw_shared_ptr<paxos::propos
                 if (topo.is_me(peer)) {
                     tracing::trace(tr_state, "accept_proposal: accept {} locally", *proposal);
                     accepted = co_await paxos::paxos_state::accept(*_proxy, _proxy->remote().paxos_store(), tr_state, _schema, proposal->update.decorated_key(*_schema).token(), *proposal, _timeout);
+                    co_await _proxy->apply_fence(get_fence(), peer);
                 } else {
-                    accepted = co_await _proxy->remote().send_paxos_accept(peer, _timeout, tr_state, *proposal);
+                    accepted = co_await _proxy->remote().send_paxos_accept(peer, _timeout, tr_state, *proposal, get_fence());
                 }
             } catch(...) {
                 if (request_tracker.p) {
@@ -2554,10 +2577,10 @@ void paxos_response_handler::prune(utils::UUID ballot) {
     (void)parallel_for_each(_live_endpoints, [this, ballot, erm, my_address] (locator::host_id peer) mutable {
         if (peer == my_address) {
             tracing::trace(tr_state, "prune: prune {} locally", ballot);
-            return paxos::paxos_state::prune(_proxy->remote().paxos_store(), _schema, _key.key(), ballot, _timeout, tr_state);
+            return _proxy->apply_fence_on_ready(paxos::paxos_state::prune(_proxy->remote().paxos_store(), _schema, _key.key(), ballot, _timeout, tr_state), get_fence(), my_address);
         } else {
             tracing::trace(tr_state, "prune: send prune of {} to {}", ballot, peer);
-            return _proxy->remote().send_paxos_prune(peer, _timeout, tr_state, _schema->version(), _key.key(), ballot);
+            return _proxy->remote().send_paxos_prune(peer, _timeout, tr_state, _schema->version(), _key.key(), ballot, get_fence());
         }
     }).then_wrapped([this, h = shared_from_this()] (future<> f) {
         h->_proxy->get_stats().cas_now_pruning--;
@@ -3043,6 +3066,10 @@ void storage_proxy_stats::stats::register_stats() {
                        sm::description("number of operations that crossed a shard boundary"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
 
+        sm::make_total_operations("fenced_out_requests", replica_fenced_out_requests,
+                       sm::description("number of requests that resulted in a stale_topology_exception"),
+                       {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
+
         sm::make_total_operations("cas_dropped_prune", cas_replica_dropped_prune,
                        sm::description("how many times a coordinator did not perform prune after cas"),
                        {storage_proxy_stats::current_scheduling_group_label()}).set_skip_when_empty(),
@@ -3347,13 +3374,13 @@ storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracin
     return apply_on_shards(erm, *s, m.token(*s), std::move(apply));
 }
 
-template<typename ID>
 std::optional<replica::stale_topology_exception>
-storage_proxy::apply_fence(fencing_token token, ID caller_address) const noexcept {
+storage_proxy::check_fence(fencing_token token, locator::host_id caller_address) noexcept {
     const auto fence_version = _shared_token_metadata.get_fence_version();
     if (!token || token.topology_version >= fence_version) {
         return std::nullopt;
     }
+    get_stats().replica_fenced_out_requests++;
     static thread_local logger::rate_limit rate_limit(std::chrono::seconds(1));
     slogger.log(log_level::warn, rate_limit,
         "Stale topology detected, request has been fenced out, "
@@ -3362,8 +3389,8 @@ storage_proxy::apply_fence(fencing_token token, ID caller_address) const noexcep
     return replica::stale_topology_exception(token.topology_version, fence_version);
 }
 
-template <typename T, typename ID>
-future<T> storage_proxy::apply_fence(future<T> future, fencing_token fence, ID caller_address) const {
+template <typename T>
+future<T> storage_proxy::apply_fence_on_ready(future<T> future, fencing_token fence, locator::host_id caller_address) {
     if (!fence) {
         return std::move(future);
     }
@@ -3371,9 +3398,27 @@ future<T> storage_proxy::apply_fence(future<T> future, fencing_token fence, ID c
         if (f.failed()) {
             return std::move(f);
         }
-        auto stale = apply_fence(fence, caller_address);
+        auto stale = check_fence(fence, caller_address);
         return stale ? make_exception_future<T>(std::move(*stale)) : std::move(f);
     });
+}
+
+future<> storage_proxy::apply_fence(std::optional<fencing_token> fence, locator::host_id caller_address) {
+    auto stale = fence ? check_fence(*fence, caller_address) : std::nullopt;
+    return stale ? make_exception_future<>(std::move(*stale)) : make_ready_future<>();
+}
+
+template <typename T>
+requires (
+    std::is_same_v<T, replica::exception_variant> ||
+    requires(T t) { std::get<replica::exception_variant>(t); }
+)
+std::optional<future<T>> storage_proxy::apply_fence_result(std::optional<fencing_token> fence, locator::host_id caller_address) {
+    auto stale = fence ? check_fence(*fence, caller_address) : std::nullopt;
+    if (stale) {
+        return encode_replica_exception_for_rpc<T>(features(), std::make_exception_ptr(std::move(*stale)));
+    }
+    return std::nullopt;
 }
 
 fencing_token storage_proxy::get_fence(const locator::effective_replication_map& erm) {
@@ -3797,7 +3842,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
             // entry to the phased barrier into the function, but the function is called from the RPC
             // handler as well and there it is more complicated. See FIXME there.
             auto op = start_write();
-            co_await apply_fence(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
+            co_await apply_fence_on_ready(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = mutations
@@ -5328,7 +5373,7 @@ protected:
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_mutation_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_address());
+            return _proxy->apply_fence_on_ready(_proxy->query_mutations_locally(_schema, cmd, _partition_range, timeout, _trace_state), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             const bool format_reverse_required = cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             cmd = format_reverse_required ? reversed(::make_lw_shared(*cmd)) : cmd;
@@ -5353,7 +5398,7 @@ protected:
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_data: querying locally");
-            return _proxy->apply_fence(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_address());
+            return _proxy->apply_fence_on_ready(_proxy->query_result_local(_effective_replication_map_ptr, _schema, _cmd, _partition_range, opts, _trace_state, timeout, adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
             auto cmd = format_reverse_required ? reversed(::make_lw_shared(*_cmd)) : _cmd;
@@ -5365,8 +5410,8 @@ protected:
         auto fence = storage_proxy::get_fence(*_effective_replication_map_ptr);
         if (_proxy->is_me(*_effective_replication_map_ptr, ep)) {
             tracing::trace(_trace_state, "read_digest: querying locally");
-            return _proxy->apply_fence(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
-                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_address());
+            return _proxy->apply_fence_on_ready(_proxy->query_result_local_digest(_effective_replication_map_ptr, _schema, _cmd, _partition_range, _trace_state,
+                        timeout, digest_algorithm(*_proxy), adjust_rate_limit_for_local_operation(_rate_limit_info)), fence, _proxy->my_host_id(*_effective_replication_map_ptr));
         } else {
             tracing::trace(_trace_state, "read_digest: sending a message to /{}", ep);
             const bool format_reverse_required = _cmd->slice.is_reversed() && !_native_reversed_queries_enabled;
