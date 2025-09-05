@@ -1,13 +1,12 @@
 name: Call Jira Status Ready For Merge
 
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled]
 
 jobs:
   call-jira-status-update:
     uses: scylladb/github-automation/.github/workflows/main_update_jira_status_to_ready_for_merge.yml@main
-    with:
-      label_name: 'status/merge_candidate'
     secrets:
-      jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+

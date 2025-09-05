@@ -1,11 +1,12 @@
 name: Call Jira Status In Progress
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened]
 
 jobs:
   call-jira-status-in-progress:
     uses: scylladb/github-automation/.github/workflows/main_update_jira_status_to_in_progress.yml@main
     secrets:
-      jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+      caller_jira_auth: ${{ secrets.USER_AND_KEY_FOR_JIRA_AUTOMATION }}
+
