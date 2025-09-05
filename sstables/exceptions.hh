@@ -73,4 +73,10 @@ public:
         : compaction_job_exception(format("Compaction for {}/{} was aborted due to: {}", ks, cf, reason)) {}
 };
 
+class scrub_skip_sstable_exception : public compaction_job_exception {
+public:
+    scrub_skip_sstable_exception(sstring ks, sstring cf, sstring reason)
+        : compaction_job_exception(format("Scrubbing of the sstable for {}/{} was skipped due to: {}", ks, cf, reason)) {}
+};
+
 }

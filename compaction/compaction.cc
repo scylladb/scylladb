@@ -1705,6 +1705,19 @@ private:
                 } catch (const storage_io_error&) {
                     // Propagate these unchanged.
                     throw;
+                } catch (const malformed_sstable_exception& e) {
+                    if (_scrub_mode == compaction_type_options::scrub::mode::skip) {
+                        throw scrub_skip_sstable_exception(
+                                _schema->ks_name(),
+                                _schema->cf_name(),
+                                format("{}", std::current_exception()));
+                    }
+
+                    throw compaction_aborted_exception(
+                            _schema->ks_name(),
+                            _schema->cf_name(),
+                            format("scrub compaction failed due to unrecoverable error: {}", std::current_exception()));
+
                 } catch (...) {
                     // We don't want failed scrubs to be retried.
                     throw compaction_aborted_exception(
@@ -1779,16 +1792,38 @@ public:
     }
 
     mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) override {
+        auto exception_handler = [this] (std::exception_ptr e) {
+            try {
+                std::rethrow_exception(std::move(e));
+            } catch (const malformed_sstable_exception& ex) {
+                if (_options.operation_mode == compaction_type_options::scrub::mode::skip) {
+                    throw scrub_skip_sstable_exception(
+                            _schema->ks_name(),
+                            _schema->cf_name(),
+                            format("{}", std::current_exception()));
+                }
+                throw compaction_aborted_exception(
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        format("scrub compaction failed due to unrecoverable error: {}", std::current_exception()));
+            } catch (...) {
+                throw;
+            }
+        };
+
         if (!use_interposer_consumer()) {
-            return end_consumer;
+            return [end_consumer = std::move(end_consumer), exception_handler] (mutation_reader reader) mutable -> future<> {
+                return end_consumer(std::move(reader)).handle_exception(exception_handler);
+            };
         }
-        return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
+
+        return [this, end_consumer = std::move(end_consumer), exception_handler] (mutation_reader reader) mutable -> future<> {
             auto cfg = mutation_writer::segregate_config{memory::stats().total_memory() / 10};
             return mutation_writer::segregate_by_partition(std::move(reader), cfg,
                     [consumer = std::move(end_consumer), this] (mutation_reader rd) {
                 ++_bucket_count;
                 return consumer(std::move(rd));
-            });
+            }).handle_exception(exception_handler);
         };
     }
 
