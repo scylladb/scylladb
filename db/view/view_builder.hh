@@ -172,6 +172,23 @@ class view_builder final : public service::migration_listener::only_view_notific
     stats _stats;
     metrics::metric_groups _metrics;
 
+    struct view_registration {
+        struct view_registration_state {
+            dht::token current_token;
+            seastar::promise<> ready_promise;
+        };
+        std::unordered_map<table_id, view_registration_state> _view_registration_map;
+        seastar::condition_variable _registration_cv;
+
+        // called by each shard
+        future<> register_view(table_id id, dht::token current_token);
+
+        // called by coordinator
+        future<dht::token> get_register_request(table_id id);
+        future<> set_registered(table_id id);
+
+    } _view_registration;
+
     enum class view_build_status_location { sys_dist_ks, group0, both };
 
     view_build_status_location _view_build_status_on = view_build_status_location::sys_dist_ks;
@@ -251,6 +268,7 @@ private:
     void setup_shard_build_step(view_builder_init_state& vbi, std::vector<system_keyspace_view_name>, std::vector<system_keyspace_view_build_progress>);
     future<> calculate_shard_build_step(view_builder_init_state& vbi);
     future<> add_new_view(view_ptr, build_step&);
+    future<> register_view_for_building(view_ptr, build_step&);
     future<> do_build_step();
     void execute(build_step&, exponential_backoff_retry);
     future<> maybe_mark_view_as_built(view_ptr, dht::token);
