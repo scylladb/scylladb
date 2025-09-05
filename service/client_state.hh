@@ -102,7 +102,7 @@ private:
     private volatile String keyspace;
 #endif
     std::optional<auth::authenticated_user> _user;
-    std::optional<sstring> _driver_name, _driver_version;
+    std::optional<sstring> _driver_name, _driver_version, _driver_config;
 
     auth_state _auth_state = auth_state::UNINITIALIZED;
 
@@ -147,6 +147,14 @@ public:
     }
     void set_driver_name(sstring driver_name) {
         _driver_name = std::move(driver_name);
+    }
+
+    std::optional<sstring> get_driver_config() const {
+        return _driver_config;
+    }
+
+    void set_driver_config(sstring driver_config) {
+        _driver_config = std::move(driver_config);
     }
 
     std::optional<sstring> get_driver_version() const {
