@@ -31,8 +31,8 @@ public:
     // Highest read id the follower replied to
     read_id max_acked_read = read_id{0};
 
-    // True if the follower is a voting one
-    bool can_vote = true;
+    //can_vote_t::yes if the follower is a voting one
+    raft::can_vote_t can_vote = raft::can_vote_t::yes;
 
     enum class state {
         // In this state only one append entry is send until matching index is found
