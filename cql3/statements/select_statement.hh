@@ -188,13 +188,10 @@ class indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
     expr::expression _used_index_restrictions;
     schema_ptr _view_schema;
-    std::optional<prepared_ann_ordering_type>  _prepared_ann_ordering;
     noncopyable_function<dht::partition_range_vector(const query_options&)> _get_partition_ranges_for_posting_list;
     noncopyable_function<query::partition_slice(const query_options&)> _get_partition_slice_for_posting_list;
 public:
     static constexpr size_t max_base_table_query_concurrency = 4096;
-    static constexpr size_t max_ann_query_limit = 1000;
-    static constexpr std::string_view ann_custom_index_option = "vector_index";
 
     static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db,
                                                                     schema_ptr schema,
@@ -205,7 +202,6 @@ public:
                                                                     ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                                     bool is_reversed,
                                                                     ordering_comparator_type ordering_comparator,
-                                                                    std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                                                     std::optional<expr::expression> limit,
                                                                     std::optional<expr::expression> per_partition_limit,
                                                                     cql_stats &stats,
@@ -219,7 +215,6 @@ public:
                                    ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                    bool is_reversed,
                                    ordering_comparator_type ordering_comparator,
-                                   std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                    std::optional<expr::expression> limit,
                                    std::optional<expr::expression> per_partition_limit,
                                    cql_stats &stats,
@@ -359,6 +354,40 @@ private:
             service::query_state& state, const query_options& options) const override;
 };
 
-}
 
+class ordered_by_ann_of_select_statement : public select_statement {
+    secondary_index::index _index;
+    prepared_ann_ordering_type _prepared_ann_ordering;
+    mutable gc_clock::time_point _query_start_time_point;
+
+public:
+    static constexpr std::string_view ann_custom_index_option = "vector_index";
+    static constexpr size_t max_ann_query_limit = 1000;
+
+    static ::shared_ptr<cql3::statements::select_statement> prepare(data_dictionary::database db, schema_ptr schema, uint32_t bound_terms,
+            lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
+            ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
+            ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
+            std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<cql3::attributes> attrs);
+
+    ordered_by_ann_of_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
+            ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+            ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
+            prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit,
+            cql_stats& stats, const secondary_index::index& index, std::unique_ptr<cql3::attributes> attrs);
+
+private:
+    future<::shared_ptr<cql_transport::messages::result_message>> do_execute(
+            query_processor& qp, service::query_state& state, const query_options& options) const override;
+
+    void update_stats() const;
+
+    lw_shared_ptr<query::read_command> prepare_command_for_base_query(query_processor& qp, service::query_state& state, const query_options& options) const;
+
+    std::vector<float> get_ann_ordering_vector(const query_options& options) const;
+
+    future<::shared_ptr<cql_transport::messages::result_message>> query_base_table(
+            query_processor& qp, service::query_state& state, const query_options& options, const std::vector<primary_key>& pkeys) const;
+};
+}
 }
