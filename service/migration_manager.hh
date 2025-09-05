@@ -86,6 +86,9 @@ private:
     //   perform a schema pull.
     bool _enable_schema_pulls{true};
 
+    // When some features are enabled we need to reload schema in the background.
+    bool _needs_reload_schema{false};
+
     friend class group0_state_machine; // needed for access to _messaging
     size_t _concurrent_ddl_retries;
 public:
@@ -188,6 +191,7 @@ private:
 
 public:
     future<> maybe_sync(const schema_ptr& s, locator::host_id endpoint);
+    future<> maybe_reload_schema();
 
     // Returns schema of given version, either from cache or from remote node identified by 'from'.
     // The returned schema may not be synchronized. See schema::is_synced().
