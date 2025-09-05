@@ -1018,8 +1018,8 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
     if (prepared_ann_ordering.has_value()) {
         auto indexes = sim.list_indexes();
         auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
-            return (ind.metadata().options().contains(db::index::secondary_index::custom_index_option_name)
-                && ind.metadata().options().at(db::index::secondary_index::custom_index_option_name) == ann_custom_index_option)
+            return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name)
+                && ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == ann_custom_index_option)
                 && (ind.target_column() == prepared_ann_ordering->first->name_as_text());
         });
 
@@ -1032,7 +1032,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
             index_opt = *it;
         }
     } else if (index_opt) {
-        auto it = index_opt->metadata().options().find(db::index::secondary_index::custom_index_option_name);
+        auto it = index_opt->metadata().options().find(db::index::secondary_index::custom_class_option_name);
         if (it != index_opt->metadata().options().end() && it->second == ann_custom_index_option) {
             throw exceptions::invalid_request_exception("Vector indexes only support ANN queries");
         }
