@@ -155,6 +155,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="timeout value for test execution")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
+    parser.add_argument('--quiet', '-q', action='store_true', default=False,
+                        help='Quiet reporting')
     parser.add_argument('--jobs', '-j', action="store", type=int,
                         help="Number of jobs to use for running the tests")
     parser.add_argument('--save-log-on-success', "-s", default=False,
@@ -319,9 +321,31 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             f'-n{int(options.jobs)}',
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
+<<<<<<< HEAD
             f'--alluredir={report_dir / f"allure_{host_id}"}',
             '-v' if options.verbose else '-q',
+||||||| parent of da4990e338 (test.py: add additional level of verbosity for output)
+            f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
+            '-v' if options.verbose else '-q',
+=======
+            f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
+>>>>>>> da4990e338 (test.py: add additional level of verbosity for output)
         ])
+<<<<<<< HEAD
+||||||| parent of da4990e338 (test.py: add additional level of verbosity for output)
+    if options.pytest_arg:
+        # If pytest_arg is provided, it should be a string with arguments to pass to pytest
+        args.extend(shlex.split(options.pytest_arg))
+=======
+    if options.verbose:
+        args.append('-v')
+    if options.quiet:
+        args.append('--quiet')
+        args.extend(['-p','no:sugar'])
+    if options.pytest_arg:
+        # If pytest_arg is provided, it should be a string with arguments to pass to pytest
+        args.extend(shlex.split(options.pytest_arg))
+>>>>>>> da4990e338 (test.py: add additional level of verbosity for output)
     if options.random_seed:
         args.append(f'--random-seed={options.random_seed}')
     if options.x_log2_compaction_groups:
