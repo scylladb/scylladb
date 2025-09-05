@@ -149,8 +149,8 @@ class compact_mutation_state {
     gc_clock::time_point _query_time;
     max_purgeable_fn _get_max_purgeable;
     can_gc_fn _can_gc;
-    api::timestamp_type _max_purgeable_regular = api::missing_timestamp;
-    api::timestamp_type _max_purgeable_shadowable = api::missing_timestamp;
+    max_purgeable _max_purgeable_regular;
+    max_purgeable _max_purgeable_shadowable;
     std::optional<gc_clock::time_point> _gc_before;
     const query::partition_slice& _slice;
     uint64_t _row_limit{};
@@ -290,12 +290,12 @@ private:
             return false;
         }
         auto& max_purgeable = is_shadowable ? _max_purgeable_shadowable : _max_purgeable_regular;
-        if (max_purgeable == api::missing_timestamp) {
+        if (!max_purgeable) {
             max_purgeable = _get_max_purgeable(*_dk, is_shadowable);
         }
-        auto ret = t.timestamp < max_purgeable;
-        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: ret={}", t, is_shadowable, max_purgeable, ret);
-        return ret;
+        auto ret = max_purgeable.can_purge(t);
+        mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: can_purge={}, timestamp_source={}", t, is_shadowable, max_purgeable, ret.can_purge, ret.timestamp_source);
+        return ret.can_purge;
     };
 
 public:
@@ -349,8 +349,8 @@ public:
         _static_row_live = false;
         _partition_tombstone = {};
         _current_partition_limit = std::min(_row_limit, _partition_row_limit);
-        _max_purgeable_regular = api::missing_timestamp;
-        _max_purgeable_shadowable = api::missing_timestamp;
+        _max_purgeable_regular = {};
+        _max_purgeable_shadowable = {};
         _gc_before = std::nullopt;
         _last_static_row.reset();
         _last_pos = position_in_partition::for_partition_start();
