@@ -2197,7 +2197,7 @@ def test_limit_partition_slice_across_pages(cql, test_keyspace):
                 assert sorted(result) == sorted(expected_all[:limit])
 
 
-# Test that a query using a secondary index can handle "short reads".
+# Test that a query using a secondary index can handle "short reads" from base table.
 #
 # A read is short when the query is paged and the page size (in bytes) hits an
 # internal memory limit (`query_page_size_in_bytes` cfg option; default is 1MiB).
@@ -2209,7 +2209,8 @@ def test_limit_partition_slice_across_pages(cql, test_keyspace):
 # the first page is cut short (2 rows suffice to hit the limit), but the code
 # assumes that the last partition of the previous page was fully read, so it
 # completely ignores it when preparing the second page. This logic is
-# implemented in `find_index_partition_ranges()`.
+# implemented in `find_index_partition_ranges()` during the construction of the
+# partition range vector.
 @pytest.mark.xfail(reason="issue #25839")
 def test_short_read(cql, test_keyspace):
     page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
@@ -2227,6 +2228,36 @@ def test_short_read(cql, test_keyspace):
         rs = cql.execute(f'SELECT pk, ck2, data FROM {table} WHERE ck1 = 1')
         rows = [(col[0], col[1]) for col in list(rs)]
         assert sorted(rows) == [(1,1), (1,2), (1,3), (2,1)]
+
+
+# Test that a LIMIT works correctly when the query is paged and the base table
+# reads are short.
+#
+# Basically the same as test_short_read above, but with a LIMIT.
+#
+# Reproduces #22158 - The test triggers the second scenario listed in the comment for
+# test_limit_partition_slice_across_pages, that is a short read from the base table.
+# This causes the limit to be exceeded.
+#
+# The test is also affected by #25839, which causes the last row of the
+# first partition to be missing from the result, but this is not the main point
+# of this test.
+@pytest.mark.xfail(reason="issues #22158, #25839")
+def test_limit_partition_slice_short_read(cql, test_keyspace):
+    page_memory_limit = 1024 * 1024  # 1MiB
+    row_size = page_memory_limit // 2  # will cause short read after 2 rows
+    with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, data text, primary key (pk, ck1, ck2)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2, data) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1, 'A' * row_size])
+        cql.execute(stmt, [1, 1, 2, 'B' * row_size])
+        cql.execute(stmt, [1, 1, 3, 'C' * row_size])
+        cql.execute(stmt, [2, 1, 1, 'D' * row_size])
+        cql.execute(stmt, [2, 1, 2, 'E' * row_size])
+        stmt = SimpleStatement(f'SELECT pk, ck2, data FROM {table} WHERE ck1 = 1 LIMIT 3')
+        rs = list(cql.execute(stmt))
+        rows = [(col[0], col[1]) for col in rs]
+        assert rows == [(1,1), (1,2), (1,3)]
 
 
 def test_index_metrics(cql, test_keyspace, scylla_only):
