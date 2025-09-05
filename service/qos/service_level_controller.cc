@@ -39,7 +39,6 @@ namespace qos {
 static logging::logger sl_logger("service_level_controller");
 
 sstring service_level_controller::default_service_level_name = "default";
-constexpr const char* scheduling_group_name_pattern = "sl:{}";
 constexpr const char* deleted_scheduling_group_name_pattern = "sl_deleted:{}";
 constexpr const char* temp_scheduling_group_name_pattern = "sl_temp:{}";
 
@@ -404,6 +403,47 @@ future<> service_level_controller::update_cache(update_both_cache_levels update_
 
     if (_auth_integration) {
         co_await _auth_integration->reload_cache();
+    }
+}
+
+service_level_options get_driver_service_level_slo() {
+    service_level_options slo;
+    slo.shares = 200;
+    slo.workload = service_level_options::workload_type::batch;
+    return slo;
+}
+
+future<utils::chunked_vector<mutation>> service_level_controller::get_create_driver_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp) const {
+
+    utils::chunked_vector<mutation> mutations;
+
+    auto sys_ks_mutation = co_await sys_ks.make_service_level_driver_created_mutation(true, timestamp);
+    mutations.push_back(sys_ks_mutation);
+
+    auto [sl_mutations, _] = co_await raft_service_level_distributed_data_accessor::set_service_level_mutations(sys_ks.query_processor(), service_level_controller::driver_service_level_name, get_driver_service_level_slo(), timestamp);
+    std::move(sl_mutations.begin(), sl_mutations.end(), std::back_inserter(mutations));
+
+    co_return mutations;
+}
+
+future<> service_level_controller::create_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks) {
+    sl_logger.info("create_driver_service_level: starting sl:{} creation", service_level_controller::driver_service_level_name);
+    try {
+        service::group0_batch mc{std::move(guard)};
+
+        auto sys_ks_mutation = co_await sys_ks.make_service_level_driver_created_mutation(true, mc.write_timestamp());
+        mc.add_mutation(sys_ks_mutation, "set service_level_driver_created=true");
+
+        constexpr bool if_not_exists = true;
+        co_await add_distributed_service_level(service_level_controller::driver_service_level_name, get_driver_service_level_slo(), if_not_exists, mc);
+
+        co_await commit_mutations(std::move(mc));
+        sl_logger.info("create_driver_service_level: sl:{} created", service_level_controller::driver_service_level_name);
+    } catch (service::group0_concurrent_modification&) {
+        throw; // Let caller handle `group0_concurrent_modification`
+    } catch (...) {
+        sl_logger.error("Failed to create service level for driver: {}", std::current_exception());
+        co_return;
     }
 }
 

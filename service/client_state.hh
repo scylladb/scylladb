@@ -40,6 +40,12 @@ public:
     enum class auth_state : uint8_t {
         UNINITIALIZED, AUTHENTICATION, READY
     };
+    enum class service_level_state : uint8_t {
+        UNINITIALIZED,
+        NO_DRIVER_SL, // no `sl:driver` in the system, use default/user's service level
+        CONTROL_CONNECTION, // keep using `sl:driver` as the client handles driver's `control connection`
+        USER // switch to default/user's SL because the connection is not `control connection`
+    };
     using workload_type = qos::service_level_options::workload_type;
 
     // This class is used to move client_state between shards
@@ -105,6 +111,7 @@ private:
     std::optional<sstring> _driver_name, _driver_version;
 
     auth_state _auth_state = auth_state::UNINITIALIZED;
+    service_level_state _sl_state = service_level_state::UNINITIALIZED;
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
@@ -140,6 +147,14 @@ public:
 
     void set_auth_state(auth_state new_state) noexcept {
         _auth_state = new_state;
+    }
+
+    service_level_state get_service_level_state() const noexcept {
+        return _sl_state;
+    }
+
+    void set_sl_state(service_level_state new_state) noexcept {
+        _sl_state = new_state;
     }
 
     std::optional<sstring> get_driver_name() const {

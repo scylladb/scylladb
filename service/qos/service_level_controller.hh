@@ -21,6 +21,7 @@
 #include "cql3/description.hh"
 #include <map>
 #include "qos_common.hh"
+#include "mutation/mutation.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -104,6 +105,10 @@ using update_both_cache_levels = bool_class<class update_both_cache_levels_tag>;
 class service_level_controller : public peering_sharded_service<service_level_controller>, public service::endpoint_lifecycle_subscriber {
 public:
     static inline const int32_t default_shares = 1000;
+    static constexpr std::string driver_service_level_name = "driver";
+    static constexpr std::string scheduling_group_name_prefix = "sl:";
+    static constexpr std::string scheduling_group_name_pattern = scheduling_group_name_prefix + "{}";
+    static constexpr std::string driver_service_level_name_with_prefix = scheduling_group_name_prefix + driver_service_level_name;
 
     class service_level_distributed_data_accessor {
     public:
@@ -343,6 +348,15 @@ public:
      * @return a future that is resolved when the update loop stops.
      */
     void maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client);
+
+    /**
+     * Get mutations required to create `sl:driver` and remember it in `system.scylla_local`
+     */
+    future<utils::chunked_vector<mutation>> get_create_driver_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp) const;
+    /**
+     * Create `sl:driver` using _sl_data_accessor if possible, and remember it in `system.scylla_local`
+     */
+    future<> create_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
 
     /**
      * Request abort of update loop.

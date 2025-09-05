@@ -47,7 +47,8 @@ def filter_grant_permissions(desc_result_iter: Iterable[DescRowType]) -> Iterabl
     return filter(lambda result: result.type == "grant_permission", desc_result_iter)
 
 def filter_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
-    return filter(lambda result: result.type == "service_level", desc_result_iter)
+    # Filter out driver service level, which is created by the system automatically
+    return filter(lambda result: result.type == "service_level" and result.name != "driver", desc_result_iter)
 
 def filter_attached_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "service_level_attachment", desc_result_iter)
@@ -1640,7 +1641,8 @@ class AuthSLContext:
             service_levels_iter = self.cql.execute("LIST ALL SERVICE LEVELS")
             service_levels = [record.service_level for record in service_levels_iter]
             for sl in service_levels:
-                self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
+                if sl != "driver": # Don't touch driver service level that is created by the system
+                    self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
 
 class ServiceLevel:
     default_shares_value = 1000

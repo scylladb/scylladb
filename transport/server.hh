@@ -237,6 +237,9 @@ public:
     future<> update_connections_scheduling_group();
     future<> update_connections_service_level_params();
     future<std::vector<connection_service_level_params>> get_connections_service_level_params();
+    scheduling_group get_scheduling_group() override {
+        return _sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+    }
 private:
     class fmt_visitor;
     friend class connection;
@@ -280,7 +283,8 @@ private:
         void handle_error(future<>&& f) override;
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
-        void update_scheduling_group();
+        void update_to_user_scheduling_group();
+        void update_to_driver_scheduling_group();
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
     private:
