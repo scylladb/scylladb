@@ -812,7 +812,7 @@ compaction_reenabler
 compaction_manager::stop_and_disable_compaction_no_wait(compaction_group_view& t, sstring reason) {
     compaction_reenabler cre(*this, t);
     try {
-        do_stop_ongoing_compactions(std::move(reason), &t, {});
+        do_stop_ongoing_compactions(std::move(reason), [&t] (const compaction_group_view* x) { return x == &t; } , {});
     } catch (...) {
         cmlog.error("Stopping ongoing compactions failed: {}.  Ignored", std::current_exception());
     }
@@ -1198,11 +1198,16 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
 }
 
 std::vector<shared_ptr<compaction_task_executor>>
-compaction_manager::do_stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<sstables::compaction_type> type_opt) noexcept {
-    auto ongoing_compactions = get_compactions(t).size();
+compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<sstables::compaction_type> type_opt) noexcept {
+    auto ongoing_compactions = get_compactions(filter).size();
+    const compaction_group_view* t = _tasks.empty() ? nullptr : _tasks.front().compacting_table();
     auto tasks = _tasks
-            | std::views::filter([t, type_opt] (const auto& task) {
-                return (!t || task.compacting_table() == t) && (!type_opt || task.compaction_type() == *type_opt);
+            | std::views::filter([&filter, type_opt, &t] (const auto& task) mutable {
+                const compaction_group_view* x = task.compacting_table();
+                if (t != x) {
+                    t = nullptr;
+                }
+                return filter(x) && (!type_opt || task.compaction_type() == *type_opt);
             })
             | std::views::transform([] (auto& task) { return task.shared_from_this(); })
             | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
@@ -1222,8 +1227,12 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, compaction_group
 }
 
 future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<sstables::compaction_type> type_opt) noexcept {
+    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, type_opt);
+}
+
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<sstables::compaction_type> type_opt) noexcept {
     try {
-        auto tasks = do_stop_ongoing_compactions(std::move(reason), t, type_opt);
+        auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), type_opt);
         bool task_stopped = true;
         co_await await_tasks(std::move(tasks), task_stopped);
     } catch (...) {
@@ -2388,7 +2397,7 @@ future<> compaction_manager::remove(compaction_group_view& t, sstring reason) no
 #endif
 }
 
-const std::vector<sstables::compaction_info> compaction_manager::get_compactions(compaction_group_view* t) const {
+const std::vector<sstables::compaction_info> compaction_manager::get_compactions(std::function<bool(const compaction_group_view*)> filter) const {
     auto to_info = [] (const compaction_task_executor& task) {
         sstables::compaction_info ret;
         ret.compaction_uuid = task.compaction_data().compaction_uuid;
@@ -2399,8 +2408,8 @@ const std::vector<sstables::compaction_info> compaction_manager::get_compactions
         ret.total_keys_written = task.compaction_data().total_keys_written;
         return ret;
     };
-    return _tasks | std::views::filter([t] (const compaction_task_executor& task) {
-                return (!t || task.compacting_table() == t) && task.compaction_running();
+    return _tasks | std::views::filter([&filter] (const compaction_task_executor& task) {
+                return filter(task.compacting_table());
             }) | std::views::transform(to_info) | std::ranges::to<std::vector>();
 }
 
@@ -2422,7 +2431,7 @@ bool compaction_manager::compaction_disabled(compaction_group_view& t) const {
     }
 }
 
-future<> compaction_manager::stop_compaction(sstring type, compaction_group_view* table) {
+future<> compaction_manager::stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter) {
     sstables::compaction_type target_type;
     try {
         target_type = sstables::to_compaction_type(type);
@@ -2438,7 +2447,7 @@ future<> compaction_manager::stop_compaction(sstring type, compaction_group_view
     default:
         break;
     }
-    return stop_ongoing_compactions("user request", table, target_type);
+    return stop_ongoing_compactions("user request", std::move(filter), target_type);
 }
 
 void compaction_manager::propagate_replacement(compaction_group_view& t,

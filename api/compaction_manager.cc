@@ -52,7 +52,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
         return cm.map_reduce0([](compaction_manager& cm) {
             std::vector<cm::summary> summaries;
 
-            for (const auto& c : cm.get_compactions()) {
+            for (const auto& c : cm.get_compactions([] (auto) { return true; })) {
                 cm::summary s;
                 s.id = fmt::to_string(c.compaction_uuid);
                 s.ks = c.ks_name;
@@ -104,7 +104,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
     cm::stop_compaction.set(r, [&cm] (std::unique_ptr<http::request> req) {
         auto type = req->get_query_param("type");
         return cm.invoke_on_all([type] (compaction_manager& cm) {
-            return cm.stop_compaction(type);
+            return cm.stop_compaction(type, [] (auto) { return true; });
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
@@ -117,8 +117,8 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
             auto& cm = db.get_compaction_manager();
             return parallel_for_each(tables, [&] (const table_info& ti) {
                 auto& t = db.find_column_family(ti.id);
-                return t.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) {
-                    return cm.stop_compaction(type, &ts);
+                return cm.stop_compaction(type, [&t] (const compaction::compaction_group_view* x) {
+                    return x->schema() == t.schema();
                 });
             });
         });
