@@ -371,7 +371,7 @@ public:
                                      tracing::trace_state_ptr trace_state = nullptr,
                                      streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
                                      mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::no,
-                                     const tombstone_gc_state* gc_state = nullptr,
+                                     tombstone_gc_state gc_state = tombstone_gc_state::no_gc(),
                                      max_purgeable_fn get_max_purgeable = can_never_purge) {
         if (auto reader_opt = make_reader_opt(s, permit, range, slice, gc_state, std::move(get_max_purgeable), std::move(trace_state), fwd, fwd_mr)) {
             return std::move(*reader_opt);
@@ -384,7 +384,7 @@ public:
                                      reader_permit permit,
                                      const dht::partition_range&,
                                      const query::partition_slice&,
-                                     const tombstone_gc_state*,
+                                     tombstone_gc_state,
                                      max_purgeable_fn get_max_purgeable,
                                      tracing::trace_state_ptr trace_state = nullptr,
                                      streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
@@ -393,7 +393,7 @@ public:
     mutation_reader make_reader(schema_ptr s,
                                     reader_permit permit,
                                     const dht::partition_range& range = query::full_partition_range,
-                                    const tombstone_gc_state* gc_state = nullptr,
+                                    tombstone_gc_state gc_state = tombstone_gc_state::no_gc(),
                                     max_purgeable_fn get_max_purgeable = can_never_purge) {
         auto& full_slice = s->full_slice();
         return make_reader(std::move(s), std::move(permit), range, full_slice, nullptr,
