@@ -462,9 +462,13 @@ verify_adequate_memory_per_shard(bool developer_mode) {
 }
 
 class memory_threshold_guard {
-    seastar::memory::scoped_large_allocation_warning_threshold _slawt;
+    std::optional<seastar::memory::scoped_large_allocation_warning_threshold> _slawt;
 public:
-    explicit memory_threshold_guard(size_t threshold) : _slawt(threshold)  {}
+    explicit memory_threshold_guard(size_t threshold) {
+        if (threshold != 0) {
+            _slawt.emplace(threshold);
+        }
+    }
     future<> stop() { return make_ready_future<>(); }
 };
 
