@@ -1355,7 +1355,8 @@ utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const
 
 future<> gossiper::replicate(endpoint_state es, permit_id pid) {
     if (!es.get_host_id()) {
-        on_internal_error(logger, fmt::format("adding a state with empty host id for ip: {}", es.get_ip()));
+        // TODO (#25818): re-introduce the on_internal_error() call once all the code paths leading to this are fixed
+        logger.warn("attempting to add a state with empty host id for ip: {}", es.get_ip());
     }
 
     verify_permit(es.get_host_id(), pid);
