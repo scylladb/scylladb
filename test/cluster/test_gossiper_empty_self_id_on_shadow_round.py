@@ -17,7 +17,6 @@ from test.pylib.manager_client import ManagerClient
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-@pytest.mark.xfail(reason="https://github.com/scylladb/scylladb/issues/25831")
 async def test_gossiper_empty_self_id_on_shadow_round(manager: ManagerClient):
     """
     Test gossiper race condition on bootstrap that can lead to an empty self host ID sent in replies to other nodes.
