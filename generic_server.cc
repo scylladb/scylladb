@@ -406,8 +406,28 @@ future<> server::do_accepts(int which, bool keepalive, socket_address server_add
             }
             // Move the processing into the background.
             (void)futurize_invoke([this, conn] {
-                // Block while monitoring for lifetime/errors.
-                return conn->process().then_wrapped([this, conn] (auto f) {
+                future<bool> tls_init = make_ready_future<bool>(true);
+
+                if (this->_credentials) {
+                    tls_init = tls::get_protocol_version(conn->_fd).then([conn](const sstring& protocol) {
+                        return tls::get_cipher_suite(conn->_fd).then(
+                            [conn, protocol](const sstring& cipher_suite) mutable {
+                                // TLS fields have to be assigned all at once: if we yield in between, we risk reading halfway through
+                                conn->_ssl_enabled = true;
+                                conn->_ssl_protocol = protocol;
+                                conn->_ssl_cipher_suite = cipher_suite;
+                                return make_ready_future<bool>(true);
+                            });
+                    }).handle_exception([this, conn](std::exception_ptr ep) {
+                        _logger.warn("Inspecting TLS connection failed: {}", ep);
+                        return make_ready_future<bool>(false);
+                    });
+                }
+
+                return tls_init.then([conn] (bool ok){
+                    // Block while monitoring for lifetime/errors.
+                    return ok ? conn->process() : make_ready_future<>();
+                }).then_wrapped([this, conn](auto f) {
                     try {
                         f.get();
                     } catch (...) {

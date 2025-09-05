@@ -174,3 +174,15 @@ def test_token_ring_tablets(scylla_only, cql, test_keyspace_tablets):
         for row in rows:
             assert row.keyspace_name == test_keyspace_tablets
             assert row.table_name == table
+
+def test_system_clients_keeps_correct_tls_entries_when_tls_disabled(cql):
+    if cql.cluster.ssl_context:
+        pytest.skip("Non-SSL-specific tests are skipped with the '--ssl' option")
+
+    table_result = list(cql.execute("SELECT * FROM system.clients"))
+    assert len(table_result) >= 1
+    for row in table_result:
+        assert row.hostname == '127.0.0.1'
+        assert row.ssl_enabled == False
+        assert row.ssl_protocol is None
+        assert row.ssl_cipher_suite is None
