@@ -412,7 +412,7 @@ public:
         return _stats;
     }
 
-    const std::vector<sstables::compaction_info> get_compactions(compaction::compaction_group_view* t = nullptr) const;
+    const std::vector<sstables::compaction_info> get_compactions(std::function<bool(const compaction_group_view*)> filter = [] (auto) { return true; }) const;
 
     // Returns true if table has an ongoing compaction, running on its behalf
     bool has_table_ongoing_compaction(const compaction::compaction_group_view& t) const;
@@ -420,11 +420,12 @@ public:
     bool compaction_disabled(compaction::compaction_group_view& t) const;
 
     // Stops ongoing compaction of a given type.
-    future<> stop_compaction(sstring type, compaction::compaction_group_view* table = nullptr);
+    future<> stop_compaction(sstring type, std::function<bool(const compaction_group_view*)> filter = [] (auto) { return true; });
 
 private:
     std::vector<shared_ptr<compaction_task_executor>>
-    do_stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<sstables::compaction_type> type_opt) noexcept;
+    do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<sstables::compaction_type> type_opt) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<sstables::compaction_type> type_opt = {}) noexcept;
 
 public:
     // Stops ongoing compaction of a given table and/or compaction_type.
