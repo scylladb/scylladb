@@ -487,3 +487,11 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
     # Check if group0 is healthy
     s2 = await manager.server_add(config=auth_config, property_file={"dc": "dc1", "rack": "rack3"})
     await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+# Reproduces scylladb/scylladb#24792.
+@pytest.mark.asyncio
+@skip_mode("release", "error injection is disabled in release mode")
+async def test_reload_service_levels_after_auth_service_is_stopped(manager: ManagerClient):
+    config = {**auth_config, "error_injections_at_startup": ["reload_service_level_cache_after_auth_service_is_stopped"]}
+    s1 = await manager.server_add(config=config)
+    await manager.server_stop_gracefully(s1.server_id)
