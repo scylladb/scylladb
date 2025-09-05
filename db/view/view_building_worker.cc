@@ -12,11 +12,13 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/shared_mutex.hh>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
 
 #include "db/view/view_building_worker.hh"
+#include "db/view/view_building_state.hh"
 #include "db/view/view_consumer.hh"
 #include "dht/token.hh"
 #include "replica/database.hh"
@@ -45,10 +47,14 @@ class view_building_worker::consumer : public view_consumer {
 
 protected:
     virtual void load_views_to_build() override {
-        _views_to_build = _batch.tasks | std::views::filter([this] (const auto& task_entry) {
-            return _db.column_family_exists(*task_entry.second.view_id);
-        }) | std::views::transform([this] (const auto& task_entry) {
-            return view_ptr(_db.find_schema(*task_entry.second.view_id));
+        auto ids = smp::submit_to(0, [&] () -> future<std::vector<table_id>> {
+            return _batch.get_views_to_build();
+        }).get();
+
+        _views_to_build = ids | std::views::filter([this] (const auto& id) {
+            return _db.column_family_exists(id);
+        }) | std::views::transform([this] (const auto& id) {
+            return view_ptr(_db.find_schema(id));
         }) | std::views::filter([this] (const view_ptr& view) {
             return partition_key_matches(_db.as_data_dictionary(), *_reader.schema(), *view->view_info(), _current_key);
         }) | std::ranges::to<std::vector>();
@@ -650,19 +656,25 @@ view_building_worker::batch::batch(view_building_worker& vbw, std::unordered_map
     , _vbw(vbw) {}
 
 future<> view_building_worker::batch::start() {
+    auto lock = co_await get_unique_lock(mutex);
     co_await abort_sources.start();
     state = batch_state::in_progress;
     work = do_work();
 }
 
 future<> view_building_worker::batch::abort_task(utils::UUID id) {
+    auto lock = co_await get_unique_lock(mutex);
     tasks.erase(id);
     if (tasks.empty()) {
-        co_await abort();
+        co_await abort(std::move(lock));
     }
 }
 
-future<> view_building_worker::batch::abort() {
+future<> view_building_worker::batch::abort(std::optional<std::unique_lock<shared_mutex>> lock) {
+    if (!lock) {
+        lock = co_await get_unique_lock(mutex);
+    }
+
     if (abort_sources.local_is_initialized()) {
         co_await abort_sources.invoke_on_all([] (abort_source& local_as) {
             if (!local_as.abort_requested()) {
@@ -671,9 +683,19 @@ future<> view_building_worker::batch::abort() {
         });
 
         if (work.valid()) {
+            lock->unlock();
             co_await work.get_future();
         }
     }
+}
+
+future<std::vector<table_id>> view_building_worker::batch::get_views_to_build() {
+    auto lock = co_await get_shared_lock(mutex);
+    co_return tasks | std::views::filter([] (const auto& task_entry) {
+        return task_entry.second.type == view_building_task::task_type::build_range;
+    }) | std::views::transform([] (const auto& task_entry) {
+        return *task_entry.second.view_id;
+    }) | std::ranges::to<std::vector>();
 }
 
 future<> view_building_worker::batch::do_work() {
@@ -719,6 +741,7 @@ future<> view_building_worker::batch::do_work() {
         }
     }
 
+    auto lock = co_await get_unique_lock(mutex);
     state = batch_state::finished;
     co_await abort_sources.stop();
     _vbw._vb_state_machine.event.broadcast();
@@ -733,6 +756,7 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
     seastar::thread_attributes attr;
     attr.sched_group = local_vbw._db.get_streaming_scheduling_group();
     return seastar::async(std::move(attr), [this, &local_vbw] {
+        auto lock = get_shared_lock(mutex).get();
         auto& as = abort_sources.local();
         auto get_views_ids = [this] {
             return tasks | std::views::values | std::views::transform([] (const view_building_task& t) {
@@ -771,7 +795,6 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
                 now,
                 as));
 
-        as.check();
         for (auto& task: tasks | std::views::values) {
             if (!local_vbw._views_in_progress.contains(*task.view_id)) {
                 auto view = local_vbw._db.find_schema(*task.view_id);
@@ -780,6 +803,7 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
             }
         }
 
+        lock.unlock();
         as.check();
         std::exception_ptr eptr;
         try {
