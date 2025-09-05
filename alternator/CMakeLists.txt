@@ -17,6 +17,7 @@ target_sources(alternator
     streams.cc
     consumed_capacity.cc
     ttl.cc
+    expression_factory.cc
     ${cql_grammar_srcs})
 target_include_directories(alternator
   PUBLIC

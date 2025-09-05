@@ -1318,6 +1318,7 @@ alternator = [
        'alternator/serialization.cc',
        'alternator/expressions.cc',
        Antlr3Grammar('alternator/expressions.g'),
+       'alternator/expression_factory.cc',
        'alternator/conditions.cc',
        'alternator/consumed_capacity.cc',
        'alternator/auth.cc',
