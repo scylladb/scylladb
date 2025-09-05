@@ -20,8 +20,7 @@ You can run your ScyllaDB workloads on AWS, GCE, and Azure using a ScyllaDB imag
 Amazon Web Services (AWS)
 -----------------------------
 
-* The recommended instance types are :ref:`i3en <system-requirements-i3en-instances>`, and :ref:`i4i <system-requirements-i4i-instances>`.
-* We recommend using enhanced networking that exposes the physical network cards to the VM.
+The recommended instance types are :ref:`i3en <system-requirements-i3en-instances>`, :ref:`i4i <system-requirements-i4i-instances>`, :ref:`i7i <system-requirements-i7i-instances>`, and :ref:`i7ie <system-requirements-i7ie-instances>`.
 
 .. note::
 
@@ -99,6 +98,102 @@ See  `Amazon EC2 I4i Instances <https://aws.amazon.com/ec2/instance-types/i4i/>`
 See `ScyllaDB on the New AWS EC2 I4i Instances: Twice the Throughput & Lower Latency <https://www.scylladb.com/2022/05/09/scylladb-on-the-new-aws-ec2-i4i-instances-twice-the-throughput-lower-latency/>`_ to 
 learn more about using ScyllaDB with i4i instances.
 
+.. _system-requirements-i7i-instances:
+
+i7i instances
+^^^^^^^^^^^^^^
+
+The following i7i instances are supported. Larger i7i instances will be
+supported in upcoming releases.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i7i.large
+     - 2
+     - 16
+     - 1 x 468 GB
+   * - i7i.xlarge
+     - 4
+     - 32
+     - 1 x 937.5 GB
+   * - i7i.2xlarge
+     - 8
+     - 64
+     - 1 x 1875 GB
+
+All i7i instances have the following specs:
+
+* 3.2 GHz all-core turbo Intel® Xeon® Scalable (Emerald Rapids) processors.
+* Up to 100 Gbps of networking bandwidth and 60 Gbps bandwidth to Amazon Elastic Block Store (EBS).
+* Advanced Matrix Extensions (AMX) for accelerating CPU-based machine learning.
+
+See `Amazon EC2 I7i Instances <https://aws.amazon.com/ec2/instance-types/i7i/>`_ for details.
+
+.. _system-requirements-i7ie-instances:
+
+i7ie instances
+^^^^^^^^^^^^^^
+
+The following i7ie instances are supported.
+
+.. list-table::
+   :widths: 30 20 20 30
+   :header-rows: 1
+
+   * - Model
+     - vCPU
+     - Mem (GiB)
+     - Storage (GB)
+   * - i7ie.large
+     - 2
+     - 16
+     - 1 x 1,250 GB
+   * - i7ie.xlarge
+     - 4
+     - 32
+     - 1 x 2,500 GB
+   * - i7ie.2xlarge
+     - 8
+     - 64
+     - 2 x 2,500 GB
+   * - i7ie.3xlarge
+     - 12
+     - 96
+     - 1 x 7,500 GB
+   * - i7ie.6xlarge
+     - 24
+     - 192
+     - 2 x 7,500 GB
+   * - i7ie.12xlarge
+     - 48
+     - 384
+     - 4 x 7,500 GB
+   * - i7ie.18xlarge
+     - 72
+     - 576
+     - 6 x 7,500 GB
+   * - i7ie.24xlarge
+     - 96
+     - 768
+     - 8 x 7,500 GB
+   * - i7ie.48xlarge
+     - 192
+     - 1,536
+     - 16 x 7,500 GB
+
+All i7i instances have the following specs:
+
+* 3.2 GHz all-core turbo Intel® Xeon® Scalable (Emerald Rapids) processors.
+* Up to 100 Gbps of networking bandwidth and 60 Gbps bandwidth to Amazon Elastic Block Store (EBS).
+* Advanced Matrix Extensions (AMX) for accelerating CPU-based machine learning.
+
+See `Amazon EC2 I7i Instances <https://aws.amazon.com/ec2/instance-types/i7i/>`_ for details.
 
 Im4gn and Is4gen instances
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
