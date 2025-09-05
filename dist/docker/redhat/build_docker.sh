@@ -89,6 +89,8 @@ bcp LICENSE-ScyllaDB-Source-Available.md /licenses/
 run microdnf clean all
 run microdnf --setopt=tsflags=nodocs -y update
 run microdnf --setopt=tsflags=nodocs -y install hostname kmod procps-ng python3 python3-pip
+run curl -L --output /etc/yum.repos.d/scylla.repo https://downloads.scylladb.com/unstable/scylla/master/rpm/centos/latest/scylla.repo
+run microdnf --setopt=tsflags=nodocs -y update
 run microdnf clean all
 run pip3 install --no-cache-dir --prefix /usr supervisor
 run bash -ec "echo LANG=C.UTF-8 > /etc/locale.conf"
