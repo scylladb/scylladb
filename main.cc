@@ -2589,7 +2589,8 @@ int main(int ac, char** av) {
         {"perf-load-balancing", perf::scylla_tablet_load_balancing_main, "run tablet load balancer tests"},
         {"perf-simple-query", perf::scylla_simple_query_main, "run performance tests by sending simple queries to this server"},
         {"perf-sstable", perf::scylla_sstable_main, "run performance tests by exercising sstable related operations on this server"},
-        {"perf-alternator", perf::alternator(scylla_main, &after_init_func), "run performance tests on full alternator stack"}
+        {"perf-alternator", perf::alternator(scylla_main, &after_init_func), "run performance tests on full alternator stack"},
+        {"perf-cql-raw", perf::cql_raw(scylla_main, &after_init_func), "run performance tests using raw CQL protocol frames"}
     };
 
     main_func_type main_func;
