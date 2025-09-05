@@ -470,7 +470,7 @@ public:
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
         bool enable_node_aggregated_table_metrics = true;
-        size_t view_update_concurrency_semaphore_limit;
+        size_t view_update_memory_semaphore_limit;
         db::data_listeners* data_listeners = nullptr;
         uint32_t tombstone_warn_threshold{0};
         unsigned x_log2_compaction_groups{0};
@@ -1406,7 +1406,7 @@ public:
         seastar::scheduling_group statement_scheduling_group;
         seastar::scheduling_group streaming_scheduling_group;
         bool enable_metrics_reporting = false;
-        size_t view_update_concurrency_semaphore_limit;
+        size_t view_update_memory_semaphore_limit;
     };
 private:
     locator::replication_strategy_ptr _replication_strategy;
@@ -1617,7 +1617,8 @@ private:
 
     // The view update read concurrency semaphores used for view updates coming from user writes.
     reader_concurrency_semaphore_group _view_update_read_concurrency_semaphores_group;
-    db::timeout_semaphore _view_update_concurrency_sem{max_memory_pending_view_updates()};
+    db::timeout_semaphore _view_update_concurrency_sem;
+    db::timeout_semaphore _view_update_memory_sem{max_memory_pending_view_updates()};
 
     cache_tracker _row_cache_tracker;
     seastar::shared_ptr<db::view::view_update_generator> _view_update_generator;
@@ -2048,7 +2049,7 @@ public:
     }
 
     db::view::update_backlog get_view_update_backlog() const {
-        return {max_memory_pending_view_updates() - _view_update_concurrency_sem.current(), max_memory_pending_view_updates()};
+        return {max_memory_pending_view_updates() - _view_update_memory_sem.current(), max_memory_pending_view_updates()};
     }
 
     db::data_listeners& data_listeners() const {
@@ -2070,8 +2071,12 @@ public:
     bool is_internal_query() const;
     bool is_user_semaphore(const reader_concurrency_semaphore& semaphore) const;
 
-    db::timeout_semaphore& view_update_sem() {
+    db::timeout_semaphore& view_update_concurrency_sem() {
         return _view_update_concurrency_sem;
+    }
+
+    db::timeout_semaphore& view_update_memory_sem() {
+        return _view_update_memory_sem;
     }
 
     future<> clear_inactive_reads_for_tablet(table_id table, dht::token_range tablet_range);
