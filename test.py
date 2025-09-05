@@ -155,6 +155,8 @@ def parse_cmd_line() -> argparse.Namespace:
                         help="timeout value for test.py/pytest session execution")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help='Verbose reporting')
+    parser.add_argument('--quiet', '-q', action='store_true', default=False,
+                        help='Quiet reporting')
     parser.add_argument('--jobs', '-j', action="store", type=int,
                         help="Number of jobs to use for running the tests")
     parser.add_argument('--save-log-on-success', "-s", default=False,
@@ -328,8 +330,12 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
             f'--tmpdir={temp_dir}',
             f'--maxfail={options.max_failures}',
             f'--alluredir={report_dir / f"allure_{HOST_ID}"}',
-            '-v' if options.verbose else '-q',
         ])
+    if options.verbose:
+        args.append('-v')
+    if options.quiet:
+        args.append('--quiet')
+        args.extend(['-p','no:sugar'])
     if options.pytest_arg:
         # If pytest_arg is provided, it should be a string with arguments to pass to pytest
         args.extend(shlex.split(options.pytest_arg))
