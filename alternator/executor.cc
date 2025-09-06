@@ -3762,9 +3762,6 @@ update_item_operation::update_item_operation(service::storage_proxy& proxy, rjso
             resolve_update_expression(expr,
                     expression_attribute_names, expression_attribute_values,
                     used_attribute_names, used_attribute_values);
-            if (expr.empty()) {
-                throw api_error::validation("Empty expression in UpdateExpression is not allowed");
-            }
             for (auto& action : expr.actions()) {
                 // Unfortunately we need to copy the action's path, because
                 // we std::move the action object.
