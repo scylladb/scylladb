@@ -6514,7 +6514,9 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             auto& table = db.find_column_family(tablet.table);
             return table.maybe_split_compaction_group_of(tablet.tablet);
         });
-
+        co_await utils::get_local_injector().inject("pause_after_streaming_tablet", [] (auto& handler) {
+            return handler.wait_for_message(db::timeout_clock::now() + std::chrono::minutes(1));
+        });
         co_return tablet_operation_result();
     });
 }
