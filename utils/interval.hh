@@ -73,22 +73,12 @@ public:
 template <typename T>
 using interval_bound_const_ref = interval_bound<const T&>;
 
-template<typename T>
-class interval;
-
-// An interval which can have inclusive, exclusive or open-ended bounds on each end.
-// The end bound can be smaller than the start bound.
-template<typename T>
-class wrapping_interval {
+template <class T>
+class interval_data {
+    using bound = interval_bound<T>;
     template <typename U>
     using optional = std::optional<U>;
-public:
-    using bound = interval_bound<T>;
-    using bound_const_ref = interval_bound_const_ref<T>;
-
-    template <typename Transformer>
-    using transformed_type = typename std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Transformer, T>>>;
-private:
+protected:
     bool _start_exists = false;
     bool _start_inclusive = false;
     bool _end_exists = false;
@@ -110,7 +100,8 @@ private:
 #endif
     };
 public:
-    wrapping_interval(optional<bound> start, optional<bound> end, bool singular = false) {
+    constexpr interval_data() noexcept {}
+    interval_data(optional<bound> start, optional<bound> end, bool singular = false) {
 #ifdef DEBUG
         _start_poison = 0xDEADBEEFDEADBEEF;
         _end_poison = 0xDEADBEEFDEADBEEF;
@@ -136,7 +127,7 @@ public:
             }
         }
     }
-    wrapping_interval(T value) {
+    interval_data(T value) {
 #ifdef DEBUG
         _start_poison = 0xDEADBEEFDEADBEEF;
         _end_poison = 0xDEADBEEFDEADBEEF;
@@ -146,7 +137,7 @@ public:
         _singular = true;
         std::construct_at(&_start_value, std::move(value));
     }
-    wrapping_interval(const wrapping_interval& o)
+    interval_data(const interval_data& o)
             : _start_exists(o._start_exists)
             , _start_inclusive(o._start_inclusive)
             , _end_exists(o._end_exists)
@@ -170,7 +161,7 @@ public:
             }
         }
     }
-    wrapping_interval(wrapping_interval&& o) noexcept(std::is_nothrow_move_constructible_v<T>)
+    interval_data(interval_data&& o) noexcept(std::is_nothrow_move_constructible_v<T>)
             : _start_exists(o._start_exists)
             , _start_inclusive(o._start_inclusive)
             , _end_exists(o._end_exists)
@@ -194,7 +185,7 @@ public:
             }
         }
     }
-    wrapping_interval& operator=(const wrapping_interval& o) {
+    interval_data& operator=(const interval_data& o) {
         if (this != &o) {
             if (_start_exists) {
                 std::destroy_at(&_start_value);
@@ -226,7 +217,7 @@ public:
         }
         return *this;
     }
-    wrapping_interval& operator=(wrapping_interval&& o) noexcept(std::is_nothrow_move_constructible_v<T>) {
+    interval_data& operator=(interval_data&& o) noexcept(std::is_nothrow_move_constructible_v<T>) {
         if (this != &o) {
             if (_start_exists) {
                 std::destroy_at(&_start_value);
@@ -256,7 +247,7 @@ public:
         }
         return *this;
     }
-    ~wrapping_interval() {
+    ~interval_data() {
         if (_start_exists) {
             std::destroy_at(&_start_value);
         }
@@ -264,6 +255,77 @@ public:
             std::destroy_at(&_end_value);
         }
     }
+};
+
+// interval_data specialization targeting trivial types
+// where copying _start is cheaper than checking _start_exists and
+// conditionally copying
+template <class T>
+requires std::is_trivially_destructible_v<T> && std::is_default_constructible_v<T>
+class interval_data<T> {
+    using bound = interval_bound<T>;
+    template <typename U>
+    using optional = std::optional<U>;
+protected:
+    bool _start_exists = false;
+    bool _start_inclusive = false;
+    bool _end_exists = false;
+    bool _end_inclusive = false;
+    bool _singular = false;
+    T _start_value;
+    T _end_value;
+public:
+    constexpr interval_data() noexcept = default;
+    interval_data(optional<bound> start, optional<bound> end, bool singular = false) {
+        _singular = singular;
+        if (start) {
+            _start_exists = true;
+            _start_inclusive = start->is_inclusive();
+            _start_value = std::move(start->value());
+        }
+        if (!_singular) {
+            if (end) {
+                _end_exists = true;
+                _end_inclusive = end->is_inclusive();
+                _end_value = std::move(end->value());
+            }
+        }
+    }
+    interval_data(T value) {
+        _start_exists = true;
+        _start_inclusive = true;
+        _singular = true;
+        _start_value = std::move(value);
+    }
+};
+
+template<typename T>
+class interval;
+
+// An interval which can have inclusive, exclusive or open-ended bounds on each end.
+// The end bound can be smaller than the start bound.
+template<typename T>
+class wrapping_interval : public interval_data<T> {
+    template <typename U>
+    using optional = std::optional<U>;
+protected:
+    // Bring base class members into scope
+    using interval_data<T>::_start_exists;
+    using interval_data<T>::_start_inclusive;
+    using interval_data<T>::_end_exists;
+    using interval_data<T>::_end_inclusive;
+    using interval_data<T>::_singular;
+    using interval_data<T>::_start_value;
+    using interval_data<T>::_end_value;
+public:
+    using bound = interval_bound<T>;
+    using bound_const_ref = interval_bound_const_ref<T>;
+
+    template <typename Transformer>
+    using transformed_type = typename std::remove_cv_t<std::remove_reference_t<std::invoke_result_t<Transformer, T>>>;
+public:
+    wrapping_interval(optional<bound> start, optional<bound> end, bool singular = false) : interval_data<T>(std::move(start), std::move(end), singular) {}
+    wrapping_interval(T value) : interval_data<T>(std::move(value)) {}
     constexpr wrapping_interval() : wrapping_interval({}, {}) { }
 private:
     // Bound wrappers for compile-time dispatch and safety.
