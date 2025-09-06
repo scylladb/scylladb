@@ -207,4 +207,7 @@ BOOST_AUTO_TEST_CASE(exception_at_expression_parsing) {
 
     // Appending duplicate update actions throws expressions_syntax_error
     BOOST_REQUIRE_THROW(alternator::parse_update_expression("SET a = :v SET b = :w"), alternator::expressions_syntax_error);
+
+    // Single non-function condition throws expressions_syntax_error
+    BOOST_REQUIRE_THROW(alternator::parse_condition_expression("a OR b", "TEST"), alternator::expressions_syntax_error);
 }
