@@ -248,7 +248,7 @@ update_expression_clause returns [parsed::update_expression e]:
 // Note the "EOF" token at the end of the update expression. We want to the
 //  parser to match the entire string given to it - not just its beginning!
 update_expression returns [parsed::update_expression e]:
-    (update_expression_clause { e.append($update_expression_clause.e); })* EOF;
+    (update_expression_clause { e.append($update_expression_clause.e); })+ EOF;
 
 projection_expression returns [std::vector<parsed::path> v]:
     p=path      { $v.push_back(std::move($p.p)); }
