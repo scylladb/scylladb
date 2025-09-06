@@ -275,6 +275,13 @@ primitive_condition returns [parsed::primitive_condition c]:
          (',' v=value[0] { $c.add_value(std::move($v.v)); })*
          ')'
       )?
+      {
+          // Post-parse check to reject non-function single values
+          if ($c._op == parsed::primitive_condition::type::VALUE &&
+              !$c._values.front().is_func()) {
+              throw expressions_syntax_error("Single value must be a function");
+          }
+      }
     ;
 
 // The following rules for parsing boolean expressions are verbose and

@@ -960,19 +960,20 @@ def test_update_condition_attribute_exists(test_table_s):
 # an example attribute_exists(z) in the previous test. However only
 # function calls are supported in this context - not general values (i.e.,
 # attribute or value references).
-# While DynamoDB does not accept a non-function-call value as a condition
-# (it results with with a syntax error), in Alternator currently, for
-# simplicity of the parser, this case is parsed correctly and only fails
-# later when the calculated value ends up to not be a boolean.
-def test_update_condition_single_value_attribute(test_table_s):
+# DynamoDB does not accept a non-function-call value as a condition
+# (it results with with a syntax error). In Alternator's parser,
+# this is a corner case that needs special handling.
+# Reproduces scylladb#25855
+def test_update_condition_single_value_primitive_condition(test_table_s):
     p = random_string()
     test_table_s.update_item(Key={'p': p},
-            AttributeUpdates={'a': {'Value': 1, 'Action': 'PUT'}})
-    with pytest.raises(ClientError, match='ValidationException'):
-        test_table_s.update_item(Key={'p': p},
-            UpdateExpression='SET c = :val',
-                ConditionExpression='a',
-                ExpressionAttributeValues={':val': 1})
+            AttributeUpdates={'a': {'Value': True, 'Action': 'PUT'}})
+    for cond in ('a', ':val', 'NOT a', 'a AND :val', 'a OR NOT :val', 'a = :val OR NOT :val'):
+        with pytest.raises(ClientError, match='ValidationException.*(yntax|parsing)'):
+            test_table_s.update_item(Key={'p': p},
+                UpdateExpression='SET c = :val',
+                    ConditionExpression=cond,
+                    ExpressionAttributeValues={':val': True})
 
 def test_update_condition_attribute_not_exists(test_table_s):
     p = random_string()

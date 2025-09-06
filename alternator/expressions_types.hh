@@ -209,9 +209,7 @@ public:
 //    function is supported).
 // 2. Ternary operator - v1 BETWEEN v2 and v3 (means v1 >= v2 AND v1 <= v3).
 // 3. N-ary operator - v1 IN ( v2, v3, ... )
-// 4. A single function call (attribute_exists etc.). The parser actually
-//    accepts a more general "value" here but later stages reject a value
-//    which is not a function call (because DynamoDB does it too).
+// 4. A single function call (attribute_exists etc.).
 class primitive_condition {
 public:
     enum class type {
