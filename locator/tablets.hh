@@ -667,6 +667,8 @@ private:
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
+    // Gets new foreign ptr with shared ownership of tablet metadata.
+    future<tablet_map_ptr> get_tablet_map_ptr(table_id id) const;
     bool has_tablet_map(table_id id) const;
     size_t external_memory_usage() const;
     bool has_replica_on(host_id) const;
