@@ -8,6 +8,8 @@
 
 #include "utils/assert.hh"
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/exception.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/util/closeable.hh>
 
@@ -724,7 +726,7 @@ private:
 
 private:
     future<remote_fill_buffer_result> fill_reader_buffer(evictable_reader& reader, std::optional<buffer_fill_hint> hint);
-    future<> do_fill_buffer(std::optional<buffer_fill_hint> hint);
+    future<int> do_fill_buffer(std::optional<buffer_fill_hint> hint);
 
 public:
     shard_reader(
@@ -815,7 +817,9 @@ future<remote_fill_buffer_result> shard_reader::fill_reader_buffer(evictable_rea
     evictable_reader::auto_pause_disable_guard auto_pause_guard{reader};
     reader_permit::need_cpu_guard ncpu_guard{reader.permit()};
 
-    co_await reader.fill_buffer();
+    if (auto f = co_await coroutine::as_future(reader.fill_buffer()); f.failed()) {
+        co_return coroutine::return_exception_ptr(f.get_exception());
+    }
 
     if (!hint) {
         co_return remote_fill_buffer_result(reader.detach_buffer(), reader.is_end_of_stream());
@@ -838,21 +842,23 @@ future<remote_fill_buffer_result> shard_reader::fill_reader_buffer(evictable_rea
     };
 
     while (!drain_buffer_and_check_hint()) {
-        co_await reader.fill_buffer();
+        if (auto f = co_await coroutine::as_future(reader.fill_buffer()); f.failed()) {
+            co_return coroutine::return_exception_ptr(f.get_exception());
+        }
     }
 
     co_return remote_fill_buffer_result(std::move(buffer), reader.is_end_of_stream());
 }
 
-future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
+future<int> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
     struct reader_and_buffer_fill_result {
         foreign_ptr<std::unique_ptr<evictable_reader>> reader;
         remote_fill_buffer_result result;
     };
 
-    auto res = co_await std::invoke([&] () -> future<remote_fill_buffer_result> {
+    auto f = co_await coroutine::as_future(std::invoke([&] () -> future<remote_fill_buffer_result> {
         if (!_reader) {
-            reader_and_buffer_fill_result res = co_await smp::submit_to(_shard, coroutine::lambda([this, gs = global_schema_ptr(_schema), hint] () -> future<reader_and_buffer_fill_result> {
+            auto f = co_await coroutine::as_future(smp::submit_to(_shard, coroutine::lambda([this, gs = global_schema_ptr(_schema), hint] () -> future<reader_and_buffer_fill_result> {
                 auto ms = mutation_source([lifecycle_policy = _lifecycle_policy.get()] (
                             schema_ptr s,
                             reader_permit permit,
@@ -864,9 +870,15 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                     return lifecycle_policy->create_reader(std::move(s), std::move(permit), pr, ps, std::move(ts), fwd_mr);
                 });
                 auto s = gs.get();
-                auto permit = co_await _lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout(), _trace_state);
+                auto permit_fut = co_await coroutine::as_future(_lifecycle_policy->obtain_reader_permit(s, "shard-reader", timeout(), _trace_state));
+                if (permit_fut.failed()) {
+                    co_return coroutine::return_exception_ptr(permit_fut.get_exception());
+                }
+                auto permit = permit_fut.get();
                 if (permit.needs_readmission()) {
-                    co_await permit.wait_readmission();
+                    if (auto f = co_await coroutine::as_future(permit.wait_readmission()); f.failed()) {
+                        co_return coroutine::return_exception_ptr(f.get_exception());
+                    }
                 }
                 auto underlying_reader = _lifecycle_policy->create_reader(s, permit, *_pr, _ps, _trace_state, _fwd_mr);
 
@@ -895,14 +907,21 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
 
                 try {
                     tracing::trace(_trace_state, "Creating shard reader on shard: {}", this_shard_id());
-                    auto res = co_await fill_reader_buffer(*rreader, hint);
-                    co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res)};
+                    auto res = co_await coroutine::as_future(fill_reader_buffer(*rreader, hint));
+                    if (res.failed()) {
+                        co_return coroutine::return_exception_ptr(res.get_exception());
+                    }
+                    co_return reader_and_buffer_fill_result{std::move(rreader), std::move(res.get())};
                 } catch (...) {
                     ex = std::current_exception();
                 }
                 co_await rreader->close();
                 std::rethrow_exception(std::move(ex));
-            }));
+            })));
+            if (f.failed()) {
+                co_return coroutine::return_exception_ptr(f.get_exception());
+            }
+            reader_and_buffer_fill_result res = f.get();
             _reader = std::move(res.reader);
             co_return std::move(res.result);
         } else {
@@ -910,7 +929,11 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
                 return fill_reader_buffer(*_reader, hint);
             }));
         }
-    });
+    }));
+    if (f.failed()) {
+        co_return coroutine::return_exception_ptr(f.get_exception());
+    }
+    auto res = f.get();
 
     reserve_additional(res.buffer->size());
     for (const auto& mf : *res.buffer) {
@@ -918,19 +941,18 @@ future<> shard_reader::do_fill_buffer(std::optional<buffer_fill_hint> hint) {
         co_await coroutine::maybe_yield();
     }
     _end_of_stream = res.end_of_stream;
+    co_return 0; // dummy return value, just so we can use coroutine::return_exception_ptr
 }
 
 future<> shard_reader::fill_buffer(std::optional<buffer_fill_hint> hint) {
-    // FIXME: want to move this to the inner scopes but it makes clang miscompile the code.
     reader_permit::awaits_guard guard(_permit);
+    future<> f = make_ready_future<>();
     if (_read_ahead) {
-        co_await *std::exchange(_read_ahead, std::nullopt);
-        co_return;
+        f = *std::exchange(_read_ahead, std::nullopt);
+    } else if (is_buffer_empty()) {
+        f = do_fill_buffer(hint).discard_result();
     }
-    if (!is_buffer_empty()) {
-        co_return;
-    }
-    co_await do_fill_buffer(hint);
+    return f.finally([guard = std::move(guard)] {});
 }
 
 future<> shard_reader::next_partition() {
@@ -986,7 +1008,7 @@ void shard_reader::read_ahead() {
         return;
     }
 
-    _read_ahead.emplace(do_fill_buffer(std::nullopt));
+    _read_ahead.emplace(do_fill_buffer(std::nullopt).discard_result());
 }
 
 } // anonymous namespace

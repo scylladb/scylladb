@@ -3938,7 +3938,9 @@ table::query(schema_ptr query_schema,
 
         std::exception_ptr ex;
       try {
-        co_await q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state);
+        if (auto f = co_await coroutine::as_future(q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state)); f.failed()) {
+            ex = f.get_exception();
+        }
       } catch (...) {
         ex = std::current_exception();
       }

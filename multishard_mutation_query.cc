@@ -273,7 +273,11 @@ public:
             rm.rparts->permit.set_max_result_size(get_max_result_size());
             co_return rm.rparts->permit;
         }
-        auto permit = co_await _db.local().obtain_reader_permit(std::move(schema), description, timeout, std::move(trace_ptr));
+        auto f = co_await coroutine::as_future(_db.local().obtain_reader_permit(std::move(schema), description, timeout, std::move(trace_ptr)));
+        if (f.failed()) {
+            co_return coroutine::return_exception_ptr(f.get_exception());
+        }
+        auto permit = f.get();
         permit.set_max_result_size(get_max_result_size());
         co_return permit;
     }
@@ -847,10 +851,15 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     try {
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result = co_await query_method(db, s, cmd, ranges, std::move(trace_state), timeout,
+        auto f = co_await coroutine::as_future(query_method(db, s, cmd, ranges, std::move(trace_state), timeout,
                 [result_builder_factory, accounter = std::move(accounter)] () mutable {
 			return result_builder_factory(std::move(accounter));
-		});
+		}));
+        if (f.failed()) {
+            ++stats.total_reads_failed;
+            co_return coroutine::return_exception_ptr(f.get_exception());
+        }
+        auto result = f.get();
 
         ++stats.total_reads;
         stats.short_mutation_queries += bool(result->is_short_read());
