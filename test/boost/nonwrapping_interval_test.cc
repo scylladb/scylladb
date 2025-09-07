@@ -370,3 +370,5 @@ BOOST_AUTO_TEST_CASE(range_deoverlap_tests) {
         BOOST_REQUIRE_EQUAL(interval<unsigned>({{4, false}}, {5}), deoverlapped[1]);
     }
 }
+
+static_assert(std::is_trivially_copyable_v<interval<dht::token>>);
