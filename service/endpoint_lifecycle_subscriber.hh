@@ -46,6 +46,13 @@ public:
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& host_id) {}
 
     /**
+     * Called when a node is no longer in topology and doesn't own any tokens.
+     *
+     * @param host_id the host ID of the endpoint that was released.
+     */
+    virtual void on_released(const locator::host_id& host_id) {}
+
+    /**
      * Called when a node is marked UP.
      *
      * @param endpoint the endpoint marked UP.
@@ -69,6 +76,7 @@ public:
 
     future<> notify_down(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_left(gms::inet_address endpoint, locator::host_id host_id);
+    future<> notify_released(locator::host_id host_id);
     future<> notify_up(gms::inet_address endpoint, locator::host_id host_id);
     future<> notify_joined(gms::inet_address endpoint, locator::host_id host_id);
 };
