@@ -1,0 +1,19 @@
+/var/log/scylla-perf/*.data {
+    daily
+    rotate 14
+    compress
+    compresscmd /usr/bin/zstd
+    uncompresscmd /usr/bin/unzstd
+    compressext .zst
+    compressoptions --rm
+    missingok
+    notifempty
+    dateext
+    dateformat -%Y%m%d
+    olddir /var/log/scylla-perf/old
+    create 0640 root root
+    postrotate
+        systemctl --no-block restart scylla-perf-collector.service
+    endscript
+    su root root
+}

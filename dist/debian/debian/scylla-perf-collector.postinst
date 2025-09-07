@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null || true
+fi
+
+#DEBHELPER#
