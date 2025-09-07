@@ -174,7 +174,7 @@ class RandomTable():
                    f"({col_defs}, , primary key({pk_names}))"
         logger.debug(cql_stmt)
         assert self.manager.cql is not None
-        return await self.manager.cql.run_async(cql_stmt)
+        return await self.manager.cql.run_async(cql_stmt, timeout=1200)
 
     async def drop(self, if_exists: bool = False) -> asyncio.Future:
         """Drop this table"""
