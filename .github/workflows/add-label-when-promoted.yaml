@@ -54,10 +54,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.AUTO_BACKPORT_TOKEN }}
         run: python .github/scripts/auto-backport.py --repo ${{ github.repository }} --base-branch ${{ github.ref }} --commits ${{ github.event.before }}..${{ github.sha }}
       - name: Check if a valid backport label exists and no backport_error
+        env:
+          LABELS_JSON: ${{ toJson(github.event.pull_request.labels) }}
         id: check_label
         run: |
-          labels_json='${{ toJson(github.event.pull_request.labels) }}'
-          echo "Checking labels: $(echo "$labels_json" | jq -r '.[].name')"
+          labels_json="$LABELS_JSON"
+          echo "Checking labels:"
+          echo "$labels_json" | jq -r '.[].name'
 
           # Check if a valid backport label exists
           if echo "$labels_json" | jq -e 'any(.[] | .name; test("backport/[0-9]+\\.[0-9]+$"))' > /dev/null; then
