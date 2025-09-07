@@ -47,13 +47,29 @@ def create_pull_request(repo, new_branch_name, base_branch_name, pr, backport_pr
             draft=is_draft
         )
         logging.info(f"Pull request created: {backport_pr.html_url}")
+        labels_to_add = []
+        priority_labels = {"P0", "P1"}
+        parent_pr_labels = [label.name for label in pr.labels]
+        for label in priority_labels:
+            if label in parent_pr_labels:
+                labels_to_add.append(label)
+                labels_to_add.append("force_on_cloud")
+                logging.info(f"Adding {label} and force_on_cloud labels from parent PR to backport PR")
+                break  # Only apply the highest priority label
+        
         if is_collaborator:
             backport_pr.add_to_assignees(pr.user)
         if is_draft:
-            backport_pr.add_to_labels("conflicts")
+            labels_to_add.append("conflicts")
             pr_comment = f"@{pr.user.login} - This PR was marked as draft because it has conflicts\n"
             pr_comment += "Please resolve them and mark this PR as ready for review"
             backport_pr.create_issue_comment(pr_comment)
+        
+        # Apply all labels at once if we have any
+        if labels_to_add:
+            backport_pr.add_to_labels(*labels_to_add)
+            logging.info(f"Added labels to backport PR: {labels_to_add}")
+
         logging.info(f"Assigned PR to original author: {pr.user}")
         return backport_pr
     except GithubException as e:
