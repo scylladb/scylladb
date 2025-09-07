@@ -3060,14 +3060,14 @@ def write_build_file(f,
     for mode in build_modes:
         server_rpms_dir = f'$builddir/dist/{mode}/redhat/RPMS/{arch}'
         server_rpms = [f'{server_rpms_dir}/{scylla_product}{suffix}-{rpm_ver}.{arch}.rpm'
-                       for suffix in ['', '-server', '-debuginfo', '-conf', '-kernel-conf']]
+                       for suffix in ['', '-server', '-debuginfo', '-conf', '-kernel-conf', '-perf-collector']]
         cqlsh_rpms = [f'tools/cqlsh/build/redhat/RPMS/{arch}/{scylla_product}-cqlsh-{rpm_ver}.{arch}.rpm']
         python3_rpms = [f'tools/python3/build/redhat/RPMS/{arch}/{scylla_product}-python3-{rpm_ver}.{arch}.rpm']
         all_rpms = server_rpms + cqlsh_rpms + python3_rpms
 
         server_deb_dir = f'$builddir/dist/{mode}/debian'
         server_debs = [f'{server_deb_dir}/{scylla_product}{suffix}_{deb_ver}_{deb_arch}.deb'
-                       for suffix in ['', '-server', '-server-dbg', '-conf', '-kernel-conf']]
+                       for suffix in ['', '-server', '-server-dbg', '-conf', '-kernel-conf', '-perf-collector']]
         server_debs += [f'{server_deb_dir}/scylla-enterprise{suffix}_{deb_ver}_all.deb'
                         for suffix in ['', '-server', '-conf', '-kernel-conf']]
         cqlsh_debs = [f'tools/cqlsh/build/debian/{scylla_product}-cqlsh_{deb_ver}_{deb_arch}.deb',

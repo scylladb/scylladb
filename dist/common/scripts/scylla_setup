@@ -269,6 +269,8 @@ if __name__ == '__main__':
                         help='skip rsyslog setup')
     parser.add_argument('--no-nofiles-setup', action='store_true', default=False,
                         help='skip LimitNOFILES setup')
+    parser.add_argument('--no-perf-collector-setup', action='store_true', default=False,
+                        help='skip perf collector setup')
     parser.add_argument('--rsyslog-server',
                         help='specify a remote rsyslog server to send Scylla logs to. Use ip:port format, if no port is given, Scylla-Monitoring rsyslog will be used')
     if len(sys.argv) == 1:
@@ -313,6 +315,7 @@ if __name__ == '__main__':
     swap_setup = not args.no_swap_setup
     rsyslog_setup = not args.no_rsyslog_setup
     nofiles_setup = not args.no_nofiles_setup
+    perf_collector_setup = not args.no_perf_collector_setup
     rsyslog_server = args.rsyslog_server
     selinux_reboot_required = False
     set_clocksource = False
@@ -540,6 +543,18 @@ if __name__ == '__main__':
     nofiles_setup = interactive_ask_service('Do you want to tune LimitNOFILES run Scylla on large node?', 'Yes - tune LimitNOFILES. No - skip this setup.', nofiles_setup)
     if nofiles_setup:
         run_setup_script('LimitNOFILE tuneup', 'scylla_nofile_setup')
+
+    if not is_nonroot():
+        perf_collector_setup = interactive_ask_service('Do you want to enable the perf data collector?', 'Yes - enables system-wide perf sampling for profiling and diagnostics. The collector runs with minimal overhead. No - skip this step.', perf_collector_setup)
+        args.no_perf_collector_setup = not perf_collector_setup
+        if perf_collector_setup:
+            perf_unit = systemd_unit('scylla-perf-collector.service')
+            perf_unit.enable()
+            perf_unit.start()
+        else:
+            perf_unit = systemd_unit('scylla-perf-collector.service')
+            perf_unit.stop()
+            perf_unit.disable()
 
     print('ScyllaDB setup finished.')
 
