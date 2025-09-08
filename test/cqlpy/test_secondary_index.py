@@ -2061,7 +2061,6 @@ def test_index_in_API(cql, test_keyspace):
 # from the index view (where the LIMIT is correctly applied). A mismatch is
 # always interpreted as more pages being available, which in this case is incorrect.
 # See `generate_view_paging_state_from_base_query_results()` for more details.
-@pytest.mark.xfail(reason="issue #22158")
 @pytest.mark.parametrize("use_paging", [False, True])
 def test_limit_partition(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, primary key ((pk1, pk2), ck)') as table:
@@ -2094,7 +2093,6 @@ def test_limit_partition(cql, test_keyspace, use_paging):
 # Same as test_limit_partition above, except that it uses partition slices
 # instead of whole partitions. This is achieved by indexing the first clustering
 # key column.
-@pytest.mark.xfail(reason="issue #22158")
 @pytest.mark.parametrize("use_paging", [False, True])
 def test_limit_partition_slice(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
@@ -2127,7 +2125,6 @@ def test_limit_partition_slice(cql, test_keyspace, use_paging):
 
 # Same as test_limit_partition_slice above, except that the indexed column is static.
 # Reproduces #22158.
-@pytest.mark.xfail(reason="issue #22158")
 @pytest.mark.parametrize("use_paging", [False, True])
 def test_static_column_index_with_limit(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk int, ck int, s int STATIC, primary key (pk, ck)') as table:

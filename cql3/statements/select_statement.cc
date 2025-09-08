@@ -702,7 +702,17 @@ view_indexed_table_select_statement::do_execute_base_query(
     }
 
     const bool is_paged = bool(paging_state);
-    base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
+    const auto row_limit = [&] {
+        if (!needs_post_query_ordering() && _selection->is_trivial() && !_restrictions_need_filtering) { // fast path
+            auto old_paging_state = options.get_paging_state();
+            if (old_paging_state) {
+                return old_paging_state->get_remaining();
+            }
+            return cmd->get_row_limit();
+        }
+        return cmd->get_row_limit() * queried_ranges_count;
+    }();
+    base_query_state query_state{row_limit, std::move(ranges_to_vnodes)};
     {
         auto& merger = query_state.merger;
         auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
