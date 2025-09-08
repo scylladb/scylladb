@@ -47,6 +47,13 @@ def test_create_and_drop_keyspace_with_default_replication_options(cql, this_dc)
     with new_test_keyspace(cql, "WITH REPLICATION = {}") as keyspace:
         assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
 
+# The "WITH REPLICATION" part of CREATE KEYSPACE may be omitted.
+# Trying to create a keyspace with no replication options at all
+# should result in NetworkTopologyStrategy and replication factor of 1 being set by default.
+def test_create_and_drop_keyspace_with_no_replication_options(cql, this_dc):
+    with new_test_keyspace(cql, "") as keyspace:
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
+
 # Trying to create the same keyspace - even if with identical parameters -
 # should result in an AlreadyExists error.
 def test_create_keyspace_twice(cql, this_dc):
@@ -64,12 +71,6 @@ def test_create_keyspace_if_not_exists(cql, this_dc):
     # they are ignored.
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
-
-# The "WITH REPLICATION" part of CREATE KEYSPACE may not be omitted - trying
-# to do so should result in a syntax error:
-def test_create_keyspace_missing_with(cql):
-    with pytest.raises(SyntaxException):
-        cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace")
 
 # The documentation states that "Keyspace names can have alpha-
 # numeric characters and contain underscores; only letters and numbers are
