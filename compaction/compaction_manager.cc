@@ -620,6 +620,7 @@ requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&
     {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
 }
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args) {
+    get_task_manager_module().abort_source().check();
     auto task_executor = seastar::make_shared<TaskExecutor>(*this, do_throw_if_stopping, std::forward<Args>(args)...);
     _tasks.push_back(*task_executor);
     auto unregister_task = defer([task_executor] {
