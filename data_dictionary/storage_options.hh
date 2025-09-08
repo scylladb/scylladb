@@ -25,29 +25,36 @@ namespace data_dictionary {
 struct storage_options {
     struct local {
         std::filesystem::path dir;
-        static constexpr std::string_view name = "LOCAL";
-
-        static local from_map(const std::map<sstring, sstring>&);
         std::map<sstring, sstring> to_map() const;
+        std::string_view name() const;
         bool operator==(const local&) const = default;
     };
-    struct s3 {
-        sstring bucket;
-        sstring endpoint;
+    struct object_storage {
+        std::string bucket;
+        std::string endpoint;
         std::variant<sstring, table_id> location;
         seastar::abort_source* abort_source = nullptr;
-        static constexpr std::string_view name = "S3";
 
-        static s3 from_map(const std::map<sstring, sstring>&);
+        std::string type;
+
         std::map<sstring, sstring> to_map() const;
-        bool operator==(const s3&) const = default;
+        std::string_view name() const;
+        bool operator==(const object_storage&) const;
     };
-    using value_type = std::variant<local, s3>;
+    using s3 = object_storage;
+    using gs = object_storage;
+
+    using value_type = std::variant<local, object_storage>;
     value_type value = local{};
 
     storage_options() = default;
 
     bool is_local_type() const noexcept;
+    bool is_object_storage_type() const noexcept;
+
+    bool is_s3_type() const noexcept;
+    bool is_gs_type() const noexcept;
+
     std::string_view type_string() const;
     std::map<sstring, sstring> to_map() const;
 
@@ -55,26 +62,19 @@ struct storage_options {
 
     static value_type from_map(std::string_view type, const std::map<sstring, sstring>& values);
 
-    storage_options append_to_s3_prefix(const sstring& s) const;
+    static const std::string LOCAL_NAME;
+    static const std::string S3_NAME;
+    static const std::string GS_NAME;
+
+    storage_options append_to_object_storage_prefix(const sstring& s) const;
 };
 
-inline storage_options make_local_options(std::filesystem::path dir) {
-    storage_options so;
-    so.value = data_dictionary::storage_options::local { .dir = std::move(dir) };
-    return so;
-}
+storage_options make_local_options(std::filesystem::path dir);
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& fqn, abort_source* = nullptr);
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* = nullptr);
 
-inline storage_options make_s3_options(const std::string& endpoint, const std::string& fqn) {
-    std::string bucket;
-    std::string object;
-    s3::s3fqn_to_parts(fqn, bucket, object);
-    object = std::filesystem::path(object).parent_path().string(); // remove the filename and trailing separator from the path
-    storage_options so;
-    so.value = storage_options::s3{.bucket = std::move(bucket), .endpoint = endpoint, .location = std::move(object)};
-
-    return so;
-}
-
+bool is_object_storage_fqn(const std::filesystem::path& fqn, std::string_view type);
+bool object_storage_fqn_to_parts(const std::filesystem::path& fqn, std::string_view type, std::string& bucket_name, std::string& object_name);
 
 } // namespace data_dictionary
 
