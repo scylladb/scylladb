@@ -53,6 +53,8 @@ private:
         map _locks;
     public:
 
+        key_lock_map();
+        
         friend class guard;
     };
 
