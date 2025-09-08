@@ -36,6 +36,13 @@ logging::logger paxos_state::logger("paxos");
 thread_local paxos_state::key_lock_map paxos_state::_paxos_table_lock;
 thread_local paxos_state::key_lock_map paxos_state::_coordinator_lock;
 
+paxos_state::key_lock_map::key_lock_map() {
+    // preallocate 8K pointers and set max_load_factor to 8 to support around 1M outstanding requests
+    // without re-allocations
+    _locks.reserve(8 * 1024);
+    _locks.max_load_factor(8);
+}
+
 paxos_state::key_lock_map::semaphore& paxos_state::key_lock_map::get_semaphore_for_key(const dht::token& key) {
     return _locks.try_emplace(key, 1).first->second;
 }
