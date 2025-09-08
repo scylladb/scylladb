@@ -2126,6 +2126,29 @@ def test_limit_partition_slice(cql, test_keyspace, use_paging):
             assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
 
 
+# Same as test_limit_partition_slice above, except that the indexed column is static.
+# Reproduces #22158.
+@pytest.mark.xfail(reason="issue #22158")
+@pytest.mark.parametrize("use_paging", [False, True])
+def test_static_column_index_with_limit(cql, test_keyspace, use_paging):
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, s int STATIC, primary key (pk, ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, s) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 2, 1])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 2, 1])
+        fetch_size = 100 if use_paging else None
+        # Test LIMIT within a single partition slice - succeeds.
+        stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 1', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
+        assert sorted(list(rs)) == [(1,1)]
+        # Test LIMIT across partition slices - reproduces #22158.
+        stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 3', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
+        assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
+
+
 # Test that a query using a secondary index can handle "short reads".
 #
 # A read is short when the query is paged and the page size (in bytes) hits an
