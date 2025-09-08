@@ -1728,11 +1728,18 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
     // Based on the computation in get_view_natural_endpoint, this is used
     // to detect beforehand the case that we're a "normal" replica which is
     // paired with a view replica and sends view updates to.
-    // For a pending replica, for example, this will return false.
+    // A base replica can be paired with a view replica if it's a "normal" non-pending replica that is
+    // returned by get_replicas() or it could be a pending replica that is also a read replica
+    // and returned by get_replicas_for_reading().
+    // For a pending replica that is not ready for reading, for example, this will return false.
     // Also, for the case of intra-node migration, we check that this shard is ready for reads.
-    const auto my_host_id = ermp->get_token_metadata_ptr()->get_topology().my_host_id();
-    const auto replicas = ermp->get_replicas(token);
-    return std::find(replicas.begin(), replicas.end(), my_host_id) != replicas.end()
+
+    const auto me = ermp->get_token_metadata_ptr()->get_topology().my_host_id();
+    const auto base_replicas = ermp->get_replicas(token);
+    const auto read_replicas = ermp->get_replicas_for_reading(token);
+
+    return (std::find(base_replicas.begin(), base_replicas.end(), me) != base_replicas.end()
+            || std::find(read_replicas.begin(), read_replicas.end(), me) != read_replicas.end())
         && ermp->shard_for_reads(*base, token) == this_shard_id();
 }
 
@@ -1844,6 +1851,33 @@ endpoints_to_update get_view_natural_endpoint(
         process_candidate(base_endpoints, base_node);
     }
 
+    // if we're a pending base replica and we're ready for reading then we should generate view updates same as
+    // the base replica that we are about to replace in the base-view pairing.
+    // `effective_me` holds the host id of a normal base replica in base_endpoints that will be used to select
+    // the paired view replica.
+    auto effective_me = [&] {
+        if (std::ranges::find(base_endpoints, me, std::mem_fn(&locator::node::host_id)) != base_endpoints.end()) {
+            // common case - we're a normal base endpoint
+            return me;
+        }
+
+        // if we got here it's probably because we're a pending base replica that is a reading replica.
+        // we will use the same view pairing as the leaving base replica.
+
+        auto base_reading_replicas = std::unordered_set(std::from_range, base_erm->get_replicas_for_reading(base_token));
+        if (base_reading_replicas.contains(me)) {
+            // find a normal base replica that is not a reading replica - it's a leaving base replica that we replace.
+            auto it = std::ranges::find_if(base_endpoints, [&] (const locator::node& n) {
+                return !base_reading_replicas.contains(n.host_id());
+            });
+            if (it != base_endpoints.end()) {
+                return it->get().host_id();
+            }
+        }
+
+        return me;
+    }();
+
     if (use_legacy_self_pairing) {
         for (auto&& view_node : view_nodes) {
             auto it = std::ranges::find(base_endpoints, view_node.get().host_id(), std::mem_fn(&locator::node::host_id));
@@ -1851,8 +1885,8 @@ endpoints_to_update get_view_natural_endpoint(
             // ourselves as the view replica.
             // We don't return an extra endpoint, as it's only needed when
             // using tablets (so !use_legacy_self_pairing)
-            if (view_node.get().host_id() == me && it != base_endpoints.end()) {
-                return {.natural_endpoint = me};
+            if (view_node.get().host_id() == effective_me && it != base_endpoints.end()) {
+                return {.natural_endpoint = effective_me};
             }
 
             // We have to remove any endpoint which is shared between the base
@@ -1925,9 +1959,9 @@ endpoints_to_update get_view_natural_endpoint(
         index_replica_set(base_racks, base_endpoints);
         index_replica_set(view_racks, view_endpoints);
 
-        // Try optimistically pairing `me` first
+        // Try optimistically pairing `effective_me` first
         const auto& my_base_replicas = base_racks[my_location.rack];
-        auto base_it = std::ranges::find(my_base_replicas, me, [] (const indexed_replica& ir) { return ir.node.get().host_id(); });
+        auto base_it = std::ranges::find(my_base_replicas, effective_me, [] (const indexed_replica& ir) { return ir.node.get().host_id(); });
         if (base_it == my_base_replicas.end()) {
             return {};
         }
@@ -1970,13 +2004,13 @@ endpoints_to_update get_view_natural_endpoint(
         std::ranges::transform(unpaired_view_replicas, std::back_inserter(view_endpoints), std::mem_fn(&indexed_replica::node));
     }
 
-    auto base_it = std::ranges::find(base_endpoints, me, std::mem_fn(&locator::node::host_id));
+    auto base_it = std::ranges::find(base_endpoints, effective_me, std::mem_fn(&locator::node::host_id));
     if (!paired_replica && base_it == base_endpoints.end()) {
         // This node is not a base replica of this key, so we return empty
         // FIXME: This case shouldn't happen, and if it happens, a view update
         // would be lost.
         ++cf_stats.total_view_updates_on_wrong_node;
-        vlogger.warn("Could not find {} in base_endpoints={}", me,
+        vlogger.warn("Could not find {} in base_endpoints={}", effective_me,
                 orig_base_endpoints | std::views::transform(std::mem_fn(&locator::node::host_id)));
         return {};
     }
