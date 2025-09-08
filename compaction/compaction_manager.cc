@@ -1137,9 +1137,6 @@ future<> compaction_manager::drain() {
 
 future<> compaction_manager::stop() {
     do_stop();
-    if (auto cm = std::exchange(_task_manager_module, nullptr)) {
-        co_await cm->stop();
-    }
     if (_stop_future) {
         co_await std::exchange(*_stop_future, make_ready_future());
     }
@@ -1150,6 +1147,7 @@ future<> compaction_manager::really_do_stop() noexcept {
     // Reset the metrics registry
     _metrics.clear();
     co_await stop_ongoing_compactions("shutdown");
+    co_await _task_manager_module->stop();
     if (!_tasks.empty()) {
         on_fatal_internal_error(cmlog, format("{} tasks still exist after being stopped", _tasks.size()));
     }
