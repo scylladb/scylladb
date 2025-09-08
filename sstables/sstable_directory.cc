@@ -48,7 +48,7 @@ sstable_directory::filesystem_components_lister::filesystem_components_lister(st
 {
 }
 
-sstable_directory::filesystem_components_lister::filesystem_components_lister(std::filesystem::path dir, sstables_manager& mgr, const data_dictionary::storage_options::s3& os)
+sstable_directory::filesystem_components_lister::filesystem_components_lister(std::filesystem::path dir, sstables_manager& mgr, const data_dictionary::storage_options::object_storage& os)
         : _directory(dir)
         , _state(std::make_unique<scan_state>())
         , _client(mgr.get_endpoint_client(os.endpoint))
@@ -77,17 +77,17 @@ sstable_directory::make_components_lister() {
             }
             return std::make_unique<sstable_directory::filesystem_components_lister>(make_path(loc.dir.native(), _state));
         },
-        [this] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
+        [this] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstable_directory::components_lister> {
             return std::visit(overloaded_functor {
                 [this, &os] (const sstring& prefix) -> std::unique_ptr<sstable_directory::components_lister> {
                     if (prefix.empty()) {
-                        on_internal_error(sstlog, "S3 storage options is missing 'prefix'");
+                        on_internal_error(sstlog, fmt::format("{} storage options is missing 'prefix'", os.type));
                     }
                     return std::make_unique<sstable_directory::filesystem_components_lister>(fs::path(prefix), _manager, os);
                 },
-                [this] (const table_id& owner) -> std::unique_ptr<sstable_directory::components_lister> {
+                [this, &os] (const table_id& owner) -> std::unique_ptr<sstable_directory::components_lister> {
                     if (owner.id.is_null()) {
-                        on_internal_error(sstlog, "S3 storage options is missing 'owner'");
+                        on_internal_error(sstlog, fmt::format("{} storage options is missing 'owner'", os.type));
                     }
                     return std::make_unique<sstable_directory::sstables_registry_components_lister>(_manager.sstables_registry(), owner);
                 }
@@ -364,7 +364,7 @@ future<> sstable_directory::filesystem_components_lister::process(sstable_direct
 
     auto lister = !_client ?
             abstract_lister::make<directory_lister>(_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), &manifest_json_filter) :
-            abstract_lister::make<s3::client::bucket_lister>(_client, _bucket, _directory.native() + "/", &manifest_json_filter);
+            _client->make_object_lister(_bucket, _directory.native() + "/", &manifest_json_filter);
 
     co_await with_closeable(std::move(lister), coroutine::lambda([this, &directory] (abstract_lister& lister) -> future<> {
         while (auto de = co_await lister.get()) {

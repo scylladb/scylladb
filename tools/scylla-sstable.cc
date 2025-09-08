@@ -362,7 +362,6 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
             auto type = is_fqn.front();
             auto endpoints = sst_man.config().object_storage_endpoints() 
                 | std::views::filter(std::bind_back(&osp::is_storage_of_type, type)) 
-                | std::views::transform(&osp::get_s3_storage)
                 ;
             if (endpoints.empty()) {
                 throw std::invalid_argument(fmt::format(
@@ -2603,7 +2602,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         abort_source abort;
 
         sstables::storage_manager::config stm_cfg;
-        stm_cfg.s3_clients_memory = 100_MiB;
+        stm_cfg.object_storage_clients_memory = 100_MiB;
         stm_cfg.skip_metrics_registration = true;
         sharded<sstables::storage_manager> sstm;
         sstm.start(std::ref(dbcfg), stm_cfg).get();

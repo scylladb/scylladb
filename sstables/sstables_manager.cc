@@ -14,12 +14,12 @@
 #include "sstables/sstables_registry.hh"
 #include "sstables/partition_index_cache.hh"
 #include "sstables/sstables.hh"
+#include "object_storage_client.hh"
 #include "db/config.hh"
 #include "db/object_storage_endpoint_param.hh"
 #include "gms/feature.hh"
 #include "gms/feature_service.hh"
 #include "utils/assert.hh"
-#include "utils/s3/client.hh"
 #include "exceptions/exceptions.hh"
 
 namespace sstables {
@@ -71,19 +71,23 @@ void sstables_manager::subscribe(sstables_manager_event_handler& handler) {
 
 using osp = db::object_storage_endpoint_param;
 
+storage_manager::object_storage_endpoint::object_storage_endpoint(db::object_storage_endpoint_param ep)
+    : cfg(ep)
+{}
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
-    : _s3_clients_memory(stm_cfg.s3_clients_memory)
+    : _object_storage_clients_memory(stm_cfg.object_storage_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)
 {
-    for (auto& e : cfg.object_storage_endpoints() | std::views::filter(&osp::is_s3_storage) | std::views::transform(&osp::get_s3_storage)) {
-        _s3_endpoints.emplace(std::make_pair(std::move(e.endpoint), make_lw_shared<s3::endpoint_config>(std::move(e.config))));
+    for (auto& e : cfg.object_storage_endpoints()) {
+        _object_storage_endpoints.emplace(std::make_pair(e.key(), e));
     }
 
     if (!stm_cfg.skip_metrics_registration) {
         namespace sm = seastar::metrics;
-        metrics.add_group("s3", {
-            sm::make_gauge("memory_usage", [this, limit = stm_cfg.s3_clients_memory] { return limit - _s3_clients_memory.available_units(); },
-                    sm::description("Total number of bytes consumed by S3 client"), {}),
+        metrics.add_group("object_storage", {
+            sm::make_gauge("memory_usage", [this, limit = stm_cfg.object_storage_clients_memory] { return limit - _object_storage_clients_memory.available_units(); },
+                    sm::description("Total number of bytes consumed by object storage client"), {}),
         });
     }
 }
@@ -93,7 +97,7 @@ future<> storage_manager::stop() {
         co_await _config_updater->action.join();
     }
 
-    for (auto ep : _s3_endpoints) {
+    for (auto ep : _object_storage_endpoints) {
         if (ep.second.client != nullptr) {
             co_await ep.second.client->close();
         }
@@ -109,35 +113,35 @@ future<> storage_manager::update_config(const db::config& cfg) {
     // This was split in two loops to guarantee the code is exception safe with
     // regards to _s3_endpoints content.
     std::unordered_set<sstring> updates;
-    for (auto& e : cfg.object_storage_endpoints() | std::views::filter(&osp::is_s3_storage) | std::views::transform(&osp::get_s3_storage)) {
-        updates.insert(e.endpoint);
+    for (auto& e : cfg.object_storage_endpoints()) {
+        auto endpoint = e.key();
+        updates.insert(endpoint);
 
-        auto s3_cfg = make_lw_shared<s3::endpoint_config>(std::move(e.config));
-        auto [it, added] = _s3_endpoints.try_emplace(e.endpoint, std::move(s3_cfg));
+        auto [it, added] = _object_storage_endpoints.try_emplace(endpoint, e);
         if (!added) {
             if (it->second.client != nullptr) {
-                co_await it->second.client->update_config(s3_cfg);
+                co_await it->second.client->update_config(e);
             }
-            it->second.cfg = std::move(s3_cfg);
+            it->second.cfg = e;
         }
     }
 
-    std::erase_if(_s3_endpoints, [&updates](const auto& e) {
+    std::erase_if(_object_storage_endpoints, [&updates](const auto& e) {
         return !updates.contains(e.first);
     });
 
     co_return;
 }
 
-shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
-    auto found = _s3_endpoints.find(endpoint);
-    if (found == _s3_endpoints.end()) {
+shared_ptr<sstables::object_storage_client> storage_manager::get_endpoint_client(sstring endpoint) {
+    auto found = _object_storage_endpoints.find(endpoint);
+    if (found == _object_storage_endpoints.end()) {
         smlogger.error("unable to find {} in configured object-storage endpoints", endpoint);
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
     auto& ep = found->second;
     if (ep.client == nullptr) {
-        ep.client = s3::client::make(endpoint, ep.cfg, _s3_clients_memory, [ &ct = container() ] (std::string ep) {
+        ep.client = make_object_storage_client(ep.cfg, _object_storage_clients_memory, [&ct = container()] (std::string ep) {
             return ct.local().get_endpoint_client(ep);
         });
     }
@@ -145,7 +149,7 @@ shared_ptr<s3::client> storage_manager::get_endpoint_client(sstring endpoint) {
 }
 
 bool storage_manager::is_known_endpoint(sstring endpoint) const {
-    return _s3_endpoints.contains(endpoint);
+    return _object_storage_endpoints.contains(endpoint);
 }
 
 storage_manager::config_updater::config_updater(const db::config& cfg, storage_manager& sstm)
@@ -420,7 +424,7 @@ void sstables_manager::validate_new_keyspace_storage_options(const data_dictiona
     std::visit(overloaded_functor {
         [] (const data_dictionary::storage_options::local&) {
         },
-        [this] (const data_dictionary::storage_options::s3& so) {
+        [this] (const data_dictionary::storage_options::object_storage& so) {
             if (!_features.keyspace_storage_options) {
                 throw exceptions::invalid_request_exception("Keyspace storage options not supported in the cluster");
             }

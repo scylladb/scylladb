@@ -525,7 +525,7 @@ private:
     friend struct component_name;
     friend class sstable_stream_sink_impl;
     friend class filesystem_storage;
-    friend class s3_storage;
+    friend class object_storage_base;
     friend class tiered_storage;
 
     const size_t sstable_buffer_size;

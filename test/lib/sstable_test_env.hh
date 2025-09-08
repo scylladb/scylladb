@@ -101,7 +101,7 @@ struct test_env_config {
     size_t available_memory = memory::stats().total_memory();
 };
 
-data_dictionary::storage_options make_test_object_storage_options();
+data_dictionary::storage_options make_test_object_storage_options(std::optional<std::string> type = {});
 
 class test_env {
     struct impl;

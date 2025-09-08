@@ -1209,7 +1209,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "starting storage manager");
             sstables::storage_manager::config stm_cfg;
-            stm_cfg.s3_clients_memory = std::clamp<size_t>(memory::stats().total_memory() * 0.01, 10 << 20, 100 << 20);
+            stm_cfg.object_storage_clients_memory = std::clamp<size_t>(memory::stats().total_memory() * 0.01, 10 << 20, 100 << 20);
             sstm.start(std::ref(*cfg), stm_cfg).get();
             auto stop_sstm = defer_verbose_shutdown("sstables storage manager", [&sstm] {
                 sstm.stop().get();
