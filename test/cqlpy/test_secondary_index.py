@@ -1280,7 +1280,6 @@ def test_index_paging_pk_only(cql, test_keyspace):
 # one component), the restriction can match the entire partition, but paging
 # still needs to page through it - and not return the entire partition as one
 # page! Reproduces #7432.
-@pytest.mark.xfail(reason="issue #7432")
 def test_index_paging_match_partition(cql, test_keyspace):
     schema = 'p1 int, p2 int, c int, primary key (p1,p2,c)'
     with new_test_table(cql, test_keyspace, schema) as table:
@@ -2596,7 +2595,7 @@ def test_index_in_API(cql, test_keyspace):
 # See `generate_view_paging_state_from_base_query_results()` for more details.
 @pytest.mark.parametrize("use_paging", [
         pytest.param(False, marks=pytest.mark.xfail(reason="issue #22158")),
-        pytest.param(True, marks=pytest.mark.xfail(reason="issue #22158"))])
+        True])
 def test_limit_partition(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, primary key ((pk1, pk2), ck)') as table:
         cql.execute(f'CREATE INDEX ON {table}(pk2)')
@@ -2628,7 +2627,7 @@ def test_limit_partition(cql, test_keyspace, use_paging):
 # key column.
 @pytest.mark.parametrize("use_paging", [
         pytest.param(False, marks=pytest.mark.xfail(reason="issue #22158")),
-        pytest.param(True, marks=pytest.mark.xfail(reason="issue #22158"))])
+        True])
 def test_limit_partition_slice(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
         cql.execute(f'CREATE INDEX ON {table}(ck1)')
@@ -2661,7 +2660,7 @@ def test_limit_partition_slice(cql, test_keyspace, use_paging):
 # Reproduces #22158.
 @pytest.mark.parametrize("use_paging", [
         pytest.param(False, marks=pytest.mark.xfail(reason="issue #22158")),
-        pytest.param(True, marks=pytest.mark.xfail(reason="issue #22158"))])
+        True])
 def test_limit_partition_nontrivial_selection(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, v int, primary key ((pk1, pk2), ck)') as table:
         cql.execute(f'CREATE INDEX ON {table}(pk2)')
@@ -2726,7 +2725,6 @@ def test_static_column_index_with_limit(cql, test_keyspace, use_paging):
 #     Can also happen if the coordinator's accumulated result exceeds 1MiB
 #     (enforced in `do_execute_base_query()`).
 #
-@pytest.mark.xfail(reason="issue #22158")
 def test_limit_partition_slice_across_pages(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
         cql.execute(f'CREATE INDEX ON {table}(ck1)')
@@ -2884,7 +2882,6 @@ def test_index_paging_reconstructs_after_empty_page(cql, test_keyspace, scylla_o
 # The test is also affected by #25839, which causes the rest of the first
 # partition to be missing from the result, but this is not the main point of
 # this test.
-@pytest.mark.xfail(reason="issue #22158")
 def test_limit_partition_slice_short_read(cql, test_keyspace):
     page_memory_limit = 1024 * 1024  # 1MiB
     row_size = page_memory_limit // 2  # will cause short read after 2 rows
