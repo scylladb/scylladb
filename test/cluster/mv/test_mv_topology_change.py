@@ -381,3 +381,95 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
 
     res = await cql.run_async(SimpleStatement(f"SELECT * FROM ks.mv", consistency_level=ConsistencyLevel.ONE))
     assert len(res) == 2
+
+# Write to a table with MV with RF=1, generating view updates, while data is migrating
+# either by tablet migration (tablets cases) or by bootstrapping a new node (vnodes case), and
+# verify all expected rows appear in the MV eventually.
+# Checks for issues of view update generation during migration.
+# Reproduces #24292
+@pytest.mark.asyncio
+@pytest.mark.parametrize("migration_type", ["tablets_internode", "tablets_intranode", "vnodes"])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_write_during_migration(manager: ManagerClient, migration_type: str):
+    cmdline = ['--smp', '2', '--logger-log-level', 'raft_topology=debug']
+
+    servers = await manager.servers_add(3, cmdline=cmdline)
+    cql = manager.get_cql()
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    tablets_enabled = migration_type.startswith("tablets")
+    if tablets_enabled:
+        keyspace_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 4}"
+    else:
+        keyspace_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'enabled': false}"
+
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (id int primary key, v int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.t_by_v AS SELECT * FROM t WHERE v IS NOT NULL AND id IS NOT NULL PRIMARY KEY (v, id)")
+
+        stmt = cql.prepare(f"INSERT INTO {ks}.t(id, v) VALUES(?, ?)")
+
+        stop_event = asyncio.Event()
+
+        async def do_inserts():
+            i = 0
+            while not stop_event.is_set():
+                await asyncio.gather(*[cql.run_async(stmt, [k, -k]) for k in range(i, i + 100)])
+                i += 100
+                await asyncio.sleep(0.01)
+            return i
+
+        async def do_migration():
+            try:
+                if tablets_enabled:
+                    tablet_token = 0
+                    replica = await get_tablet_replica(manager, servers[0], ks, 't', tablet_token)
+                    src_host = replica[0]
+                    src_shard = replica[1]
+
+                    if migration_type == "tablets_internode":
+                        # Find a different node to migrate to
+                        all_host_ids = [await manager.get_host_id(server.server_id) for server in servers]
+                        dst_host = next(host_id for host_id in all_host_ids if host_id != src_host)
+                        dst_shard = 0
+                    else: # migration_type == "tablets_intranode"
+                        # Move to a different shard on the same node
+                        dst_host = src_host
+                        dst_shard = 1 - src_shard  # Switch between shard 0 and 1
+
+                    await manager.api.move_tablet(servers[0].ip_addr, ks, "t", src_host, src_shard, dst_host, dst_shard, tablet_token)
+                else:  # vnodes
+                    # bootstrap a new node - token ranges will be migrated to it
+                    await manager.server_add(cmdline=cmdline)
+            finally:
+                stop_event.set()
+
+        insert_task, migration_task = await asyncio.gather(
+            asyncio.create_task(do_inserts()),
+            asyncio.create_task(do_migration()),
+            return_exceptions=True
+        )
+
+        # Check for exceptions
+        if isinstance(insert_task, Exception):
+            raise insert_task
+        if isinstance(migration_task, Exception):
+            raise migration_task
+
+        actual_inserts = insert_task
+
+        async def all_rows_found():
+            rows = await cql.run_async(f"SELECT COUNT(*) AS cnt FROM {ks}.t_by_v")
+            if len(rows) == 1 and rows[0].cnt == actual_inserts:
+                return True
+        try:
+            await wait_for(all_rows_found, time.time() + 60)
+        except Exception:
+            table_rows = await cql.run_async(f"SELECT id, token(id) AS tk FROM {ks}.t")
+            id_to_token = {row.id: row.tk for row in table_rows}
+            mv_rows = await cql.run_async(f"SELECT * FROM {ks}.t_by_v")
+            missing_id = id_to_token.keys() - {row.id for row in mv_rows}
+            for mid in missing_id:
+                logger.error("Missing MV row for id %s base token %s", mid, id_to_token[mid])
+            logger.error(f"Expected {actual_inserts} rows, got {len(mv_rows)} in MV")
+            raise
