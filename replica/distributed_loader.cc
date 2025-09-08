@@ -235,12 +235,17 @@ distributed_loader::get_sstables_from_upload_dir(sharded<replica::database>& db,
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
 distributed_loader::get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src) {
-    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, prefix, sstables=std::move(sstables), &get_abort_src] (auto& global_table, auto& directory) {
+    return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, prefix, sstables=std::move(sstables), &get_abort_src, &db] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
-            sharded_parameter([bucket, endpoint, prefix, &get_abort_src] {
-                data_dictionary::storage_options opts;
+            sharded_parameter([bucket, endpoint, prefix, &get_abort_src, &db] {
+                auto eps = db.local().get_config().object_storage_endpoints() 
+                    | std::views::filter([&endpoint](auto& ep) { return ep.key() == endpoint; })
+                    ;
+                if (eps.empty()) {
+                    throw std::invalid_argument(fmt::format("Undefined endpoint {}", endpoint));
+                }
                 seastar::abort_source* as = get_abort_src ? get_abort_src() : nullptr;
-                opts.value = data_dictionary::storage_options::s3{bucket, endpoint, prefix, as};
+                auto opts = data_dictionary::make_object_storage_options(endpoint, eps.front().type(), bucket, prefix, as);
                 return make_lw_shared<const data_dictionary::storage_options>(std::move(opts));
             }),
             sstables,
@@ -308,7 +313,7 @@ private:
 
     future<> collect_subdirs();
     future<> collect_subdirs(const data_dictionary::storage_options::local&, sstables::sstable_state state);
-    future<> collect_subdirs(const data_dictionary::storage_options::s3&, sstables::sstable_state state);
+    future<> collect_subdirs(const data_dictionary::storage_options::object_storage&, sstables::sstable_state state);
     future<> process_subdir(sharded<sstables::sstable_directory>&);
     future<> populate_subdir(sharded<sstables::sstable_directory>&);
 };
@@ -351,7 +356,7 @@ future<> table_populator::collect_subdirs(const data_dictionary::storage_options
     });
 }
 
-future<> table_populator::collect_subdirs(const data_dictionary::storage_options::s3& so, sstables::sstable_state state) {
+future<> table_populator::collect_subdirs(const data_dictionary::storage_options::object_storage& so, sstables::sstable_state state) {
     auto dptr = make_lw_shared<sharded<sstables::sstable_directory>>();
     co_await dptr->start(_global_table.as_sharded_parameter(), state, default_io_error_handler_gen());
     _sstable_directories.push_back(std::move(dptr));

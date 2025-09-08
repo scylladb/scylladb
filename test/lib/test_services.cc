@@ -185,7 +185,7 @@ std::vector<db::object_storage_endpoint_param> make_storage_options_config(const
     std::visit(overloaded_functor {
         [] (const data_dictionary::storage_options::local& loc) mutable -> void {
         },
-        [&endpoints] (const data_dictionary::storage_options::s3& os) mutable -> void {
+        [&endpoints] (const data_dictionary::storage_options::object_storage& os) mutable -> void {
             endpoints.emplace_back(os.endpoint, 
                 s3::endpoint_config {
                 .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
@@ -375,7 +375,7 @@ test_env::make_sstable(schema_ptr schema, sstring dir, sstables::generation_type
     auto storage = _impl->storage;
     std::visit(overloaded_functor {
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
-        [&schema] (data_dictionary::storage_options::s3& o) { o.location = schema->id(); },
+        [&schema] (data_dictionary::storage_options::object_storage& o) { o.location = schema->id(); },
     }, storage.value);
     return _impl->mgr.make_sstable(std::move(schema), storage, generation, sstables::sstable_state::normal, v, f, now, default_io_error_handler_gen(), buffer_size);
 }
@@ -512,7 +512,7 @@ test_env::make_table_for_tests(schema_ptr s, sstring dir) {
     auto storage = _impl->storage;
     std::visit(overloaded_functor {
         [&dir] (data_dictionary::storage_options::local& o) { o.dir = dir; },
-        [&s] (data_dictionary::storage_options::s3& o) { o.location = s->id(); },
+        [&s] (data_dictionary::storage_options::object_storage& o) { o.location = s->id(); },
     }, storage.value);
     return table_for_tests(manager(), _impl->cmgr->get_compaction_manager(), s, std::move(cfg), std::move(storage));
 }
@@ -532,11 +532,13 @@ void test_env::request_abort() {
     _impl->abort.request_abort();
 }
 
-data_dictionary::storage_options make_test_object_storage_options() {
+data_dictionary::storage_options make_test_object_storage_options(std::optional<std::string> type) {
     data_dictionary::storage_options ret;
-    ret.value = data_dictionary::storage_options::s3 {
-        .bucket = tests::getenv_safe("S3_BUCKET_FOR_TEST"),
-        .endpoint = tests::getenv_safe("S3_SERVER_ADDRESS_FOR_TEST"),
+    auto t = type.value_or("S3");
+    ret.value = data_dictionary::storage_options::object_storage {
+        .bucket = tests::getenv_safe(t + "_BUCKET_FOR_TEST"),
+        .endpoint = tests::getenv_safe(t + "_SERVER_ADDRESS_FOR_TEST"),
+        .type = t
     };
     return ret;
 }
