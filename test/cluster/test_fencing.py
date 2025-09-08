@@ -7,17 +7,20 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, Column, IntType, CounterType
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
 from cassandra import WriteFailure, ConsistencyLevel
-from test.pylib.internal_types import ServerInfo, HostID
+from test.pylib.internal_types import ServerInfo
 from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
 from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, reconnect_driver
+from test.pylib.scylla_cluster import ScyllaVersionDescription
 import pytest
 import logging
 import time
 import asyncio
+import os
+import random
 
 
 logger = logging.getLogger(__name__)
@@ -461,3 +464,99 @@ async def test_fenced_out_on_tablet_migration_while_handling_paxos_verb(manager:
             await insert_lwt
 
         assert await fenced_out_requests() == 1
+
+
+@pytest.mark.asyncio
+@skip_mode('release', 'dev mode is enough for this test')
+@skip_mode('debug', 'dev mode is enough for this test')
+async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
+    """
+    The test runs some LWT workload on a vnodes-based table, rolling-restarts nodes
+    with a new Scylla version and checks that LWTs complete as expected. Downgrading
+    a single node back to original version is also covered.
+    """
+    new_exe = os.getenv("SCYLLA")
+    assert new_exe
+
+    logger.info("Bootstrapping cluster")
+    servers = await manager.servers_add(3,
+                                        cmdline=[
+                                            '--logger-log-level', 'paxos=trace'
+                                        ],
+                                        config={
+                                            'tablets_mode_for_new_keyspaces': 'disabled'
+                                        },
+                                        auto_rack_dc='dc1',
+                                        version=scylla_2025_1)
+    (cql, hosts) = await manager.get_ready_cql(servers)
+
+    logger.info("Create a test keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        logger.info("Create test table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+        await cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (1, 1)")
+
+        update_stmt = cql.prepare(f"UPDATE {ks}.test SET c = ? WHERE pk = 1 IF c = ?")
+        stop = False
+        cond = asyncio.Condition()
+        lwt_counter = 1
+        async def lwt_workload():
+            nonlocal lwt_counter
+            while not stop:
+                result = await cql.run_async(update_stmt, [lwt_counter + 1, lwt_counter])
+
+                # The driver may retry the statement, so 'applied' can be false here.
+                # applied == true  -> 'c' holds the previous value  -> lwt_counter
+                # applied == false -> 'c' holds the new value       -> lwt_counter + 1
+                assert result[0] in ((True, lwt_counter), (False, lwt_counter + 1))
+
+                async with cond:
+                    lwt_counter += 1
+                    cond.notify_all()
+                await asyncio.sleep(random.random() / 100)
+        async def wait_for_some_lwts():
+            nonlocal lwt_counter
+            if lwt_workload_task.done():
+                e = lwt_workload_task.exception()
+                raise e if e is not None else RuntimeError(
+                    'unexpected lwt_workload_task state')
+            async with cond:
+                start = lwt_counter
+                await cond.wait_for(lambda: lwt_counter - start >= 10)
+
+        logger.info("LWT workoad started")
+        lwt_workload_task = asyncio.create_task(lwt_workload())
+        wait_for_some_lwts()
+
+        logger.info(f"Upgrading {servers[0].server_id}")
+        await manager.server_change_version(servers[0].server_id, new_exe)
+        wait_for_some_lwts()
+
+        logger.info(f"Downgrading {servers[0].server_id}")
+        await manager.server_change_version(servers[0].server_id, scylla_2025_1.path)
+        wait_for_some_lwts()
+
+        for s in servers:
+            # Ensure all hosts are alive before restarting the last server,
+            # so the LWT workload doesn’t fail if the driver suddenly sees all nodes as “down”.
+            if s == servers[-1]:
+                logger.info("Wait all nodes are up")
+                async def all_hosts_are_alive():
+                    for h in hosts:
+                        if not h.is_up:
+                            logger.info(f"Host {h} is down, continue waiting")
+                            return None
+                    return True
+                await wait_for(all_hosts_are_alive, deadline=time.time() + 60, period=0.1)
+            logger.info(f"Upgrading {s.server_id}")
+            await manager.server_change_version(s.server_id, new_exe)
+
+        logger.info("Done upgrading servers")
+
+        wait_for_some_lwts()
+
+        stop = True
+        await lwt_workload_task
+        assert lwt_counter >= 40, f"unexpected counter value: {lwt_counter}"
+
+        logger.info(f"Done, number of successfull LWTs: {lwt_counter}")
