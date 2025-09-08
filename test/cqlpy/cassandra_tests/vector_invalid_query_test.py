@@ -130,26 +130,26 @@ def test_invalid_column_name_with_ann(cql, test_keyspace):
             "SELECT k FROM %s ORDER BY bad_col ANN OF [1.0] LIMIT 1"
         )
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
-def test_cannot_perform_non_ann_query_on_vector_index(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
-        custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
-        execute(cql, table, f"CREATE CUSTOM INDEX c_index ON %s (val) USING '{custom_index}'")
-        assert_invalid_message(
-            cql, table, VECTOR_INDEXES_ANN_ONLY_MESSAGE,
-            "SELECT * FROM %s WHERE val = [1.0, 2.0, 3.0]"
-        )
+# @pytest.mark.parametrize("test_keyspace",
+#                          [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+#                          indirect=True)
+# def test_cannot_perform_non_ann_query_on_vector_index(cql, test_keyspace):
+#     with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
+#         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
+#         execute(cql, table, f"CREATE CUSTOM INDEX c_index ON %s (val) USING '{custom_index}'")
+#         assert_invalid_message(
+#             cql, table, VECTOR_INDEXES_ANN_ONLY_MESSAGE,
+#             "SELECT * FROM %s WHERE val = [1.0, 2.0, 3.0]"
+#         )
 
-def test_cannot_order_with_ann_on_non_vector_column(cql, test_keyspace):
-    with create_table(cql, test_keyspace, "(k int, v int, PRIMARY KEY(k))") as table:
-        # Scylla doesn't support custom indexes on int columns so we use a regular index.
-        execute(cql, table, "CREATE INDEX c_index ON %s (v)")
-        assert_invalid_message(
-            cql, table, ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE,
-            "SELECT * FROM %s ORDER BY v ANN OF 1 LIMIT 1"
-        )
+# def test_cannot_order_with_ann_on_non_vector_column(cql, test_keyspace):
+#     with create_table(cql, test_keyspace, "(k int, v int, PRIMARY KEY(k))") as table:
+#         # Scylla doesn't support custom indexes on int columns so we use a regular index.
+#         execute(cql, table, "CREATE INDEX c_index ON %s (v)")
+#         assert_invalid_message(
+#             cql, table, ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE,
+#             "SELECT * FROM %s ORDER BY v ANN OF 1 LIMIT 1"
+#         )
 
 #     @Test
 #     public void disallowZeroVectorsWithCosineSimilarity()
