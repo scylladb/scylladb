@@ -21,6 +21,7 @@
 #include "cql3/description.hh"
 #include <map>
 #include "qos_common.hh"
+#include "mutation/mutation.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "qos_configuration_change_subscriber.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -344,6 +345,18 @@ public:
      * @return a future that is resolved when the update loop stops.
      */
     void maybe_start_legacy_update_from_distributed_data(std::function<steady_clock_type::duration()> interval_f, service::storage_service& storage_service, service::raft_group0_client& group0_client);
+
+    /**
+     * Get mutations required to:
+     * 1. create `sl:driver`
+     * 2. store information that `sl:driver` was created in `system.scylla_local`
+     */
+    static future<utils::chunked_vector<mutation>> get_create_driver_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp);
+    /**
+     * Create `sl:driver` using _sl_data_accessor if possible. If `sl:driver` exists or it's created, store
+       the information it was created in `system.scylla_local`.
+     */
+    future<> migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks);
 
     /**
      * Request abort of update loop.
