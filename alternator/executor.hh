@@ -237,12 +237,15 @@ public:
         const std::optional<attrs_to_get>&,
         uint64_t* = nullptr);
 
+    // Converts a multi-row selection result to JSON compatible with DynamoDB.
+    // For each row, this method calls item_callback, which takes the size of
+    // the item as the parameter.
     static future<std::vector<rjson::value>> describe_multi_item(schema_ptr schema,
         const query::partition_slice&& slice,
         shared_ptr<cql3::selection::selection> selection,
         foreign_ptr<lw_shared_ptr<query::result>> query_result,
         shared_ptr<const std::optional<attrs_to_get>> attrs_to_get,
-        uint64_t& rcu_half_units);
+        noncopyable_function<void(uint64_t)> item_callback = {});
 
     static void describe_single_item(const cql3::selection::selection&,
         const std::vector<managed_bytes_opt>&,
