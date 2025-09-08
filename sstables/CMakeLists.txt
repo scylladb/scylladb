@@ -11,6 +11,7 @@ target_sources(sstables
     mx/partition_reversing_data_source.cc
     mx/reader.cc
     mx/writer.cc
+    object_storage_client.cc
     prepended_input_stream.cc
     random_access_reader.cc
     sstable_directory.cc
