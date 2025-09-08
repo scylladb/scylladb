@@ -329,6 +329,14 @@ class ManagerClient:
         data = {"path": path}
         await self.client.put_json(f"/cluster/server/{server_id}/switch_executable", data)
 
+    async def server_change_version(self, server_id: ServerNum, exe: str):
+        """ Upgrades a running Scylla node by switching it to a new binary version 
+            specified by the 'exe' parameter.
+        """
+        await self.server_stop_gracefully(server_id)
+        await self.server_switch_executable(server_id, exe)
+        await self.server_start(server_id)
+
     async def server_wipe_sstables(self, server_id: ServerNum, keyspace: str, table: str) -> None:
         """Delete all files for the given table from the data directory"""
         logger.debug("ManagerClient wiping sstables on %s, keyspace=%s, table=%s", server_id, keyspace, table)
