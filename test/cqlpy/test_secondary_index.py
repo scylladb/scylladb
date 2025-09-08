@@ -2062,7 +2062,8 @@ def test_index_in_API(cql, test_keyspace):
 # always interpreted as more pages being available, which in this case is incorrect.
 # See `generate_view_paging_state_from_base_query_results()` for more details.
 @pytest.mark.xfail(reason="issue #22158")
-def test_limit_partition(cql, test_keyspace):
+@pytest.mark.parametrize("use_paging", [False, True])
+def test_limit_partition(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, primary key ((pk1, pk2), ck)') as table:
         cql.execute(f'CREATE INDEX ON {table}(pk2)')
         stmt = cql.prepare(f'INSERT INTO {table} (pk1, pk2, ck) VALUES (?, ?, ?)')
@@ -2070,21 +2071,23 @@ def test_limit_partition(cql, test_keyspace):
         cql.execute(stmt, [1, 1, 2])
         cql.execute(stmt, [2, 1, 1])
         cql.execute(stmt, [2, 1, 2])
+        fetch_size = 100 if use_paging else None
         # Test LIMIT within a single partition - succeeds.
-        rs = cql.execute(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 1')
+        stmt = SimpleStatement(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 1', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
         assert sorted(list(rs)) == [(2,1)]
-        assert rs.has_more_pages == False
         # Test LIMIT across partitions - reproduces #22158.
-        rs = cql.execute(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 3')
+        stmt = SimpleStatement(f'SELECT pk1, ck FROM {table} WHERE pk2 = 1 LIMIT 3', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
         assert sorted(list(rs)) == [(1,1), (2,1), (2,2)]
-        assert rs.has_more_pages == False
 
 
 # Same as test_limit_partition above, except that it uses partition slices
 # instead of whole partitions. This is achieved by indexing the first clustering
 # key column.
 @pytest.mark.xfail(reason="issue #22158")
-def test_limit_partition_slice(cql, test_keyspace):
+@pytest.mark.parametrize("use_paging", [False, True])
+def test_limit_partition_slice(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
         cql.execute(f'CREATE INDEX ON {table}(ck1)')
         stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2) VALUES (?, ?, ?)')
@@ -2092,14 +2095,15 @@ def test_limit_partition_slice(cql, test_keyspace):
         cql.execute(stmt, [1, 1, 2])
         cql.execute(stmt, [2, 1, 1])
         cql.execute(stmt, [2, 1, 2])
+        fetch_size = 100 if use_paging else None
         # Test LIMIT within a single partition slice - succeeds.
-        rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 1')
+        stmt = SimpleStatement(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 1', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
         assert sorted(list(rs)) == [(1,1)]
-        assert rs.has_more_pages == False
         # Test LIMIT across partition slices - reproduces #22158.
-        rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 3')
+        stmt = SimpleStatement(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 3', fetch_size=fetch_size)
+        rs = cql.execute(stmt)
         assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
-        assert rs.has_more_pages == False
 
 
 # Test that a query using a secondary index can handle "short reads".
