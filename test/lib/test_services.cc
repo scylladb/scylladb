@@ -269,7 +269,11 @@ void test_env::maybe_start_compaction_manager(bool enable) {
 
 future<> test_env::stop() {
     if (_impl->cmgr) {
-        co_await _impl->cmgr->get_compaction_manager().stop();
+        if (_impl->cmgr->get_compaction_manager().is_running()) {
+            co_await _impl->cmgr->get_compaction_manager().stop();
+        } else {
+            co_await _impl->cmgr->get_compaction_manager().get_task_manager_module().stop();
+        }
     }
     co_await _impl->mgr.close();
     co_await _impl->semaphore.stop();
