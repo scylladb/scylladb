@@ -354,15 +354,25 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         data_dictionary::storage_options options;
         auto ed = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
 
-        if (s3::is_s3_fqn(sst_path)) {
-            using osp = db::object_storage_endpoint_param;
-            auto s3_endpoints = sst_man.config().object_storage_endpoints() | std::views::filter(&osp::is_s3_storage) | std::views::transform(&osp::get_s3_storage);
-            if (s3_endpoints.empty()) {
-                throw std::invalid_argument("Unable to open SSTable in S3: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
-                                            "valid AWS object storage configuration.");
+        using osp = db::object_storage_endpoint_param;
+        static const auto os_types = { osp::s3_type, osp::gs_type };
+        auto is_fqn = os_types | std::views::filter(std::bind_front(&data_dictionary::is_object_storage_fqn, sst_path));
+
+        if (!is_fqn.empty()) {
+            auto type = is_fqn.front();
+            auto endpoints = sst_man.config().object_storage_endpoints() 
+                | std::views::filter(std::bind_back(&osp::is_storage_of_type, type)) 
+                | std::views::transform(&osp::get_s3_storage)
+                ;
+            if (endpoints.empty()) {
+                throw std::invalid_argument(fmt::format(
+                    "Unable to open SSTable in {}: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
+                    "valid AWS object storage configuration."
+                    , type
+                ));
             }
-            auto endpoint = (*s3_endpoints.begin()).endpoint;
-            options = data_dictionary::make_s3_options(endpoint, sst_path);
+            auto endpoint = endpoints.front().key();
+            options = data_dictionary::make_object_storage_options(endpoint, sst_path);
         } else {
             sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
             const auto dir_path = sst_path.parent_path();
