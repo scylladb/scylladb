@@ -2593,9 +2593,7 @@ def test_index_in_API(cql, test_keyspace):
 # from the index view (where the LIMIT is correctly applied). A mismatch is
 # always interpreted as more pages being available, which in this case is incorrect.
 # See `generate_view_paging_state_from_base_query_results()` for more details.
-@pytest.mark.parametrize("use_paging", [
-        pytest.param(False, marks=pytest.mark.xfail(reason="issue #22158")),
-        True])
+@pytest.mark.parametrize("use_paging", [False, True])
 def test_limit_partition(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, primary key ((pk1, pk2), ck)') as table:
         cql.execute(f'CREATE INDEX ON {table}(pk2)')
@@ -2625,9 +2623,7 @@ def test_limit_partition(cql, test_keyspace, use_paging):
 # Same as test_limit_partition above, except that it uses partition slices
 # instead of whole partitions. This is achieved by indexing the first clustering
 # key column.
-@pytest.mark.parametrize("use_paging", [
-        pytest.param(False, marks=pytest.mark.xfail(reason="issue #22158")),
-        True])
+@pytest.mark.parametrize("use_paging", [False, True])
 def test_limit_partition_slice(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, primary key (pk, ck1, ck2)') as table:
         cql.execute(f'CREATE INDEX ON {table}(ck1)')
@@ -2658,9 +2654,7 @@ def test_limit_partition_slice(cql, test_keyspace, use_paging):
 # Same as test_limit_partition above, except that the selection includes a
 # function, so the query needs more than the rows of the base table read.
 # Reproduces #22158.
-@pytest.mark.parametrize("use_paging", [
-        pytest.param(False, marks=pytest.mark.xfail(reason="issue #22158")),
-        True])
+@pytest.mark.parametrize("use_paging", [False, True])
 def test_limit_partition_nontrivial_selection(cql, test_keyspace, use_paging):
     with new_test_table(cql, test_keyspace, 'pk1 int, pk2 int, ck int, v int, primary key ((pk1, pk2), ck)') as table:
         cql.execute(f'CREATE INDEX ON {table}(pk2)')
@@ -2696,6 +2690,40 @@ def test_static_column_index_with_limit(cql, test_keyspace, use_paging):
         stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 3', fetch_size=fetch_size)
         rs = cql.execute(stmt)
         assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
+
+# Same as test_static_column_index_with_limit above, except that the index has
+# a stale entry: the static column of one partition changes, but the update of
+# the index is lost (injected failure). The post-filter drops the rows of that
+# partition, so they must not count against the LIMIT.
+@pytest.mark.parametrize("fetch_size", [None, 1, 100])
+def test_static_column_index_with_limit_and_stale_entry(cql, test_keyspace, scylla_only, fetch_size):
+    injection = 'view_update_generation_failure'
+    with new_test_table(cql, test_keyspace, 'pk int, ck int, s int STATIC, primary key (pk, ck)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(s)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck, s) VALUES (?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1])
+        cql.execute(stmt, [1, 2, 1])
+        cql.execute(stmt, [2, 1, 1])
+        cql.execute(stmt, [2, 2, 1])
+        cql.execute(stmt, [3, 1, 1])
+        cql.execute(stmt, [3, 2, 1])
+        # Make the first partition in token order stale, so that its rows are
+        # read first.
+        stale_pk = min(cql.execute(f'SELECT DISTINCT pk, token(pk) FROM {table}'), key=lambda r: r[1])[0]
+        rest_api.post_request(cql, f'v2/error_injection/injection/{injection}?one_shot=True')
+        try:
+            if injection not in rest_api.get_request(cql, 'v2/error_injection/injection'):
+                skip_env("error injection not enabled in this build")
+            cql.execute(f'UPDATE {table} SET s = 2 WHERE pk = {stale_pk}')
+        finally:
+            rest_api.delete_request(cql, f'v2/error_injection/injection/{injection}')
+        # The index still lists the partition under s = 1.
+        assert stale_pk in [r[0] for r in cql.execute(f'SELECT pk FROM {table}_s_idx_index WHERE s = 1')]
+        stmt = SimpleStatement(f'SELECT pk, ck FROM {table} WHERE s = 1 LIMIT 4', fetch_size=fetch_size)
+        rows = list(cql.execute(stmt))
+        assert len(rows) == 4
+        assert stale_pk not in [r[0] for r in rows]
+
 
 
 # Same as test_limit_partition_slice above, except that it uses a page size

@@ -760,7 +760,19 @@ view_indexed_table_select_statement::do_execute_base_query(
     }
 
     const bool is_paged = bool(paging_state);
-    base_query_state query_state{cmd->get_row_limit() * queried_ranges_count, std::move(ranges_to_vnodes)};
+    const auto row_limit = [&] {
+        // Cap the base table read at the remaining rows of the query, unless a
+        // later step may drop rows: post-query ordering trims the result, and the
+        // post-filter drops rows that do not match the restrictions (on an index
+        // on a regular or static column, this includes rows from stale index
+        // entries). Function selectors change values, not rows, so they do not
+        // matter.
+        if (!needs_post_query_ordering() && !needs_post_filtering()) {
+            return remaining_rows_before_page(options, *cmd);
+        }
+        return cmd->get_row_limit() * queried_ranges_count;
+    }();
+    base_query_state query_state{row_limit, std::move(ranges_to_vnodes)};
     {
         auto& merger = query_state.merger;
         auto& ranges_to_vnodes = query_state.ranges_to_vnodes;
