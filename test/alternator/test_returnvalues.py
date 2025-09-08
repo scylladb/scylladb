@@ -258,6 +258,44 @@ def test_update_item_returnvalues_all_old(test_table_s):
         ExpressionAttributeValues={':val': 'cat'})
     assert not 'Attributes' in ret
 
+# UpdateItem has a separate code path for the new-style UpdateExpression,
+# and for the old style AttributeUpdates. The above test was for the new-
+# style, Let's also test the old-style code path - it may have separate bugs.
+# Specifically we had bug #25894 in cases where both the AttributeUpdates
+# handling and the ReturnValues need the same old item, and this test
+# reproduces these bugs.
+@pytest.mark.xfail(reason="issue #25894")
+def test_update_item_returnvalues_all_old_attributeupdates(test_table_s):
+    # With ReturnValues=ALL_OLD, the entire old value of the item (even
+    # attributes we did not modify) is returned in an "Attributes" attribute:
+    p = random_string()
+    # The AttributeUpdates "ADD" operation is one of the operations that
+    # needs the value of the previous item, and ReturnValues='ALL_OLD'
+    # needs it too, so it reproduces #25894.
+    test_table_s.put_item(Item={'p': p, 'a': 3, 'b': 'dog'})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_OLD',
+        AttributeUpdates={'a': {'Action': 'ADD', 'Value': 2}})
+    assert ret['Attributes'] == {'p': p, 'a': 3, 'b': 'dog'}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {
+        'p': p, 'a': 5, 'b': 'dog'}
+    # The "DELETE" operation for sets is another operation that needs the
+    # value of the previous item, and reproduces #25894.
+    test_table_s.put_item(Item={'p': p, 'a': set([2, 4, 6, 7]), 'b': 'dog'})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_OLD',
+        AttributeUpdates={'a': {'Action': 'DELETE', 'Value': set([4, 5])}})
+    assert ret['Attributes'] == {'p': p, 'a': set([2, 4, 6, 7]), 'b': 'dog'}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {
+        'p': p, 'a': set([2, 6, 7]), 'b': 'dog'}
+    # The "PUT" operation doesn't need the value of the previous item,
+    # so does not #25894, but still ReturnValues requires the previous item,
+    # so we mustn't forget to fetch it in this case too.
+    test_table_s.put_item(Item={'p': p, 'a': 'hi', 'c': 7})
+    ret=test_table_s.update_item(Key={'p': p}, ReturnValues='ALL_OLD',
+        AttributeUpdates={'a': {'Action': 'PUT', 'Value': 17}})
+    assert ret['Attributes'] == {'p': p, 'a': 'hi', 'c': 7}
+    assert test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item'] == {
+            'p': p, 'a': 17, 'c': 7}
+
 def test_update_item_returnvalues_updated_old(test_table_s):
     # With ReturnValues=UPDATED_OLD, only the overwritten attributes of the
     # old item are returned in an "Attributes" attribute:
