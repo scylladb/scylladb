@@ -22,6 +22,7 @@
 #include "sstables/shared_sstable.hh"
 #include "sstables/version.hh"
 #include "db/cache_tracker.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "locator/host_id.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "utils/s3/creds.hh"
@@ -34,7 +35,6 @@ namespace db {
 class large_data_handler;
 class corrupt_data_handler;
 class config;
-class object_storage_endpoint_param;
 
 }   // namespace db
 
@@ -44,6 +44,7 @@ namespace gms { class feature_service; }
 
 namespace sstables {
 
+class object_storage_client;
 class directory_semaphore;
 using schema_ptr = lw_shared_ptr<const schema>;
 using shareable_components_ptr = lw_shared_ptr<shareable_components>;
@@ -57,14 +58,14 @@ class storage_manager : public peering_sharded_service<storage_manager> {
         config_updater(const db::config& cfg, storage_manager&);
     };
 
-    struct s3_endpoint {
-        s3::endpoint_config_ptr cfg;
-        shared_ptr<s3::client> client;
-        s3_endpoint(s3::endpoint_config_ptr c) noexcept : cfg(std::move(c)) {}
+    struct object_storage_endpoint {
+        db::object_storage_endpoint_param cfg;
+        shared_ptr<object_storage_client> client;
+        object_storage_endpoint(db::object_storage_endpoint_param);
     };
 
-    semaphore _s3_clients_memory;
-    std::unordered_map<sstring, s3_endpoint> _s3_endpoints;
+    semaphore _object_storage_clients_memory;
+    std::unordered_map<sstring, object_storage_endpoint> _object_storage_endpoints;
     std::unique_ptr<config_updater> _config_updater;
     seastar::metrics::metric_groups metrics;
 
@@ -72,12 +73,12 @@ class storage_manager : public peering_sharded_service<storage_manager> {
 
 public:
     struct config {
-        size_t s3_clients_memory = 16 << 20; // 16M by default
+        size_t object_storage_clients_memory = 16 << 20; // 16M by default
         bool skip_metrics_registration = false;
     };
 
     storage_manager(const db::config&, config cfg);
-    shared_ptr<s3::client> get_endpoint_client(sstring endpoint);
+    shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint);
     bool is_known_endpoint(sstring endpoint) const;
     future<> stop();
 };
@@ -169,7 +170,7 @@ public:
             io_error_handler_gen error_handler_gen = default_io_error_handler_gen(),
             size_t buffer_size = default_sstable_buffer_size);
 
-    shared_ptr<s3::client> get_endpoint_client(sstring endpoint) const {
+    shared_ptr<object_storage_client> get_endpoint_client(sstring endpoint) const {
         SCYLLA_ASSERT(_storage != nullptr);
         return _storage->get_endpoint_client(std::move(endpoint));
     }
