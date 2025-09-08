@@ -1010,7 +1010,7 @@ public:
 };
 
 compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
-    : _task_manager_module(make_shared<task_manager_module>(tm))
+    : _task_manager_module(make_shared<task_manager_module>(tm, *this))
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
@@ -1047,7 +1047,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
 }
 
 compaction_manager::compaction_manager(tasks::task_manager& tm)
-    : _task_manager_module(make_shared<task_manager_module>(tm))
+    : _task_manager_module(make_shared<task_manager_module>(tm, *this))
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
@@ -1272,7 +1272,6 @@ future<> compaction_manager::really_do_stop() noexcept {
     cmlog.info("Asked to stop");
     // Reset the metrics registry
     _metrics.clear();
-    co_await stop_ongoing_compactions("shutdown");
     if (auto cm = std::exchange(_task_manager_module, nullptr)) {
         co_await cm->stop();
     }

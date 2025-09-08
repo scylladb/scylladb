@@ -927,6 +927,10 @@ future<std::optional<double>> shard_resharding_compaction_task_impl::expected_to
     co_return _expected_workload;
 }
 
+future<> task_manager_module::do_stop() noexcept {
+    return _cm.stop_ongoing_compactions("shutdown");
+}
+
 }
 
 auto fmt::formatter<compaction::flush_mode>::format(compaction::flush_mode fm, fmt::format_context& ctx) const -> decltype(ctx.out()) {

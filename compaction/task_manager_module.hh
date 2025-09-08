@@ -21,6 +21,8 @@ namespace replica {
 class reshard_shard_descriptor;
 }
 
+class compaction_manager;
+
 namespace compaction {
 
 class compaction_task_impl : public tasks::task_manager::task::impl {
@@ -735,8 +737,12 @@ protected:
 };
 
 class task_manager_module : public tasks::task_manager::module {
+private:
+    compaction_manager& _cm;
 public:
-    task_manager_module(tasks::task_manager& tm) noexcept : tasks::task_manager::module(tm, "compaction") {}
+    task_manager_module(tasks::task_manager& tm, compaction_manager& cm) noexcept : tasks::task_manager::module(tm, "compaction"), _cm(cm) {}
+protected:
+    virtual future<> do_stop() noexcept override;
 };
 
 class regular_compaction_task_impl : public compaction_task_impl {
