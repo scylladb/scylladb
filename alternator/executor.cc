@@ -4009,9 +4009,6 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
             }
         }
     }
-    if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
-        _return_attributes = std::move(*previous_item);
-    }
     if (_attribute_updates) {
         for (auto it = _attribute_updates->MemberBegin(); it != _attribute_updates->MemberEnd(); ++it) {
             // Note that it.key() is the name of the column, *it is the operation
@@ -4120,6 +4117,9 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         // There was no pre-existing item, and we're not creating one, so
         // don't report the new item in the returned Attributes.
         _return_attributes = rjson::null_value();
+    }
+    if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
+        _return_attributes = std::move(*previous_item);
     }
     // ReturnValues=UPDATED_OLD/NEW never return an empty Attributes field,
     // even if a new item was created. Instead it should be missing entirely.
