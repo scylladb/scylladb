@@ -1728,11 +1728,18 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
     // Based on the computation in get_view_natural_endpoint, this is used
     // to detect beforehand the case that we're a "normal" replica which is
     // paired with a view replica and sends view updates to.
-    // For a pending replica, for example, this will return false.
+    // A base replica can be paired with a view replica if it's a "normal" non-pending replica that is
+    // returned by get_replicas() or it could be a pending replica that is also a read replica
+    // and returned by get_replicas_for_reading().
+    // For a pending replica that is not ready for reading, for example, this will return false.
     // Also, for the case of intra-node migration, we check that this shard is ready for reads.
-    const auto my_host_id = ermp->get_token_metadata_ptr()->get_topology().my_host_id();
-    const auto replicas = ermp->get_replicas(token);
-    return std::find(replicas.begin(), replicas.end(), my_host_id) != replicas.end()
+
+    const auto me = ermp->get_token_metadata_ptr()->get_topology().my_host_id();
+    const auto base_replicas = ermp->get_replicas(token);
+    const auto read_replicas = ermp->get_replicas_for_reading(token);
+
+    return (std::find(base_replicas.begin(), base_replicas.end(), me) != base_replicas.end()
+            || std::find(read_replicas.begin(), read_replicas.end(), me) != read_replicas.end())
         && ermp->shard_for_reads(*base, token) == this_shard_id();
 }
 
@@ -1840,6 +1847,28 @@ get_view_natural_endpoint(
     // is rebuilding a replica which has left the ring. get_natural_endpoints() filters such replicas.
     for (auto&& base_endpoint : base_erm->get_replicas(base_token)) {
         process_candidate(base_endpoints, topology, base_endpoint, false);
+    }
+
+    // if we're a pending base replica and we're ready for reading then we should generate view updates same as
+    // the base replica that we are about to replace in the base-view pairing.
+    auto base_pending_replicas = base_erm->get_pending_replicas(base_token);
+    if (std::ranges::find(base_pending_replicas, me) != base_pending_replicas.end()) {
+        auto base_reading_replicas = base_erm->get_replicas_for_reading(base_token);
+
+        auto is_reading_replica = [&] (locator::host_id id) {
+            return std::ranges::find(base_reading_replicas, id) != base_reading_replicas.end();
+        };
+
+        if (is_reading_replica(me)) {
+            // find a normal base replica that is not a reading replica - it's a leaving base replica that we replace.
+            // use the same view pairing as that base replica.
+            auto it = std::ranges::find_if(base_endpoints, [&] (const locator::node& n) {
+                return !is_reading_replica(n.host_id());
+            });
+            if (it != base_endpoints.end()) {
+                me = it->get().host_id();
+            }
+        }
     }
 
     auto& view_topology = view_erm->get_token_metadata_ptr()->get_topology();
