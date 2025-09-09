@@ -161,13 +161,20 @@ class scylla_rest_client {
     rjson::value do_request(sstring type, sstring path,
                             std::unordered_map<sstring, sstring> params,
                             std::optional<request_body> body = {}) {
+        http::request::query_parameters_type req_params;
+        for (auto& [key, value] : params) {
+            req_params[std::move(key)].push_back(std::move(value));
+        }
+        return do_request(type, path, std::move(req_params), std::move(body));
+    }
+
+    rjson::value do_request(sstring type, sstring path,
+                            http::request::query_parameters_type params,
+                            std::optional<request_body> body = {}) {
         auto req = http::request::make(type, _host_name, path);
         auto url = req.get_url();
 
-        for (const auto& [k, v] : params) {
-            req.set_query_param(k, v);
-        }
-
+        req.set_query_params(params);
         if (body) {
             req.write_body(body->content_type, body->content);
         }
@@ -218,12 +225,25 @@ public:
         return do_request("POST", std::move(path), std::move(params), std::move(body));
     }
 
+    rjson::value post(sstring path, http::request::query_parameters_type params, std::optional<request_body> body = {}) {
+        return do_request("POST", std::move(path), std::move(params), std::move(body));
+    }
+
     rjson::value get(sstring path, std::unordered_map<sstring, sstring> params = {}) {
+        return do_request("GET", std::move(path), std::move(params));
+    }
+
+    rjson::value get(sstring path, http::request::query_parameters_type params) {
         return do_request("GET", std::move(path), std::move(params));
     }
 
     // delete is a reserved keyword, using del instead
     rjson::value del(sstring path, std::unordered_map<sstring, sstring> params = {}) {
+        return do_request("DELETE", std::move(path), std::move(params));
+    }
+
+    // delete is a reserved keyword, using del instead
+    rjson::value del(sstring path, http::request::query_parameters_type params) {
         return do_request("DELETE", std::move(path), std::move(params));
     }
 };
