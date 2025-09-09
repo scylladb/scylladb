@@ -153,7 +153,7 @@ public:
             task_id parent_id;
             std::string type;
             is_abortable abortable;
-            std::vector<task_essentials> failed_children;
+            utils::chunked_vector<task_essentials> failed_children;
         };
 
         class children {
@@ -171,7 +171,7 @@ public:
 
             // Make sure there is no race between map_children and the child's owner shard.
             template<typename Res>
-            future<std::vector<Res>> map_each_task(std::function<std::optional<Res>(const foreign_task_ptr&)> map_children,
+            future<utils::chunked_vector<Res>> map_each_task(std::function<std::optional<Res>(const foreign_task_ptr&)> map_children,
                     std::function<std::optional<Res>(const task_essentials&)> map_finished_children) const {
                 auto shared_holder = co_await _lock.hold_read_lock();
 
@@ -180,7 +180,7 @@ public:
 
                 auto kids = _children | std::views::values | std::views::transform(map_children) | deopt;
                 auto finished_kids = _finished_children | std::views::transform(map_finished_children) | deopt;
-                std::vector<Res> result;
+                utils::chunked_vector<Res> result;
                 // Want to use insert_range(), but libstd++ hasn't implemented it yet.
                 result.insert(result.end(), kids.begin(), kids.end());
                 result.insert(result.end(), finished_kids.begin(), finished_kids.end());
@@ -216,7 +216,7 @@ public:
             virtual future<> release_resources() noexcept {
                 return make_ready_future();
             }
-            future<std::vector<task_essentials>> get_failed_children() const;
+            future<utils::chunked_vector<task_essentials>> get_failed_children() const;
             void set_virtual_parent() noexcept;
             task_id id() const noexcept;
             task_manager::task::status& get_status() noexcept;
@@ -261,7 +261,7 @@ public:
         void unregister_task() noexcept;
         const children& get_children() const noexcept;
         bool is_complete() const noexcept;
-        future<std::vector<task_essentials>> get_failed_children() const;
+        future<utils::chunked_vector<task_essentials>> get_failed_children() const;
         void set_virtual_parent() noexcept;
 
         friend class test_task;
@@ -281,7 +281,7 @@ public:
             impl& operator=(impl&&) = delete;
             virtual ~impl() = default;
         protected:
-            static future<std::vector<task_identity>> get_children(module_ptr module, task_id parent_id, std::function<bool(locator::host_id)> is_host_alive);
+            static future<utils::chunked_vector<task_identity>> get_children(module_ptr module, task_id parent_id, std::function<bool(locator::host_id)> is_host_alive);
         public:
             virtual task_group get_group() const noexcept = 0;
             // Returns std::nullopt if an operation with task_id isn't tracked by this virtual_task.

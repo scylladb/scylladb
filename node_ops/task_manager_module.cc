@@ -101,7 +101,7 @@ future<std::optional<tasks::task_status>> node_ops_virtual_task::get_status_help
         .entity = "",
         .progress_units = "",
         .progress = tasks::task_manager::task::progress{},
-        .children = started ? co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper())) : std::vector<tasks::task_identity>{}
+        .children = started ? co_await get_children(get_module(), id, std::bind_front(&gms::gossiper::is_alive, &_ss.gossiper())) : utils::chunked_vector<tasks::task_identity>{}
     };
 }
 
