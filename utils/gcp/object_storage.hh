@@ -19,6 +19,10 @@
 #include "utils/rjson.hh"
 #include "utils/chunked_vector.hh"
 
+namespace seastar {
+class abort_source;
+}
+
 namespace utils::gcp {
     struct google_credentials;
 }
@@ -105,11 +109,11 @@ namespace utils::gcp::storage {
          * 
          * Note: this will overwrite any existing object of the same name.
          */
-        seastar::data_sink create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata = {}) const;
+        seastar::data_sink create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata = {}, seastar::abort_source* = nullptr) const;
         /**
          * Creates a data_source for reading from a named object.
          */
-        seastar::data_source create_download_source(std::string_view bucket, std::string_view object_name) const;
+        seastar::data_source create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* = nullptr) const;
 
         /**
          * Destroys resources. Must be called before releasing object
