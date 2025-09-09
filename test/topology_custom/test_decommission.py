@@ -4,10 +4,11 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 import logging
+import time
 
 import pytest
 from test.pylib.manager_client import ManagerClient
-from test.topology.util import check_token_ring_and_group0_consistency
+from test.topology.util import wait_for_token_ring_and_group0_consistency
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ async def test_decommissioned_node_cant_rejoin(request, manager: ManagerClient):
     # to communicate with other nodes to discover a leader.
     logger.info(f"Decommissioning node {servers[1]}")
     await manager.decommission_node(servers[1].server_id)
-    await check_token_ring_and_group0_consistency(manager)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     logger.info(f"Attempting to start the node {servers[1]} after it was decommissioned")
     await manager.server_start(servers[1].server_id,
                                expected_error='This node was decommissioned and will not rejoin the ring')

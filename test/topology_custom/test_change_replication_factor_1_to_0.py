@@ -12,7 +12,7 @@ from cassandra import ConsistencyLevel  # type: ignore
 from cassandra.query import SimpleStatement  # type: ignore
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.topology.util import check_token_ring_and_group0_consistency, new_test_keyspace
+from test.topology.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 from test.pylib.util import wait_for
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ async def test_change_replication_factor_1_to_0_and_decommission(request: pytest
         
         # decommission dc1
         await manager.decommission_node(srvs[1].server_id)
-        await check_token_ring_and_group0_consistency(manager)
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
         # ensure this no-op alter still works
         async with asyncio.timeout(30):
