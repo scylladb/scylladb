@@ -2828,6 +2828,52 @@ def test_desc_auth_attach_service_levels(cql, scylla_only):
 
         assert set(sl_stmts) == set(desc_iter)
 
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_driver_service_level(cql, scylla_only):
+    """
+    Driver service level is a special service level that is created automatically by
+    the system. Therefore, it requires special handling in DESC SCHEMA WITH INTERNALS,
+    to make sure that:
+     1. CREATE SERVICE LEVEL doesn't fail if the service level already exists (i.e. IF NOT EXISTS to CREATE)
+     2. If service level exists, it's configuration is fully restored (i.e. ALTER SERVICE command is also added)
+     3. If service level is removed, the information is retained (i.e. DROP SERVICE LEVEL is used instead of CREATE and ALTER)
+    This test verifies this behavior.
+    """
+
+    with AuthSLContext(cql):
+        cql.execute(f"ALTER SERVICE LEVEL driver WITH SHARES=123")
+        cql.execute(f"ALTER SERVICE LEVEL driver WITH TIMEOUT=321s")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+
+        [create, alter] = list(desc_iter)
+
+        assert create.keyspace_name == None
+        assert create.type == "service_level"
+        assert create.name == "driver"
+        assert create.create_statement == "CREATE SERVICE LEVEL IF NOT EXISTS driver WITH TIMEOUT = 321000ms AND WORKLOAD_TYPE = 'batch' AND SHARES = 123;"
+
+        assert alter.keyspace_name == None
+        assert alter.type == "service_level"
+        assert alter.name == "driver"
+        assert alter.create_statement == "ALTER SERVICE LEVEL driver WITH TIMEOUT = 321000ms AND WORKLOAD_TYPE = 'batch' AND SHARES = 123;"
+
+        cql.execute("DROP SERVICE LEVEL DRIVER")
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+
+        [drop] = list(desc_iter)
+
+        assert drop.keyspace_name == None
+        assert drop.type == "service_level"
+        assert drop.name == "driver"
+        assert drop.create_statement == "DROP SERVICE LEVEL IF EXISTS driver;"
+
+        # Bring the system to back the initial state for other tests
+        cql.execute("CREATE SERVICE LEVEL DRIVER WITH WORKLOAD_TYPE = 'batch' AND SHARES = 200")
+
 def test_desc_restore(cql):
     """
     Verify that restoring the schema, auth and service levels works correctly. We create entities
