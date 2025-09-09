@@ -79,6 +79,10 @@ async def disable_tablet_load_balancing_on_all_servers(manager: ManagerClient):
     servers = await manager.running_servers()
     await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
 
+async def enable_tablet_load_balancing_on_all_servers(manager: ManagerClient):
+    servers = await manager.running_servers()
+    await asyncio.gather(*(manager.api.enable_tablet_balancing(s.ip_addr) for s in servers))
+
 async def populate_base_table(cql: Session, ks: str, tbl: str):
     for i in range(ROW_COUNT):
         await cql.run_async(f"INSERT INTO {ks}.{tbl} (key, c, v) VALUES ({i // ROWS_PER_PARTITION}, {i % ROWS_PER_PARTITION}, '{i}')")
@@ -539,3 +543,66 @@ async def test_view_building_failure(manager: ManagerClient):
 
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
+
+# Reproduces scylladb/scylladb#25912
+@pytest.mark.asyncio
+async def test_concurrent_tablet_migrations(manager: ManagerClient):
+    # This test created 2 nodes per DC (node1/dc1, node2/dc1, node1/dc2, node2/dc2)
+    # and the initial tablet value in the keyspace is 1.
+    # Load balancing is turned off at first.
+    #
+    # This test makes sure that all tablets (for base table and view) are on node1
+    # in both DCs.
+    # Then, when load balancing is enabled again, load balancer should generate 2 migrations
+    # for the same table:
+    # - in dc1: tablet of base table node1 -> node2
+    # - in dc2: tablet of base table node1 -> node2
+    # Since these are 2 migrations of different tablets but in the same table,
+    # one of them is overwritten by the second one and this leads to scylladb/scylladb#25912
+
+    servers = {
+        "dc1": {
+            "rack1": await manager.server_add(property_file={'dc': 'dc1', 'rack': 'rack1'}, cmdline=cmdline_loggers),
+            "rack2": await manager.server_add(property_file={'dc': 'dc1', 'rack': 'rack2'}, cmdline=cmdline_loggers)
+        },
+        "dc2": {
+            "rack1": await manager.server_add(property_file={'dc': 'dc2', 'rack': 'rack1'}, cmdline=cmdline_loggers),
+            "rack2": await manager.server_add(property_file={'dc': 'dc2', 'rack': 'rack2'}, cmdline=cmdline_loggers)
+        }
+    }
+
+    cql = manager.get_cql()
+    await disable_tablet_load_balancing_on_all_servers(manager)
+
+    host_ids = {
+        dc: {rack: await manager.get_host_id(s.server_id) for rack, s in dc_servers.items()} for dc, dc_servers in servers.items()
+    }
+
+    def get_host_id_of_rack1_in_the_same_dc(my_host_id):
+        if my_host_id in host_ids["dc1"].values():
+            return host_ids["dc1"]["rack1"]
+        elif my_host_id in host_ids["dc2"].values():
+            return host_ids["dc2"]["rack1"]
+        assert False, "host id not found in any dc"
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1} AND tablets = {'initial': 1}") as ks:
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE TABLE {ks}.base (pk int, ck int, PRIMARY KEY (pk, ck))")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, ck FROM {ks}.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
+
+        # Make sure both tablets are on rack1 in both DCs
+        for table in ["base", "mv"]:
+            replicas = await get_tablet_replicas(manager, servers["dc1"]["rack1"], ks, table, 0)
+            for replica in replicas:
+                if replica[0] not in [host_ids["dc1"]["rack1"], host_ids["dc2"]["rack1"]]:
+                    target_host = get_host_id_of_rack1_in_the_same_dc(replica[0])
+                    await manager.api.move_tablet(servers["dc1"]["rack1"].ip_addr, ks, table, replica[0], replica[1], target_host, 0, 0, force=True)
+
+        # Enable load balancing, wait for balancing is finished and resume work on view building
+        await enable_tablet_load_balancing_on_all_servers(manager)
+        await manager.api.quiesce_topology(servers["dc1"]["rack1"].ip_addr)
+        await unpause_view_building_tasks(manager)
+
+        await wait_for_view(cql, "mv", 4)
