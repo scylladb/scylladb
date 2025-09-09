@@ -155,6 +155,16 @@ static void assert_table_sstable_count(table_for_tests& t, size_t expected_count
     BOOST_REQUIRE(uint64_t(t->get_stats().live_sstable_count) == expected_count);
 }
 
+static void corrupt_sstable(sstables::shared_sstable sst) {
+    auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
+    auto close_f = deferred_close(f);
+    const auto wbuf_align = f.memory_dma_alignment();
+    const auto wbuf_len = f.disk_write_dma_alignment();
+    auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
+    std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
+    f.dma_write(0, wbuf.get(), wbuf_len).get();
+}
+
 SEASTAR_TEST_CASE(compaction_manager_basic_test) {
   return test_env::do_with_async([] (test_env& env) {
     BOOST_REQUIRE(smp::count == 1);
@@ -542,15 +552,8 @@ static void compact_corrupted_by_compression_mode(const std::string& tname,
 
         const auto muts = tests::generate_random_mutations(random_schema, 2).get();
         auto sst = make_sstable_containing(env.make_sstable(schema), muts);
-        {
-            auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
-            auto close_f = deferred_close(f);
-            const auto wbuf_align = f.memory_dma_alignment();
-            const auto wbuf_len = f.disk_write_dma_alignment();
-            auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
-            std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
-            f.dma_write(0, wbuf.get(), wbuf_len).get();
-        }
+        corrupt_sstable(sst);
+
         test_failing_compact(schema, {sst}, error_msg, "failed checksum");
 
         testlog.info("Compacting {}compressed SSTable with invalid digest", compress ? "" : "un");
@@ -2492,13 +2495,7 @@ void scrub_validate_corrupted_file(compress_sstable compress) {
         auto sst = sstables.front();
 
         // Corrupt the data to cause an invalid checksum.
-        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
-        const auto wbuf_align = f.memory_dma_alignment();
-        const auto wbuf_len = f.disk_write_dma_alignment();
-        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
-        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
-        f.dma_write(0, wbuf.get(), wbuf_len).get();
-        f.close().get();
+        corrupt_sstable(sst);
 
         sstables::compaction_type_options::scrub opts = {
             .operation_mode = sstables::compaction_type_options::scrub::mode::validate,
@@ -2578,13 +2575,7 @@ void scrub_validate_no_digest(compress_sstable compress) {
         BOOST_REQUIRE(!sst->get_checksum());
 
         // Corrupt the data to cause an invalid checksum.
-        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
-        auto close_f = deferred_close(f);
-        const auto wbuf_align = f.memory_dma_alignment();
-        const auto wbuf_len = f.disk_write_dma_alignment();
-        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
-        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
-        f.dma_write(0, wbuf.get(), wbuf_len).get();
+        corrupt_sstable(sst);
 
         stats = table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get();
 
@@ -2954,13 +2945,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         auto sst = make_sst(std::move(frags));
 
         // Corrupt the data to cause an invalid checksum.
-        auto f = open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo).get();
-        const auto wbuf_align = f.memory_dma_alignment();
-        const auto wbuf_len = f.disk_write_dma_alignment();
-        auto wbuf = seastar::temporary_buffer<char>::aligned(wbuf_align, wbuf_len);
-        std::fill(wbuf.get_write(), wbuf.get_write() + wbuf_len, 0xba);
-        f.dma_write(0, wbuf.get(), wbuf_len).get();
-        f.close().get();
+        corrupt_sstable(sst);
 
         auto res = sstables::validate_checksums(sst, permit).get();
         BOOST_REQUIRE(res.status == validate_checksums_status::invalid);
@@ -2995,6 +2980,53 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
 
         BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
         BOOST_REQUIRE(in_strategy_sstables(ts).get().front() == sst);
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_malformed_sstable_test) {
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema(), 3).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+        corrupt_sstable(sst);
+
+        testlog.info("Scrub in abort mode");
+
+        // We expect the scrub with mode=scrub::mode::abort to abort scrub on invalid sstable
+        sstables::compaction_type_options::scrub opts = {};
+        opts.operation_mode = sstables::compaction_type_options::scrub::mode::abort;
+        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
+
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().front() == sst);
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_malformed_sstable_test) {
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema(), 3).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+        corrupt_sstable(sst);
+
+        testlog.info("Scrub in skip mode");
+
+        // We expect the scrub with mode=scrub::mode::skip to remove invalid partitions or sstables
+        sstables::compaction_type_options::scrub opts = {};
+        opts.operation_mode = sstables::compaction_type_options::scrub::mode::skip;
+        BOOST_REQUIRE_NO_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get());
+
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
