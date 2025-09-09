@@ -73,14 +73,15 @@ class utils::gcp::storage::client::object_data_sink : public data_sink_impl {
     seastar::named_gate _gate;
     seastar::semaphore _semaphore;
     std::exception_ptr _exception;
-
+    seastar::abort_source* _as;
 public:
-    object_data_sink(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, rjson::value metadata)
+    object_data_sink(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, rjson::value metadata, seastar::abort_source* as)
         : _impl(i)
         , _bucket(bucket)
         , _object_name(object_name)
         , _metadata(std::move(metadata))
         , _semaphore(1)
+        , _as(as)
     {}
     future<> put(net::packet data) override {
         return fallback_put(std::move(data));
@@ -175,12 +176,14 @@ class utils::gcp::storage::client::object_data_source : public data_source_impl 
     uint64_t _generation = 0;
     uint64_t _size = 0;
     uint64_t _position = 0;
+    seastar::abort_source* _as;
     std::deque<temporary_buffer<char>> _buffers;
 public:
-    object_data_source(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name)
+    object_data_source(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, seastar::abort_source* as)
         : _impl(i)
         , _bucket(bucket)
         , _object_name(object_name)
+        , _as(as)
     {}
     future<temporary_buffer<char>> get() override;
     future<temporary_buffer<char>> skip(uint64_t n) override;
@@ -204,9 +207,9 @@ public:
     impl(const utils::http::url_info&, std::optional<google_credentials>, shared_ptr<seastar::tls::certificate_credentials> creds);
     impl(std::string_view endpoint, std::optional<google_credentials>, shared_ptr<seastar::tls::certificate_credentials> creds);
 
-    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, handler_func_ex, httpclient::method_type op, key_values headers = {});
-    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, rest::httpclient::handler_func, httpclient::method_type op, key_values headers = {});
-    future<rest::httpclient::result_type> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, httpclient::method_type op, key_values headers = {});
+    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, handler_func_ex, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
+    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, rest::httpclient::handler_func, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
+    future<rest::httpclient::result_type> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
 
     future<> close();
 };
@@ -267,7 +270,7 @@ static future<> backoff(int n) {
  * Performs a REST post/put/get with credential refresh/retry.
  */
 future<> 
-utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers) {
+utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
     int retries = 0;
     bool do_backoff = false;
 
@@ -316,7 +319,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                     throw storage_error(int(res._status), co_await get_gcp_error_message(in));
                 }
                 co_await handler(res, in);
-            });
+            }, as);
             break;
         } catch (storage_error& e) {
             gcp_storage.debug("{}: Got unexpected response: {}", _endpoint, e.what());
@@ -347,17 +350,17 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
 }
 
 future<> 
-utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, rest::httpclient::handler_func f, httpclient::method_type op, key_values headers) {
+utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, rest::httpclient::handler_func f, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
     co_await send_with_retry(path, scope, std::move(body), content_type, [f](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
         // ensure these are on our coroutine frame.
         auto& resp_handler = f;
         auto result = co_await util::read_entire_stream_contiguous(in);
         resp_handler(rep, result);
-    }, op, headers);
+    }, op, headers, as);
 }
 
 future<rest::httpclient::result_type> 
-utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, httpclient::method_type op, key_values headers) {
+utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
     rest::httpclient::result_type res;
     co_await send_with_retry(path, scope, std::move(body), content_type, [&res](const seastar::http::reply& r, std::string_view body)  {
         gcp_storage.trace("{}", body);
@@ -365,7 +368,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
         res.reply._content = sstring(body);
         res.reply._headers = r._headers;
         res.reply._version = r._version;
-    }, op, headers);
+    }, op, headers, as);
     co_return res;
 }
 
@@ -391,6 +394,8 @@ future<> utils::gcp::storage::client::object_data_sink::acquire_session() {
         , std::move(body)
         , APPLICATION_JSON
         , httpclient::method_type::POST
+        , {}
+        , _as
     );
 
     if (reply.result() != status_type::ok) {
@@ -462,6 +467,7 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                 , ""s // no content type
                 , httpclient::method_type::PUT
                 , rest::key_values({ { CONTENT_RANGE, range } })
+                , _as
             );
 
             switch (res.result()) {
@@ -531,6 +537,7 @@ future<> utils::gcp::storage::client::object_data_sink::check_upload() {
         , APPLICATION_JSON
         , httpclient::method_type::PUT
         , rest::key_values({ { CONTENT_RANGE, range } })
+        , _as
     );
 
     switch (res.result()) {
@@ -560,6 +567,8 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
         , ""s
         , APPLICATION_JSON
         , httpclient::method_type::DELETE
+        , {}
+        , _as
     );
 
     switch (int(res.result())) {
@@ -617,6 +626,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 }
                 , httpclient::method_type::GET
                 , rest::key_values({ { RANGE, range } })
+                , _as
             );
         }
     }
@@ -663,6 +673,8 @@ future<> utils::gcp::storage::client::object_data_source::read_info() {
         , ""s
         , ""s
         , httpclient::method_type::GET
+        , {}
+        , _as
     );
 
     if (res.result() != status_type::ok) {
@@ -903,12 +915,12 @@ future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::
     co_await copy_object(bucket, object_name, bucket, to_name);
 }
 
-seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata) const {
-    return seastar::data_sink(std::make_unique<object_data_sink>(_impl, bucket, object_name, std::move(metadata)));
+seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata, seastar::abort_source* as) const {
+    return seastar::data_sink(std::make_unique<object_data_sink>(_impl, bucket, object_name, std::move(metadata), as));
 }
 
-seastar::data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name) const {
-    return seastar::data_source(std::make_unique<object_data_source>(_impl, bucket, object_name));
+seastar::data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* as) const {
+    return seastar::data_source(std::make_unique<object_data_source>(_impl, bucket, object_name, as));
 }
 
 future<> utils::gcp::storage::client::close() {
