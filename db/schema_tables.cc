@@ -823,11 +823,12 @@ future<utils::chunked_vector<canonical_mutation>> convert_schema_to_mutations(di
         utils::chunked_vector<canonical_mutation> results;
         results.reserve(rs->partitions().size());
         for (auto&& p : rs->partitions()) {
-            auto mut = co_await unfreeze_gently(p.mut(), s);
-            auto partition_key = value_cast<sstring>(utf8_type->deserialize(mut.key().get_component(*s, 0)));
+            auto pk = partition_key(p.mut().key());
+            auto partition_key = value_cast<sstring>(utf8_type->deserialize(pk.get_component(*s, 0)));
             if (is_system_keyspace(partition_key)) {
                 continue;
             }
+            auto mut = co_await unfreeze_gently(p.mut(), s);
             mut = redact_columns_for_missing_features(std::move(mut), features);
             results.emplace_back(co_await make_canonical_mutation_gently(mut));
         }

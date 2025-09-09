@@ -51,6 +51,17 @@ using namespace locator;
 using namespace replica;
 using namespace service;
 
+static inline
+future<mutation> tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
+                       api::timestamp_type ts, const gms::feature_service& features) {
+    std::optional<mutation> ret;
+    co_await tablet_map_to_mutations(tablets, id, keyspace_name, table_name, ts, features, [&] (mutation m) {
+        ret = std::move(m);
+        return make_ready_future();
+    });
+    co_return std::move(*ret);
+}
+
 static api::timestamp_type current_timestamp(cql_test_env& e) {
     // Mutations in system.tablets got there via group0, so in order for new
     // mutations to take effect, their timestamp should be "later" than that
