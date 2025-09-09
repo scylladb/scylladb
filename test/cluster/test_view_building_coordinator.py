@@ -539,3 +539,18 @@ async def test_view_building_failure(manager: ManagerClient):
 
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
+
+# Reproduces scylladb/scylladb#25912
+@pytest.mark.asyncio
+async def test_mv_rf_change(manager: ManagerClient):
+    servers = []
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack1'}, cmdline=cmdline_loggers))
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack2'}, cmdline=cmdline_loggers))
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack1'}, cmdline=cmdline_loggers))
+    servers.append(await manager.server_add(config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack2'}, cmdline=cmdline_loggers))
+
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1, 'dc2': 1} AND tablets = {'initial': 1}")
+    await cql.run_async("CREATE TABLE ks.base (pk int, ck int, PRIMARY KEY (pk, ck))")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT pk, ck FROM ks.base WHERE ck IS NOT NULL PRIMARY KEY (ck, pk)")
+    await wait_for_view(cql, "mv", 4)
