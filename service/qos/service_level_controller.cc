@@ -958,7 +958,27 @@ future<> service_level_controller::unregister_subscriber(qos_configuration_chang
     return _subscribers.remove(subscriber);
 }
 
-static sstring describe_service_level(std::string_view sl_name, const service_level_options& sl_opts) {
+enum class describe_cmd: uint8_t {
+    CREATE,
+    CREATE_IF_NOT_EXISTS,
+    ALTER,
+    DROP_IF_EXISTS,
+};
+
+std::string_view describe_cmd_to_sstring(describe_cmd cmd_enum) {
+    switch (cmd_enum) {
+        case describe_cmd::CREATE:
+            return "CREATE SERVICE LEVEL";
+        case describe_cmd::CREATE_IF_NOT_EXISTS:
+            return "CREATE SERVICE LEVEL IF NOT EXISTS";
+        case describe_cmd::ALTER:
+            return "ALTER SERVICE LEVEL";
+        case describe_cmd::DROP_IF_EXISTS:
+            return "DROP SERVICE LEVEL IF EXISTS";
+    };
+}
+
+static sstring describe_service_level(std::string_view sl_name, const service_level_options& sl_opts, describe_cmd cmd=describe_cmd::CREATE) {
     using slo = service_level_options;
 
     utils::small_vector<sstring, 3> opts{};
@@ -992,12 +1012,44 @@ static sstring describe_service_level(std::string_view sl_name, const service_le
     }
 
     if (opts.size() == 0) {
-        return seastar::format("CREATE SERVICE LEVEL {};", sl_name_formatted);
+        return seastar::format("{} {};", describe_cmd_to_sstring(cmd), sl_name_formatted);
     }
 
-    return seastar::format("CREATE SERVICE LEVEL {} WITH {};", sl_name_formatted, fmt::join(opts, " AND "));
+    return seastar::format("{} {} WITH {};", describe_cmd_to_sstring(cmd), sl_name_formatted, fmt::join(opts, " AND "));
 }
 
+utils::small_vector<cql3::description, 2> describe_driver_service_level(const std::optional<service_level_options>& driver_service_level_slo) {
+    utils::small_vector<cql3::description, 2> result;
+    const auto service_level_type = "service_level";
+    if (driver_service_level_slo.has_value()) {
+        // We need to use CREATE IF EXISTS because `driver` service level can be already created automatically
+        // We also need to ALTER because if driver exists, it can have different shares number
+        const sstring create_statement = describe_service_level(service_level_controller::driver_service_level_name, driver_service_level_slo.value(), describe_cmd::CREATE_IF_NOT_EXISTS);
+        const sstring alter_statement = describe_service_level(service_level_controller::driver_service_level_name, driver_service_level_slo.value(), describe_cmd::ALTER);
+
+        result.push_back(cql3::description {
+            .keyspace = std::nullopt,
+            .type = service_level_type,
+            .name = service_level_controller::driver_service_level_name,
+            .create_statement = managed_string(create_statement)
+        });
+        result.push_back(cql3::description {
+            .keyspace = std::nullopt,
+            .type = service_level_type,
+            .name = service_level_controller::driver_service_level_name,
+            .create_statement = managed_string(alter_statement)
+        });
+    } else {
+        const sstring drop_statement = describe_service_level(service_level_controller::driver_service_level_name, service_level_options{}, describe_cmd::DROP_IF_EXISTS);
+        result.push_back(cql3::description {
+            .keyspace = std::nullopt,
+            .type = service_level_type,
+            .name = service_level_controller::driver_service_level_name,
+            .create_statement = managed_string(drop_statement)
+        });
+    }
+    return result;
+}
 
 future<std::vector<cql3::description>> service_level_controller::describe_created_service_levels() const {
 
@@ -1013,8 +1065,14 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
     //
     // If Raft is not used yet, updating the cache will happen every 10 seconds. We deem it
     // good enough if someone does attempt to make a backup in that state.
+
+    std::optional<service_level_options> driver_service_level_slo;
     for (const auto& [sl_name, sl] : _service_levels_db) {
         if (sl.is_static) {
+            continue;
+        }
+        if (sl_name == driver_service_level_name) {
+            driver_service_level_slo = sl.slo;
             continue;
         }
 
@@ -1032,8 +1090,13 @@ future<std::vector<cql3::description>> service_level_controller::describe_create
     }
 
     std::ranges::sort(result, std::less<>{}, std::mem_fn(&cql3::description::name));
+    auto driver_sl_description = describe_driver_service_level(driver_service_level_slo);
 
-    co_return result;
+    std::vector<cql3::description> combined;
+    combined.reserve(result.size() + driver_sl_description.size());
+    std::move(driver_sl_description.begin(), driver_sl_description.end(), std::back_inserter(combined));
+    std::move(result.begin(), result.end(), std::back_inserter(combined));
+    co_return combined;
 }
 
 future<std::vector<cql3::description>> service_level_controller::auth_integration::describe_attached_service_levels() {
