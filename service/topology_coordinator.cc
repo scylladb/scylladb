@@ -1236,7 +1236,6 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_transition(last_token, mig.kind)
                 .set_migration_task_info(last_token, std::move(migration_task_info), _feature_service)
                 .build());
-        _vb_coordinator->abort_tasks(out, guard, mig.tablet.table, mig.src, last_token);
     }
 
     void generate_repair_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
@@ -1393,6 +1392,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     if (do_barrier()) {
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::write_both_read_old);
+                        auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        if (leaving_replica) {
+                            _vb_coordinator->abort_tasks(updates, guard, gid.table, *leaving_replica, last_token);
+                        }
                         updates.emplace_back(get_mutation_builder()
                             .set_stage(last_token, locator::tablet_transition_stage::write_both_read_old)
                             // Create session a bit earlier to avoid adding barrier
