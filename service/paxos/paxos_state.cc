@@ -462,7 +462,7 @@ static future<cql3::untyped_result_set> do_execute_cql_with_timeout(sstring req,
     service::query_state qs(client_state, empty_service_permit());
 
     const auto cache_key = qp.compute_id(req, "", cql3::internal_dialect());
-    auto ps_ptr = qp.get_prepared(cache_key);
+    auto ps_ptr = co_await qp.get_prepared(cache_key);
     if (!ps_ptr) {
         const auto msg_ptr = co_await qp.prepare(req, qs, cql3::internal_dialect());
         ps_ptr = std::move(msg_ptr->get_prepared());

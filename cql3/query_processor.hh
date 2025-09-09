@@ -214,8 +214,8 @@ public:
         return statements::prepared_statement::checked_weak_ptr();
     }
 
-    statements::prepared_statement::checked_weak_ptr get_prepared(const prepared_cache_key_type& key) {
-        return _prepared_cache.find(key);
+    future<statements::prepared_statement::checked_weak_ptr> get_prepared(const prepared_cache_key_type& key) {
+        co_return _prepared_cache.find(key);
     }
 
     inline
