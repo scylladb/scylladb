@@ -37,8 +37,13 @@ class RestApiSession:
         if params:
             sep = '?'
             for key, value in params.items():
-                url += f"{sep}{key}={value}"
-                sep = '&'
+                if isinstance(value, list):
+                    for v in value:
+                        url += f"{sep}{key}={v}"
+                        sep = '&'
+                else:
+                    url += f"{sep}{key}={value}"
+                    sep = '&'
         req = self.session.prepare_request(requests.Request(method, url))
         return self.session.send(req)
 
