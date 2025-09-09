@@ -280,6 +280,7 @@ private:
         void handle_error(future<>&& f) override;
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
+        void set_service_level_state_for_ready_client();
         void update_scheduling_group();
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }

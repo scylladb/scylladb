@@ -83,21 +83,28 @@ def verify_scheduling_group_assignment(cql, user, target_scheduling_group, shard
     assert len(shards_with_correct_sg) == shard_count, (f"Not all user '{user}' connections are working under target scheduling group '{target_scheduling_group}'."
                                                         f"Shards with correct scehduling group: {shards_with_correct_sg}, shard")
 
+# Send some requests to ensure connection is recognized as non-control connection
+def send_some_requests(session):
+    for _ in range(100):
+        session.execute(f"select * from system.scylla_local")
+
 # Test if `/service_levels/count_connections` prints counted CQL connections
 # per scheduling group per user.
 def test_count_opened_cql_connections(cql):
     user = f"test_user_{unique_name()}"
     sl = f"sl_{unique_name()}"
 
-    cql.execute(f"CREATE ROLE {user} WITH login = true AND password='{user}'")
+    cql.execute(f"CREATE ROLE {user} WITH superuser = true AND login = true AND password='{user}'")
     cql.execute(f"CREATE SERVICE LEVEL {sl} WITH shares = 100")
     cql.execute(f"ATTACH SERVICE LEVEL {sl} TO {user}")
     read_barrier(cql)
 
     try:
-        with new_session(cql, user):
+        with new_session(cql, user) as user_session:
             wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
             wait_until_all_connections_authenticated(cql)
+            send_some_requests(cql)
+            send_some_requests(user_session)
             verify_scheduling_group_assignment(cql, user, sl, get_shard_count(cql))
 
             api_response = count_opened_connections(cql)
@@ -134,6 +141,8 @@ def test_switch_tenants(cql):
         with new_session(cql, user) as user_session:
             wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
             wait_until_all_connections_authenticated(cql)
+            send_some_requests(cql)
+            send_some_requests(user_session)
             verify_scheduling_group_assignment(cql, user, sl1, shard_count)
 
             cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
