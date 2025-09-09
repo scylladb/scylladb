@@ -993,11 +993,11 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
 }
 
 void cql_server::connection::update_scheduling_group() {
-    switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
-        auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
-        _current_scheduling_group = shg;
-        co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
-    });
+        switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
+            auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
+            _current_scheduling_group = shg;
+            co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
+        });
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state,
