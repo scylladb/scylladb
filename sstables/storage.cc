@@ -577,7 +577,7 @@ protected:
     static constexpr auto status_sealed = "sealed";
     static constexpr auto status_removing = "removing";
 
-    sstring make_object_name(const sstable& sst, component_type type) const;
+    object_name make_object_name(const sstable& sst, component_type type) const;
 
     table_id owner() const {
         if (std::holds_alternative<sstring>(_location)) {
@@ -624,20 +624,20 @@ public:
         return std::visit([] (const auto& v) { return fmt::to_string(v); }, _location); 
     }
 
-    future<> put_object(sstring object_name, ::memory_data_sink_buffers bufs) {
-        return _client->put_object(std::move(object_name), std::move(bufs), abort_source());
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs) {
+        return _client->put_object(std::move(name), std::move(bufs), abort_source());
     }
-    future<> delete_object(sstring object_name) {
-        return _client->delete_object(std::move(object_name));
+    future<> delete_object(object_name name) {
+        return _client->delete_object(std::move(name));
     }
-    file make_readable_file(sstring object_name) {
-        return _client->make_readable_file(std::move(object_name), abort_source());
+    file make_readable_file(object_name name) {
+        return _client->make_readable_file(std::move(name), abort_source());
     }
-    data_sink make_data_upload_sink(sstring object_name, std::optional<unsigned> max_parts_per_piece) {
-        return _client->make_data_upload_sink(std::move(object_name), max_parts_per_piece, abort_source());
+    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece) {
+        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, abort_source());
     }
-    data_sink make_upload_sink(sstring object_name) {
-        return _client->make_upload_sink(std::move(object_name), abort_source());
+    data_sink make_upload_sink(object_name name) {
+        return _client->make_upload_sink(std::move(name), abort_source());
     }
 };
 
@@ -650,17 +650,17 @@ public:
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
 };
 
-sstring object_storage_base::make_object_name(const sstable& sst, component_type type) const {
+object_name object_storage_base::make_object_name(const sstable& sst, component_type type) const {
     if (!sst.generation().is_uuid_based()) {
         throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
     }
 
     return std::visit(overloaded_functor {
-        [&] (const sstring& prefix) -> sstring {
-            return format("/{}/{}/{}", _bucket, prefix, sst.component_basename(type));
+        [&] (const sstring& prefix) {
+            return object_name(_bucket, prefix, sst.component_basename(type));
         },
-        [&] (const table_id& owner) -> sstring {
-            return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
+        [&] (const table_id& owner) {
+            return object_name(_bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
         }
     }, _location);
 }
@@ -785,11 +785,10 @@ future<> object_storage_base::atomic_delete_complete(atomic_delete_context ctx) 
 }
 
 future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
-    auto prefix = format("/{}/{}", _bucket, desc.generation);
     std::vector<sstring> components;
 
     try {
-        auto f = make_readable_file(prefix + "/" + sstable_version_constants::get_component_map(desc.version).at(component_type::TOC));
+        auto f = make_readable_file(object_name(_bucket, desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
         components = co_await with_closeable(std::move(f), [] (file& f) {
             return sstable::read_and_parse_toc(f);
         });
@@ -799,12 +798,12 @@ future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
         }
     }
 
-    co_await coroutine::parallel_for_each(components, [this, &prefix] (sstring comp) -> future<> {
+    co_await coroutine::parallel_for_each(components, [this, &desc] (sstring comp) -> future<> {
         if (comp != sstable_version_constants::TOC_SUFFIX) {
-            co_await delete_object(prefix + "/" + comp);
+            co_await delete_object(object_name(_bucket, desc.generation, comp));
         }
     });
-    co_await delete_object(prefix + "/" + sstable_version_constants::TOC_SUFFIX);
+    co_await delete_object(object_name(_bucket, desc.generation, sstable_version_constants::TOC_SUFFIX));
 }
 
 future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
