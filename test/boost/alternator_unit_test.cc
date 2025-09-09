@@ -15,6 +15,8 @@
 #include "utils/rjson.hh"
 #include "alternator/serialization.hh"
 
+#include "alternator/expressions.hh"
+
 static std::map<std::string, std::string> strings {
     {"", ""},
     {"a", "YQ=="},
@@ -165,4 +167,44 @@ BOOST_AUTO_TEST_CASE(test_magnitude_and_precision) {
     BOOST_CHECK(res.magnitude > 1000);
     res = alternator::internal::get_magnitude_and_precision("1e-1000000000000");
     BOOST_CHECK(res.magnitude < -1000);
+}
+
+// ANTLR3 leaks memory when it tries to recover from missing token.
+// - it creates a "fake" token, if it allows to continue parsing.
+// Leak was reported by ASAN, when running this test in debug mode - 
+// the test passed but the leak is discovered when the test file exits.
+// Reproduces #25878
+BOOST_AUTO_TEST_CASE(missing_tokens_memory_leak) {
+    BOOST_REQUIRE_THROW(alternator::parse_update_expression("SET a :v"), alternator::expressions_syntax_error); // missing '='
+    BOOST_REQUIRE_THROW(alternator::parse_update_expression("DELETE a v"), alternator::expressions_syntax_error); // missing ':'
+    BOOST_REQUIRE_THROW(alternator::parse_update_expression("ADD a v"), alternator::expressions_syntax_error); // missing ':'
+    
+    BOOST_REQUIRE_THROW(alternator::parse_condition_expression("size(a < 5", "Test"), alternator::expressions_syntax_error); // missing ')'
+    BOOST_REQUIRE_THROW(alternator::parse_condition_expression("a IN :x)", "Test"), alternator::expressions_syntax_error); // missing '('
+    BOOST_REQUIRE_THROW(alternator::parse_condition_expression("a IN (:x", "Test"), alternator::expressions_syntax_error); // missing ')'
+    BOOST_REQUIRE_THROW(alternator::parse_condition_expression("a BETWEEN :x AN :y", "Test"), alternator::expressions_syntax_error); // missing 'AND'
+    BOOST_REQUIRE_THROW(alternator::parse_condition_expression("a BETWEEN :x :y", "Test"), alternator::expressions_syntax_error); // missing 'AND'
+
+    BOOST_REQUIRE_THROW(alternator::parse_projection_expression("a[0.b"), alternator::expressions_syntax_error); // missing ']'
+}
+
+// Tests of inputs that cause exceptions inside the expression parser.
+// ANTR3 itself doesn't use exceptions, but we do in additional checks.
+// Apart from correct response, which may be tested in Python tests,
+// main concern here is if this can cause memory leaks
+// similar to issue in the above test.
+BOOST_AUTO_TEST_CASE(exception_at_expression_parsing) {
+    // std::stoi throws std::out_of_range if the number is too big
+    BOOST_REQUIRE_THROW(alternator::parse_projection_expression("a[99999999999999999]") , alternator::expressions_syntax_error);
+
+    // Path depth limit exceeded should throw expressions_syntax_error
+    // alternator::parsed::path::depth_limit is private, so try with some arbitrary long path:
+    std::string long_path = "a";
+    for (int i = 0; i < 100; ++i) {
+        long_path += ".a";
+    }
+    BOOST_REQUIRE_THROW(alternator::parse_projection_expression(long_path), alternator::expressions_syntax_error);
+
+    // Appending duplicate update actions throws expressions_syntax_error
+    BOOST_REQUIRE_THROW(alternator::parse_update_expression("SET a = :v SET b = :w"), alternator::expressions_syntax_error);
 }
