@@ -607,10 +607,27 @@ future<> gossiper::send_gossip(gossip_digest_syn message, std::set<T> epset) {
 
 
 future<> gossiper::do_apply_state_locally(locator::host_id node, endpoint_state remote_state, bool shadow_round) {
+
+    co_await utils::get_local_injector().inject("delay_gossiper_apply", [&node, &remote_state](auto& handler) -> future<> {
+        const auto gossip_delay_node = handler.template get<std::string_view>("delay_node");
+        if (gossip_delay_node && !remote_state.get_host_id() && inet_address(sstring(gossip_delay_node.value())) == remote_state.get_ip()) {
+            logger.debug("delay_gossiper_apply: suspend for node {}", node);
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+            logger.debug("delay_gossiper_apply: resume for node {}", node);
+        }
+    });
+
     // If state does not exist just add it. If it does then add it if the remote generation is greater.
     // If there is a generation tie, attempt to break it by heartbeat version.
     auto permit = co_await lock_endpoint(node, null_permit_id);
     auto es = get_endpoint_state_ptr(node);
+
+    // If remote state update does not contain a host id, check whether the endpoint still
+    // exists in the `_endpoint_state_map` since after a preemption point it could have been deleted.
+    if (!remote_state.get_host_id() && !es) {
+        throw std::runtime_error(format("Entry for host id {} does not exist in the endpoint state map.", node));
+    }
+
     if (es) {
         endpoint_state local_state = *es;
         auto local_generation = local_state.get_heart_beat_state().get_generation();
@@ -1337,6 +1354,12 @@ utils::chunked_vector<gossip_digest> gossiper::make_random_gossip_digest() const
 }
 
 future<> gossiper::replicate(endpoint_state es, permit_id pid) {
+    if (!es.get_host_id()) {
+        // TODO (#25818): re-introduce the on_internal_error() call once all the code paths leading to this are fixed
+        logger.warn("attempting to add a state with empty host id for ip: {}", es.get_ip());
+        co_return;
+    }
+
     verify_permit(es.get_host_id(), pid);
 
     // First pass: replicate the new endpoint_state on all shards.
@@ -2070,15 +2093,19 @@ future<> gossiper::start_gossiping(gms::generation_type generation_nbr, applicat
         generation_nbr = gms::generation_type(_gcfg.force_gossip_generation());
         logger.warn("Use the generation number provided by user: generation = {}", generation_nbr);
     }
-    endpoint_state local_state = my_endpoint_state();
+
+    // Create a new local state.
+    endpoint_state local_state{get_broadcast_address()};
     local_state.set_heart_beat_state_and_update_timestamp(heart_beat_state(generation_nbr));
     for (auto& entry : preload_local_states) {
         local_state.add_application_state(entry.first, entry.second);
     }
 
+    co_await utils::get_local_injector().inject("gossiper_publish_local_state_pause", utils::wait_for_message(5min));
+
     co_await replicate(local_state, permit.id());
 
-    logger.info("Gossip started with local state: {}", local_state);
+    logger.info("Gossip started with local state: {}", my_endpoint_state());
     _enabled = true;
     _nr_run = 0;
     _scheduled_gossip_task.arm(INTERVAL);
@@ -2158,7 +2185,11 @@ future<> gossiper::do_shadow_round(std::unordered_set<gms::inet_address> nodes, 
         });
 
         for (auto& response : responses) {
-            co_await apply_state_locally_in_shadow_round(std::move(response.endpoint_state_map));
+            try {
+                co_await apply_state_locally_in_shadow_round(std::move(response.endpoint_state_map));
+            } catch (const std::exception& exception) {
+                logger.warn("Error while applying node state {}", exception.what());
+            }
         }
         if (!nodes_talked.empty()) {
             break;
