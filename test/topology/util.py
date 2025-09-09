@@ -116,15 +116,22 @@ async def check_token_ring_and_group0_consistency(manager: ManagerClient) -> Non
 
 
 async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, deadline: float) -> None:
-    """Weaker version of the above check; the token ring is not immediately updated after
-    bootstrap/replace/decommission - the normal tokens of the new node propagate through gossip.
+    """
+    Weaker version of the above check.
+
+    In the Raft-based topology, a decommissioning node is removed from group 0 after the decommission request is
+    considered finished (and the token ring is updated).
+
+    Moreover, in the gossip-based topology, the token ring is not immediately updated after
+    bootstrap/replace/decommission - the normal tokens propagate through gossip.
+
     Take this into account and wait for the equality condition to hold, with a timeout.
     """
     servers = await manager.running_servers()
     for srv in servers:
-        group0_members = await get_current_group0_config(manager, srv)
-        group0_ids = {m[0] for m in group0_members}
-        async def token_ring_matches():
+        async def token_ring_and_group0_match():
+            group0_members = await get_current_group0_config(manager, srv)
+            group0_ids = {m[0] for m in group0_members}
             token_ring_ids = await get_token_ring_host_ids(manager, srv)
             diff = token_ring_ids ^ group0_ids
             if diff:
@@ -132,7 +139,7 @@ async def wait_for_token_ring_and_group0_consistency(manager: ManagerClient, dea
                                f" according to {srv}, symmetric difference: {diff}")
                 return None
             return True
-        await wait_for(token_ring_matches, deadline, period=.5)
+        await wait_for(token_ring_and_group0_match, deadline, period=.5)
 
 
 async def wait_for_upgrade_state(state: str, cql: Session, host: Host, deadline: float) -> None:
