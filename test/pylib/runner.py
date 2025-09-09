@@ -184,9 +184,15 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         )
 
 
-def pytest_sessionfinish() -> None:
+def pytest_sessionfinish(session: pytest.Session) -> None:
+    if not session.config.getoption("--test-py-init"):
+        return
     if getattr(TestSuite, "artifacts", None) is not None:
-        asyncio.get_event_loop().run_until_complete(TestSuite.artifacts.cleanup_before_exit())
+        loop: AbstractEventLoop = asyncio.get_event_loop()
+        if not loop.is_running():
+            loop.run_until_complete(TestSuite.artifacts.cleanup_before_exit())
+        else:
+            loop.create_task(TestSuite.artifacts.cleanup_before_exit())
 
 
 def pytest_configure(config: pytest.Config) -> None:
