@@ -1736,10 +1736,11 @@ bool should_generate_view_updates_on_this_shard(const schema_ptr& base, const lo
     const auto me = ermp->get_token_metadata_ptr()->get_topology().my_host_id();
     const auto base_replicas = ermp->get_replicas(token);
     const auto read_replicas = ermp->get_replicas_for_reading(token);
+    const auto shards = ermp->shards_ready_for_reads(*base, token);
 
     return (std::find(base_replicas.begin(), base_replicas.end(), me) != base_replicas.end()
             || std::find(read_replicas.begin(), read_replicas.end(), me) != read_replicas.end())
-        && ermp->shard_for_reads(*base, token) == this_shard_id();
+        && std::find(shards.begin(), shards.end(), this_shard_id()) != shards.end();
 }
 
 // Calculate the node ("natural endpoint") to which this node should send
