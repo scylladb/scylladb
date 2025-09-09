@@ -7,7 +7,7 @@
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.cluster.conftest import skip_mode
-from test.cluster.util import check_token_ring_and_group0_consistency, new_test_keyspace
+from test.cluster.util import new_test_keyspace, wait_for_token_ring_and_group0_consistency
 
 import pytest
 import asyncio
@@ -67,7 +67,7 @@ async def test_data_resurrection_after_cleanup(manager: ManagerClient):
 
         logger.info(f"Decommissioning node {servers[1]}")
         await manager.decommission_node(servers[1].server_id)
-        await check_token_ring_and_group0_consistency(manager)
+        await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
 
         time.sleep(1)
         await check(range(128))

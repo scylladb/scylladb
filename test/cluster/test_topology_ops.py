@@ -7,7 +7,7 @@ from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.util import check_token_ring_and_group0_consistency, reconnect_driver, \
-        check_node_log_for_failed_mutations, start_writes
+        check_node_log_for_failed_mutations, start_writes, wait_for_token_ring_and_group0_consistency
 
 from cassandra.cluster import ConsistencyLevel
 
@@ -45,7 +45,7 @@ async def test_topology_ops(request, manager: ManagerClient, tablets_enabled: bo
 
     logger.info(f"Decommissioning node {servers[0]}")
     await manager.decommission_node(servers[0].server_id)
-    await check_token_ring_and_group0_consistency(manager)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
     servers = servers[1:]
 
     logger.info(f"Restarting node {servers[0]} when other nodes have bootstrapped")
