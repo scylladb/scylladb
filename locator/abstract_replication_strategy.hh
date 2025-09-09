@@ -270,6 +270,14 @@ public:
     dht::shard_replica_set shard_for_writes(const schema& s, dht::token t) const {
         return get_sharder(s).shard_for_writes(t);
     }
+
+    // Returns all shards that are ready for reading.
+    // Usually it's the same as shard_for_reads. The exception is if we're in a phase of intranode
+    // migration just about before changing shard_for_reads from one shard to the other, where both
+    // shards are ready for reading, then both shards are returned.
+    virtual dht::shard_replica_set shards_ready_for_reads(const schema& s, const token& token) const {
+        return {shard_for_reads(s, token)};
+    }
 };
 
 using effective_replication_map_ptr = seastar::shared_ptr<const effective_replication_map>;

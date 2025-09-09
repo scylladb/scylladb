@@ -151,6 +151,38 @@ public:
         tablet_logger.trace("[{}] token_for_next_shard({}, {}, {}) = null", _table, t, shard, spans);
         return dht::maximum_token();
     }
+
+    dht::shard_replica_set shards_ready_for_reads(const token& t) const {
+        // similar to choose_shard_for_reads except that in intranode migration in stage write_both_read_new
+        // both current and pending shards are returned.
+
+        ensure_tablet_map();
+        auto tid = _tmap->get_tablet_id(t);
+
+        auto* trinfo = _tmap->get_tablet_transition_info(tid);
+        auto& tinfo = _tmap->get_tablet_info(tid);
+
+        auto shard = get_shard(tinfo.replicas, _host).value_or(0);
+
+        if (!trinfo) {
+            return {shard};
+        }
+
+        if (trinfo->pending_replica && trinfo->pending_replica->host == _host) {
+            if (trinfo->transition == tablet_transition_kind::intranode_migration) {
+                if (trinfo->stage == tablet_transition_stage::write_both_read_new) {
+                    return {shard, trinfo->pending_replica->shard};
+                }
+                if (trinfo->reads == read_replica_set_selector::previous) {
+                    return {shard};
+                }
+            }
+            return {trinfo->pending_replica->shard};
+        }
+
+        return {shard};
+    }
+
 };
 
 } // namespace locator
