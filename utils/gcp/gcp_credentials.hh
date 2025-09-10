@@ -85,11 +85,16 @@ namespace utils::gcp {
         access_token token;
     };
 
+    struct unresolved_credentials {
+        std::variant<std::monostate, std::string> src;
+    };
+
     using credentials_variant = std::variant<
         user_credentials,
         service_account_credentials,
         impersonated_service_account_credentials,
-        compute_engine_credentials
+        compute_engine_credentials,
+        unresolved_credentials
     >;
 
     using scope_implies_other_scope_pred = std::function<bool(const scopes_type&, const scopes_type&)>;
@@ -115,6 +120,9 @@ namespace utils::gcp {
         static future<google_credentials> from_file(const std::string& path);
 
         static future<google_credentials> get_default_credentials();
+
+        static google_credentials uninitialized_default_credentials();
+        static google_credentials uninitialized_from_file(const std::string& path);
     };
 
     class bad_configuration : public std::runtime_error {
