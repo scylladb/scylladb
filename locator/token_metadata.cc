@@ -825,7 +825,7 @@ topology_change_info::topology_change_info(lw_shared_ptr<token_metadata> target_
 }
 
 future<> topology_change_info::clear_gently() {
-    co_await utils::clear_gently(target_token_metadata);
+    co_await utils::reset_gently(target_token_metadata);
     co_await utils::clear_gently(all_tokens);
 }
 

@@ -509,7 +509,7 @@ static_effective_replication_map::~static_effective_replication_map() {
 vnode_effective_replication_map::~vnode_effective_replication_map() {
     if (is_registered()) {
         try {
-            _factory->submit_background_work(clear_gently(std::move(_replication_map),
+            _factory->submit_background_work(dispose_gently(std::move(_replication_map),
                 std::move(*_pending_endpoints),
                 std::move(*_read_endpoints),
                 std::move(_tmptr)));
