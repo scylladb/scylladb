@@ -86,8 +86,6 @@ namespace kms_errors {
     [[maybe_unused]] static const char* AlreadyExistsException = "AlreadyExistsException";
 }
 
-namespace shttp = seastar::http;
-
 static std::string to_lower(std::string_view s) {
     std::string tmp(s.size(), 0);
     std::transform(s.begin(), s.end(), tmp.begin(), ::tolower);
@@ -566,7 +564,7 @@ future<rjson::value> encryption::kms_host::impl::post(std::string_view target, s
             .service = "sts",
             .content_type = "application/x-www-form-urlencoded; charset=utf-8",
             .content = "Action=AssumeRole&Version=2011-06-15&RoleArn=" 
-                + shttp::internal::url_encode(aws_assume_role_arn)
+                + seastar::http::internal::url_encode(aws_assume_role_arn)
                 + "&RoleSessionName=" + role_session,
             .aws_access_key_id = aws_access_key_id,
             .aws_secret_access_key = aws_secret_access_key,

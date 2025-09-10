@@ -2522,7 +2522,7 @@ future<> database::start(sharded<qos::service_level_controller>& sl_controller, 
     // We need the compaction manager ready early so we can reshard.
     if (!_compaction_manager.is_running()) {
         // It might be already enabled or even drained by the out of space controller.
-        // In this case, we do not want to enable it again or worse accidently overwrite
+        // In this case, we do not want to enable it again or worse accidentally overwrite
         // the drain call.
         _compaction_manager.enable();
     }

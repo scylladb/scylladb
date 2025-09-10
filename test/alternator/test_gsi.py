@@ -1152,7 +1152,7 @@ def test_gsi_5_describe_table_schema(test_table_gsi_5):
 
 # Similar DescribeTable schema test for test_table_gsi_2. The peculiarity
 # in that table is that the base table has only a hash key p, and index
-# only hash hash key x; Now, while internally Scylla needs to add "p" as a
+# only has hash key x; Now, while internally Scylla needs to add "p" as a
 # clustering key in the materialized view (in Scylla the view key always
 # contains the base key), when describing the table, "p" shouldn't be
 # returned as a range key, because the user didn't ask for it.

@@ -1970,7 +1970,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
         co_return compaction_stats_opt{};
     }
     // All sstables must be included, even the ones being compacted, such that everything in table is validated.
-    // No need to split sstables as repaired or unrepaired. No need to take any compaction and repair locks, since this compation does not modify the sstable.
+    // No need to split sstables as repaired or unrepaired. No need to take any compaction and repair locks, since this compaction does not modify the sstable.
     auto all_sstables = co_await get_all_sstables(t);
     co_return co_await perform_compaction<validate_sstables_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id, std::move(all_sstables), quarantine_sstables);
 }
@@ -2198,7 +2198,7 @@ future<> compaction_manager::try_perform_cleanup(owned_ranges_ptr sorted_owned_r
                 update_sstable_cleanup_state(t, sst, *sorted_owned_ranges);
             });
         };
-        // No need to treat repaired and unrepaired sstables separtely here,
+        // No need to treat repaired and unrepaired sstables separately here,
         // since it only inserts or deletes sstables into or from
         // sstables_requiring_cleanup.
         co_await update_sstables_cleanup_state(co_await t.main_sstable_set());

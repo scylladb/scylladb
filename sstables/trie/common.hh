@@ -45,7 +45,7 @@ inline void expensive_assert(bool expr, std::source_location srcloc = std::sourc
     }
 }
 
-// We aleady have bytes_view, so perhaps it should be used here.
+// We already have bytes_view, so perhaps it should be used here.
 // But std::span<const std::byte> is, in some sense, the standard type for this purpose.
 // std::as_bytes() exists, after all.
 using const_bytes = std::span<const std::byte>;
