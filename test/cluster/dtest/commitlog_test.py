@@ -661,6 +661,7 @@ class TestCommitLog(Tester):
         assert node1.grep_log(f"large_data - Writing large row {self.ks}/{self.cf}:")
         assert in_table == [self.values]
 
+    @pytest.mark.skip(reason="issue #25627")
     def test_one_big_mutation_corrupted_on_startup(self):
         """
         Test commit log replay with a single big (larger than mutation limit) commitlog mutation
