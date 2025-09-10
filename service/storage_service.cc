@@ -116,6 +116,7 @@
 #include "service/topology_mutation.hh"
 #include "cql3/query_processor.hh"
 #include "service/qos/service_level_controller.hh"
+#include "auth/service.hh"
 #include "service/qos/standard_service_level_distributed_data_accessor.hh"
 #include <csignal>
 #include "utils/labels.hh"
@@ -199,6 +200,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::view::view_builder>& view_builder,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
+    sharded<auth::service>& auth_service,
     topology_state_machine& topology_state_machine,
     db::view::view_building_state_machine& view_building_state_machine,
     tasks::task_manager& tm,
@@ -217,6 +219,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _stream_manager(stream_manager)
         , _snitch(snitch)
         , _sl_controller(sl_controller)
+        , _auth_service(auth_service)
         , _group0(nullptr)
         , _async_gate("storage_service")
         , _node_ops_abort_thread(node_ops_abort_thread())
@@ -1184,6 +1187,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _tablet_allocator.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
+                    _auth_service,
                     _feature_service,
                     _topology_cmd_rpc_tracker);
         }

@@ -14,6 +14,7 @@
 #include <seastar/core/sharded.hh>
 #include <stdexcept>
 
+#include "auth/service.hh"
 #include "utils/log.hh"
 #include "raft/raft.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
@@ -89,6 +90,7 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
+        sharded<auth::service>& auth_service,
         gms::feature_service& feature_service,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);
 
