@@ -838,6 +838,9 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
             if (s_opts.is_s3_type()) {
                 return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
             }
+            if (s_opts.is_gs_type()) {
+                return std::make_unique<sstables::object_storage_base>("GS", manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+            }
             throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
     }, s_opts.value);
