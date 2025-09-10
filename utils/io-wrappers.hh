@@ -45,3 +45,9 @@ seastar::data_sink create_memory_sink(std::vector<seastar::temporary_buffer<char
  * from the source vector buffers.
  */
 seastar::data_source create_memory_source(std::vector<seastar::temporary_buffer<char>>);
+
+class seekable_data_source;
+
+using seekable_data_source_shard_src = std::function<seekable_data_source()>;
+
+seastar::file create_file_for_seekable_source(seekable_data_source, seekable_data_source_shard_src = {});
