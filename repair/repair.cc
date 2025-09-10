@@ -58,7 +58,7 @@ using namespace std::chrono_literals;
 
 logging::logger rlogger("repair");
 
-node_ops_info::node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept
+node_ops_info::node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<locator::host_id>&& ignore_nodes_) noexcept
     : ops_uuid(ops_uuid_)
     , as(std::move(as_))
     , ignore_nodes(std::move(ignore_nodes_))
@@ -1812,9 +1812,9 @@ future<> repair_service::do_decommission_removenode_with_repair(locator::token_m
                 rs.get_metrics().removenode_total_ranges = nr_ranges_total;
             }).get();
         }
-        auto get_ignore_nodes = [ops, this] () -> std::list<locator::host_id> {
+        auto get_ignore_nodes = [ops] () -> std::list<locator::host_id> {
             static std::list<locator::host_id> no_ignore_nodes;
-            return ops ? ops->ignore_nodes | std::views::transform([this] (gms::inet_address ip) { return _gossiper.local().get_host_id(ip); }) | std::ranges::to<std::list>() : no_ignore_nodes;
+            return ops ? ops->ignore_nodes : no_ignore_nodes;
         };
         rlogger.info("{}: started with keyspaces={}, leaving_node={}, ignore_nodes={}", op, ks_erms | std::views::keys, leaving_node_id, get_ignore_nodes());
         for (const auto& [keyspace_name, erm] : ks_erms) {
