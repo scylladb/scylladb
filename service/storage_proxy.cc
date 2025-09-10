@@ -4237,12 +4237,12 @@ future<> storage_proxy::send_to_endpoint(
             cancellable);
 }
 
-future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, locator::host_id target) {
+future<> storage_proxy::send_hint_to_endpoint(frozen_mutation_and_schema fm_a_s, locator::effective_replication_map_ptr ermp, locator::host_id target, host_id_vector_topology_change pending_endpoints) {
     return send_to_endpoint(
             std::make_unique<hint_mutation>(std::move(fm_a_s)),
             std::move(ermp),
             std::move(target),
-            host_id_vector_topology_change{},
+            std::move(pending_endpoints),
             db::write_type::SIMPLE,
             tracing::trace_state_ptr(),
             get_stats(),
