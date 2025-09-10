@@ -263,12 +263,19 @@ future<key_ptr> local_file_provider::write_key_file(key_info info) {
     });
 }
 
-local_system_key::local_system_key(encryption_context& ctxt, const sstring& path)
-    : _provider(make_shared<local_file_provider>(ctxt, bfs::path(ctxt.config().system_key_directory()) / bfs::path(path), true))
-{}
+local_system_key::local_system_key(encryption_context& ctxt, const sstring& path) {
+    if (!is_local_file_name(path)) {
+        throw std::invalid_argument(fmt::format("Invalid local system key: '{}'. Must be a valid file name (paths not allowed).", path));
+    }
+    _provider = make_shared<local_file_provider>(ctxt, bfs::path(ctxt.config().system_key_directory()) / bfs::path(path), true);
+}
 
 local_system_key::~local_system_key()
 {}
+
+bool local_system_key::is_local_file_name(const sstring& s) {
+    return !s.empty() && s.find('/') == sstring::npos;
+}
 
 future<shared_ptr<symmetric_key>> local_system_key::get_key() {
     return _provider->key(system_key_info).then([](std::tuple<key_ptr, opt_bytes> k_id) {
