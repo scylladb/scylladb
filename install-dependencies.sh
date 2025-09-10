@@ -175,6 +175,7 @@ declare -A pip_packages=(
     [pykmip]=""
     [universalasync]=""
     [boto3-stubs[dynamodb]]=""
+    [setuptools_scm]=""
 )
 
 pip_symlinks=(
