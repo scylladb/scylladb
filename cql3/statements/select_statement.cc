@@ -21,6 +21,9 @@
 #include "exceptions/exceptions.hh"
 #include <seastar/core/future.hh>
 #include <seastar/coroutine/exception.hh>
+#include "index/secondary_index_manager.hh"
+#include "index/vector_index.hh"
+#include "schema/schema.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
 #include "service/vector_store_client.hh"
@@ -245,7 +248,14 @@ future<> select_statement::check_access(query_processor& qp, const service::clie
         auto& cf_name = s->is_view()
             ? s->view_info()->base_name()
             : (cdc ? cdc->cf_name() : column_family());
-        co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT);
+        co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::SELECT).then_wrapped([this, &state, cf_name](future<> f) -> future<> {
+            if (f.failed() && secondary_index::vector_index::has_vector_index(*_schema)) {
+                f.ignore_ready_future();
+                co_await state.has_column_family_access(keyspace(), cf_name, auth::permission::VECTOR_SEARCH_INDEXING);
+            } else {
+                co_await std::move(f);
+            }
+        });
     } catch (const data_dictionary::no_such_column_family& e) {
         // Will be validated afterwards.
         co_return;
