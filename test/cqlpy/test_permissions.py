@@ -673,7 +673,6 @@ def test_auto_grant_view(cql, test_keyspace):
 # then enables CDC. Both should work.
 # This is a scylla_only test because it tests the Scylla-only CDC feature.
 # Reproduces #19798:
-@pytest.mark.xfail(reason="issue #19798")
 @pytest.mark.parametrize("test_keyspace",
                          [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
                          indirect=True)
@@ -783,7 +782,7 @@ def test_auto_revoke_cdc(cql, test_keyspace, scylla_only):
             with eventually_new_named_table(user2_session, table, schema, extra):
                 # Now, permissions were auto-granted for user2, but user1
                 # no longer has permissions on this table.
-                #eventually_authorized(lambda: user2_session.execute(f'SELECT * FROM {table}_scylla_cdc_log')) # Reproduces #19798
+                eventually_authorized(lambda: user2_session.execute(f'SELECT * FROM {table}_scylla_cdc_log')) # Reproduces #19798
                 eventually_unauthorized(lambda: user1_session.execute(f'SELECT * FROM {table}_scylla_cdc_log'))
 
 # Test that an unprivileged user can read from *some* system tables, such
