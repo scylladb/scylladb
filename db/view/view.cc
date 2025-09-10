@@ -23,6 +23,7 @@
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/when_any.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "db/view/base_info.hh"
@@ -2023,6 +2024,10 @@ future<> view_update_generator::mutate_MV(
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all)
 {
+    // We limit the concurrency of view updates by _view_update_concurrency_sem
+    // and at each point, one extra view update may be procedded for each write.
+    // View updates processed as the extra one will hold the unit from the following semaphore.
+    db::timeout_semaphore free_unit_sem(1);
     auto& ks = _db.find_keyspace(base->ks_name());
     auto& replication = ks.get_replication_strategy();
     // We set legacy self-pairing for old vnode-based tables (for backward
@@ -2048,9 +2053,8 @@ future<> view_update_generator::mutate_MV(
     // on the pairing algorithm.
     bool use_tablets_rack_aware_view_pairing = _db.features().tablet_rack_aware_view_pairing && ks.uses_tablets();
     auto me = base_ermp->get_topology().my_host_id();
-    static constexpr size_t max_concurrent_updates = 128;
     co_await utils::get_local_injector().inject("delay_before_get_view_natural_endpoint", 8000ms);
-    co_await max_concurrent_for_each(view_updates, max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
+    co_await max_concurrent_for_each(view_updates, view_update_generator::max_concurrent_updates, [&] (frozen_mutation_and_schema mut) mutable -> future<> {
         auto view_token = dht::get_token(*mut.s, mut.fm.key());
         auto view_ermp = erms.at(mut.s->id());
         auto target_endpoint = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
@@ -2107,9 +2111,34 @@ future<> view_update_generator::mutate_MV(
             auto mut_ptr = remote_endpoints.empty() ? std::make_unique<frozen_mutation>(std::move(mut.fm)) : std::make_unique<frozen_mutation>(mut.fm);
             tracing::trace(tr_state, "Locally applying view update for {}.{}; base token = {}; view token = {}",
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
+
+            abort_source reuse_free_unit_as;
+            // Wait either for the free unit allocated for this base write, or for the shared concurrency units
+            auto any_count_units = co_await seastar::when_any(
+                seastar::get_units(free_unit_sem, 1, reuse_free_unit_as),
+                seastar::get_units(_view_update_concurrency_sem, 1, reuse_free_unit_as)
+            );
+            // Stop waiting for the unused semaphore
+            reuse_free_unit_as.request_abort();
+            auto [free_unit_fut, shared_unit_fut] = co_await seastar::when_all(std::move(std::get<0>(any_count_units.futures)), std::move(std::get<1>(any_count_units.futures)));
+
+            db::timeout_semaphore_units count_units(_view_update_concurrency_sem, 0);
+            // If we manage to get units from both semaphores, we can return shared units early
+            // Otherwise, we'll use the units we got and we'll ignore the other aborted semaphore
+            if (!free_unit_fut.failed() && !shared_unit_fut.failed()) {
+                shared_unit_fut.get().return_all();
+                count_units = free_unit_fut.get();
+            } else if (shared_unit_fut.failed()){
+                co_await shared_unit_fut.discard_result().handle_exception_type([](const semaphore_aborted& e) {});
+                count_units = free_unit_fut.get();
+            } else {
+                co_await free_unit_fut.discard_result().handle_exception_type([](const semaphore_aborted& e) {});
+                count_units = shared_unit_fut.get();
+            }
+
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            sem_units, this] (future<>&& f) mutable {
+                            sem_units, count_units = std::move(count_units), this] (future<>&& f) mutable {
                 --stats.writes;
                 sem_units = nullptr;
                 _proxy.local().update_view_update_backlog();
