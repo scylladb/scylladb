@@ -632,6 +632,8 @@ private:
 public:
     bool balancing_enabled() const { return _balancing_enabled; }
     const tablet_map& get_tablet_map(table_id id) const;
+    // Gets shared ownership of tablet map
+    future<tablet_map_ptr> get_tablet_map_ptr(table_id id) const;
     bool has_tablet_map(table_id id) const;
     const table_to_tablet_map& all_tables() const { return _tablets; }
     size_t external_memory_usage() const;
