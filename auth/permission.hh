@@ -40,6 +40,9 @@ enum class permission {
 
     // function/aggregate/procedure calls
     EXECUTE,
+
+    // Vector Store service permission
+    VECTOR_SEARCH_INDEXING // allows selecting from tables with vector indexes
 };
 
 typedef enum_set<
@@ -54,7 +57,8 @@ typedef enum_set<
                 permission::MODIFY,
                 permission::AUTHORIZE,
                 permission::DESCRIBE,
-                permission::EXECUTE>> permission_set;
+                permission::EXECUTE,
+                permission::VECTOR_SEARCH_INDEXING>> permission_set;
 
 bool operator<(const permission_set&, const permission_set&);
 

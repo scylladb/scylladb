@@ -18,6 +18,7 @@
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include "auth/permission.hh"
 #include "cql3/functions/aggregate_function.hh"
 #include "cql3/functions/user_function.hh"
 #include "cql3/util.hh"
@@ -41,6 +42,8 @@ static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::functions, 2}};
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
+    
+    // table
     if (dv.table()) {
         return permission_set::of<
                 permission::ALTER,
@@ -50,13 +53,27 @@ static permission_set applicable_permissions(const data_resource_view& dv) {
                 permission::AUTHORIZE>();
     }
 
-    return permission_set::of<
+    // keyspace
+    if (dv.keyspace()) {
+        return permission_set::of<
             permission::CREATE,
             permission::ALTER,
             permission::DROP,
             permission::SELECT,
             permission::MODIFY,
             permission::AUTHORIZE>();
+    }
+
+    // All keyspaces
+    return permission_set::of<
+            permission::CREATE,
+            permission::ALTER,
+            permission::DROP,
+            permission::SELECT,
+            permission::MODIFY,
+            permission::AUTHORIZE,
+            permission::VECTOR_SEARCH_INDEXING>();
+        
 }
 
 static permission_set applicable_permissions(const role_resource_view& rv) {
