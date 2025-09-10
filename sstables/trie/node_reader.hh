@@ -21,25 +21,25 @@ using const_bytes = std::span<const std::byte>;
 
 // Contains information about the result of the (partial) walk down.
 //
-// For example, if the trie contains strings ("abc", "abd", "bc"),
+// For example, if the trie contains strings ("123", "124", "23"),
 // then the trie looks like this (where * is the root node):
 //
 // *
-// a-----b
-// b     c
-// c-d
+// 1-----2
+// 2     3
+// 3-4
 //
-// and if node "abd" is on a different page than node "ab", then
-// `walk_down_along_key(pos_of_root, "abc")` might
-// return node "ab" as the result, with
+// and if node "124" is on a different page than node "12", then
+// `walk_down_along_key(pos_of_root, "123")` might
+// return node "12" as the result, with
 //
 // payload_bits = 0
 // n_children = 2
-// found_idx = idx_of_child_d_in_node_ab
-// found_byte = 'd'
+// found_idx = idx_of_child_4_in_node_12
+// found_byte = '4'
 // traversed_key_bytes = 2
-// body_pos = pos_of_node_ab
-// child_offset = pos_of_node_ab - pos_of_node_abc
+// body_pos = pos_of_node_12
+// child_offset = pos_of_node_12 - pos_of_node_123
 struct node_traverse_result {
     // Payload bits for this node.
     uint8_t payload_bits;
@@ -117,7 +117,7 @@ concept node_reader = requires(T& o, int64_t pos, const_bytes key, int child_idx
     // Might walk over any number of *unimportant* nodes,
     // but does not walk past the first *important* node.
     //
-    // An *important* node is one which fullfills at least one of the following conditions:
+    // An *important* node is one which fulfills at least one of the following conditions:
     // 1. Has a payload.
     // 2. Has more than one child.
     //

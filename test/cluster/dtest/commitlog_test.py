@@ -678,7 +678,7 @@ class TestCommitLog(Tester):
         assert in_table == [self.values]
 
         # stop node
-        # because the mutation is large, it uses a code path that puts the commilog to disk before acknowledging the insert
+        # because the mutation is large, it uses a code path that puts the commitlog to disk before acknowledging the insert
         node1.stop(gently=False)
 
         # corrupt the commitlogs

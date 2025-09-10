@@ -213,7 +213,7 @@ encryption::symmetric_key::symmetric_key(const key_info& info, const bytes& key)
 }
 
 std::string encryption::symmetric_key::validate_exact_info_result() const {
-    auto [types, modes, padds] = parse_key_spec(_info.alg);
+    auto [types, modes, paddings] = parse_key_spec(_info.alg);
 
     auto cipher = EVP_CIPHER_CTX_get0_cipher(*this);
     auto len = EVP_CIPHER_key_length(cipher);
@@ -244,8 +244,8 @@ std::string encryption::symmetric_key::validate_exact_info_result() const {
         ss << _info << ": " << "Block mode " << i->second << " differers from requested " << modes << std::endl;
     }
 
-    if ((!padds.empty() && padds != "no") != _padding) {
-        ss << _info << ": " << "Padding (" << bool(_padding) << " differs from requested " << padds << std::endl;
+    if ((!paddings.empty() && paddings != "no") != _padding) {
+        ss << _info << ": " << "Padding (" << bool(_padding) << " differs from requested " << paddings << std::endl;
     }
 
     return ss.str();

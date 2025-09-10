@@ -323,7 +323,7 @@ future<bool> view_building_coordinator::work_on_view_building(service::group0_gu
 
             // If there were no mutations for this replica, we can just remove the entry from `_remote_work` map
             // and start new work in the same iteration.
-            // Otherwise, the entry needs to be removed after the mutations are commited successfully.
+            // Otherwise, the entry needs to be removed after the mutations are committed successfully.
             if (skip_work_on_this_replica) {
                 _remote_work_keys_to_erase.insert(replica);
             } else {

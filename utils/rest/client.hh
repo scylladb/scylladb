@@ -21,7 +21,7 @@ namespace rest {
 
 /**
  * Wrapper for http::request, making setting headers, body, etc
- * more convinient for our purposes. Separated from the below client
+ * more convenient for our purposes. Separated from the below client
  * so the logic can be shared with non-single usage, i.e. the free-form
  * simple_send method, possibly caching a http::client across calls.
  */

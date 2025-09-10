@@ -531,7 +531,7 @@ future<> view_building_worker::local_state::update(view_building_worker& vbw) {
         co_await clear_state();
 
         if (vb_state.currently_processed_base_table) {
-            // When we start to process new base table, we need to flush its currrent data, so we can build the view.
+            // When we start to process new base table, we need to flush its current data, so we can build the view.
             co_await flush_table(vbw, *vb_state.currently_processed_base_table);
         }
 

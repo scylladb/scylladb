@@ -1719,7 +1719,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 case locator::tablet_transition_stage::end_repair: {
                     if (do_barrier()) {
                         if (action_failed(tablet_state.repair_update_compaction_ctrl)) {
-                            rtlogger.warn("Failed to perfrom repair_update_compaction_ctrl for tablet repair tablet_id={}", gid);
+                            rtlogger.warn("Failed to perform repair_update_compaction_ctrl for tablet repair tablet_id={}", gid);
                             _tablets.erase(gid);
                             updates.emplace_back(get_mutation_builder().del_transition(last_token).build());
                             break;

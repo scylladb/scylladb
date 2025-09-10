@@ -13,7 +13,7 @@ Currently the coordinator processes at most only one base table at the time, bui
 
 ## View building task
 
-Whole view building process is splitted into smaller view building tasks.
+Whole view building process is split into smaller view building tasks.
 Each task is associated with particular tablet replica `(host_id, shard, tablet_id)` of a certain base table.
 
 There are 2 types of tasks:
@@ -40,7 +40,7 @@ View building tasks are created when:
 
 A task might be aborted in two ways: by deleting it or by setting its state to `ABORTED`.
 If a view/keyspace is dropped, then its tasks are aborted by deleting them as they are no longer needed.
-On the other hand, at the begining of a tablet operation (migration/resize/RF change), relevant view building tasks are aborted using `ABORTED` state.
+On the other hand, at the beginning of a tablet operation (migration/resize/RF change), relevant view building tasks are aborted using `ABORTED` state.
 This intermediate state is needed to create new tasks at the end of the operation or in case of failure and rollback (aborted tasks are also deleted then).
 
 The view building coordinator starts a task only if its tablet is not in transition (`tablet_map.get_tablet_transition_info(tid) == nullptr`).
