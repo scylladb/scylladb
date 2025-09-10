@@ -32,10 +32,10 @@ class node_ops_info {
 public:
     node_ops_id ops_uuid;
     shared_ptr<abort_source> as;
-    std::list<gms::inet_address> ignore_nodes;
+    std::list<locator::host_id> ignore_nodes;
 
 public:
-    node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<gms::inet_address>&& ignore_nodes_) noexcept;
+    node_ops_info(node_ops_id ops_uuid_, shared_ptr<abort_source> as_, std::list<locator::host_id>&& ignore_nodes_) noexcept;
     node_ops_info(const node_ops_info&) = delete;
     node_ops_info(node_ops_info&&) = delete;
 
