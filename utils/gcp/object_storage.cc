@@ -59,6 +59,13 @@ static bool storage_scope_implies(const scopes_type& scopes, const scopes_type& 
     return false;
 }
 
+static auto parse_rfc3339(const std::string& s) {
+    std::chrono::system_clock::time_point t;
+    std::istringstream is(s);
+    is >> std::chrono::parse("%FT%TZ", t);
+    return t;
+}
+
 class utils::gcp::storage::client::object_data_sink : public data_sink_impl {
     shared_ptr<impl> _impl;
     std::string _bucket;
@@ -819,6 +826,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
                 info.content_type = rjson::get_opt<std::string>(item, "contentType").value_or(""s);
                 info.size = std::stoull(rjson::get<std::string>(item, "size"));
                 info.generation = std::stoull(rjson::get<std::string>(item, "generation"));
+                info.modified = parse_rfc3339(rjson::get<std::string>(item, "updated"));
                 result.emplace_back(std::move(info));
             }
 
