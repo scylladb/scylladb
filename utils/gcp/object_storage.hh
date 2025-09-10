@@ -18,6 +18,7 @@
 
 #include "utils/rjson.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/seekable_source.hh"
 
 namespace seastar {
 class abort_source;
@@ -136,7 +137,7 @@ namespace utils::gcp::storage {
         /**
          * Creates a data_source for reading from a named object.
          */
-        seastar::data_source create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* = nullptr) const;
+        seekable_data_source create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* = nullptr) const;
 
         /**
          * Destroys resources. Must be called before releasing object
