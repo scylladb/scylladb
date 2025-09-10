@@ -78,6 +78,7 @@
 #include "readers/mutation_source.hh"
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
+#include "sstables/trie/bti_index.hh"
 
 #include "release.hh"
 #include "utils/build_id.hh"
@@ -3691,6 +3692,44 @@ future<data_sink> file_io_extension::wrap_sink(const sstable& sst, component_typ
 future<data_source> file_io_extension::wrap_source(const sstable& sst, component_type c, sstables::data_source_creator_fn, uint64_t, uint64_t) {
     SCYLLA_ASSERT(0 && "You are not supposed to get here, file_io_extension::wrap_source() is not implemented");
 }
+
+namespace trie {
+
+// This implementation would belong better in sstables/trie/bti_partition_index_writer.cc,
+// but we put it here to have access to the `parse(...)` helpers.
+future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, sstable_version_types v, const seastar::file& f, uint64_t file_size) {
+    file_random_access_reader reader(f, file_size, default_sstable_buffer_size);
+    if (file_size < 24) {
+        throw malformed_sstable_exception(fmt::format("Partitions.db file is too small: file_size={}", file_size));
+    }
+    co_await reader.seek(file_size - 24);
+    uint64_t keys_position;
+    uint64_t partition_count;
+    uint64_t trie_root;
+    co_await parse(s, v, reader, keys_position);
+    co_await parse(s, v, reader, partition_count);
+    co_await parse(s, v, reader, trie_root);
+    if (trie_root >= file_size) {
+        throw malformed_sstable_exception(fmt::format("Partitions.db malformed: trie_root={}, file_size={}", trie_root, file_size));
+    }
+    if (keys_position >= file_size) {
+        throw malformed_sstable_exception(fmt::format("Partitions.db malformed: keys_position={}, file_size={}", keys_position, file_size));
+    }
+    co_await reader.seek(keys_position);
+    disk_string<uint16_t> first_key;
+    disk_string<uint16_t> last_key;
+    co_await parse(s, v, reader, first_key);
+    co_await parse(s, v, reader, last_key);
+    co_return trie::bti_partitions_db_footer{
+        .first_key = sstables::key::from_bytes(std::move(first_key.value)),
+        .last_key = sstables::key::from_bytes(std::move(last_key.value)),
+        .partition_count = partition_count,
+        .trie_root_position = trie_root,
+    };
+}
+
+} // namespace trie
+
 } // namespace sstables
 
 namespace seastar {

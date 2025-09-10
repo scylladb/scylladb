@@ -181,19 +181,41 @@ using cbi_span_type = std::remove_cvref_t<decltype(*std::declval<T>())>;
 template <comparable_bytes_iterator T>
 std::pair<size_t, typename cbi_span_type<T>::pointer> lcb_mismatch(T&& a_it, T&& b_it) {
     using span_type = cbi_span_type<T>;
+    // a_sp is a suffix of the span pointed to by a_it,
+    // b_sp is a suffix of the span pointed to by b_it.
+    // Incrementing the iterators invalidates the corresponding spans.
     auto a_sp = span_type();
     auto b_sp = span_type();
+    // Prefix bytes visited so far.
     size_t i = 0;
-    while ((a_it != std::default_sentinel || !a_sp.empty()) && (b_it != std::default_sentinel || !b_sp.empty())) {
+
+    if (b_it == std::default_sentinel) {
+        goto b_exhausted;
+    } 
+    b_sp = *b_it;
+    if (a_it == std::default_sentinel) {
+        goto a_exhausted;
+    }
+    a_sp = *a_it;
+    while (true) {
         if (a_sp.empty()) {
-            a_sp = *a_it;
             ++a_it;
+            if (a_it == std::default_sentinel) {
+                goto a_exhausted;
+            }
+            a_sp = *a_it;
+            expensive_log("lcb_mismatch: a_sp={}", fmt_hex(a_sp));
         }
         if (b_sp.empty()) {
-            b_sp = *b_it;
             ++b_it;
+            if (b_it == std::default_sentinel) {
+                goto b_exhausted;
+            }
+            b_sp = *b_it;
+            expensive_log("lcb_mismatch: b_sp={}", fmt_hex(b_sp));
         }
         size_t mismatch_idx = std::ranges::mismatch(a_sp, b_sp).in2 - b_sp.begin();
+        expensive_log("lcb_mismatch: mismatch_idx={}, a[0]={}, b[0]={}", mismatch_idx, *a_sp.begin(), *b_sp.begin());
         i += mismatch_idx;
         if (mismatch_idx < a_sp.size() && mismatch_idx < b_sp.size()) {
             return {i, &b_sp[mismatch_idx]};
@@ -201,10 +223,17 @@ std::pair<size_t, typename cbi_span_type<T>::pointer> lcb_mismatch(T&& a_it, T&&
         a_sp = a_sp.subspan(mismatch_idx);
         b_sp = b_sp.subspan(mismatch_idx);
     }
-    while (b_it != std::default_sentinel && b_sp.empty()) {
-        b_sp = *b_it;
+a_exhausted:
+    while (b_sp.empty()) {
         ++b_it;
+        if (b_it == std::default_sentinel) {
+            break;
+        }
+        b_sp = *b_it;
     }
+b_exhausted:
+    // Note: b_sp might be empty here, if b_it is exhausted.
+    // That's fine, in this case the pointer will be one-past the last fragment of b_it.
     return {i, &b_sp[0]};
 }
 

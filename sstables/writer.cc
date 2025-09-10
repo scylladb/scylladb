@@ -77,6 +77,10 @@ void sstable_writer::set_repaired_at(int64_t repaired_at) {
     _impl->set_repaired_at(repaired_at);
 }
 
+uint64_t sstable_writer::data_file_position_for_tests() const {
+    return _impl->data_file_position_for_tests();
+}
+
 sstable_writer::sstable_writer(sstable_writer&& o) = default;
 sstable_writer& sstable_writer::operator=(sstable_writer&& o) = default;
 sstable_writer::~sstable_writer() {

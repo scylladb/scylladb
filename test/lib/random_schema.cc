@@ -471,28 +471,46 @@ data_value generate_boolean_value(std::mt19937& engine, size_t, size_t) {
 }
 
 data_value generate_date_value(std::mt19937& engine, size_t, size_t) {
-    return data_value(date_type_native_type{db_clock::time_point(db_clock::duration(random::get_int<std::make_unsigned_t<db_clock::rep>>(engine)))});
+    using pt = db_clock::time_point;
+    // Python driver can't tolerate dates above year 9999.
+    constexpr auto max_day = std::chrono::sys_days(std::chrono::year{10000}/1/1);
+    constexpr auto max = std::chrono::sys_time<std::chrono::milliseconds>(max_day).time_since_epoch().count() - 1;
+    auto x = random::get_int<std::make_unsigned_t<db_clock::rep>>(0, max, engine);
+    return data_value(date_type_native_type{pt(pt::duration(x))});
 }
 
 data_value generate_timeuuid_value(std::mt19937&, size_t, size_t) {
-    return data_value(timeuuid_native_type{utils::UUID_gen::get_time_UUID()});
+    // FIXME: respect the passed engine.
+    auto b = tests::random::get_bytes(16);
+    b[6] = (b[6] & 0x0F) | 0x10; // version 1
+    return timeuuid_type->deserialize(b);
 }
 
 data_value generate_timestamp_value(std::mt19937& engine, size_t, size_t) {
     using pt = db_clock::time_point;
-    return data_value(pt(pt::duration(random::get_int<pt::rep>(engine))));
+    // Python driver can't tolerate dates above year 9999 or below year 1.
+    constexpr auto min_day = std::chrono::sys_days(std::chrono::year{1}/1/1);
+    constexpr auto max_day = std::chrono::sys_days(std::chrono::year{10000}/1/1);
+    constexpr auto min = std::chrono::sys_time<std::chrono::milliseconds>(min_day).time_since_epoch().count();
+    constexpr auto max = std::chrono::sys_time<std::chrono::milliseconds>(max_day).time_since_epoch().count() - 1;
+    auto x = random::get_int<pt::rep>(min, max, engine);
+    return data_value(pt(pt::duration(x)));
 }
-
+    
 data_value generate_simple_date_value(std::mt19937& engine, size_t, size_t) {
     return data_value(simple_date_native_type{random::get_int<simple_date_native_type::primary_type>(engine)});
 }
 
 data_value generate_time_value(std::mt19937& engine, size_t, size_t) {
-    return data_value(time_native_type{random::get_int<time_native_type::primary_type>(engine)});
+    // A legal `time` is smaller than the number of nanoseconds in a day.
+    auto max = std::chrono::nanoseconds(std::chrono::days(1)).count() - 1;
+    return data_value(time_native_type{random::get_int<time_native_type::primary_type>(0, max, engine)});
 }
 
 data_value generate_uuid_value(std::mt19937& engine, size_t, size_t) {
-    return data_value(utils::make_random_uuid());
+    auto b = tests::random::get_bytes(16, engine);
+    b[6] = (b[6] & 0x0F) | 0x40; // version 4
+    return data_value(uuid_type->deserialize(b));
 }
 
 data_value generate_inet_addr_value(std::mt19937& engine, size_t, size_t) {
@@ -769,7 +787,7 @@ timestamp_generator default_timestamp_generator() {
     };
 }
 
-timestamp_generator uncompactible_timestamp_generator(uint32_t seed) {
+timestamp_generator uncompactible_timestamp_generator(uint32_t seed, api::timestamp_type min_timestamp) {
     auto engine = std::mt19937(seed);
 
     const auto rank = [] (timestamp_destination dest) -> api::timestamp_type {
@@ -791,7 +809,7 @@ timestamp_generator uncompactible_timestamp_generator(uint32_t seed) {
     const auto max_rank = rank(timestamp_destination::collection_cell_timestamp);
     const auto margin = 1000;
     std::vector<api::timestamp_type> points;
-    points.push_back(api::min_timestamp);
+    points.push_back(min_timestamp);
     for (api::timestamp_type i = 0; i < max_rank; ++i) {
         const auto remaining_ranks = max_rank - i;
         const auto point = std::uniform_int_distribution<api::timestamp_type>(points.back() + margin, api::max_timestamp - (remaining_ranks * margin))(engine);
@@ -799,7 +817,7 @@ timestamp_generator uncompactible_timestamp_generator(uint32_t seed) {
     }
     points.push_back(api::max_timestamp);
 
-    return [rank, points] (std::mt19937& engine, timestamp_destination destination, api::timestamp_type min_timestamp) {
+    return [rank, points] (std::mt19937& engine, timestamp_destination destination, api::timestamp_type curr_min_ts) {
         const auto r = rank(destination);
         auto ts_dist = std::uniform_int_distribution<api::timestamp_type>(points.at(r), points.at(r + 1) - 1);
         return ts_dist(engine);

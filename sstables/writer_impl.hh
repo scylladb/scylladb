@@ -52,6 +52,7 @@ struct sstable_writer::writer_impl {
     void set_repaired_at(uint64_t repaired_at) {
         _collector.set_repaired_at(repaired_at);
     }
+    virtual uint64_t data_file_position_for_tests() const = 0;
 };
 
 }

@@ -137,10 +137,15 @@ inline bool get_bool() {
     return get_bool(gen());
 }
 
-inline bytes get_bytes(size_t n) {
+template <typename RandomEngine>
+inline bytes get_bytes(size_t n, RandomEngine& engine) {
     bytes b(bytes::initialized_later(), n);
-    std::ranges::generate(b, [] { return get_int<bytes::value_type>(); });
+    std::ranges::generate(b, [&engine] { return get_int<bytes::value_type>(engine); });
     return b;
+}
+
+inline bytes get_bytes(size_t n) {
+    return get_bytes(n, gen());
 }
 
 inline bytes get_bytes() {

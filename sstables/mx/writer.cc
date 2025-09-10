@@ -816,6 +816,7 @@ public:
     stop_iteration consume(range_tombstone_change&& rtc) override;
     stop_iteration consume_end_of_partition() override;
     void consume_end_of_stream() override;
+    uint64_t data_file_position_for_tests() const override;
 };
 
 writer::~writer() {
@@ -1543,6 +1544,10 @@ void writer::consume_end_of_stream() {
     });
     _sst.write_scylla_metadata(_shard, std::move(identifier), std::move(ld_stats), std::move(ts_stats));
     _sst.seal_sstable(_cfg.backup).get();
+}
+
+uint64_t writer::data_file_position_for_tests() const {
+    return _data_writer->offset();
 }
 
 std::unique_ptr<sstable_writer::writer_impl> make_writer(sstable& sst,

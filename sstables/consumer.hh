@@ -70,6 +70,7 @@ private:
         READING_U8,
         READING_U16,
         READING_U32,
+        READING_U56,
         READING_U64,
         READING_BYTES_CONTIGUOUS,
         READING_BYTES,
@@ -196,6 +197,17 @@ public:
     }
     inline read_status read_32() noexcept {
         return read_partial_int(prestate::READING_U32);
+    }
+    inline read_status read_56(Buffer& data) {
+        if (data.size() >= 7) {
+            char buf[8] = {0};
+            std::memcpy(buf + 1, data.get(), 7);
+            _u64 = read_be<uint64_t>(buf);
+            data.trim_front(7);
+            return read_status::ready;
+        } else {
+            return read_partial_int(data, prestate::READING_U56);
+        }
     }
     inline read_status read_64(Buffer& data) {
         if (data.size() >= sizeof(uint64_t)) {
@@ -461,6 +473,13 @@ public:
             break;
         case prestate::READING_U32:
             return consume_u32(data);
+        case prestate::READING_U56:
+            if (process_int(data, 7)) {
+                _u64 = net::ntoh(_read_int.uint64) >> 8;
+                _prestate = prestate::NONE;
+                return read_status::ready;
+            }
+            break;
         case prestate::READING_U64:
             if (process_int(data, sizeof(uint64_t))) {
                 _u64 = net::ntoh(_read_int.uint64);
