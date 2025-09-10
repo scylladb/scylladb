@@ -40,6 +40,21 @@ namespace utils::gcp::storage {
         // TODO: what info do we need?
     };
 
+    class client;
+
+    struct bucket_paging {
+    private:
+        uint32_t max_results;
+        std::string token;
+        friend class client;
+    public:
+        bucket_paging(uint64_t max = 1000)
+            : max_results(max)
+        {}
+        bucket_paging(const bucket_paging&) = delete;
+        bucket_paging(bucket_paging&&) = default;
+    };
+
     /**
      * Minimal GCP object storage client
      */
@@ -80,6 +95,13 @@ namespace utils::gcp::storage {
          * List objects in bucket. Optionally applies the @prefix as filter
          */
         future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix = {});
+
+        /**
+         * List objects in bucket. Optionally applies the @prefix as filter. Uses page size and offset as defined by 
+         * the bucket_pager
+         */
+        future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix, bucket_paging&);
+
         /**
          * Deletes a named object from bucket
          */

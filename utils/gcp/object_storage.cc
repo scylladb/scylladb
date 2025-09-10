@@ -763,13 +763,22 @@ future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket) {
 // read all data from network, etc. Thus there is not all that much
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix) {
-    gcp_storage.debug("List bucket {} (prefix={})", bucket, prefix);
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix, bucket_paging& pager) {
+    gcp_storage.debug("List bucket {} (prefix={}, max_results={})", bucket, prefix, pager.max_results);
 
     auto path = fmt::format("/storage/v1/b/{}/o", bucket);
-
+    auto psep = "?";
     if (!prefix.empty()) {
-        path += fmt::format("?prefix={}", prefix);
+        path += fmt::format("{}prefix={}", psep, prefix);
+        psep = "&&";
+    }
+    if (pager.max_results != 0) {
+        path += fmt::format("{}maxResults={}", psep, pager.max_results);
+        psep = "&&";
+    }
+    if (!pager.token.empty()) {
+        path += fmt::format("{}pageToken={}", psep, pager.token);
+        psep = "&&";
     }
 
     utils::chunked_vector<utils::gcp::storage::object_info> result;
@@ -800,6 +809,9 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
             if (!items->IsArray()) {
                 throw failed_operation("Malformed list object items");
             }
+
+            pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
+
             for (auto& item : items->GetArray()) {
                 object_info info;
 
@@ -815,6 +827,11 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
     );
 
     co_return result;
+}
+
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix) {
+    bucket_paging dummy(0);
+    co_return co_await list_objects(bucket, prefix, dummy);
 }
 
 // See https://cloud.google.com/storage/docs/deleting-objects
