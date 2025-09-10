@@ -37,6 +37,7 @@ namespace utils::gcp::storage {
         std::string content_type;
         uint64_t size;
         uint64_t generation;
+        std::chrono::system_clock::time_point modified;
         // TODO: what info do we need?
     };
 
