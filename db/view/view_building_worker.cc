@@ -91,6 +91,29 @@ public:
     }
 };
 
+static shard_id get_sstable_shard_id(const sstables::sstable& sst) {
+    auto shards = sst.get_shards_for_this_sstable();
+#ifdef SEASTAR_DEBUG
+    // Sstable from tablet-table should belong to only one shard
+    SCYLLA_ASSERT(shards.size() == 1);
+#endif
+    return shards[0];
+}
+
+static locator::tablet_id get_sstable_tablet_id(const locator::tablet_map& tablet_map, const sstables::sstable& sst) {
+    auto last_token = sst.get_last_decorated_key().token();
+    auto tablet_id = tablet_map.get_tablet_id(last_token);
+
+#ifdef SEASTAR_DEBUG
+    // Single sstable from tablet-table should contain data for only one tablet
+    auto first_token = sst.get_first_decorated_key().token();
+    auto first_token_tablet_id = tablet_map.get_tablet_id(first_token);
+    SCYLLA_ASSERT(tablet_id == first_token_tablet_id);
+#endif
+
+    return tablet_id;
+}
+
 view_building_worker::view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mnotifier, service::raft_group0_client& group0_client, view_update_generator& vug, netw::messaging_service& ms, view_building_state_machine& vbsm)
         : _db(db)
         , _sys_ks(sys_ks)
@@ -183,29 +206,6 @@ future<> view_building_worker::run_staging_sstables_registrator() {
             vbw_logger.warn("Got raft::request_aborted while creating staging sstable tasks");
         }
     }
-}
-
-static shard_id get_sstable_shard_id(const sstables::sstable& sst) {
-    auto shards = sst.get_shards_for_this_sstable();
-#ifdef SEASTAR_DEBUG
-    // Sstable from tablet-table should belong to only one shard
-    SCYLLA_ASSERT(shards.size() == 1);
-#endif
-    return shards[0];
-}
-
-static locator::tablet_id get_sstable_tablet_id(const locator::tablet_map& tablet_map, const sstables::sstable& sst) {
-    auto last_token = sst.get_last_decorated_key().token();
-    auto tablet_id = tablet_map.get_tablet_id(last_token);
-
-#ifdef SEASTAR_DEBUG
-    // Single sstable from tablet-table should contain data for only one tablet
-    auto first_token = sst.get_first_decorated_key().token();
-    auto first_token_tablet_id = tablet_map.get_tablet_id(first_token);
-    SCYLLA_ASSERT(tablet_id == first_token_tablet_id);
-#endif
-
-    return tablet_id;
 }
 
 future<> view_building_worker::create_staging_sstable_tasks() {
