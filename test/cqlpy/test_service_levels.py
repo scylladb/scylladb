@@ -142,10 +142,10 @@ def test_list_effective_service_level_without_attached(scylla_only, cql):
         with pytest.raises(InvalidRequest, match=f"Role {role} doesn't have assigned any service level"):
             cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {role}")
 
-# Scylla Enterprise limits the number of service levels to a small number (8 including 1 default service level).
+# Scylla Enterprise limits the number of service levels to a small number (9 including 1 default service level).
 # This test verifies that attempting to create more service levels than that results in an InvalidRequest error
 # and doesn't silently succeed. 
-# The test also has a regression check if a user can create exactly 7 service levels.
+# The test also has a regression check if a user can create exactly 8 service levels.
 # In case you are adding a new internal scheduling group and this test failed, you should increase `SCHEDULING_GROUPS_COUNT`
 #
 # Reproduces enterprise issue #4481.
@@ -161,7 +161,7 @@ def test_scheduling_groups_limit(scylla_only, cql):
                 created_count = created_count + 1
 
     assert created_count > 0
-    assert created_count == 7 # regression check
+    assert created_count == 8 # regression check
 
 def test_default_shares_in_listings(scylla_only, cql):
     with scylla_inject_error(cql, "create_service_levels_without_default_shares", one_shot=False), \
