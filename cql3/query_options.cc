@@ -160,12 +160,11 @@ void query_options::fill_value_views()
     }
 }
 
-db::consistency_level query_options::check_serial_consistency() const {
-
+utils::result_with_exception_ptr<db::consistency_level> query_options::check_serial_consistency() const {
     if (_options.serial_consistency.has_value()) {
         return *_options.serial_consistency;
     }
-    throw exceptions::protocol_exception("Consistency level for LWT is missing for a request with conditions");
+    return bo::failure(std::make_exception_ptr(exceptions::protocol_exception("Consistency level for LWT is missing for a request with conditions")));
 }
 
 void query_options::cache_pk_function_call(computed_function_values::key_type id, computed_function_values::mapped_type value) const {

@@ -377,7 +377,10 @@ future<::shared_ptr<cql_transport::messages::result_message>>
 modification_statement::execute_with_condition(query_processor& qp, service::query_state& qs, const query_options& options) const {
 
     auto cl_for_learn = options.get_consistency();
-    auto cl_for_paxos = options.check_serial_consistency();
+    utils::result_with_exception_ptr<db::consistency_level> cl_for_paxos = options.check_serial_consistency();
+    if (!cl_for_paxos) [[unlikely]] {
+        return make_exception_future<shared_ptr<cql_transport::messages::result_message>>(std::move(cl_for_paxos).assume_error());
+    }
     db::timeout_clock::time_point now = db::timeout_clock::now();
     const timeout_config& cfg = qs.get_client_state().get_timeout_config();
 
@@ -426,7 +429,7 @@ modification_statement::execute_with_condition(query_processor& qp, service::que
 
     return qp.proxy().cas(s, std::move(cas_shard), request, request->read_command(qp), request->key(),
             {read_timeout, qs.get_permit(), qs.get_client_state(), qs.get_trace_state()},
-            cl_for_paxos, cl_for_learn, statement_timeout, cas_timeout).then([this, request, tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
+            std::move(cl_for_paxos).assume_value(), cl_for_learn, statement_timeout, cas_timeout).then([this, request, tablet_replicas = std::move(tablet_info->tablet_replicas), token_range = tablet_info->token_range] (bool is_applied) {
         auto result = request->build_cas_result_set(_metadata, _columns_of_cas_result_set, is_applied);
         result->add_tablet_info(tablet_replicas, token_range);
         return result;

@@ -15,11 +15,10 @@
 #include "test/lib/random_utils.hh"
 
 struct {
-    [[noreturn]]
-    static void throw_out_of_range(size_t a, size_t b) {
-        throw size_t(a + b);
+    static utils::result_with_exception_ptr<void> out_of_range(size_t a, size_t b) {
+        return bo::failure(std::make_exception_ptr(size_t(a + b)));
     }
-} int_thrower;
+} int_creator;
 
 std::tuple<std::vector<fragmented_temporary_buffer>, uint64_t, uint16_t> get_buffers()
 {
@@ -208,10 +207,10 @@ SEASTAR_THREAD_TEST_CASE(test_empty_istream) {
 
     auto linearization_buffer = bytes_ostream();
     BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-    BOOST_CHECK_THROW(in.read<char>(), std::out_of_range);
-    BOOST_CHECK_THROW(in.read_view(1), std::out_of_range);
-    BOOST_CHECK_THROW(in.read_bytes_view(1, linearization_buffer), std::out_of_range);
-    BOOST_CHECK_EQUAL(in.read_bytes_view(0, linearization_buffer), bytes_view());
+    BOOST_CHECK_THROW(in.read<char>().value(), std::out_of_range);
+    BOOST_CHECK_THROW(in.read_view(1).value(), std::out_of_range);
+    BOOST_CHECK_THROW(in.read_bytes_view(1, linearization_buffer).value(), std::out_of_range);
+    BOOST_CHECK_EQUAL(in.read_bytes_view(0, linearization_buffer).value(), bytes_view());
     BOOST_CHECK(linearization_buffer.empty());
 }
 
@@ -223,18 +222,18 @@ SEASTAR_THREAD_TEST_CASE(test_read_pod) {
 
         auto in = ftb.get_istream();
         BOOST_CHECK_EQUAL(in.bytes_left(), sizeof(type1) + sizeof(type2));
-        BOOST_CHECK_EQUAL(in.read<type1>(), expected_value1);
+        BOOST_CHECK_EQUAL(in.read<type1>().value(), expected_value1);
         BOOST_CHECK_EQUAL(in.bytes_left(), sizeof(type2));
-        BOOST_CHECK_THROW(in.read<type1>(), std::out_of_range);
+        BOOST_CHECK_THROW(in.read<type1>().value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), sizeof(type2));
-        BOOST_CHECK_EQUAL(in.read<type2>(), expected_value2);
+        BOOST_CHECK_EQUAL(in.read<type2>().value(), expected_value2);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read<type2>(), std::out_of_range);
+        BOOST_CHECK_THROW(in.read<type2>().value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read<type1>(), std::out_of_range);
+        BOOST_CHECK_THROW(in.read<type1>().value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read<char>(), std::out_of_range);
-        BOOST_CHECK_EXCEPTION(in.read<char>(int_thrower), size_t, [] (size_t v) { return v == 1; });
+        BOOST_CHECK_THROW(in.read<char>().value(), std::out_of_range);
+        BOOST_CHECK_EXCEPTION(in.read<char>(int_creator).value(), size_t, [] (size_t v) { return v == 1; });
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
     };
 
@@ -253,21 +252,21 @@ SEASTAR_THREAD_TEST_CASE(test_read_to) {
         auto in = ftb.get_istream();
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value1.size() + expected_value2.size());
         actual_value = bytes(bytes::initialized_later(), expected_value1.size());
-        in.read_to(expected_value1.size(), actual_value.begin());
+        BOOST_CHECK(in.read_to(expected_value1.size(), actual_value.begin()).value());
         BOOST_CHECK_EQUAL(actual_value, expected_value1);
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value2.size());
-        BOOST_CHECK_THROW(in.read_to(expected_value1.size(), actual_value.begin()), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_to(expected_value1.size(), actual_value.begin()).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value2.size());
         actual_value = bytes(bytes::initialized_later(), expected_value2.size());
-        in.read_to(expected_value2.size(), actual_value.begin());
+        BOOST_CHECK(in.read_to(expected_value2.size(), actual_value.begin()).value());
         BOOST_CHECK_EQUAL(actual_value, expected_value2);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_to(expected_value2.size(), actual_value.begin()), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_to(expected_value2.size(), actual_value.begin()).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_to(expected_value1.size(), actual_value.begin()), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_to(expected_value1.size(), actual_value.begin()).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_to(1, actual_value.begin()), std::out_of_range);
-        BOOST_CHECK_EXCEPTION(in.read_to(1, actual_value.begin(), int_thrower), size_t, [] (size_t v) { return v == 1; });
+        BOOST_CHECK_THROW(in.read_to(1, actual_value.begin()).value(), std::out_of_range);
+        BOOST_CHECK_EXCEPTION(in.read_to(1, actual_value.begin(), int_creator).value(), size_t, [] (size_t v) { return v == 1; });
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
     };
 
@@ -286,18 +285,18 @@ SEASTAR_THREAD_TEST_CASE(test_read_view) {
 
         auto in = ftb.get_istream();
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value1.size() + expected_value2.size());
-        BOOST_CHECK_EQUAL(linearized(in.read_view(expected_value1.size())), expected_value1);
+        BOOST_CHECK_EQUAL(linearized(in.read_view(expected_value1.size()).value()), expected_value1);
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value2.size());
-        BOOST_CHECK_THROW(in.read_view(expected_value1.size()), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_view(expected_value1.size()).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value2.size());
-        BOOST_CHECK_EQUAL(linearized(in.read_view(expected_value2.size())), expected_value2);
+        BOOST_CHECK_EQUAL(linearized(in.read_view(expected_value2.size()).value()), expected_value2);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_view(expected_value2.size()), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_view(expected_value2.size()).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_view(expected_value1.size()), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_view(expected_value1.size()).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_view(1), std::out_of_range);
-        BOOST_CHECK_EXCEPTION(in.read_view(1, int_thrower), size_t, [] (size_t v) { return v == 1; });
+        BOOST_CHECK_THROW(in.read_view(1).value(), std::out_of_range);
+        BOOST_CHECK_EXCEPTION(in.read_view(1, int_creator).value(), size_t, [] (size_t v) { return v == 1; });
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
     };
 
@@ -316,22 +315,22 @@ SEASTAR_THREAD_TEST_CASE(test_read_bytes_view) {
         SCYLLA_ASSERT(expected_value2.size() < expected_value1.size());
 
         auto in = ftb.get_istream();
-        BOOST_CHECK_EQUAL(in.read_bytes_view(0, linearization_buffer), bytes_view());
+        BOOST_CHECK_EQUAL(in.read_bytes_view(0, linearization_buffer).value(), bytes_view());
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value1.size() + expected_value2.size());
-        BOOST_CHECK_EQUAL(in.read_bytes_view(expected_value1.size(), linearization_buffer), expected_value1);
+        BOOST_CHECK_EQUAL(in.read_bytes_view(expected_value1.size(), linearization_buffer).value(), expected_value1);
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value2.size());
-        BOOST_CHECK_THROW(in.read_bytes_view(expected_value1.size(), linearization_buffer), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_bytes_view(expected_value1.size(), linearization_buffer).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), expected_value2.size());
-        BOOST_CHECK_EQUAL(in.read_bytes_view(expected_value2.size(), linearization_buffer), expected_value2);
+        BOOST_CHECK_EQUAL(in.read_bytes_view(expected_value2.size(), linearization_buffer).value(), expected_value2);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_bytes_view(expected_value2.size(), linearization_buffer), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_bytes_view(expected_value2.size(), linearization_buffer).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_bytes_view(expected_value1.size(), linearization_buffer), std::out_of_range);
+        BOOST_CHECK_THROW(in.read_bytes_view(expected_value1.size(), linearization_buffer).value(), std::out_of_range);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read_bytes_view(1, linearization_buffer), std::out_of_range);
-        BOOST_CHECK_EXCEPTION(in.read_bytes_view(1, linearization_buffer, int_thrower), size_t, [] (size_t v) { return v == 1; });
+        BOOST_CHECK_THROW(in.read_bytes_view(1, linearization_buffer).value(), std::out_of_range);
+        BOOST_CHECK_EXCEPTION(in.read_bytes_view(1, linearization_buffer, int_creator).value(), size_t, [] (size_t v) { return v == 1; });
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_EQUAL(in.read_bytes_view(0, linearization_buffer), bytes_view());
+        BOOST_CHECK_EQUAL(in.read_bytes_view(0, linearization_buffer).value(), bytes_view());
     };
 
 
@@ -444,7 +443,7 @@ SEASTAR_THREAD_TEST_CASE(test_skip) {
         BOOST_CHECK_EQUAL(in.bytes_left(), sizeof(type1) + sizeof(type2));
         in.skip(sizeof(type1));
         BOOST_CHECK_EQUAL(in.bytes_left(), sizeof(type2));
-        BOOST_CHECK_EQUAL(in.read<type2>(), expected_value2);
+        BOOST_CHECK_EQUAL(in.read<type2>().value(), expected_value2);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
         in.skip(sizeof(type2));
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
@@ -466,9 +465,9 @@ SEASTAR_THREAD_TEST_CASE(test_remove_suffix) {
         BOOST_CHECK_EQUAL(ftb.size_bytes(), sizeof(type1));
 
         auto in = ftb.get_istream();
-        BOOST_CHECK_EQUAL(in.read<type1>(), expected_value1);
+        BOOST_CHECK_EQUAL(in.read<type1>().value(), expected_value1);
         BOOST_CHECK_EQUAL(in.bytes_left(), 0);
-        BOOST_CHECK_THROW(in.read<char>(), std::out_of_range);
+        BOOST_CHECK_THROW(in.read<char>().value(), std::out_of_range);
 
         ftb.remove_suffix(sizeof(type1) - 1);
         BOOST_CHECK_EQUAL(ftb.size_bytes(), 1);
