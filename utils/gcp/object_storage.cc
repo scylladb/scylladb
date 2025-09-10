@@ -175,7 +175,7 @@ public:
     }
 };
 
-class utils::gcp::storage::client::object_data_source : public data_source_impl {
+class utils::gcp::storage::client::object_data_source : public seekable_data_source_impl {
     shared_ptr<impl> _impl;
     std::string _bucket;
     std::string _object_name;
@@ -183,8 +183,14 @@ class utils::gcp::storage::client::object_data_source : public data_source_impl 
     uint64_t _generation = 0;
     uint64_t _size = 0;
     uint64_t _position = 0;
+    std::chrono::system_clock::time_point _timestamp;
     seastar::abort_source* _as;
     std::deque<temporary_buffer<char>> _buffers;
+
+    size_t buffer_size() const {
+        return std::accumulate(_buffers.begin(), _buffers.end(), 0, [](size_t sum, auto& b) { return sum + b.size(); });
+    }
+
 public:
     object_data_source(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, seastar::abort_source* as)
         : _impl(i)
@@ -195,6 +201,11 @@ public:
     future<temporary_buffer<char>> get() override;
     future<temporary_buffer<char>> skip(uint64_t n) override;
     future<> read_info();
+
+    future<temporary_buffer<char>> get(size_t limit) override;
+    future<> seek(uint64_t pos) override;
+    future<uint64_t> size() override;
+    future<std::chrono::system_clock::time_point> timestamp() override;
 };
 
 using body_writer = std::function<future<>(output_stream<char>&&)>;
@@ -596,7 +607,7 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
 }
 
 // Read a single buffer from the source object
-future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get() {
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get(size_t limit) {
     // If we don't know the source size yet, get the info from server
     if (_size == 0) {
         co_await read_info();
@@ -604,7 +615,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
 
     // If we don't have buffers to give, try getting one from server
     if (_buffers.empty()) {
-        auto to_read = std::min(_size - _position, uint64_t(default_gcp_storage_chunk_size));
+        auto to_read = std::min(_size - _position, limit);
 
         // to_read == 0 -> eof
         if (to_read != 0) {
@@ -620,7 +631,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 , ""s
                 , [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
-                        throw failed_operation(fmt::format("Could not read object {}: {} ({}/{})", _bucket, _object_name, _position, _size));
+                        throw failed_operation(fmt::format("Could not read object {}: {} ({}/{} - {})", _bucket, _object_name, _position, _size, int(rep._status)));
                     }
                     auto old = _position;
                     // ensure these are on our coroutine frame.
@@ -638,22 +649,41 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
         }
     }
 
-    // Now, either buffers have data, or we are EOF.
+    temporary_buffer<char> res;
+
     if (!_buffers.empty()) {
-        auto res = std::move(_buffers.front());
-        _buffers.pop_front();
-        co_return res;
+        auto&& buf = _buffers.front();
+        if (buf.size() >= limit) {
+            res = buf.share(0, limit);
+            buf.trim_front(limit);
+        } else {
+            res = std::move(buf);
+            _buffers.pop_front();
+        }
     }
 
-    co_return temporary_buffer<char>{};
+    co_return res;
 }
 
-future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n) {
-    // If we don't know the source size yet, get the info from server
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get() {
+    // If we don't have buffers to give, try getting one from server
+    co_return co_await get(default_gcp_storage_chunk_size);
+}
+
+future<> utils::gcp::storage::client::object_data_source::seek(uint64_t pos) {
     if (_size == 0) {
         co_await read_info();
     }
-    // First, skip any data we have in cache
+    auto buf_size = buffer_size();
+    assert(buf_size <= _position);
+    auto read_pos = _position - buf_size;
+    if (pos < read_pos || pos >= _position) {
+        _buffers.clear();
+        _position = std::min(pos, _size);
+        co_return;
+    }
+    auto n = pos - read_pos;
+    // Drop superfluous cache
     while (n > 0 && !_buffers.empty()) {
         auto m = std::min(n, _buffers.front().size());
         _buffers.front().trim_front(m);
@@ -662,10 +692,27 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
         }
         n -= m;
     }
-    // Now, if we have more to skip, just adjust our position.
-    auto skip = std::min(_size - _position, n);
-    _position += skip;
+}
 
+future<uint64_t> utils::gcp::storage::client::object_data_source::size() {
+    if (_size == 0) {
+        co_await read_info();
+    }
+    co_return _size;
+}
+
+future<std::chrono::system_clock::time_point> utils::gcp::storage::client::object_data_source::timestamp() {
+    if (_timestamp.time_since_epoch().count() == 0) {
+        co_await read_info();
+    }
+    co_return _timestamp;
+}
+
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n) {
+    auto buf_size = buffer_size();
+    assert(buf_size <= _position);
+    auto read_pos = _position - buf_size;
+    co_await seek(read_pos + n);
     // And get the next buffer
     co_return co_await get();
 }
@@ -696,6 +743,7 @@ future<> utils::gcp::storage::client::object_data_source::read_info() {
 
     _size = std::stoull(rjson::get<std::string>(item, "size"));
     _generation = std::stoull(rjson::get<std::string>(item, "generation"));
+    _timestamp = parse_rfc3339(rjson::get<std::string>(item, "updated"));
 }
 
 utils::gcp::storage::client::client(std::string_view endpoint, std::optional<google_credentials> c, shared_ptr<seastar::tls::certificate_credentials> certs)
@@ -957,8 +1005,8 @@ seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_v
     return seastar::data_sink(std::make_unique<object_data_sink>(_impl, bucket, object_name, std::move(metadata), as));
 }
 
-seastar::data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* as) const {
-    return seastar::data_source(std::make_unique<object_data_source>(_impl, bucket, object_name, as));
+seekable_data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* as) const {
+    return seekable_data_source(std::make_unique<object_data_source>(_impl, bucket, object_name, as));
 }
 
 future<> utils::gcp::storage::client::close() {
