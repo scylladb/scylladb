@@ -292,6 +292,19 @@ def test_update_item_long_attr(test_table_sb):
     assert 'ConsumedCapacity' in response
     assert 3 == response['ConsumedCapacity']["CapacityUnits"]
 
+@pytest.mark.xfail(reason="Updates should consider the larger of the old item size and the new item size. This will be fixed in a next PR.")
+def test_update_item_considers_old_and_new_item(test_table_sb):
+    p = random_string()
+    c = random_bytes()
+    test_table_sb.put_item(Item={'p': p, 'c': c, 'a': 'a' * 5 * KB})
+
+    response = test_table_sb.update_item(Key={'p': p, 'c': c},
+        UpdateExpression='SET b = :b_value',
+        ExpressionAttributeValues={':b_value': 'b' * 2 * KB},
+        ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 8 == response['ConsumedCapacity']["CapacityUnits"]
+
 # Validates that when the old value is returned the WCU takes
 # Its size into account in the WCU calculation.
 # WCU is calculated based on 1KB block size.
@@ -320,7 +333,6 @@ def test_long_update(test_table):
 # according to that setting, and the total consumed capacity is their sum.
 def test_simple_batch_get_items(test_table_sb):
     p1 = random_string()
-    val = random_string()
     c1 = random_bytes()
     test_table_sb.put_item(Item={'p': p1, 'c': c1})
 
@@ -334,6 +346,34 @@ def test_simple_batch_get_items(test_table_sb):
     assert 'TableName' in response['ConsumedCapacity'][0]
     assert response['ConsumedCapacity'][0]['TableName'] == test_table_sb.name
     assert 2 == response['ConsumedCapacity'][0]['CapacityUnits']
+
+# This test reproduces a bug where the consumed capacity was divided by 16 KB,
+# instead of 4 KB. The general formula for RCU per item is the same as for
+# GetItem, namely:
+#
+# CEIL(ItemSizeInBytes / 4096) * (1 if strong consistency, 0.5 if eventual
+# consistency)
+#
+# The RCU is calculated for each item individually, and the results are summed
+# for the total cost of the BatchGetItem. In this case, the larger item is
+# rounded up to 68KB, giving 17 RCUs, and the smaller item to 20KB, which
+# results in 5 RCUs, making the total consumed capacity for this operation
+# 22 RCUs.
+def test_batch_get_items_large(test_table_sb):
+    p1 = random_string()
+    c1 = random_bytes()
+    test_table_sb.put_item(Item={'p': p1, 'c': c1, 'a': 'a' * 64 * KB})
+
+    p2 = random_string()
+    c2 = random_bytes()
+    test_table_sb.put_item(Item={'p': p2, 'c': c2, 'a': 'a' * 16 * KB})
+
+    response = test_table_sb.meta.client.batch_get_item(RequestItems = {
+        test_table_sb.name: {'Keys': [{'p': p1, 'c': c1}, {'p': p2, 'c': c2}], 'ConsistentRead': True}}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert 'TableName' in response['ConsumedCapacity'][0]
+    assert response['ConsumedCapacity'][0]['TableName'] == test_table_sb.name
+    assert 22 == response['ConsumedCapacity'][0]['CapacityUnits']
 
 # Validate that when getting a batch of requests
 # From multiple tables we get an RCU for each of the tables
