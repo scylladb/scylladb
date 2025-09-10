@@ -205,6 +205,9 @@ public:
         return std::move(mc).commit(_group0_client, _as, ::service::raft_timeout{});
     }
 
+    // Migrates data from old keyspace to new one which supports linearizable writes via raft.
+    future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0,start_operation_func_t start_operation_func, abort_source& as);
+
 private:
     future<> create_legacy_keyspace_if_missing(::service::migration_manager& mm) const;
     future<bool> has_superuser(std::string_view role_name, const role_set& roles) const;
@@ -386,8 +389,5 @@ future<std::vector<permission_details>> list_filtered_permissions(
 
 // Finalizes write operations performed in auth by committing mutations via raft group0.
 future<> commit_mutations(service& ser, ::service::group0_batch&& mc);
-
-// Migrates data from old keyspace to new one which supports linearizable writes via raft.
-future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as);
 
 }

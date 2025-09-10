@@ -20,6 +20,7 @@
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include <stdexcept>
 #include <variant>
 
 #include "auth/service.hh"
@@ -3426,7 +3427,10 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     auto auth_version = co_await _sys_ks.get_auth_version();
     if (auth_version < db::system_keyspace::auth_version_t::v2) {
         rtlogger.info("migrating system_auth keyspace data");
-        co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
+        if (!_auth_service.local_is_initialized()) {
+            throw std::runtime_error("auth service not yet initialized");
+        }
+        co_await _auth_service.local().migrate_to_auth_v2(_sys_ks, _group0.client(),
                 [this] (abort_source&) { return start_operation();}, _as);
     }
 
