@@ -1363,8 +1363,12 @@ future<> sstable::read_summary() noexcept {
             co_return co_await read_simple<component_type::Summary>(_components->summary);
         } catch (...) {
             auto ep = std::current_exception();
-            sstlog.warn("Couldn't read summary file {}: {}. Recreating it.", this->filename(component_type::Summary), ep);
+            sstlog.warn("Couldn't read summary file {}: {}.", this->filename(component_type::Summary), ep);
         }
+    }
+
+    if (!has_component(component_type::Index)) {
+        co_return;
     }
 
     co_await generate_summary();
@@ -1376,7 +1380,9 @@ future<file> sstable::open_file(component_type type, open_flags flags, file_open
 
 future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
     utils::small_vector<future<>, 4> futures;
+  if (has_component(component_type::Index)) {
     futures.push_back(open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }));
+  }
     futures.push_back(open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); }));
     if (has_component(component_type::Partitions) && !_partitions_file) {
         // FIXME: if _partitions_file is already opened, we are ignoring options and flags.
@@ -1428,6 +1434,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
     _data_file_size = st.st_size;
     _data_file_write_time = db_clock::from_time_t(st.st_mtime);
 
+  if (_index_file) {
     auto size = co_await _index_file.size();
     _index_file_size = size;
     parse_assert(!_cached_index_file, get_filename());
@@ -1437,6 +1444,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
                                                             _manager.get_cache_tracker().region(),
                                                             _index_file_size);
     _index_file = make_cached_seastar_file(*_cached_index_file);
+  }
     if (_partitions_file) {
         auto size = co_await _partitions_file.size();
         _partitions_file_size = size;
@@ -1487,7 +1495,9 @@ future<> sstable::create_data() noexcept {
 }
 
 future<> sstable::drop_caches() {
-    co_await _cached_index_file->evict_gently();
+    if (_cached_index_file) {
+        co_await _cached_index_file->evict_gently();
+    }
     if (_cached_partitions_file) {
         co_await _cached_partitions_file->evict_gently();
     }
@@ -1533,6 +1543,9 @@ void sstable::write_filter() {
 
 void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     if (!has_component(component_type::Filter)) {
+        return;
+    }
+    if (!has_component(component_type::Index)) {
         return;
     }
 
@@ -1744,7 +1757,9 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     co_await read_toc();
     _components = std::move(info.components);
     _data_file = make_checked_file(_read_error_handler, info.data.to_file());
-    _index_file = make_checked_file(_read_error_handler, info.index.to_file());
+  if (info.index) {
+    _index_file = make_checked_file(_read_error_handler, info.index->to_file());
+  }
     if (info.partitions) {
         _partitions_file = make_checked_file(_read_error_handler, info.partitions->to_file());
     }
@@ -1767,7 +1782,7 @@ future<foreign_sstable_open_info> sstable::get_open_info() & {
             .components = std::move(c),
             .owners = this->get_shards_for_this_sstable(),
             .data = _data_file.dup(),
-            .index = _index_file.dup(),
+            .index = _index_file ? std::optional<seastar::file_handle>(_index_file.dup()) : std::nullopt,
             .partitions = _partitions_file ? std::optional<seastar::file_handle>(_partitions_file.dup()) : std::nullopt,
             .rows = _rows_file ? std::optional<seastar::file_handle>(_rows_file.dup()) : std::nullopt,
             .generation = _generation,
