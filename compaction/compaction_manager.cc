@@ -620,6 +620,7 @@ requires (compaction_manager& cm, throw_if_stopping do_throw_if_stopping, Args&&
     {TaskExecutor(cm, do_throw_if_stopping, std::forward<Args>(args)...)} -> std::same_as<TaskExecutor>;
 }
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_compaction(throw_if_stopping do_throw_if_stopping, tasks::task_info parent_info, Args&&... args) {
+    get_task_manager_module().abort_source().check();
     auto task_executor = seastar::make_shared<TaskExecutor>(*this, do_throw_if_stopping, std::forward<Args>(args)...);
     _tasks.push_back(*task_executor);
     auto unregister_task = defer([task_executor] {
@@ -1010,7 +1011,7 @@ public:
 };
 
 compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task_manager& tm)
-    : _task_manager_module(make_shared<task_manager_module>(tm))
+    : _task_manager_module(make_shared<task_manager_module>(tm, *this))
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(std::move(cfg))
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
@@ -1047,7 +1048,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
 }
 
 compaction_manager::compaction_manager(tasks::task_manager& tm)
-    : _task_manager_module(make_shared<task_manager_module>(tm))
+    : _task_manager_module(make_shared<task_manager_module>(tm, *this))
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
@@ -1263,9 +1264,6 @@ future<> compaction_manager::start(const db::config& cfg, utils::disk_space_moni
 
 future<> compaction_manager::stop() {
     do_stop();
-    if (auto cm = std::exchange(_task_manager_module, nullptr)) {
-        co_await cm->stop();
-    }
     if (_stop_future) {
         co_await std::exchange(*_stop_future, make_ready_future());
     }
@@ -1275,7 +1273,9 @@ future<> compaction_manager::really_do_stop() noexcept {
     cmlog.info("Asked to stop");
     // Reset the metrics registry
     _metrics.clear();
-    co_await stop_ongoing_compactions("shutdown");
+    if (auto cm = std::exchange(_task_manager_module, nullptr)) {
+        co_await cm->stop();
+    }
     if (!_tasks.empty()) {
         on_fatal_internal_error(cmlog, format("{} tasks still exist after being stopped", _tasks.size()));
     }

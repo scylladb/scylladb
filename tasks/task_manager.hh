@@ -347,7 +347,9 @@ public:
         void register_task(task_ptr task);
         void register_virtual_task(virtual_task_ptr task);
         void unregister_task(task_id id) noexcept;
-        virtual future<> stop() noexcept;
+        future<> stop() noexcept;
+    protected:
+        virtual future<> do_stop() noexcept;
     public:
         // Must be called on target shard.
         // If task has a parent, data concerning its children is updated and sequence number is inherited

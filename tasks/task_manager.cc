@@ -604,7 +604,9 @@ void task_manager::module::unregister_task(task_id id) noexcept {
 future<> task_manager::module::stop() noexcept {
     tmlogger.info("Stopping module {}", _name);
     abort_source().request_abort();
-    co_await _gate.close();
+    auto close_gate = _gate.close();
+    co_await do_stop();
+    co_await std::move(close_gate);
     if (this_shard_id() == 0) {
         for (auto& [group, _]: _tasks._virtual_tasks) {
             _tm.unregister_virtual_task(group);
@@ -612,6 +614,10 @@ future<> task_manager::module::stop() noexcept {
         _tasks._virtual_tasks = {};
     }
     _tm.unregister_module(_name);
+}
+
+future<> task_manager::module::do_stop() noexcept {
+    return make_ready_future();
 }
 
 future<task_manager::task_ptr> task_manager::module::make_task(task::task_impl_ptr task_impl_ptr, task_info parent_d) {
