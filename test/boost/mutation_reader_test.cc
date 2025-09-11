@@ -44,7 +44,7 @@
 
 #include "dht/sharder.hh"
 #include "schema/schema_builder.hh"
-#include "cell_locking.hh"
+#include "replica/cell_locking.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstable_set_impl.hh"
 #include "replica/database.hh"
