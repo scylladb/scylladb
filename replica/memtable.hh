@@ -336,6 +336,9 @@ public:
     const db::replay_position& replay_position() const noexcept {
         return _replay_position;
     }
+    const db::rp_set& get_rp_set() noexcept {
+        return _rp_set;
+    }
     /**
      * Returns the current rp_set, and resets the
      * stored one to empty. Only used for flushing

@@ -21,6 +21,10 @@ namespace replica {
 class database;
 }
 
+namespace db {
+class rp_set;
+}
+
 namespace dht {
 
 class decorated_key;
@@ -54,7 +58,7 @@ public:
 
 class tombstone_gc_options;
 
-using gc_time_min_source = std::function<gc_clock::time_point(const table_id&)>;
+using gc_time_min_source = std::function<gc_clock::time_point(const table_id&, const db::rp_set*)>;
 
 struct range_repair_time {
     dht::token_range range;
@@ -87,8 +91,8 @@ public:
         _gc_min_source = std::move(src);
     }
 
-    gc_clock::time_point get_gc_min_time(const table_id& tid) const noexcept {
-        return _gc_min_source ? _gc_min_source(tid) : gc_clock::time_point::max();
+    gc_clock::time_point get_gc_min_time(const table_id& tid, const db::rp_set* exclude) const noexcept {
+        return _gc_min_source ? _gc_min_source(tid, exclude) : gc_clock::time_point::max();
     }
 
     void update_repair_time(table_id id, const dht::token_range& range, gc_clock::time_point repair_time);
@@ -117,6 +121,7 @@ public:
 class tombstone_gc_state {
     const shared_tombstone_gc_state* _shared_state{nullptr};
     bool _check_commitlog{true};
+    const db::rp_set* _exclude = nullptr; // used to restrict commitlog checks
 
 private:
     [[nodiscard]] gc_clock::time_point check_min(schema_ptr, gc_clock::time_point) const;
@@ -125,15 +130,16 @@ private:
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
 
-    explicit tombstone_gc_state(const shared_tombstone_gc_state* shared_state, bool check_commitlog) noexcept
+    explicit tombstone_gc_state(const shared_tombstone_gc_state* shared_state, bool check_commitlog, const db::rp_set* exclude) noexcept
         : _shared_state(shared_state)
         , _check_commitlog(check_commitlog)
+        , _exclude(exclude)
     { }
 
 public:
     tombstone_gc_state() = delete;
-    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept : tombstone_gc_state(&shared_state, check_commitlog) {}
-    explicit tombstone_gc_state(std::nullptr_t) noexcept : tombstone_gc_state(nullptr, true) {}
+    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept : tombstone_gc_state(&shared_state, check_commitlog, nullptr) {}
+    explicit tombstone_gc_state(std::nullptr_t) noexcept : tombstone_gc_state(nullptr, true, nullptr) {}
 
     explicit operator bool() const noexcept {
         return _shared_state != nullptr;
@@ -153,7 +159,10 @@ public:
     [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const;
 
     // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
-    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_shared_state, false); }
+    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_shared_state, false, nullptr); }
+    [[nodiscard]] tombstone_gc_state with_commitlog_check_restricted(const db::rp_set& exclude) const {
+        return tombstone_gc_state(_shared_state, _check_commitlog, &exclude);
+    }
 };
 
 std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy&, const locator::token_metadata&);
