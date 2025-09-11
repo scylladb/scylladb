@@ -45,6 +45,7 @@
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
 #include "service/session.hh"
+#include "sstables/trie/bti_index.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -548,6 +549,7 @@ private:
     file _data_file;
     file _partitions_file;
     seastar::shared_ptr<cached_file> _cached_partitions_file;
+    std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
     uint64_t _data_file_size;
@@ -691,6 +693,8 @@ private:
     // To be called when we try to load an SSTable that lacks a Summary. Could
     // happen if old tools are being used.
     future<> generate_summary();
+
+    future<> read_partitions_db_footer();
 
     future<> read_statistics();
     void write_statistics();
