@@ -378,6 +378,8 @@ public:
         return _index_file;
     }
     file uncached_index_file();
+    file uncached_partitions_file();
+    file uncached_rows_file();
     // Returns size of bloom filter data.
     uint64_t filter_size() const;
 
@@ -544,8 +546,14 @@ private:
     file _index_file;
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
+    file _partitions_file;
+    seastar::shared_ptr<cached_file> _cached_partitions_file;
+    file _rows_file;
+    seastar::shared_ptr<cached_file> _cached_rows_file;
     uint64_t _data_file_size;
     uint64_t _index_file_size;
+    uint64_t _partitions_file_size = 0;
+    uint64_t _rows_file_size = 0;
     // on-disk size of components but data and index.
     uint64_t _metadata_size_on_disk = 0;
     db_clock::time_point _data_file_write_time;
