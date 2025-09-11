@@ -682,10 +682,12 @@ protected:
     void finish_new_sstable(compaction_writer* writer) {
         writer->writer.set_repaired_at(_output_repaired_at);
         writer->writer.consume_end_of_stream();
-        writer->sst->open_data().get();
-        _end_size += writer->sst->bytes_on_disk();
-        _new_unused_sstables.push_back(writer->sst);
-        _new_partial_sstables.erase(writer->sst);
+        if (!writer->sst->marked_for_deletion()) {
+            writer->sst->open_data().get();
+            _end_size += writer->sst->bytes_on_disk();
+            _new_unused_sstables.push_back(writer->sst);
+            _new_partial_sstables.erase(writer->sst);
+        }
     }
 
     sstable_writer_config make_sstable_writer_config(compaction_type type) {
@@ -740,8 +742,10 @@ protected:
     void stop_gc_compaction_writer(compaction_writer* c_writer) {
         c_writer->writer.consume_end_of_stream();
         auto sst = c_writer->sst;
-        sst->open_data().get();
-        _unused_garbage_collected_sstables.push_back(std::move(sst));
+        if (!sst->marked_for_deletion()) {
+            sst->open_data().get();
+            _unused_garbage_collected_sstables.push_back(std::move(sst));
+        }
     }
 
     // Writes a temporary sstable run containing only garbage collected data.
@@ -1315,11 +1319,19 @@ private:
             return;
         }
         auto permit = seastar::get_units(_replacer_lock, 1).get();
-        // Replace exhausted sstable(s), if any, by new one(s) in the column family.
-        auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (shared_sstable& sst) {
-            return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;
-        };
-        auto exhausted = std::partition(_sstables.begin(), _sstables.end(), not_exhausted);
+
+        auto exhausted = [&]() {
+            // If output SStable is marked for deletion, consider all input SSTables as exhausted.
+            if (sst->marked_for_deletion()) {
+                return _sstables.begin();
+            }
+
+            // Replace exhausted sstable(s), if any, by new one(s) in the column family.
+            auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (shared_sstable& sst) {
+                return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;
+            };
+            return std::partition(_sstables.begin(), _sstables.end(), not_exhausted);;
+        }();
 
         if (exhausted != _sstables.end()) {
             // The goal is that exhausted sstables will be deleted as soon as possible,
@@ -1633,6 +1645,31 @@ private:
             report_fn("Rectifying by adding missing partition-end to the end of the stream");
         }
 
+        void on_malformed_sstable_exception(std::exception_ptr e) {
+            if (_scrub_mode != compaction_type_options::scrub::mode::skip) {
+                throw compaction_aborted_exception(
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        format("scrub compaction failed due to unrecoverable error: {}", e));
+            }
+
+            // Closes the active range tombstone if needed, before emitting partition end.
+            if (auto current_tombstone = _validator.current_tombstone(); current_tombstone) {
+                const auto& last_pos = _validator.previous_position();
+                auto after_last_pos = position_in_partition::after_key(*_schema, last_pos.key());
+                auto rtc = range_tombstone_change(std::move(after_last_pos), tombstone{});
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));
+            }
+
+            // Emit partition end if needed.
+            if (_validator.previous_mutation_fragment_kind() != mutation_fragment_v2::kind::partition_end) {
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
+            }
+
+            // Report the end of stream.
+            _end_of_stream = true;
+        }
+
         void fill_buffer_from_underlying() {
             utils::get_local_injector().inject("rest_api_keyspace_scrub_abort", [] { throw compaction_aborted_exception("", "", "scrub compaction found invalid data"); });
             while (!_reader.is_buffer_empty() && !is_buffer_full()) {
@@ -1705,6 +1742,8 @@ private:
                 } catch (const storage_io_error&) {
                     // Propagate these unchanged.
                     throw;
+                } catch (const malformed_sstable_exception& e) {
+                    on_malformed_sstable_exception(std::current_exception());
                 } catch (...) {
                     // We don't want failed scrubs to be retried.
                     throw compaction_aborted_exception(
