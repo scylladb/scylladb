@@ -652,7 +652,7 @@ You can feed the output of dump-data to write by filtering the output of the for
 .. code-block:: console
 
     scylla sstable dump-data --system-schema system_schema.columns /path/to/me-14-big-Data.db | jq .sstables[] > input.json
-    scylla sstable write --system-schema system_schema.columns --input-file ./input.json --generation 0
+    scylla sstable write --system-schema system_schema.columns --input-file ./input.json
     scylla sstable dump-data --system-schema system_schema.columns ./me-0-big-Data.db | jq .sstables[] > dump.json
 
 At the end of the above, ``input.json`` and ``dump.json`` will have the same content.
@@ -664,7 +664,7 @@ Note that `write` doesn't yet support all the features of the ScyllaDB storage e
 
 Parsing uses a streaming JSON parser, it is safe to pass in input files of any size.
 
-The output SStable will use the BIG format, the highest supported SStable format, and the specified generation (``--generation``).
+The output SStable will use the BIG format, the highest supported SStable format and a random UUID generation, which is printed to stdout.
 By default, it is placed in the local directory, which can be changed with ``--output-dir``.
 If the output SStable clashes with an existing SStable, the write will fail.
 
