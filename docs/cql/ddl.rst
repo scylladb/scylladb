@@ -97,7 +97,7 @@ A keyspace is created using a ``CREATE KEYSPACE`` statement:
 
 .. code-block:: cql
 
-   create_keyspace_statement: CREATE KEYSPACE [ IF NOT EXISTS ] `keyspace_name` WITH `options`
+   create_keyspace_statement: CREATE KEYSPACE [ IF NOT EXISTS ] `keyspace_name` [ WITH `options` ]
 
 For example:
 
@@ -112,14 +112,16 @@ The supported ``options`` are:
 =================== ========== =========== ========= ===================================================================
 name                 kind       mandatory   default   description
 =================== ========== =========== ========= ===================================================================
-``replication``      *map*      yes                   The replication strategy and options to use for the keyspace (see
+``replication``      *map*      no                    The replication strategy and options to use for the keyspace (see
                                                       details below).
 ``durable_writes``   *simple*   no          true      Whether to use the commit log for updates on this keyspace
                                                       (disable this option at your own risk!).
 ``tablets``          *map*      no                    Enables or disables tablets for the keyspace (see :ref:`tablets <tablets>`)
 =================== ========== =========== ========= ===================================================================
 
-The ``replication`` property is mandatory. It contains the ``'class'`` sub-option, which defines the replication strategy class to use.
+The ``replication`` property is optional. Omitting it is equivalent to supplying an empty map (``replication = {}``),
+and default value will be applied for each sub-option.
+The ``replication`` property contains the ``'class'`` sub-option, which defines the replication strategy class to use.
 If ``'class'`` is not specified, it defaults to ``'NetworkTopologyStrategy'``.
 The rest of the sub-options depend on what replication strategy is used.
 By default, ScyllaDB supports the following ``'class'``:
@@ -229,6 +231,13 @@ An example that excludes both class and datacenter options::
 
     CREATE KEYSPACE excalibur
         WITH replication = {} ;
+
+    DESCRIBE KEYSPACE excalibur
+        CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3', 'DC2': '2'} AND durable_writes = true;
+
+An example that excludes the whole ``replication`` option::
+
+    CREATE KEYSPACE excalibur ;
 
     DESCRIBE KEYSPACE excalibur
         CREATE KEYSPACE excalibur WITH replication = {'class': 'NetworkTopologyStrategy', 'DC1': '3', 'DC2': '2'} AND durable_writes = true;
