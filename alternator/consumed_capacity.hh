@@ -63,4 +63,11 @@ public:
     static uint64_t get_units(uint64_t total_bytes) noexcept;
 };
 
+inline size_t dynamo_field_size(const bytes& value) {
+    // ScyllaDB uses one extra byte compared to DynamoDB for the bytes length
+    return value.length() ? value.length() - 1 : 0;
+}
+inline size_t dynamo_field_size(const sstring& value) {
+    return value.length();
+}
 }

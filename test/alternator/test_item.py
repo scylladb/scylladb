@@ -223,6 +223,9 @@ def test_update_item_wrong_key_type(test_table, test_table_s):
         test_table.get_item(Key={'p': s, 'c': s, 'spurious': s})
     with pytest.raises(ClientError, match='ValidationException'):
         test_table_s.get_item(Key={'p': s, 'c': s})
+    # Should fail (too large key)
+    with pytest.raises(ClientError, match='InternalServerError.*Key size too large'):
+        test_table_s.update_item(Key={'p': 'a' * 65534})
 def test_get_item_wrong_key_type(test_table, test_table_s):
     b = random_bytes()
     s = random_string()

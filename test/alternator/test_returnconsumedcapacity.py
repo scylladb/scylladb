@@ -6,7 +6,7 @@
 
 import pytest
 from botocore.exceptions import ClientError
-from test.alternator.util import random_string, random_bytes, new_test_table
+from test.alternator.util import random_string, random_bytes, new_test_table, scylla_config_temporary
 import decimal
 from decimal import Decimal
 KB = 1024
@@ -277,20 +277,101 @@ def test_simple_update_missing_item(test_table_sb):
 
 # The test validates the length of the values passed to update is taking into account
 # when calculating the WCU
-def test_update_item_long_attr(test_table_sb):
+@pytest.mark.parametrize("total_length,expected_wcu", [(2*KB + 1, 3), (2*KB, 2)])
+def test_update_item_long_attr(test_table_sb, total_length, expected_wcu):
     p = random_string()
     val = random_string()
     c = random_bytes()
     test_table_sb.put_item(Item={'p': p, 'c': c, 'att': val}, ReturnConsumedCapacity='TOTAL')
     combined_keys = "pcatt" # Takes all the keys and make one single string out of them
-    total_length = len(p) + len(c) + len(combined_keys)
+    key_length = len(p) + len(c) + len(combined_keys)
 
-    val1 = 'a' * (2*KB + 1 - total_length) # val1 is a string that makes the total message length equals 2KB +1
+    val1 = 'a' * (total_length - key_length)  # val1 pads the total message length to total_length
     response = test_table_sb.update_item(Key={'p': p, 'c': c},
         UpdateExpression='SET att = :val1',
         ExpressionAttributeValues={':val1': val1}, ReturnConsumedCapacity='TOTAL')
     assert 'ConsumedCapacity' in response
-    assert 3 == response['ConsumedCapacity']["CapacityUnits"]
+    assert expected_wcu == response['ConsumedCapacity']["CapacityUnits"]
+
+# Small numbers seem to take 5 B.
+@pytest.mark.parametrize("total_length,expected_wcu", [(2*KB + 1, 3), (2*KB, 2)])
+def test_update_item_long_attr_and_number(test_table_s, total_length, expected_wcu):
+    NUM_LEN = 5
+    p = random_string()
+    val = random_string()
+    test_table_s.put_item(Item={'p': p, 'att': val}, ReturnConsumedCapacity='TOTAL')
+    combined_keys = "pattnum" # Takes all the keys and make one single string out of them
+    key_length = len(p) + len(combined_keys)
+
+    val1 = 'a' * (total_length - key_length - NUM_LEN)  # val1 pads the total message length to total_length
+    response = test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET num = :num, att = :val1',
+        ExpressionAttributeValues={':num': 1, ':val1': val1}, ReturnConsumedCapacity='TOTAL')
+    assert 'ConsumedCapacity' in response
+    assert expected_wcu == response['ConsumedCapacity']["CapacityUnits"]
+
+# Consumed WCU is the maximum of the item's size before the update, and the
+# item's size after the update. This test verifies that an existing field 'a'
+# and a new field 'b' are included in the new item's size.
+#
+# Withouht forced read-before-write, only the updated parameters contribute to
+# the item's size.
+@pytest.mark.parametrize('force_rbw,expected_wcu', [('true', 8), ('false', 3)])
+def test_update_item_update_expression_considers_old_and_new(dynamodb, test_table_sb, force_rbw, expected_wcu):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', force_rbw):
+        p = random_string()
+        c = random_bytes()
+        test_table_sb.put_item(Item={'p': p, 'c': c, 'a': 'a' * 5 * KB})
+
+        response = test_table_sb.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET b = :b_value',
+            ExpressionAttributeValues={':b_value': 'b' * 2 * KB},
+            ReturnConsumedCapacity='TOTAL')
+
+        assert 'ConsumedCapacity' in response
+        assert expected_wcu == response['ConsumedCapacity']["CapacityUnits"]
+
+def test_update_item_larger_override_considers_new_item_only(dynamodb, test_table_sb):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        p = random_string()
+        c = random_bytes()
+        test_table_sb.put_item(Item={'p': p, 'c': c, 'a': 'a'})
+
+        response = test_table_sb.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET a = :a_value',
+            ExpressionAttributeValues={':a_value': 'a' * 4 * KB},
+            ReturnConsumedCapacity='TOTAL')
+
+        assert 'ConsumedCapacity' in response
+        assert 5 == response['ConsumedCapacity']["CapacityUnits"]
+
+def test_update_item_smaller_override_considers_old_item_only(dynamodb, test_table_sb):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', 'true'):
+        p = random_string()
+        c = random_bytes()
+        test_table_sb.put_item(Item={'p': p, 'c': c, 'a': 'a' * 4 * KB})
+
+        response = test_table_sb.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET a = :a_value',
+            ExpressionAttributeValues={':a_value': 'a' * 2 * KB},
+            ReturnConsumedCapacity='TOTAL')
+
+        assert 'ConsumedCapacity' in response
+        assert 5 == response['ConsumedCapacity']["CapacityUnits"]
+
+@pytest.mark.parametrize('force_rbw,expected_wcu', [('true', 8), ('false', 3)])
+def test_update_item_attribute_updates(dynamodb, test_table_s, force_rbw, expected_wcu):
+    with scylla_config_temporary(dynamodb, 'alternator_force_read_before_write', force_rbw):
+        p = random_string()
+        test_table_s.put_item(Item={'p': p, 'b': 'b' * 5 * KB})
+
+        response = test_table_s.update_item(Key={'p': p},
+            AttributeUpdates={'a': {'Value': 'a' * 2 * KB, 'Action': 'PUT'}},
+            ReturnConsumedCapacity='TOTAL')
+
+        assert test_table_s.get_item(Key={'p': p})['Item'] == {'p': p, 'a': 'a' * 2 * KB, 'b': 'b' * 5 * KB}
+        assert 'ConsumedCapacity' in response
+        assert expected_wcu == response['ConsumedCapacity']["CapacityUnits"]
 
 # Validates that when the old value is returned the WCU takes
 # Its size into account in the WCU calculation.
