@@ -201,3 +201,80 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
         # will be held for long time until the write timeouts.
         # Otherwise, it is expected to complete in short time.
         await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=180)
+
+# Write to a table with MV with RF=1, generating view updates, while tablets are migrating,
+# and verify all expected rows appear in the MV eventually.
+# Checks for issues of view update generation during tablet migration.
+# Reproduces #24292
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_write_during_tablet_migration(manager: ManagerClient):
+    cfg = {'error_injections_at_startup': ['tablet_allocator_shuffle']}
+    cmdline = ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(3, config=cfg, cmdline=cmdline)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (id int primary key, v int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.t_by_v AS SELECT * FROM t WHERE v IS NOT NULL AND id IS NOT NULL PRIMARY KEY (v, id)")
+
+        N = 50000
+        stmt = cql.prepare(f"INSERT INTO {ks}.t(id, v) VALUES(?, ?)")
+        for i in range(0, N, 100):
+            await asyncio.gather(*[cql.run_async(stmt, [k, -k]) for k in range(i, i + 100)])
+
+        async def all_rows_found():
+            rows = await cql.run_async(f"SELECT COUNT(*) AS cnt FROM {ks}.t_by_v")
+            if len(rows) == 1 and rows[0].cnt == N:
+                return True
+        try:
+            await wait_for(all_rows_found, time.time() + 60)
+        except Exception:
+            table_rows = await cql.run_async(f"SELECT id, token(id) AS tk FROM {ks}.t")
+            id_to_token = {row.id: row.tk for row in table_rows}
+            mv_rows = await cql.run_async(f"SELECT * FROM {ks}.t_by_v")
+            missing_id = id_to_token.keys() - {row.id for row in mv_rows}
+            for mid in missing_id:
+                logger.error("Missing MV row for id %s base token %s", mid, id_to_token[mid])
+            raise
+
+# Write to a table with MV with RF=1, generating view updates, while adding a new node,
+# and verify all expected rows appear in the MV eventually.
+# Checks for issues of view update generation during node bootstrapping.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_write_during_add_node(manager: ManagerClient):
+    cmdline = ['--logger-log-level', 'raft_topology=debug']
+    servers = await manager.servers_add(3, cmdline=cmdline)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (id int primary key, v int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.t_by_v AS SELECT * FROM t WHERE v IS NOT NULL AND id IS NOT NULL PRIMARY KEY (v, id)")
+
+        N = 50000
+        stmt = cql.prepare(f"INSERT INTO {ks}.t(id, v) VALUES(?, ?)")
+
+        async def do_inserts():
+            for i in range(0, N, 100):
+                await asyncio.gather(*[cql.run_async(stmt, [k, -k]) for k in range(i, i + 100)])
+
+        async def add_node():
+            await manager.server_add(cmdline=cmdline)
+
+        await asyncio.gather(do_inserts(), add_node())
+
+        async def all_rows_found():
+            rows = await cql.run_async(f"SELECT COUNT(*) AS cnt FROM {ks}.t_by_v")
+            if len(rows) == 1 and rows[0].cnt == N:
+                return True
+        try:
+            await wait_for(all_rows_found, time.time() + 60)
+        except Exception:
+            table_rows = await cql.run_async(f"SELECT id, token(id) AS tk FROM {ks}.t")
+            id_to_token = {row.id: row.tk for row in table_rows}
+            mv_rows = await cql.run_async(f"SELECT * FROM {ks}.t_by_v")
+            missing_id = id_to_token.keys() - {row.id for row in mv_rows}
+            for mid in missing_id:
+                logger.error("Missing MV row for id %s base token %s", mid, id_to_token[mid])
+            raise
