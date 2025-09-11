@@ -7,6 +7,9 @@
  */
 
 #include <seastar/core/coroutine.hh>
+#include "auth/authenticated_user.hh"
+#include "auth/authenticator.hh"
+#include "db/config.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/eventually.hh"
@@ -2160,5 +2163,51 @@ SEASTAR_TEST_CASE(test_large_allocations) {
     });
 }
 #endif
+
+SEASTAR_TEST_CASE(test_alter_index_has_permissions) {
+    cql_test_config cfg{};
+    cfg.db_config->authenticator("PasswordAuthenticator");
+    cfg.db_config->authorizer("CassandraAuthorizer");
+
+    // Verify that ALTER INDEX can only be executed by users that have permissions to alter the underlying materialized view.
+    return do_with_cql_env_thread([] (cql_test_env& e) -> future<> {
+        auto authenticate = [&e] (sstring role, sstring password) -> future<auth::authenticated_user> {
+            auto& authenticator = e.local_auth_service().underlying_authenticator();
+            auth::authenticator::credentials_map cm {
+                    {auth::authenticator::USERNAME_KEY, std::move(role)},
+                    {auth::authenticator::PASSWORD_KEY, std::move(password)}
+            };
+
+            auth::authenticated_user user = authenticator.authenticate(cm).get();
+            e.local_client_state().set_login(std::move(user));
+
+            e.local_client_state().check_user_can_login().get();
+            return make_ready_future<auth::authenticated_user>(*e.local_client_state().user());
+        };
+
+        e.execute_cql("CREATE TABLE t (p int PRIMARY KEY, v int)").get();
+        e.execute_cql("CREATE INDEX i ON t(v)").get();
+
+        e.execute_cql("CREATE ROLE r1 WITH PASSWORD = 'somepass' AND LOGIN = true").get();
+        e.execute_cql("CREATE ROLE r2 WITH PASSWORD = 'somepass' AND LOGIN = true").get();
+
+        e.execute_cql("GRANT ALTER ON ks.t TO r1").get();
+
+        authenticate("r1", "somepass").get();
+        // Should succeed: r1 has permissions to modify the base table.
+        e.execute_cql("ALTER INDEX i WITH gc_grace_seconds = 13").get();
+
+        authenticate("r2", "somepass").get();
+        // Should fail: r2 has no permissions.
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER INDEX i WITH gc_grace_seconds = 13").get(), exceptions::unauthorized_exception);
+
+        e.local_client_state().set_login(auth::anonymous_user());
+        e.refresh_client_state().get();
+        // Should fail: the anonymous user has no permission to alter the base table.
+        BOOST_REQUIRE_THROW(e.execute_cql("ALTER INDEX i WITH gc_grace_seconds = 13").get(), exceptions::unauthorized_exception);
+
+        return make_ready_future();
+    }, cfg);
+}
 
 BOOST_AUTO_TEST_SUITE_END()
