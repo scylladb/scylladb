@@ -859,6 +859,10 @@ void token_metadata::set_shared_token_metadata(shared_token_metadata& stm) {
     _shared_token_metadata = &stm;
 }
 
+shared_token_metadata& token_metadata::get_shared_token_metadata() {
+    return *_shared_token_metadata;
+}
+
 const utils::chunked_vector<token>&
 token_metadata::sorted_tokens() const {
     return _impl->sorted_tokens();
@@ -1336,6 +1340,30 @@ gms::inet_address host_id_or_endpoint::resolve_endpoint(const gms::gossiper& g) 
         throw std::runtime_error(format("Host ID {} not found in the cluster", id()));
     }
     return *endpoint_opt;
+}
+
+future<> pending_token_metadata::assign(locator::mutable_token_metadata_ptr new_token_metadata) {
+    auto& sharded_token_metadata = new_token_metadata->get_shared_token_metadata().container();
+    // clone a local copy of new_token_metadata on all other shards
+    co_await smp::invoke_on_others([this, &new_token_metadata, &sharded_token_metadata] () -> future<> {
+        local() = sharded_token_metadata.local().make_token_metadata_ptr(
+                co_await new_token_metadata->clone_async());
+    });
+    local() = std::move(new_token_metadata);
+}
+
+locator::mutable_token_metadata_ptr& pending_token_metadata::local() {
+    return _shards[this_shard_id()];
+}
+
+locator::token_metadata_ptr pending_token_metadata::local() const {
+    return _shards[this_shard_id()];
+}
+
+future<> pending_token_metadata::destroy() {
+    return smp::invoke_on_all([this] () {
+        _shards[this_shard_id()] = nullptr;
+    });
 }
 
 } // namespace locator

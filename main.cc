@@ -1924,6 +1924,9 @@ sharded<locator::shared_token_metadata> token_metadata;
             checkpoint(stop_signal, "loading non-system sstables");
             replica::distributed_loader::init_non_system_keyspaces(db, proxy, sys_ks).get();
 
+            // Done in the background. Depends on all keyspaces being initialized.
+            (void)mm.local().maybe_reload_schema();
+
             checkpoint(stop_signal, "starting commit log");
             auto cl = db.local().commitlog();
 
