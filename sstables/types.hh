@@ -38,6 +38,7 @@ inline bytes_view to_bytes_view(const temporary_buffer<char>& b) {
 namespace sstables {
 
 using use_caching = bool_class<struct use_caching_tag>;
+using prefer_bti_index = bool_class<struct prefer_bti_index_tag>;
 
 template<typename T>
 concept Writer =

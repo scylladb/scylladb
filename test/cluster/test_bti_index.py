@@ -146,4 +146,9 @@ async def test_bti_index_enable(manager: ManagerClient) -> None:
     await test_files_presence(bti_should_exist=True, big_should_exist=True)
     await test_bti_usage_during_reads(should_use_bti=False, use_cache=False)
 
+    logger.info("Step 8: Enabling BTI preference for reads, checking that BTI is used.")
+    await test_bti_usage_during_reads(should_use_bti=False, use_cache=False)
+    await live_update_config(manager, servers, 'sstable_index_preferred_read_formats', ['bti'])
+    await test_bti_usage_during_reads(should_use_bti=True, use_cache=False)
+
     manager.driver_close()

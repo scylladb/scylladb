@@ -1055,7 +1055,8 @@ public:
     std::unique_ptr<abstract_index_reader> make_index_reader(
         reader_permit permit,
         tracing::trace_state_ptr trace_state = {},
-        use_caching caching = use_caching::yes,
+        prefer_bti_index = prefer_bti_index::no,
+        use_caching = use_caching::yes,
         bool single_partition_read = false);
 
     // Allow the test cases from sstable_test.cc to test private methods. We use

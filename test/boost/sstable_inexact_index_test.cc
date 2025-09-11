@@ -19,7 +19,7 @@
 // in the Data file.
 std::vector<uint64_t> get_ck_positions(shared_sstable sst, reader_permit permit) {
     std::vector<uint64_t> result;
-    auto abstract_r = sst->make_index_reader(permit, nullptr, use_caching::no, false);
+    auto abstract_r = sst->make_index_reader(permit, nullptr, prefer_bti_index::no, use_caching::no, false);
     auto& r = dynamic_cast<index_reader&>(*abstract_r);
     r.advance_to(dht::partition_range::make_open_ended_both_sides()).get();
     r.read_partition_data().get();
@@ -40,7 +40,7 @@ std::vector<uint64_t> get_ck_positions(shared_sstable sst, reader_permit permit)
 std::vector<uint64_t> get_partition_positions(shared_sstable sst, reader_permit permit) {
     std::vector<uint64_t> result;
     {
-        auto ir = sst->make_index_reader(permit, nullptr, use_caching::no, false);
+        auto ir = sst->make_index_reader(permit, nullptr, prefer_bti_index::no, use_caching::no, false);
         ir->advance_to(dht::partition_range::make_open_ended_both_sides()).get();
         ir->read_partition_data().get();
         auto close_ir = deferred_close(*ir);

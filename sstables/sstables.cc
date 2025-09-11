@@ -2421,7 +2421,11 @@ sstable::make_reader(
     const auto reversed = slice.is_reversed();
 
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
-    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
+    const auto& preferred_index_formats = _manager.config().sstable_index_preferred_read_formats();
+    auto prefer_bti = prefer_bti_index(
+            preferred_index_formats.size() > 0
+            && db::sstable_index_format_t::mode(preferred_index_formats[0]) == db::sstable_index_format_t::mode::bti);
+    auto index_reader = make_index_reader(permit, trace_state, prefer_bti, index_caching, range.is_singular());
 
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
         return mx::make_reader(shared_from_this(), std::move(query_schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon, integrity, std::move(index_reader));
@@ -3452,8 +3456,44 @@ gc_clock::time_point sstable::get_gc_before_for_fully_expire(const gc_clock::tim
 std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
     reader_permit permit,
     tracing::trace_state_ptr trace_state,
+    prefer_bti_index bti_index,
     use_caching caching,
-    bool single_partition_read) {
+    bool single_partition_read
+) {
+    if (!_index_file || (_partitions_file && bti_index == prefer_bti_index::yes)) {
+        if (!_partitions_db_footer) [[unlikely]] {
+            on_internal_error(sstlog, fmt::format("_partitions_db_footer is empty for sstable {}", get_filename()));
+        }
+        auto cached_partitions_file = caching == use_caching::yes
+            ? _cached_partitions_file
+            :  seastar::make_shared<cached_file>(
+                _partitions_file,
+                _manager.get_cache_tracker().get_partitions_cached_file_stats(),
+                _manager.get_cache_tracker().get_lru(),
+                _manager.get_cache_tracker().region(),
+                _cached_partitions_file->size(),
+                trace_state ? component_name(*this, component_type::Partitions).format() : sstring()
+            );
+            auto cached_rows_file = caching == use_caching::yes
+            ? _cached_rows_file
+            :  seastar::make_shared<cached_file>(
+                _rows_file,
+                _manager.get_cache_tracker().get_rows_cached_file_stats(),
+                _manager.get_cache_tracker().get_lru(),
+                _manager.get_cache_tracker().region(),
+                _cached_rows_file->size(),
+                trace_state ? component_name(*this, component_type::Rows).format() : sstring()
+            );
+        return trie::make_bti_index_reader(
+            cached_partitions_file,
+            cached_rows_file,
+            _partitions_db_footer.value().trie_root_position,
+            data_size(),
+            _schema,
+            std::move(permit),
+            std::move(trace_state)
+        );
+    }
     return std::make_unique<index_reader>(shared_from_this(), std::move(permit), std::move(trace_state), caching, single_partition_read);
 }
 
