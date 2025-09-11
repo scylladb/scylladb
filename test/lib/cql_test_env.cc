@@ -724,7 +724,7 @@ private:
                                                      std::chrono::duration_cast<std::chrono::milliseconds>(cql3::prepared_statements_cache::entry_expiry));
             auth_prep_cache_config.refresh = std::chrono::milliseconds(cfg->permissions_update_interval_in_ms());
 
-            _vector_store_client.start(std::ref(*cfg)).get();
+            _vector_store_client.start(std::ref(*cfg), std::ref(_mnotifier), std::ref(_db)).get();
             auto stop_vector_store_client = defer_verbose_shutdown("vector store client", [this] {
                 _vector_store_client.stop().get();
             });

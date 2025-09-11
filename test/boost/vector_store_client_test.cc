@@ -6,16 +6,20 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "replica/database.hh"
+#include "service/migration_listener.hh"
 #include "service/vector_store_client.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
+#include <boost/test/tools/old/interface.hpp>
 #include <functional>
 #include <chrono>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/net/api.hh>
 #include <seastar/http/function_handlers.hh>
 #include <seastar/http/httpd.hh>
@@ -131,6 +135,30 @@ auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) 
     co_return env.local_db().find_schema(ks, cf);
 }
 
+auto create_vs_server(lw_shared_ptr<std::queue<std::tuple<sstring, sstring>>> ann_replies) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    return new_http_server([ann_replies](routes& r) {
+        auto ann = [ann_replies](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+            BOOST_REQUIRE(!ann_replies->empty());
+            auto [req_exp, rep_inp] = ann_replies->front();
+            auto const req_inp = co_await util::read_entire_stream_contiguous(*req->content_stream);
+            BOOST_CHECK_EQUAL(req_inp, req_exp);
+            ann_replies->pop();
+            rep->set_status(status_type::ok);
+            rep->write_body("json", rep_inp);
+            co_return rep;
+        };
+        r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
+    });
+}
+
+auto get_metrics_value(sstring metric_name, const auto& all_metrics) {
+    const auto& all_metadata = *all_metrics->metadata;
+    const auto m = find_if(cbegin(all_metadata), cend(all_metadata), [&metric_name](const auto& x) {
+        return x.mf.name == metric_name;
+    });
+    return all_metrics->values[distance(cbegin(all_metadata), m)].cbegin();
+}
+
 class configure {
     std::reference_wrapper<service::vector_store_client> vs_ref;
 
@@ -179,177 +207,194 @@ public:
 
 } // namespace
 
-BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
+SEASTAR_TEST_CASE(vector_store_client_test_ctor) {
     {
-        auto cfg = config();
-        auto vs = vector_store_client{cfg};
-        BOOST_CHECK(vs.is_disabled());
-        BOOST_CHECK(!vs.host());
-        BOOST_CHECK(!vs.port());
+        co_await do_with_cql_env([](cql_test_env& env) -> future<> {
+            auto& vs = env.local_qp().vector_store_client();
+            BOOST_CHECK(vs.is_disabled());
+            BOOST_CHECK(!vs.host());
+            BOOST_CHECK(!vs.port());
+            return make_ready_future();
+        });
     }
     {
-        auto cfg = config();
-        cfg.vector_store_uri.set("http://good.authority.com:6080");
-        auto vs = vector_store_client{cfg};
-        BOOST_CHECK(!vs.is_disabled());
-        BOOST_CHECK_EQUAL(*vs.host(), "good.authority.com");
-        BOOST_CHECK_EQUAL(*vs.port(), 6080);
+        auto cfg = cql_test_config();
+        cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+        co_await do_with_cql_env(
+                [](cql_test_env& env) -> future<> {
+                    auto& vs = env.local_qp().vector_store_client();
+                    BOOST_CHECK(!vs.is_disabled());
+                    BOOST_CHECK_EQUAL(*vs.host(), "good.authority.here");
+                    BOOST_CHECK_EQUAL(*vs.port(), 6080);
+                    return make_ready_future();
+                },
+                cfg);
     }
     {
-        auto cfg = config();
-        cfg.vector_store_uri.set("http://bad,authority.com:6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("bad-schema://authority.com:6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://bad.port.com:a6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://bad.port.com:60806080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://bad.format.com:60:80");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://authority.com:6080/bad/path");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+        co_await do_with_cql_env([](cql_test_env& env) -> future<> {
+            auto cfg = config();
+            auto& mnotifier = env.local_mnotifier();
+            auto& db = env.local_db();
+            cfg.vector_store_uri.set("http://bad,authority.com:6080");
+            BOOST_CHECK_THROW((vector_store_client{cfg, mnotifier, db}), configuration_exception);
+            cfg.vector_store_uri.set("bad-schema://authority.com:6080");
+            BOOST_CHECK_THROW((vector_store_client{cfg, mnotifier, db}), configuration_exception);
+            cfg.vector_store_uri.set("http://bad.port.com:a6080");
+            BOOST_CHECK_THROW((vector_store_client{cfg, mnotifier, db}), configuration_exception);
+            cfg.vector_store_uri.set("http://bad.port.com:60806080");
+            BOOST_CHECK_THROW((vector_store_client{cfg, mnotifier, db}), configuration_exception);
+            cfg.vector_store_uri.set("http://bad.format.com:60:80");
+            BOOST_CHECK_THROW((vector_store_client{cfg, mnotifier, db}), configuration_exception);
+            cfg.vector_store_uri.set("http://authority.com:6080/bad/path");
+            BOOST_CHECK_THROW((vector_store_client{cfg, mnotifier, db}), configuration_exception);
+            co_return;
+        });
     }
 }
 
 /// Resolving of the hostname is started in start_background_tasks()
 SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
-    auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-    auto vs = vector_store_client{cfg};
-    configure(vs).with_dns({{"good.authority.here", "127.0.0.1"}});
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"good.authority.here", "127.0.0.1"}});
 
-    vs.start_background_tasks();
+                vs.start_background_tasks();
 
-    auto as = abort_source_timeout();
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
-
-    co_await vs.stop();
+                auto as = abort_source_timeout();
+                auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                BOOST_REQUIRE(addr);
+                BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
+            },
+            cfg);
 }
 
 /// Unable to resolve the hostname
 SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
-    auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-    auto vs = vector_store_client{cfg};
-    configure(vs).with_dns({{"good.authority.here", std::nullopt}});
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"good.authority.here", std::nullopt}});
 
-    vs.start_background_tasks();
+                vs.start_background_tasks();
 
-    auto as = abort_source_timeout();
-    BOOST_CHECK(!co_await vector_store_client_tester::resolve_hostname(vs, as.as));
-
-    co_await vs.stop();
+                auto as = abort_source_timeout();
+                BOOST_CHECK(!co_await vector_store_client_tester::resolve_hostname(vs, as.as));
+            },
+            cfg);
 }
 
 /// Resolving of the hostname is repeated after errors
 SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
-    auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-    auto vs = vector_store_client{cfg};
+    auto cfg = cql_test_config();
     auto count = 0;
-    configure(vs)
-            .with_dns_refresh_interval(milliseconds(10))
-            .with_wait_for_client_timeout(milliseconds(20))
-            .with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
-                BOOST_CHECK_EQUAL(host, "good.authority.here");
-                count++;
-                if (count % 3 != 0) {
-                    co_return std::nullopt;
-                }
-                co_return inet_address(format("127.0.0.{}", count));
-            });
+    cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [&count](cql_test_env& env) -> future<> {
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs)
+                        .with_dns_refresh_interval(milliseconds(10))
+                        .with_wait_for_client_timeout(milliseconds(20))
+                        .with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
+                            BOOST_CHECK_EQUAL(host, "good.authority.here");
+                            count++;
+                            if (count % 3 != 0) {
+                                co_return std::nullopt;
+                            }
+                            co_return inet_address(format("127.0.0.{}", count));
+                        });
 
-    vs.start_background_tasks();
+                vs.start_background_tasks();
 
-    auto as = abort_source_timeout();
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        co_return co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    }));
-    BOOST_CHECK_EQUAL(count, 3);
-    as.reset();
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.3");
+                auto as = abort_source_timeout();
+                BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+                    co_return co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                }));
+                BOOST_CHECK_EQUAL(count, 3);
+                auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                BOOST_REQUIRE(addr);
+                BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.3");
 
-    vector_store_client_tester::trigger_dns_resolver(vs);
+                vector_store_client_tester::trigger_dns_resolver(vs);
 
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        as.reset();
-        co_return !co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    }));
+                BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+                    co_return !co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                }));
 
-    BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        as.reset();
-        co_return co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    }));
-    BOOST_CHECK_EQUAL(count, 6);
-    as.reset();
-    addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.6");
-
-    co_await vs.stop();
+                BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
+                    co_return co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                }));
+                BOOST_CHECK_EQUAL(count, 6);
+                addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                BOOST_REQUIRE(addr);
+                BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.6");
+            },
+            cfg);
 }
 
 /// Minimal interval between DNS refreshes is respected
 SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
-    auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-    auto vs = vector_store_client{cfg};
-    auto count = 0;
-    configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
-        BOOST_CHECK_EQUAL(host, "good.authority.here");
-        count++;
-        co_return inet_address("127.0.0.1");
-    });
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto& vs = env.local_qp().vector_store_client();
+                auto count = 0;
+                configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
+                    BOOST_CHECK_EQUAL(host, "good.authority.here");
+                    count++;
+                    co_return inet_address("127.0.0.1");
+                });
 
-    vs.start_background_tasks();
-    co_await sleep(milliseconds(20)); // wait for the first DNS refresh
+                vs.start_background_tasks();
+                co_await sleep(milliseconds(20)); // wait for the first DNS refresh
 
-    auto as = abort_source_timeout();
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
-    BOOST_CHECK_EQUAL(count, 1);
-    count = 0;
-    vector_store_client_tester::trigger_dns_resolver(vs);
-    vector_store_client_tester::trigger_dns_resolver(vs);
-    vector_store_client_tester::trigger_dns_resolver(vs);
-    vector_store_client_tester::trigger_dns_resolver(vs);
-    vector_store_client_tester::trigger_dns_resolver(vs);
-    co_await sleep(milliseconds(100)); // wait for the next DNS refresh
+                auto as = abort_source_timeout();
+                auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                BOOST_REQUIRE(addr);
+                BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
+                BOOST_CHECK_EQUAL(count, 1);
+                count = 0;
+                vector_store_client_tester::trigger_dns_resolver(vs);
+                vector_store_client_tester::trigger_dns_resolver(vs);
+                vector_store_client_tester::trigger_dns_resolver(vs);
+                vector_store_client_tester::trigger_dns_resolver(vs);
+                vector_store_client_tester::trigger_dns_resolver(vs);
+                co_await sleep(milliseconds(100)); // wait for the next DNS refresh
 
-    as.reset();
-    addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
-    BOOST_CHECK_GE(count, 1);
-    BOOST_CHECK_LE(count, 2);
-
-    co_await vs.stop();
+                addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                BOOST_REQUIRE(addr);
+                BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
+                BOOST_CHECK_GE(count, 1);
+                BOOST_CHECK_LE(count, 2);
+            },
+            cfg);
 }
 
 /// DNS refresh could be aborted
 SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
-    auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-    auto vs = vector_store_client{cfg};
-    configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&](auto const& host) -> future<std::optional<inet_address>> {
-        BOOST_CHECK_EQUAL(host, "good.authority.here");
-        co_await sleep(milliseconds(100));
-        co_return inet_address("127.0.0.1");
-    });
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&](auto const& host) -> future<std::optional<inet_address>> {
+                    BOOST_CHECK_EQUAL(host, "good.authority.here");
+                    co_await sleep(milliseconds(100));
+                    co_return inet_address("127.0.0.1");
+                });
 
-    vs.start_background_tasks();
+                vs.start_background_tasks();
 
-    auto as = abort_source_timeout(milliseconds(10));
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_CHECK(!addr);
-
-    co_await vs.stop();
+                auto as = abort_source_timeout(milliseconds(10));
+                auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                BOOST_CHECK(!addr);
+            },
+            cfg);
 }
 
 SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
@@ -428,19 +473,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
     auto ann_replies = make_lw_shared<std::queue<std::tuple<sstring, sstring>>>();
-    auto [server, addr] = co_await new_http_server([ann_replies](routes& r) {
-        auto ann = [ann_replies](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-            BOOST_REQUIRE(!ann_replies->empty());
-            auto [req_exp, rep_inp] = ann_replies->front();
-            auto const req_inp = co_await util::read_entire_stream_contiguous(*req->content_stream);
-            BOOST_CHECK_EQUAL(req_inp, req_exp);
-            ann_replies->pop();
-            rep->set_status(status_type::ok);
-            rep->write_body("json", rep_inp);
-            co_return rep;
-        };
-        r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
-    });
+    auto [server, addr] = co_await create_vs_server(ann_replies);
 
     auto cfg = cql_test_config();
     cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr.port()));
@@ -537,50 +570,58 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 }
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
-    auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-    auto vs = vector_store_client{cfg};
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto& vs = env.local_qp().vector_store_client();
 
-    cfg.vector_store_uri.set("");
+                env.db_config().vector_store_uri.set("");
 
-    BOOST_CHECK(vs.is_disabled());
-    co_await vs.stop();
+                BOOST_CHECK(vs.is_disabled());
+                return make_ready_future();
+            },
+            cfg);
 }
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_non_empty) {
-    auto cfg = config();
-    std::vector<std::string> resolved;
-    auto vs = vector_store_client{cfg};
-    configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&resolved](auto const& host) -> future<std::optional<inet_address>> {
-        resolved.push_back(host);
-        co_return inet_address("127.0.0.1");
+    co_await do_with_cql_env([](cql_test_env& env) -> future<> {
+        std::vector<std::string> resolved;
+        auto& vs = env.local_qp().vector_store_client();
+        configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&resolved](auto const& host) -> future<std::optional<inet_address>> {
+            resolved.push_back(host);
+            co_return inet_address("127.0.0.1");
+        });
+
+        vs.start_background_tasks();
+
+        env.db_config().vector_store_uri.set("http://good.authority.here:6080");
+
+        BOOST_CHECK(!vs.is_disabled());
+        // Wait for the DNS resolver to be called
+        BOOST_CHECK(co_await repeat_until(std::chrono::seconds(1), [&]() -> future<bool> {
+            co_return resolved.size() > 0;
+        }));
+        BOOST_CHECK_EQUAL(resolved.back(), "good.authority.here");
     });
-
-    vs.start_background_tasks();
-
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-
-    BOOST_CHECK(!vs.is_disabled());
-    // Wait for the DNS resolver to be called
-    BOOST_CHECK(co_await repeat_until(std::chrono::seconds(1), [&]() -> future<bool> {
-        co_return resolved.size() > 0;
-    }));
-    BOOST_CHECK_EQUAL(resolved.back(), "good.authority.here");
-    co_await vs.stop();
 }
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
-    auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
-    auto vs = vector_store_client{cfg};
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto& vs = env.local_qp().vector_store_client();
 
-    vs.start_background_tasks();
+                vs.start_background_tasks();
 
-    cfg.vector_store_uri.set("invalid-uri");
+                env.db_config().vector_store_uri.set("invalid-uri");
 
-    // vs becomes disabled
-    BOOST_CHECK(vs.is_disabled());
-    co_await vs.stop();
+                // vs becomes disabled
+                BOOST_CHECK(vs.is_disabled());
+                return make_ready_future();
+            },
+            cfg);
 }
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update) {
@@ -627,4 +668,41 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
             cfg);
     co_await s1->stop();
     co_await s2->stop();
+}
+
+SEASTAR_TEST_CASE(vector_search_metrics_test) {
+    auto ann_replies = make_lw_shared<std::queue<std::tuple<sstring, sstring>>>();
+    auto [server, addr] = co_await create_vs_server(ann_replies);
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr.port()));
+    co_await do_with_cql_env(
+            [&ann_replies](cql_test_env& env) -> future<> {
+                auto as = abort_source();
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+                result.get()->throw_if_exception();
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
+
+                vs.start_background_tasks();
+
+                ann_replies->emplace(std::make_tuple(R"({"embedding":[0.1,0.2,0.3],"limit":2})",
+                        R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as);
+
+                auto all_metrics = seastar::metrics::impl::get_values();
+                auto latencies = get_metrics_value("vector_store_ann_latencies", all_metrics);
+                BOOST_CHECK_EQUAL(latencies->get_histogram().sample_count, 1);
+                auto limits = get_metrics_value("vector_store_ann_limit_histogram", all_metrics);
+                BOOST_CHECK_EQUAL(limits->get_histogram().sample_count, 1);
+                auto bucket = find_if(cbegin(limits->get_histogram().buckets), cend(limits->get_histogram().buckets), [](const auto& x) {
+                    return x.upper_bound == 2;
+                });
+                BOOST_CHECK_EQUAL(bucket->count, 1);
+                auto dns = get_metrics_value("vector_store_dns_refreshes", all_metrics);
+                BOOST_CHECK_EQUAL(dns->i(), 0);
+            },
+            cfg);
+    co_await server->stop();
 }

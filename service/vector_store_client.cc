@@ -11,15 +11,22 @@
 #include "cql3/type_json.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
+#include "index/secondary_index.hh"
+#include "replica/database.hh"
+#include "seastar/core/shared_ptr.hh"
+#include "service/migration_listener.hh"
 #include "utils/sequential_producer.hh"
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
+#include "utils/histogram_metrics_helper.hh"
 #include "utils/rjson.hh"
 #include "schema/schema.hh"
 #include <charconv>
 #include <exception>
 #include <fmt/ranges.h>
+#include <memory>
 #include <regex>
+#include <seastar/core/metrics.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/http/client.hh>
@@ -316,6 +323,7 @@ struct vector_store_client::impl {
     unsigned http_request_retries = HTTP_REQUEST_RETRIES;
     std::function<future<std::optional<inet_address>>(sstring const&)> dns_resolver;
     sequential_producer<lw_shared_ptr<http_client>> client_producer;
+    std::function<void()> _dns_observer; ///< The DNS observer for metrics collection.
 
     impl(utils::config_file::named_value<sstring> cfg)
         : uri_observer(cfg.observe([this](std::string_view uri) {
@@ -328,14 +336,18 @@ struct vector_store_client::impl {
             }
         }))
         , _host_port(get_host_port(cfg()))
-        , dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
+        , dns_resolver([this](auto const& host) -> future<std::optional<inet_address>> {
             auto addr = co_await coroutine::as_future(net::dns::resolve_name(host));
             if (addr.failed()) {
                 auto err = addr.get_exception();
+                vslogger.warn("Failed to resolve vector store service address: {}", err);
                 if (try_catch<std::system_error>(err) != nullptr) {
                     co_return std::nullopt;
                 }
                 co_await coroutine::return_exception_ptr(std::move(err));
+            }
+            if (_dns_observer) {
+                _dns_observer();
             }
             co_return co_await std::move(addr);
         })
@@ -544,10 +556,205 @@ struct vector_store_client::impl {
 
         co_return std::unexpected{service_unavailable{}};
     }
+
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, ann_error>> {
+        if (is_disabled()) {
+            vslogger.error("Disabled Vector Store while calling ann");
+            co_return std::unexpected{disabled{}};
+        }
+
+        auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
+        auto content = write_ann_json(std::move(embedding), limit);
+
+        auto resp = co_await make_request(operation_type::POST, std::move(path), std::move(content), as);
+        if (!resp) {
+            co_return std::unexpected{std::visit(
+                    [](auto&& err) {
+                        return ann_error{err};
+                    },
+                    resp.error())};
+        }
+
+        if (resp->status != status_type::ok) {
+            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, seastar::value_of([&resp] {
+                return response_content_to_sstring(resp->content);
+            }));
+            co_return std::unexpected{service_error{resp->status}};
+        }
+
+        try {
+            auto response = read_ann_json(rjson::parse(std::move(resp->content)), schema);
+            co_return response;
+        } catch (const rjson::error& e) {
+            vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+            co_return std::unexpected{service_reply_format_error{}};
+        }
+    }
 };
 
-vector_store_client::vector_store_client(config const& cfg)
-    : _impl(std::make_unique<impl>(cfg.vector_store_uri)) {
+struct index_metrics {
+    sstring cf_name;
+    seastar::metrics::metric_groups metrics;        ///< The metrics for the index.
+    utils::estimated_histogram ann_limit_histogram; ///< Histogram of the limits used in ANN requests, 35 to cover the range 1-1000.
+    utils::time_estimated_histogram ann_latencies;  ///< Histogram of the latencies of ANN requests.
+    seastar::metrics::label idx_name{"index_name"};
+
+
+    index_metrics(sstring ks_name, sstring cf_name, sstring index_name)
+        : cf_name(cf_name)
+        , ann_limit_histogram(35)
+        , ann_latencies() {
+        metrics.add_group("vector_store",
+                {seastar::metrics::make_histogram(
+                         fmt::format("ann_limit_histogram"),
+                         [this]() {
+                             return estimated_histogram_to_metrics(ann_limit_histogram);
+                         },
+                         seastar::metrics::description("Histogram of the limits used in ANN requests"))(idx_name(fmt::format("{}.{}", ks_name, index_name)))
+                                .aggregate({seastar::metrics::shard_label})
+                                .set_skip_when_empty(),
+                        seastar::metrics::make_histogram(
+                                fmt::format("ann_latencies"),
+                                [this]() {
+                                    return to_metrics_histogram(ann_latencies);
+                                },
+                                seastar::metrics::description("Histogram of the latencies of ANN requests"))(
+                                idx_name(fmt::format("{}.{}", ks_name, index_name)))
+                                .aggregate({seastar::metrics::shard_label})
+                                .set_skip_when_empty()});
+    }
+};
+
+class vector_store_client::metrics : public service::migration_listener {
+    migration_notifier& _notifier;
+    lw_shared_ptr<impl> _impl;
+    replica::database const& _db;
+    std::unordered_map<sstring, index_metrics> _index_metrics;
+    uint64_t dns_refreshes = 0;
+    seastar::metrics::metric_groups _metrics;
+
+    bool is_vector_index(const index_metadata& metadata) const {
+        auto it = metadata.options().find(db::index::secondary_index::custom_index_option_name);
+        return it != metadata.options().end() && it->second == "vector_index";
+    }
+
+    void add_metrics_for_created_indexes(const sstring& ks_name, const sstring& cf_name, const std::unordered_map<sstring, index_metadata>& indexes) {
+        for (auto& idx : indexes) {
+            auto metadata = idx.second;
+            if (is_vector_index(metadata)) {
+                _index_metrics.try_emplace(fmt::format("{}.{}", ks_name, idx.first), ks_name, cf_name, idx.first);
+            }
+        }
+    };
+
+    std::pair<sstring, sstring> get_ks_and_index_name(const sstring& metric_name) const {
+        auto pos = metric_name.find('.');
+        if (pos != sstring::npos) {
+            auto ks_name = metric_name.substr(0, pos);
+            auto index_name = metric_name.substr(pos + 1);
+            return {ks_name, index_name};
+        }
+        vslogger.warn("Invalid metric name: {}", metric_name);
+        return {"", ""};
+    }
+
+    auto get_metrics_to_delete(const sstring& ks_name, const sstring& cf_name, const std::unordered_map<sstring, index_metadata>& indexes) const {
+        auto metrics_to_delete = std::vector<sstring>();
+        for (auto& metric : _index_metrics) {
+
+            auto [metric_ks_name, metric_index_name] = get_ks_and_index_name(metric.first);
+            // Wrong keyspace
+            if (metric_ks_name != ks_name) {
+                continue;
+            }
+            // Wrong table
+            if (metric.second.cf_name != cf_name) {
+                continue;
+            }
+            if (!indexes.contains(metric_index_name)) {
+                metrics_to_delete.push_back(metric.first);
+            }
+        }
+        return metrics_to_delete;
+    }
+
+    void remove_metrics_for_dropped_indexes(const sstring& ks_name, const sstring& cf_name, const std::unordered_map<sstring, index_metadata>& indexes) {
+        auto metrics_to_delete = get_metrics_to_delete(ks_name, cf_name, indexes);
+        for (auto& metric : metrics_to_delete) {
+            _index_metrics.erase(metric);
+        }
+    }
+
+    virtual void on_create_keyspace(const sstring& ks_name) override {};
+    virtual void on_create_column_family(const sstring& ks_name, const sstring& cf_name) override {};
+    virtual void on_create_user_type(const sstring& ks_name, const sstring& type_name) override {};
+    virtual void on_create_function(const sstring& ks_name, const sstring& function_name) override {};
+    virtual void on_create_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {};
+    virtual void on_create_view(const sstring& ks_name, const sstring& view_name) override {};
+
+    virtual void on_update_keyspace(const sstring& ks_name) override {};
+    virtual void on_update_user_type(const sstring& ks_name, const sstring& type_name) override {};
+    virtual void on_update_function(const sstring& ks_name, const sstring& function_name) override {};
+    virtual void on_update_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {};
+    virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
+
+    virtual void on_drop_keyspace(const sstring& ks_name) override {};
+    virtual void on_drop_column_family(const sstring& ks_name, const sstring& cf_name) override {};
+    virtual void on_drop_user_type(const sstring& ks_name, const sstring& type_name) override {};
+    virtual void on_drop_function(const sstring& ks_name, const sstring& function_name) override {};
+    virtual void on_drop_aggregate(const sstring& ks_name, const sstring& aggregate_name) override {};
+    virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override {};
+
+public:
+
+    metrics(migration_notifier& notifier, lw_shared_ptr<impl> _impl, replica::database const& db)
+        : _notifier(notifier)
+        , _impl(_impl)
+        , _db(db)
+        , _index_metrics() {
+        _notifier.register_listener(this);
+        _metrics.add_group("vector_store", {seastar::metrics::make_gauge(
+                                                   "dns_refreshes",
+                                                   [this] {
+                                                       return dns_refreshes;
+                                                   },
+                                                   seastar::metrics::description("Number of DNS refreshes"))});
+        _impl->_dns_observer = [this] {
+            dns_refreshes++;
+        };
+    }
+
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, ann_error>> {
+        auto start_time = lowres_system_clock::now();
+        auto value = co_await _impl->ann(keyspace, name, schema, embedding, limit, as);
+        auto latency = lowres_system_clock::now() - start_time;
+        auto index_id = fmt::format("{}.{}", keyspace, name);
+        auto it = _index_metrics.find(index_id);
+        if (it != _index_metrics.end()) {
+            it->second.ann_latencies.add(latency);
+            it->second.ann_limit_histogram.add(limit);
+        }
+        co_return value;
+    }
+
+    virtual void on_update_column_family(const sstring& ks_name, const sstring& cf_name, bool columns_changed) override {
+        auto schema = _db.find_column_family(ks_name, cf_name).schema();
+        auto indexes = schema->all_indices();
+        add_metrics_for_created_indexes(ks_name, cf_name, indexes);
+        remove_metrics_for_dropped_indexes(ks_name, cf_name, indexes);
+    };
+
+    auto stop() -> future<> {
+        _impl->_dns_observer = nullptr;
+        co_await _notifier.unregister_listener(this);
+    }
+};
+
+vector_store_client::vector_store_client(config const& cfg, migration_notifier& notifier, replica::database const& db)
+    : _impl(make_lw_shared<impl>(cfg.vector_store_uri))
+    , _metrics(std::make_unique<metrics>(notifier, _impl, db)) {
 }
 
 vector_store_client::~vector_store_client() = default;
@@ -565,6 +772,7 @@ auto vector_store_client::stop() -> future<> {
     _impl->abort_refresh.request_abort();
     _impl->refresh_cv.signal();
     co_await _impl->tasks_gate.close();
+    co_await _metrics->stop();
 }
 
 auto vector_store_client::is_disabled() const -> bool {
@@ -581,35 +789,7 @@ auto vector_store_client::port() const -> std::expected<port_number, disabled> {
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, ann_error>> {
-    if (is_disabled()) {
-        vslogger.error("Disabled Vector Store while calling ann");
-        co_return std::unexpected{disabled{}};
-    }
-
-    auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-    auto content = write_ann_json(std::move(embedding), limit);
-
-    auto resp = co_await _impl->make_request(operation_type::POST, std::move(path), std::move(content), as);
-    if (!resp) {
-        co_return std::unexpected{std::visit(
-                [](auto&& err) {
-                    return ann_error{err};
-                },
-                resp.error())};
-    }
-
-    if (resp->status != status_type::ok) {
-        vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status,
-                       seastar::value_of([&resp] {return response_content_to_sstring(resp->content);}));
-        co_return std::unexpected{service_error{resp->status}};
-    }
-
-    try {
-        co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
-    } catch (const rjson::error& e) {
-        vslogger.error("Vector Store returned invalid JSON: {}", e.what());
-        co_return std::unexpected{service_reply_format_error{}};
-    }
+    return _metrics->ann(keyspace, name, schema, embedding, limit, as);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
