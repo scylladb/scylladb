@@ -47,6 +47,7 @@ public:
 };
 } // namespace parsed
 
+// Preferably use parsed::expression_cache instance instead of this free functions.
 parsed::update_expression parse_update_expression(std::string_view query);
 std::vector<parsed::path> parse_projection_expression(std::string_view query);
 parsed::condition_expression parse_condition_expression(std::string_view query, const char* caller);
