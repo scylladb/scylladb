@@ -718,13 +718,21 @@ future<> scrub_sstables_compaction_task_impl::run() {
 }
 
 future<std::optional<double>> scrub_sstables_compaction_task_impl::expected_total_workload() const {
-    auto table_infos = _column_families | std::views::transform([this] (const auto& cf) {
-        return table_info{
-            .name = cf,
-            .id = _db.local().find_uuid(_status.keyspace, cf)
-        };
-    }) | std::ranges::to<std::vector<table_info>>();
-    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_keyspace_task_workload(_db, std::move(table_infos));
+    try {
+        std::vector<table_info> table_infos;
+        table_infos.reserve(_column_families.size());
+        for (const auto& cf : _column_families) {
+            auto id = _db.local().find_uuid(_status.keyspace, cf);
+            table_infos.push_back(table_info{
+                .name = cf,
+                .id = id
+            });
+        }
+        co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_keyspace_task_workload(_db, std::move(table_infos));
+    } catch (...) {
+        // Expected total workload cannot be found.
+    }
+    co_return std::nullopt;
 }
 
 future<> shard_scrub_sstables_compaction_task_impl::run() {
@@ -739,13 +747,21 @@ future<> shard_scrub_sstables_compaction_task_impl::run() {
 }
 
 future<std::optional<double>> shard_scrub_sstables_compaction_task_impl::expected_total_workload() const {
-    auto table_infos = _column_families | std::views::transform([this] (const auto& cf) {
-        return table_info{
-            .name = cf,
-            .id = _db.find_uuid(_status.keyspace, cf)
-        };
-    }) | std::ranges::to<std::vector<table_info>>();
-    co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, std::move(table_infos));
+    try {
+        std::vector<table_info> table_infos;
+        table_infos.reserve(_column_families.size());
+        for (auto& cf : _column_families) {
+            auto id = _db.find_uuid(_status.keyspace, cf);
+            table_infos.push_back(table_info{
+                .name = cf,
+                .id = id
+            });
+        }
+        co_return _expected_workload = _expected_workload ? _expected_workload : co_await get_shard_task_workload(_db, std::move(table_infos));
+    } catch (...) {
+        // Expected total workload cannot be found.
+    }
+    co_return std::nullopt;
 }
 
 future<> table_scrub_sstables_compaction_task_impl::run() {
@@ -760,14 +776,20 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
 }
 
 future<std::optional<double>> table_scrub_sstables_compaction_task_impl::expected_total_workload() const {
-    if (!_expected_workload) {
-        table_info ti{
-            .name = _status.table,
-            .id = _db.find_uuid(_status.keyspace, _status.table)
-        };
-        _expected_workload = co_await get_table_task_workload(_db, ti);
+    try {
+        if (!_expected_workload) {
+            auto id = _db.find_uuid(_status.keyspace, _status.table);
+            table_info ti{
+                .name = _status.table,
+                .id = id
+            };
+            _expected_workload = co_await get_table_task_workload(_db, ti);
+        }
+        co_return _expected_workload;
+    } catch (...) {
+        // Expected total workload cannot be found.
     }
-    co_return _expected_workload;
+    co_return std::nullopt;
 }
 
 future<> table_reshaping_compaction_task_impl::run() {
