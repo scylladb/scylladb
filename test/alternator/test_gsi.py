@@ -1157,7 +1157,6 @@ def test_gsi_5_describe_table_schema(test_table_gsi_5):
 # contains the base key), when describing the table, "p" shouldn't be
 # returned as a range key, because the user didn't ask for it.
 # This test reproduces issue #5320.
-@pytest.mark.xfail(reason="GSI DescribeTable spurious range key (#5320)")
 def test_gsi_2_describe_table_schema(test_table_gsi_2):
     got = test_table_gsi_2.meta.client.describe_table(TableName=test_table_gsi_2.name)['Table']
     # Copied from test_table_gsi_2 fixture
