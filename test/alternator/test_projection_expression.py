@@ -347,3 +347,34 @@ def test_projection_expression_path_nesting_levels(test_table_s):
     # nesting levels: 33".
     with pytest.raises(ClientError, match='ValidationException.*nesting levels'):
         test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a'+('.b'*32))
+
+# Above we already checked different cases of reading individual elements
+# from a list - the expression a[i]. The following test exercises these
+# list indexes more rigourously, including testing what happens when the
+# index overflows an integer (reproducing #25947).
+def test_projection_expression_list_index(test_table_s):
+    p = random_string()
+    test_table_s.put_item(Item={'p': p, 'a': [7, 42]})
+    # a[0] and a[1] return the elements from the list, as expected
+    # (note that a[i] actually returns an array with a single element a[i])
+    assert {'a': [7]} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[0]')['Item']
+    assert {'a': [42]} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[1]')['Item']
+    # If the index is beyond the length of the array, such as a[2] or a[999],
+    # we expect to get back an empty Item - not an error, and not missing Item.
+    assert {} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[2]')['Item']
+    assert {} == test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[999]')['Item']
+    # If the index is so high that it can't be parsed as an integer, it isn't
+    # silently ignored like 999 above, but causes a parse error. DynamoDB
+    # reports: "Invalid ProjectionExpression: List index is not within the
+    # allowable range; index: [99999999999999]". After fixing #25947,
+    # Alternator reports: "Failed parsing ProjectionExpression
+    # 'a[99999999999999]': list index out of integer range".
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression.*index'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[99999999999999]')['Item']
+    # Trying to use a negative number as an index, like a[-1], is just a
+    # syntax error - the parser expects to see digits, not "-".
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression.*[Ss]yntax error'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[-1]')['Item']
+    # A completely missing index - a[] - is also a syntax error:
+    with pytest.raises(ClientError, match='ValidationException.*ProjectionExpression.*[Ss]yntax error'):
+        test_table_s.get_item(Key={'p': p}, ConsistentRead=True, ProjectionExpression='a[]')['Item']

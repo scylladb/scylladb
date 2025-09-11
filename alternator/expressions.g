@@ -184,7 +184,13 @@ path_component: NAME | NAMEREF;
 path returns [parsed::path p]:
     root=path_component           { $p.set_root($root.text); }
     (   '.' name=path_component   { $p.add_dot($name.text); }
-      | '[' INTEGER ']'           { $p.add_index(std::stoi($INTEGER.text)); }
+      | '[' INTEGER ']'           {
+                try {
+                    $p.add_index(std::stoi($INTEGER.text));
+                } catch(std::out_of_range&) {
+                    throw expressions_syntax_error("list index out of integer range");
+                }
+            }
     )*;
 
 /* See comment above why the "depth" counter was needed here */
