@@ -452,7 +452,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
 
         await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
 
-        await asyncio.gather(*[manager.api.enable_tablet_balancing(s.ip_addr) for s in servers])
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
 
         # Trigger tablet merge to reproduce #23481
         table_id = await manager.get_table_id(ks, 'test')
@@ -469,6 +469,10 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
             if new_tablet_count < old_tablet_count:
                 return True
         await wait_for(tablets_merged, time.time() + 60)
+
+        # Workaround for https://github.com/scylladb/scylladb/issues/21779. We don't want the keyspace drop at the end
+        # of new_test_keyspace to fail because of concurrent tablet migrations.
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
