@@ -117,6 +117,7 @@ name                 kind       mandatory   default   description
 ``durable_writes``   *simple*   no          true      Whether to use the commit log for updates on this keyspace
                                                       (disable this option at your own risk!).
 ``tablets``          *map*      no                    Enables or disables tablets for the keyspace (see :ref:`tablets <tablets>`)
+``consistency``      *simple*   no         `eventual` Configures consistency mode for the keyspace (see :ref:`consistency <consistency-option>`).
 =================== ========== =========== ========= ===================================================================
 
 The ``replication`` property is optional. Omitting it is equivalent to supplying an empty map (``replication = {}``),
@@ -297,6 +298,15 @@ By default, SStables of a keyspace are stored locally.
 As an alternative, you can configure your keyspace to be stored
 on Amazon S3 or another S3-compatible object store.
 See :ref:`Keyspace storage options <admin-keyspace-storage-options>` for details.
+
+Keyspace consistency options :label-caution:`Experimental`
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Experimental option that allows to configure consistency for all tables in a keyspace.
+By default the consistency is `eventual`. But you can change it to strong consistency by
+setting the `consistency` option to `local` or `global` where `local` means that strong
+consistency is guaranteed only for operations going to the same DC and `global` means that
+strong consistency is guaranteed for operations going to all DCs.
 
 .. _use-statement:        
         
