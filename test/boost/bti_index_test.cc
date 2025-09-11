@@ -1008,8 +1008,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto partitions_db_cached = cached_file(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
         auto rows_db_cached = cached_file(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
 
-        auto p = partitions_db_cached.get_file().dma_read_exactly<char>(partitions_db_size - 24, 24).get();
-        auto partitions_db_root_pos = read_be<uint64_t>(p.get() + 16);
+        auto partitions_db_footer = sstables::trie::read_bti_partitions_db_footer(*the_schema, sst_ver, partitions_db, partitions_db_size).get();
+        auto partitions_db_root_pos = partitions_db_footer.trie_root_position;
 
         auto semaphore = tests::reader_concurrency_semaphore_wrapper();
 
