@@ -260,28 +260,28 @@ SEASTAR_THREAD_TEST_CASE(test_load_sketch) {
 
     stm.mutate_token_metadata([&] (token_metadata& tm) {
         tablet_metadata tab_meta;
-        tablet_map tmap(4);
+        shared_tablet_map tmap(4);
 
         auto tid = tmap.first_tablet();
-        tmap.set_tablet(tid, tablet_info{{
+        tmap.set_tablet(tid, shared_tablet_info{{
                 tablet_replica{host3, 2}
         }});
         node3_shards[2]++;
 
         tid = *tmap.next_tablet(tid);
-        tmap.set_tablet(tid, tablet_info{{
+        tmap.set_tablet(tid, shared_tablet_info{{
                 tablet_replica{host3, 2}
         }});
         node3_shards[2]++;
 
         tid = *tmap.next_tablet(tid);
-        tmap.set_tablet(tid, tablet_info{{
+        tmap.set_tablet(tid, shared_tablet_info{{
                 tablet_replica{host3, 2}
         }});
         node3_shards[2]++;
 
         tid = *tmap.next_tablet(tid);
-        tmap.set_tablet(tid, tablet_info{{
+        tmap.set_tablet(tid, shared_tablet_info{{
                 tablet_replica{host3, 1}
         }});
         node3_shards[1]++;
