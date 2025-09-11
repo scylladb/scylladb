@@ -147,6 +147,80 @@ def test_describe_custom_index(cql, test_keyspace):
         assert f"CREATE CUSTOM INDEX custom1 ON {table}{maybe_space}(v2) USING '{custom_class}'" in b_desc
 
 
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_vector_index_version_on_recreate(cql, test_keyspace, scylla_only):
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        _, table_name = table.split('.')
+        base_table_version_query = f"SELECT version FROM system_schema.scylla_tables WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"
+        index_version_query = f"SELECT * FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}' AND index_name = 'abc'"
+
+        # Fetch the base table version.
+        version = str(cql.execute(base_table_version_query).one().version)
+
+        # Create the vector index.
+        cql.execute(f"CREATE CUSTOM INDEX abc ON {table}(v) USING 'vector_index'")
+
+        # Fetch the index version.
+        # It should be the same as the base table version before the index was created.
+        result = cql.execute(index_version_query)
+        assert len(result.current_rows) == 1
+        assert result.current_rows[0].options['index_version'] == version
+
+        # Drop and create new index with the same parameters.
+        cql.execute(f"DROP INDEX {test_keyspace}.abc")
+        cql.execute(f"CREATE CUSTOM INDEX abc ON {table}(v) USING 'vector_index'")
+
+        # Check if the index version changed.
+        result = cql.execute(index_version_query)
+        assert len(result.current_rows) == 1
+        assert result.current_rows[0].options['index_version'] != version
+
+
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_vector_index_version_unaffected_by_alter(cql, test_keyspace, scylla_only):
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        _, table_name = table.split('.')
+        base_table_version_query = f"SELECT version FROM system_schema.scylla_tables WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"
+        index_version_query = f"SELECT * FROM system_schema.indexes WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}' AND index_name = 'abc'"
+
+        # Fetch the base table version.
+        version = str(cql.execute(base_table_version_query).one().version)
+
+        # Create the vector index.
+        cql.execute(f"CREATE CUSTOM INDEX abc ON {table}(v) USING 'vector_index'")
+
+        # Fetch the index version.
+        # It should be the same as the base table version before the index was created.
+        result = cql.execute(index_version_query)
+        assert len(result.current_rows) == 1
+        assert result.current_rows[0].options['index_version'] == version
+
+        # ALTER the base table.
+        cql.execute(f"ALTER TABLE {table} ADD v2 vector<float, 3>")
+
+        # Check if the index version is still the same.
+        result = cql.execute(index_version_query)
+        assert len(result.current_rows) == 1
+        assert result.current_rows[0].options['index_version'] == version
+
+
+@pytest.mark.parametrize("test_keyspace",
+                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
+                         indirect=True)
+def test_vector_index_version_fail_given_as_option(cql, test_keyspace, scylla_only):
+    schema = 'p int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        # Fail to create vector index with version option given by the user.
+        with pytest.raises(InvalidRequest, match="Cannot specify index_version as a CUSTOM option"):
+            cql.execute(f"CREATE CUSTOM INDEX abc ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'index_version': '18ad2003-05ea-17d9-1855-0325ac0a755d'}}")
+
+
 ###############################################################################
 # Tests for CDC with vector indexes
 #
