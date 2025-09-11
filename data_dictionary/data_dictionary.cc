@@ -9,6 +9,7 @@
 #include <ranges>
 #include "data_dictionary.hh"
 #include "cql3/description.hh"
+#include "data_dictionary/consistency_config_options.hh"
 #include "impl.hh"
 #include "user_types_metadata.hh"
 #include "keyspace_metadata.hh"
@@ -214,6 +215,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
              std::string_view strategy_name,
              locator::replication_strategy_config_options strategy_options,
              std::optional<unsigned> initial_tablets,
+             std::optional<consistency_config_option> consistency_option,
              bool durable_writes,
              std::vector<schema_ptr> cf_defs,
              user_types_metadata user_types,
@@ -225,6 +227,7 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
     , _durable_writes{durable_writes}
     , _user_types{std::move(user_types)}
     , _storage_options(make_lw_shared<storage_options>(std::move(storage_opts)))
+    , _consistency_option(consistency_option)
 {
     for (auto&& s : cf_defs) {
         _cf_meta_data.emplace(s->cf_name(), s);
@@ -233,9 +236,18 @@ keyspace_metadata::keyspace_metadata(std::string_view name,
 
 void keyspace_metadata::validate(const gms::feature_service& fs, const locator::topology& topology) const {
     using namespace locator;
-    locator::replication_strategy_params params(strategy_options(), initial_tablets());
+    locator::replication_strategy_params params(strategy_options(), initial_tablets(), consistency_option());
     auto strategy = locator::abstract_replication_strategy::create_replication_strategy(strategy_name(), params, topology);
     strategy->validate_options(fs, topology);
+    if (!params.initial_tablets && params.consistency.value_or(data_dictionary::consistency_config_option::eventual) != data_dictionary::consistency_config_option::eventual) {
+        throw exceptions::configuration_exception("Only eventual consistency is supported for non-tablet keyspaces");
+    }
+    if (params.consistency && !fs.strongly_consistent_tables) {
+        throw exceptions::configuration_exception("The strongly_consistent_tables feature must be enabled to use a consistency option");
+    }
+    if (params.consistency && *params.consistency == data_dictionary::consistency_config_option::global) {
+        throw exceptions::configuration_exception("Global consistency is not supported yet");
+    }
 }
 
 lw_shared_ptr<keyspace_metadata>
@@ -243,16 +255,17 @@ keyspace_metadata::new_keyspace(std::string_view name,
                                 std::string_view strategy_name,
                                 locator::replication_strategy_config_options options,
                                 std::optional<unsigned> initial_tablets,
+                                std::optional<consistency_config_option> consistency_option,
                                 bool durables_writes,
                                 storage_options storage_opts,
                                 std::vector<schema_ptr> cf_defs)
 {
-    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, initial_tablets, durables_writes, cf_defs, user_types_metadata{}, storage_opts);
+    return ::make_lw_shared<keyspace_metadata>(name, strategy_name, options, initial_tablets, consistency_option, durables_writes, cf_defs, user_types_metadata{}, storage_opts);
 }
 
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(const keyspace_metadata& ksm) {
-    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.durable_writes(), ksm.get_storage_options());
+    return new_keyspace(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(), ksm.get_storage_options());
 }
 
 void keyspace_metadata::add_user_type(const user_type ut) {
@@ -440,6 +453,9 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
         }
         os << "} AND durable_writes = " << fmt::to_string(_durable_writes);
         if (db.features().tablets) {
+            if (_consistency_option) {
+                os << " AND consistency = " << cql3::util::single_quote(consistency_config_option_to_string(*_consistency_option));
+            }
             if (!_initial_tablets.has_value()) {
                 os << " AND tablets = {'enabled': false}";
             } else {
@@ -457,6 +473,29 @@ cql3::description keyspace_metadata::describe(const replica::database& db, cql3:
         .name = name(),
         .create_statement = std::move(maybe_create_statement)
     };
+}
+
+consistency_config_option consistency_config_option_from_string(const seastar::sstring& str) {
+    if (str == "eventual") {
+        return consistency_config_option::eventual;
+    } else if (str == "local") {
+        return consistency_config_option::local;
+    } else if (str == "global") {
+        return consistency_config_option::global;
+    } else {
+        throw exceptions::configuration_exception(fmt::format("Consistency option must be one of 'eventual', 'local', or 'global'; found: {}", str));
+    }
+}
+
+seastar::sstring consistency_config_option_to_string(consistency_config_option option) {
+    switch (option) {
+    case consistency_config_option::eventual:
+        return "eventual";
+    case consistency_config_option::local:
+        return "local";
+    case consistency_config_option::global:
+        return "global";
+    }
 }
 
 } // namespace data_dictionary

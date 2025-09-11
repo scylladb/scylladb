@@ -400,6 +400,7 @@ future<> replicated_key_provider::do_initialize_tables(::replica::database& db, 
                     "org.apache.cassandra.locator.EverywhereStrategy",
                     {},
                     std::nullopt,
+                    std::nullopt,
                     true);
             co_await mm.announce(service::prepare_new_keyspace_announcement(db, ksm, ts), std::move(group0_guard), fmt::format("encryption at rest: create keyspace {}", KSNAME));
         } catch (exceptions::already_exists_exception&) {

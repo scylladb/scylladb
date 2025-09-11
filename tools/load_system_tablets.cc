@@ -73,7 +73,7 @@ tools::tablets_t do_load_system_tablets(const db::config& dbcfg,
     auto ks = make_lw_shared<data_dictionary::keyspace_metadata>(keyspace_name,
                                                                  "org.apache.cassandra.locator.LocalStrategy",
                                                                  locator::replication_strategy_config_options{},
-                                                                 std::nullopt, false);
+                                                                 std::nullopt, std::nullopt, false);
     db::cql_type_parser::raw_builder ut_builder(*ks);
 
     tools::tablets_t tablets;

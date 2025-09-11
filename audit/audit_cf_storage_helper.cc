@@ -74,6 +74,7 @@ future<> audit_cf_storage_helper::migrate_audit_table(service::group0_guard grou
                                                                    "org.apache.cassandra.locator.NetworkTopologyStrategy",
                                                                    strategy_opts,
                                                                    std::nullopt, // initial_tablets
+                                                                   std::nullopt, // consistency_option
                                                                    old_ks_metadata->durable_writes(),
                                                                    old_ks_metadata->get_storage_options(),
                                                                    old_ks_metadata->tables());

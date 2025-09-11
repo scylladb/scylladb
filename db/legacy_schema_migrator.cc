@@ -543,6 +543,7 @@ public:
                             , ks.replication_params["class"] // TODO, make ksm like c3?
                             , cql3::statements::property_definitions::to_extended_map(ks.replication_params)
                             , std::nullopt
+                            , std::nullopt
                             , ks.durable_writes);
 
             // we want separate time stamps for tables/types, so cannot bulk them into the ksm.
