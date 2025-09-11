@@ -13,29 +13,15 @@ import contextlib
 import time
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.rest_client import read_barrier, HTTPError
-from test.pylib.scylla_cluster import ScyllaVersionDescription, get_scylla_2025_1_description
+from test.pylib.scylla_cluster import ScyllaVersionDescription
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from cassandra.cluster import ConsistencyLevel
-from cassandra.policies import FallthroughRetryPolicy, ConstantReconnectionPolicy
+from cassandra.policies import FallthroughRetryPolicy
 from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement
-from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
-@pytest.fixture(scope="function")
-def internet_dependency_enabled(request) -> None:
-    if request.config.getoption('skip_internet_dependent_tests'):
-        pytest.skip(reason="skip_internet_dependent_tests is set")
-
-@pytest.fixture(scope="function")
-async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
-    yield await get_scylla_2025_1_description(build_mode)
-
-async def change_version(manager: ManagerClient, s: ServerInfo, exe: str):
-    await manager.server_stop_gracefully(s.server_id)
-    await manager.server_switch_executable(s.server_id, exe)
-    await manager.server_start(s.server_id)
 
 async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
     new_exe = os.getenv("SCYLLA")
@@ -118,7 +104,7 @@ async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: Scyll
         raise Exception(f'Expected HTTPError, got no exception')
 
     logger.info("Upgrading server 0")
-    await change_version(manager, servers[0], new_exe)
+    await manager.server_change_version(servers[0].server_id, new_exe)
 
     logger.info("Checking that new version returns 500 on retrain_dict before full upgrade")
     try:
@@ -165,14 +151,14 @@ async def test_upgrade_and_rollback(manager: ManagerClient, scylla_2025_1: Scyll
     await validate_select()
 
     logger.info("Downgrading server 0")
-    await change_version(manager, servers[0], scylla_2025_1.path)
+    await manager.server_change_version(servers[0].server_id, scylla_2025_1.path)
 
     await validate_select()
 
     logger.info("Upgrading both servers")
     await asyncio.gather(
-        change_version(manager, servers[0], new_exe),
-        change_version(manager, servers[1], new_exe)
+        manager.server_change_version(servers[0].server_id, new_exe),
+        manager.server_change_version(servers[1].server_id, new_exe)
     )
 
     logger.info("Waiting for SSTABLE_COMPRESSION_DICTS cluster feature")

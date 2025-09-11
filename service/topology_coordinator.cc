@@ -2470,6 +2470,10 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     _rollback = fmt::format("Failed stream ranges: {}", std::current_exception());
                     break;
                 }
+
+                co_await utils::get_local_injector().inject("topology_coordinator/write_both_read_old/before_version_increment",
+                    utils::wait_for_message(std::chrono::minutes(5)));
+
                 // Streaming completed. We can now move tokens state to topology::transition_state::write_both_read_new
                 topology_mutation_builder builder(node.guard.write_timestamp());
                 builder

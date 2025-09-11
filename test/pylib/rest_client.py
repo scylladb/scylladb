@@ -9,6 +9,7 @@ from __future__ import annotations                           # Type hints as str
 
 import logging
 import os.path
+from urllib.parse import quote
 from abc import ABCMeta
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
@@ -245,7 +246,7 @@ class ScyllaRESTAPIClient:
            the injection will be executed only once or every time the process passes the injection point.
            Note: this only has an effect in specific build modes: debug,dev,sanitize.
         """
-        await self.client.post(f"/v2/error_injection/injection/{injection}",
+        await self.client.post(f"/v2/error_injection/injection/{quote(injection, safe='')}",
                                host=node_ip, params={"one_shot": str(one_shot)}, json={ key: str(value) for key, value in parameters.items() })
 
     async def get_injection(self, node_ip: str, injection: str) -> list[dict[str, Any]]:
@@ -254,7 +255,7 @@ class ScyllaRESTAPIClient:
            active, as well as any parameters it might have.
            Note: this only has an effect in specific build modes: debug,dev,sanitize.
         """
-        return await self.client.get_json(f"/v2/error_injection/injection/{injection}", host=node_ip)
+        return await self.client.get_json(f"/v2/error_injection/injection/{quote(injection, safe='')}", host=node_ip)
 
     async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int, timeout: Optional[float] = None) -> None:
         await self.client.post(f"/storage_service/tablets/move", host=node_ip, timeout=timeout, params={
@@ -317,7 +318,7 @@ class ScyllaRESTAPIClient:
         await self.client.get(f"/storage_service/keyspace_scrub/{ks}", host=node_ip,  params={"scrub_mode": scrub_mode})
 
     async def disable_injection(self, node_ip: str, injection: str) -> None:
-        await self.client.delete(f"/v2/error_injection/injection/{injection}", host=node_ip)
+        await self.client.delete(f"/v2/error_injection/injection/{quote(injection, safe='')}", host=node_ip)
 
     async def get_enabled_injections(self, node_ip: str) -> list[str]:
         data = await self.client.get_json("/v2/error_injection/injection", host=node_ip)
@@ -326,7 +327,7 @@ class ScyllaRESTAPIClient:
         return data
 
     async def message_injection(self, node_ip: str, injection: str) -> None:
-        await self.client.post(f"/v2/error_injection/injection/{injection}/message", host=node_ip)
+        await self.client.post(f"/v2/error_injection/injection/{quote(injection, safe='')}/message", host=node_ip)
 
     async def inject_disconnect(self, node_ip: str, ip_to_disconnect_from: str) -> None:
         await self.client.post(f"/v2/error_injection/disconnect/{ip_to_disconnect_from}", host=node_ip)
