@@ -14,6 +14,7 @@
 #include <boost/regex.hpp>
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/on_internal_error.hh>
 
 #include "cql3/statements/create_table_statement.hh"
 #include "cql3/statements/prepared_statement.hh"
@@ -121,6 +122,14 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
     if (valueAlias != null)
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
+
+    // Set up default compression for user tables.
+    if (!_properties->get_compression_options()) {
+        if (is_system_keyspace(keyspace())) {
+            on_internal_error(mylogger, seastar::format("CREATE TABLE called on system keyspace: {}", keyspace()));
+        }
+        builder.set_compressor_params(compression_parameters(db.get_config().sstable_compression_user_table_options() | std::ranges::to<std::map>()));
+    }
 
     _properties->apply_to_builder(builder, _properties->make_schema_extensions(db.extensions()), db, keyspace());
 }
