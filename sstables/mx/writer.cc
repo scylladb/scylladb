@@ -1576,6 +1576,7 @@ stop_iteration writer::consume_end_of_partition() {
 
 void writer::consume_end_of_stream() {
     _cfg.monitor->on_data_write_completed();
+    SCYLLA_ASSERT(_num_partitions_consumed > 0);
 
     seal_summary(_sst._components->summary, std::move(_first_key), std::move(_last_key), _index_sampling_state).get();
 

@@ -169,6 +169,7 @@ public:
     test_env_compaction_manager& test_compaction_manager();
     reader_concurrency_semaphore& semaphore();
     db::config& db_config();
+    future<> force_bti_index();
     tmpdir& tempdir() noexcept;
     data_dictionary::storage_options get_storage_options() const noexcept;
 

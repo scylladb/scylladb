@@ -462,6 +462,11 @@ test_env::db_config() {
     return *_impl->db_config;
 }
 
+future<> test_env::force_bti_index() {
+    co_await _impl->feature_service.enable({"BTI_SSTABLE_INDEX"});
+    db_config().sstable_index_write_formats.set({{db::sstable_index_format_t::mode::bti}});
+}
+
 tmpdir&
 test_env::tempdir() noexcept {
     return _impl->dir;

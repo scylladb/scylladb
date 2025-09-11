@@ -1154,6 +1154,10 @@ SEASTAR_TEST_CASE(test_no_index_reads_when_rows_fall_into_range_boundaries) {
 
 SEASTAR_TEST_CASE(test_key_count_estimation) {
     return test_env::do_with_async([] (test_env& env) {
+      for (const auto enable_bti : {false, true}) {
+        if (enable_bti) {
+            env.force_bti_index().get();
+        }
         for (const auto version : writable_sstable_versions) {
             auto s = schema_builder("ks", "cf")
                 .with_column("pk", bytes_type, column_kind::partition_key)
@@ -1215,6 +1219,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 BOOST_REQUIRE_EQUAL(est, 0);
             }
         }
+      }
     });
 }
 
