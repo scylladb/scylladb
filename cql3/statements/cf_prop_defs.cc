@@ -24,6 +24,7 @@
 #include "db/tablet_options.hh"
 #include "utils/bloom_calculations.hh"
 #include "db/config.hh"
+#include "db/system_keyspace.hh"
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -353,9 +354,14 @@ void cf_prop_defs::apply_to_builder(schema_builder& builder, schema::extensions_
     }
 
     builder.set_bloom_filter_fp_chance(get_double(KW_BF_FP_CHANCE, builder.get_bloom_filter_fp_chance()));
+    // First, check for compression options in the statement.
+    // If none are found and the table is a user table, use the compression options from scylla.yaml.
+    // System tables are always uncompressed (default setting in schema builder's raw_schema).
     auto compression_options = get_compression_options();
     if (compression_options) {
         builder.set_compressor_params(compression_parameters(*compression_options));
+    } else if (!is_system_keyspace(ks_name)) {
+        builder.set_compressor_params(compression_parameters(db.get_config().sstable_compression_user_table_options() | std::ranges::to<std::map>()));
     }
 
     auto caching_options = get_caching_options();

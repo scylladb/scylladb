@@ -542,7 +542,7 @@ private:
         data_type _regular_column_name_type;
         data_type _default_validation_class = bytes_type;
         double _bloom_filter_fp_chance = 0.01;
-        compression_parameters _compressor_params;
+        compression_parameters _compressor_params{compression_parameters::algorithm::none};
         extensions_map _extensions;
         bool _is_dense = false;
         bool _is_compound = true;
