@@ -5,7 +5,7 @@ add_scylla_test(advanced_rpc_compressor_test
 add_scylla_test(allocation_strategy_test
   KIND BOOST)
 add_scylla_test(alternator_unit_test
-  KIND BOOST
+  KIND SEASTAR
   LIBRARIES alternator)
 add_scylla_test(anchorless_list_test
   KIND BOOST)

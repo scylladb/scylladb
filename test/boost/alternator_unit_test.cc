@@ -6,8 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#define BOOST_TEST_MODULE alternator
-#include <boost/test/unit_test.hpp>
+#include "test/lib/scylla_test_case.hh"
 
 #include <seastar/util/defer.hh>
 #include <seastar/core/memory.hh>
@@ -16,6 +15,8 @@
 #include "alternator/serialization.hh"
 
 #include "alternator/expressions.hh"
+#include <seastar/core/coroutine.hh>
+#include <seastar/core/sleep.hh>
 
 static std::map<std::string, std::string> strings {
     {"", ""},
@@ -169,6 +170,8 @@ BOOST_AUTO_TEST_CASE(test_magnitude_and_precision) {
     BOOST_CHECK(res.magnitude < -1000);
 }
 
+// parsed expression cache tests:
+
 // ANTLR3 leaks memory when it tries to recover from missing token.
 // - it creates a "fake" token, if it allows to continue parsing.
 // Leak was reported by ASAN, when running this test in debug mode - 
@@ -210,4 +213,221 @@ BOOST_AUTO_TEST_CASE(exception_at_expression_parsing) {
 
     // Single non-function condition throws expressions_syntax_error
     BOOST_REQUIRE_THROW(alternator::parse_condition_expression("a OR b", "TEST"), alternator::expressions_syntax_error);
+}
+
+using exp_type = alternator::stats::expression_types;
+static int exp_type_i(exp_type type) {
+    if (static_cast<int>(type) >= exp_type::NUM_EXPRESSION_TYPES)
+        BOOST_FAIL("Invalid expression type");
+    return static_cast<int>(type);
+}
+static std::string_view str(exp_type type) {
+    constexpr static std::string_view exp_type_s[exp_type::NUM_EXPRESSION_TYPES] = { "projection", "update", "condition" };
+    return exp_type_s[exp_type_i(type)];
+};
+static uint64_t& hits_counter(alternator::stats& stats, exp_type type) {
+    return stats.expression_cache.requests[exp_type_i(type)].hits;
+}
+static uint64_t& misses_counter(alternator::stats& stats, exp_type type) {
+    return stats.expression_cache.requests[exp_type_i(type)].misses;
+}
+enum class expecting_exception { yes, no };
+static expecting_exception hit(alternator::stats& stats, exp_type type) {
+    hits_counter(stats, type)++;
+    return expecting_exception::no;
+}
+static expecting_exception miss(alternator::stats& stats, exp_type type) {
+    misses_counter(stats, type)++;
+    return expecting_exception::no;
+}
+static expecting_exception eviction_miss(alternator::stats& stats, exp_type type) {
+    stats.expression_cache.evictions++;
+    return miss(stats, type);
+}
+static expecting_exception invalid(alternator::stats& stats, exp_type type) {
+    return expecting_exception::yes;
+}
+struct test_cache {
+    alternator::stats stats;
+    alternator::stats expected_stats;
+    utils::updateable_value_source<uint32_t> max_cache_entries;
+    std::unique_ptr<alternator::parsed::expression_cache> cache;
+    test_cache(int size) : max_cache_entries(size), cache(std::make_unique<alternator::parsed::expression_cache>(alternator::parsed::expression_cache::config{
+        .max_cache_entries = utils::updateable_value<uint32_t>(max_cache_entries)
+    }, stats)) {}
+
+    std::string validate_stats(const std::string& msg) {
+        for (int t = 0; t < exp_type::NUM_EXPRESSION_TYPES; t++) {
+            exp_type type = static_cast<exp_type>(t);
+            if(hits_counter(stats, type) != hits_counter(expected_stats, type)) {
+                return format("{}: expected {} {} hits, got {}", msg, hits_counter(expected_stats, type), str(type), hits_counter(stats, type));
+            }
+            if(misses_counter(stats, type) != misses_counter(expected_stats, type)) {
+                return format("{}: expected {} {} misses, got {}", msg, misses_counter(expected_stats, type), str(type), misses_counter(stats, type));
+            }
+        }
+        if(stats.expression_cache.evictions != expected_stats.expression_cache.evictions) {
+            return format("{}: expected {} evictions, got {}", msg, expected_stats.expression_cache.evictions, stats.expression_cache.evictions);
+        }
+        return std::string();
+    }
+    void check_stats(const std::string& msg) {
+        std::string v = validate_stats(msg);
+        BOOST_REQUIRE_MESSAGE(v.empty(), v);
+    }
+    seastar::future<> wait_check_stats(const std::string& msg) {
+        for (int attempt = 0; attempt < 100; attempt++) {
+            std::string v = validate_stats(msg);
+            if (v.empty()) {
+                co_return;
+            }
+            co_await seastar::sleep(std::chrono::milliseconds(10));
+        }
+        check_stats(msg); // Final check after all attempts
+    }
+    void try_parse(const std::string& expr, exp_type type, expecting_exception (*expected_cache_behavior)(alternator::stats&, exp_type)) {
+        try {
+            switch (type) {
+            case exp_type::PROJECTION_EXPRESSION:
+                (void)(cache->parse_projection_expression(expr));
+                break;
+            case exp_type::UPDATE_EXPRESSION:
+                (void)(cache->parse_update_expression(expr));
+                break;
+            case exp_type::CONDITION_EXPRESSION:
+                (void)(cache->parse_condition_expression(expr, "Test"));
+                break;
+            default:
+                BOOST_FAIL("Invalid expression type");
+            }
+            if (expected_cache_behavior(expected_stats, type) == expecting_exception::yes) {
+                BOOST_FAIL(format("Expected exception for {} expression: {}, but none was thrown.", str(type), expr));
+            }
+        } catch (const alternator::expressions_syntax_error& ex) {
+            if (expected_cache_behavior(expected_stats, type) == expecting_exception::no) {
+                BOOST_FAIL(format("Unexpected syntax exception for {} expression: {}, {}", str(type), expr, ex.what()));
+            }
+        } catch (const std::exception& ex) {
+            BOOST_FAIL(format("Unexpected exception for {} expression: {}, {}", str(type), expr, ex.what()));
+        }
+        check_stats(format("after parsing {} expression: {}", str(type), expr));
+    }
+};
+
+// Basic cache functionality test: hits, misses, evictions.
+SEASTAR_TEST_CASE(test_parsed_expression_cache) {
+    test_cache cache(3);
+
+    // New entries
+    cache.try_parse("a", exp_type::PROJECTION_EXPRESSION, miss);
+    cache.try_parse("a", exp_type::PROJECTION_EXPRESSION, hit);
+    cache.try_parse("SET a=:v", exp_type::UPDATE_EXPRESSION, miss);
+    cache.try_parse("SET a=:v", exp_type::UPDATE_EXPRESSION, hit);
+    cache.try_parse("a=:v", exp_type::CONDITION_EXPRESSION, miss);
+    cache.try_parse("a=:v", exp_type::CONDITION_EXPRESSION, hit);
+
+    // Cache full - evicting old entrires
+    cache.try_parse("b", exp_type::PROJECTION_EXPRESSION, eviction_miss);
+    cache.try_parse("b", exp_type::PROJECTION_EXPRESSION, hit);
+    cache.try_parse("SET b=:v", exp_type::UPDATE_EXPRESSION, eviction_miss);
+    cache.try_parse("SET b=:v", exp_type::UPDATE_EXPRESSION, hit);
+    cache.try_parse("b=:v", exp_type::CONDITION_EXPRESSION, eviction_miss);
+    cache.try_parse("b=:v", exp_type::CONDITION_EXPRESSION, hit);
+
+    // Keys existing in cache, but invalid (for a given type) - raise exception
+    cache.try_parse("b", exp_type::UPDATE_EXPRESSION, invalid);
+    cache.try_parse("b", exp_type::CONDITION_EXPRESSION, invalid);
+    cache.try_parse("SET b=:v", exp_type::PROJECTION_EXPRESSION, invalid);
+    cache.try_parse("SET b=:v", exp_type::CONDITION_EXPRESSION, invalid);
+    cache.try_parse("b=:v", exp_type::PROJECTION_EXPRESSION, invalid);
+    cache.try_parse("b=:v", exp_type::UPDATE_EXPRESSION, invalid);
+
+    // Invalid expressions should not affect cache state
+    cache.try_parse("b", exp_type::PROJECTION_EXPRESSION, hit);
+    cache.try_parse("SET b=:v", exp_type::UPDATE_EXPRESSION, hit);
+    cache.try_parse("b=:v", exp_type::CONDITION_EXPRESSION, hit);
+
+    co_return;
+}
+
+// Test that same strings can't be parsed to different expression types.
+SEASTAR_TEST_CASE(test_parsed_expression_cache_invalid_requests) {
+    test_cache cache(2000);
+
+    auto inv_expr = {"", " ", "SET", "set", ":v", "1"};
+    for (auto expr : inv_expr) {
+        cache.try_parse(expr, exp_type::PROJECTION_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::UPDATE_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::CONDITION_EXPRESSION, invalid);
+    }
+    auto projection = {"a", "a, b", "a.b", "a.#b", "#a[1]", "a[1].b"};
+    for (auto expr : projection) {
+        cache.try_parse(expr, exp_type::UPDATE_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::CONDITION_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::PROJECTION_EXPRESSION, miss);
+    }
+    auto condition = {"a=:v", "size(a)", "a IN (:v)", "a > :v", "a = :v AND b = :w", "a = :v OR b = :w", "NOT a = :v", "(a = :v)"};
+    for (auto expr : condition) {
+        cache.try_parse(expr, exp_type::PROJECTION_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::UPDATE_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::CONDITION_EXPRESSION, miss);
+    }
+    auto update = {"SET a=:v", "SET a=:v, b = :1", "ADD a[1] :v", "REMOVE a[1]", "DELETE a :v", "DELETE a :v, b :w REMOVE c", "SET a=:v REMOVE b ADD c :w"};
+    for (auto expr : update) {
+        cache.try_parse(expr, exp_type::PROJECTION_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::CONDITION_EXPRESSION, invalid);
+        cache.try_parse(expr, exp_type::UPDATE_EXPRESSION, miss);
+    }
+    co_return;
+}
+
+// Test resizing the cache at runtime.
+SEASTAR_TEST_CASE(test_parsed_expression_cache_resize) {
+    test_cache cache(3);
+
+    cache.try_parse("a", exp_type::PROJECTION_EXPRESSION, miss);
+    cache.try_parse("b", exp_type::PROJECTION_EXPRESSION, miss);
+    cache.try_parse("c", exp_type::PROJECTION_EXPRESSION, miss);
+    cache.try_parse("d", exp_type::PROJECTION_EXPRESSION, eviction_miss);
+
+    cache.max_cache_entries.set(4);
+    cache.try_parse("e", exp_type::PROJECTION_EXPRESSION, miss);
+
+    cache.max_cache_entries.set(2);
+    cache.expected_stats.expression_cache.evictions += 2;
+    cache.check_stats("after resizing cache to 2 entries");
+
+    cache.max_cache_entries.set(0);
+    cache.expected_stats.expression_cache.evictions += 2;
+    cache.check_stats("after disabling cache");
+
+    // for resizes down with more then 3000 evictions the change may be asynchronous
+    size_t large_size = 30000;
+    size_t first_reduce = 75*large_size/100;
+    cache.max_cache_entries.set(large_size);
+    for (size_t i = 0; i < large_size; i++) {
+        cache.try_parse(seastar::format("expr{}", i), exp_type::PROJECTION_EXPRESSION, miss);
+        co_await maybe_yield();
+    }
+    cache.max_cache_entries.set(first_reduce);
+    cache.expected_stats.expression_cache.evictions += (large_size - first_reduce);
+    co_await cache.wait_check_stats("async, after resizing cache");
+    for (size_t i = 0; i < first_reduce; i++) {
+        cache.try_parse(seastar::format("expr{}", i), exp_type::PROJECTION_EXPRESSION, eviction_miss);
+        co_await maybe_yield();
+    }
+    cache.max_cache_entries.set(0);
+    cache.expected_stats.expression_cache.evictions += first_reduce;
+    co_await cache.wait_check_stats("async, after disabling cache");
+
+    cache.max_cache_entries.set(large_size);
+    for (size_t i = 0; i < large_size; i++) {
+        cache.try_parse(seastar::format("expr{}", i), exp_type::PROJECTION_EXPRESSION, miss);
+        co_await maybe_yield();
+    }
+    cache.max_cache_entries.set(1000);
+    co_await cache.cache->stop();
+    cache.cache.reset();
+
+    co_return;
 }
