@@ -65,11 +65,38 @@ using namespace std::chrono_literals;
 logging::logger elogger("alternator-executor");
 
 namespace alternator {
-// We write the provisioned read and write capacity on a table using the
-// tags RCU_TAG_KEY and WCU_TAG_KEY.
-static const sstring RCU_TAG_KEY("system:provisioned_rcu");
-static const sstring WCU_TAG_KEY("system:provisioned_wcu");
-static const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
+
+// Alternator-specific table properties stored as hidden table tags:
+//
+// Alternator doesn't keep its own records of which Alternator tables exist
+// or how each one was configured. Instead, an Alternator table is created
+// as a CQL table - and that CQL table stores its own name, schema, views,
+// and so on. However, there are some Alternator-specific properties of a
+// table which are not part of a CQL schema but which we need to remember.
+// We store those extra properties as hidden "tags" on the CQL table, using
+// the schema's "tags extension". This extension provides a map<string,string>
+// for the table that is stored persistently on disk, but also readable
+// quickly from memory.
+// Alternator also uses the tags extension to store user-defined tags on
+// tables (the TagResource, UntagResource and ListTagsOfResource requests).
+// So the internal tags are kept hidden from the user by using the prefix
+// "system:" in their name (see tag_key_is_internal()).
+// The following is the list of these Alternator-specific hidden tags that
+// Alternator adds to tables:
+//
+// Tags storing the "ReadCapacityUnits" and "WriteCapacityUnits"
+// configured for a table with BillingMode=PROVISIONED.
+const sstring RCU_TAG_KEY("system:provisioned_rcu");
+const sstring WCU_TAG_KEY("system:provisioned_wcu");
+// Tag storing the table's original creation time, in milliseconds since the
+// Unix epoch. All tables get this tag when they are created, but it may be
+// missing in old tables created before this tag was introduced.
+const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
+// If this tag is present, it stores the name of the attribute that was
+// configured by UpdateTimeToLive to be the expiration-time attribute for
+// this table.
+extern const sstring TTL_TAG_KEY("system:ttl_attribute");
+
 
 enum class table_status {
     active = 0,
