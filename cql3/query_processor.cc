@@ -990,7 +990,11 @@ query_processor::execute_with_params(
     auto opts = make_internal_options(p, values, cl);
     auto statement = p->statement;
 
-    auto msg = co_await execute_maybe_with_guard(query_state, std::move(statement), opts, &query_processor::do_execute_with_params);
+    auto f = co_await coroutine::as_future(execute_maybe_with_guard(query_state, std::move(statement), opts, &query_processor::do_execute_with_params));
+    if (f.failed()) {
+        co_return coroutine::return_exception_ptr(f.get_exception());
+    }
+    auto msg = f.get();
     co_return ::make_shared<untyped_result_set>(msg);
 }
 
@@ -1000,7 +1004,11 @@ query_processor::do_execute_with_params(
         shared_ptr<cql_statement> statement,
         const query_options& options, std::optional<service::group0_guard> guard) {
     statement->validate(*this, service::client_state::for_internal_calls());
-    co_return co_await statement->execute(*this, query_state, options, std::move(guard));
+    auto f = co_await coroutine::as_future(statement->execute(*this, query_state, options, std::move(guard)));
+    if (f.failed()) {
+        co_return coroutine::return_exception_ptr(f.get_exception());
+    }
+    co_return f.get();
 }
 
 
