@@ -682,10 +682,12 @@ protected:
     void finish_new_sstable(compaction_writer* writer) {
         writer->writer.set_repaired_at(_output_repaired_at);
         writer->writer.consume_end_of_stream();
-        writer->sst->open_data().get();
-        _end_size += writer->sst->bytes_on_disk();
-        _new_unused_sstables.push_back(writer->sst);
-        _new_partial_sstables.erase(writer->sst);
+        if (!writer->sst->marked_for_deletion()) {
+            writer->sst->open_data().get();
+            _end_size += writer->sst->bytes_on_disk();
+            _new_unused_sstables.push_back(writer->sst);
+            _new_partial_sstables.erase(writer->sst);
+        }
     }
 
     sstable_writer_config make_sstable_writer_config(compaction_type type) {
@@ -740,8 +742,10 @@ protected:
     void stop_gc_compaction_writer(compaction_writer* c_writer) {
         c_writer->writer.consume_end_of_stream();
         auto sst = c_writer->sst;
-        sst->open_data().get();
-        _unused_garbage_collected_sstables.push_back(std::move(sst));
+        if (!sst->marked_for_deletion()) {
+            sst->open_data().get();
+            _unused_garbage_collected_sstables.push_back(std::move(sst));
+        }
     }
 
     // Writes a temporary sstable run containing only garbage collected data.
@@ -1312,7 +1316,14 @@ private:
         if (!enable_garbage_collected_sstable_writer()) {
             return;
         }
+
+        // Do not attempt to replace exhausted sstables if the new sstable is empty
+        if (sst->marked_for_deletion()) {
+            return;
+        }
+
         auto permit = seastar::get_units(_replacer_lock, 1).get();
+
         // Replace exhausted sstable(s), if any, by new one(s) in the column family.
         auto not_exhausted = [s = _schema, &dk = sst->get_last_decorated_key()] (shared_sstable& sst) {
             return sst->get_last_decorated_key().tri_compare(*s, dk) > 0;
