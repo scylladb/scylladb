@@ -38,7 +38,7 @@
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
-#include "collection_mutation.hh"
+#include "mutation/collection_mutation.hh"
 #include "schema/schema.hh"
 #include "db/tags/extension.hh"
 #include "db/tags/utils.hh"

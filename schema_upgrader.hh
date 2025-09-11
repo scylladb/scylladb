@@ -10,7 +10,7 @@
 
 #include "mutation/mutation_fragment.hh"
 #include "mutation/mutation_fragment_v2.hh"
-#include "converting_mutation_partition_applier.hh"
+#include "mutation/converting_mutation_partition_applier.hh"
 
 // A StreamedMutationTransformer which transforms the stream to a different schema
 class schema_upgrader {

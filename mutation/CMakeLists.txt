@@ -4,6 +4,9 @@ target_sources(mutation
     async_utils.cc
     atomic_cell.cc
     canonical_mutation.cc
+    collection_mutation.cc
+    converting_mutation_partition_applier.cc
+    counters.cc
     frozen_mutation.cc
     mutation.cc
     mutation_fragment.cc

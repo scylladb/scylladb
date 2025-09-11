@@ -11,7 +11,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
-#include "collection_mutation.hh"
+#include "mutation/collection_mutation.hh"
 #include "utils/log.hh"
 
 namespace cql3 {
