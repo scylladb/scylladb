@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <seastar/core/chunked_fifo.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/http/exception.hh>
@@ -34,8 +35,9 @@ static ::tm get_time(db_clock::time_point tp) {
 }
 
 tm::task_status make_status(tasks::task_status status, sharded<gms::gossiper>& gossiper) {
-    std::vector<tm::task_identity> tis{status.children.size()};
-    std::ranges::transform(status.children, tis.begin(), [&gossiper] (const auto& child) {
+    chunked_fifo<tm::task_identity> tis;
+    tis.reserve(status.children.size());
+    for (const auto& child : status.children) {
         tm::task_identity ident;
         gms::inet_address addr{};
         if (gossiper.local_is_initialized()) {
@@ -43,8 +45,8 @@ tm::task_status make_status(tasks::task_status status, sharded<gms::gossiper>& g
         }
         ident.task_id = child.task_id.to_sstring();
         ident.node = fmt::format("{}", addr);
-        return ident;
-    });
+        tis.push_back(std::move(ident));
+    }
 
     tm::task_status res{};
     res.id = status.task_id.to_sstring();

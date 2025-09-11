@@ -19,6 +19,7 @@
 #include "db/timeout_clock.hh"
 #include "message/messaging_service.hh"
 #include "utils/assert.hh"
+#include "utils/chunked_vector.hh"
 #include "utils/overloaded_functor.hh"
 #include "service/storage_service.hh"
 #include "tasks/task_handler.hh"
@@ -182,7 +183,7 @@ bool task_manager::task::impl::is_done() const noexcept {
     return _status.state == tasks::task_manager::task_state::done;
 }
 
-future<std::vector<task_manager::task::task_essentials>> task_manager::task::impl::get_failed_children() const {
+future<utils::chunked_vector<task_manager::task::task_essentials>> task_manager::task::impl::get_failed_children() const {
     return _children.map_each_task<task_essentials>([] (const foreign_task_ptr&) { return std::nullopt; },
         [] (const task_essentials& child) -> std::optional<task_essentials> {
             if (child.task_status.state == task_state::failed || !child.failed_children.empty()) {
@@ -387,7 +388,7 @@ bool task_manager::task::is_complete() const noexcept {
     return _impl->is_complete();
 }
 
-future<std::vector<task_manager::task::task_essentials>> task_manager::task::get_failed_children() const {
+future<utils::chunked_vector<task_manager::task::task_essentials>> task_manager::task::get_failed_children() const {
     return _impl->get_failed_children();
 }
 
@@ -399,7 +400,7 @@ task_manager::virtual_task::impl::impl(module_ptr module) noexcept
     : _module(std::move(module))
 {}
 
-future<std::vector<task_identity>> task_manager::virtual_task::impl::get_children(module_ptr module, task_id parent_id, std::function<bool(locator::host_id)> is_host_alive) {
+future<utils::chunked_vector<task_identity>> task_manager::virtual_task::impl::get_children(module_ptr module, task_id parent_id, std::function<bool(locator::host_id)> is_host_alive) {
     auto ms = module->get_task_manager()._messaging;
     if (!ms) {
         auto ids = co_await module->get_task_manager().get_virtual_task_children(parent_id);
@@ -408,7 +409,7 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
                 .host_id = tm.get_host_id(),
                 .task_id = id
             };
-        }) | std::ranges::to<std::vector<task_identity>>();
+        }) | std::ranges::to<utils::chunked_vector<task_identity>>();
     }
 
     auto nodes = module->get_nodes();
@@ -416,7 +417,7 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
         tmlogger.info("tasks_vt_get_children: waiting");
         co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::seconds{10});
     });
-    co_return co_await map_reduce(nodes, [ms, parent_id, is_host_alive = std::move(is_host_alive)] (auto host_id) -> future<std::vector<task_identity>> {
+    co_return co_await map_reduce(nodes, [ms, parent_id, is_host_alive = std::move(is_host_alive)] (auto host_id) -> future<utils::chunked_vector<task_identity>> {
         if (is_host_alive(host_id)) {
             return ser::tasks_rpc_verbs::send_tasks_get_children(ms, host_id, parent_id).then([host_id] (auto resp) {
                 return resp | std::views::transform([host_id] (auto id) {
@@ -424,12 +425,15 @@ future<std::vector<task_identity>> task_manager::virtual_task::impl::get_childre
                         .host_id = host_id,
                         .task_id = id
                     };
-                }) | std::ranges::to<std::vector<task_identity>>();
+                }) | std::ranges::to<utils::chunked_vector<task_identity>>();
             });
         } else {
-            return make_ready_future<std::vector<task_identity>>();
+            return make_ready_future<utils::chunked_vector<task_identity>>();
         }
-    }, std::vector<task_identity>{}, concat<task_identity>);
+    }, utils::chunked_vector<task_identity>{}, [] (auto a, auto&& b) {
+        std::move(b.begin(), b.end(), std::back_inserter(a));
+        return a;
+    });
 }
 
 task_manager::module_ptr task_manager::virtual_task::impl::get_module() const noexcept {

@@ -37,7 +37,7 @@ struct task_status {
     std::string entity;
     std::string progress_units;
     task_manager::task::progress progress;
-    std::vector<task_identity> children;
+    utils::chunked_vector<task_identity> children;
 };
 
 struct task_stats {

@@ -447,7 +447,7 @@
                "description":"The number of units completed so far"
             },
             "children_ids":{
-               "type":"array",
+               "type":"chunked_array",
                "items":{
                   "type":"task_identity"
                },

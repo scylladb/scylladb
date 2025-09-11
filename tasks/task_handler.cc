@@ -189,7 +189,7 @@ future<utils::chunked_vector<task_status>> task_handler::get_status_recursively(
                             .host_id = tm.get_host_id(),
                             .task_id = child.task_status.id
                         };
-                    }) | std::ranges::to<std::vector<task_identity>>()
+                    }) | std::ranges::to<utils::chunked_vector<task_identity>>()
                 };
                 res.push_back(status);
 
