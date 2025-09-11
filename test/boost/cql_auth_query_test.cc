@@ -28,6 +28,7 @@
 #include "service/client_state.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/exception_utils.hh"
 
 BOOST_AUTO_TEST_SUITE(cql_auth_query_test)
 
@@ -342,6 +343,43 @@ SEASTAR_TEST_CASE(modify_table_with_index) {
         assert_that(cquery_nofail(env, "SELECT p FROM t WHERE v='aaa' ALLOW FILTERING;")).is_rows().with_rows(
                 {{int32_type->decompose(14)}});
     }, db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(grant_vector_search_indexing) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                create_user_if_not_exists(env, bob);
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v vector<float, 4>)");
+                BOOST_REQUIRE_EXCEPTION(env.execute_cql("GRANT VECTOR_SEARCH_INDEXING ON ks.t TO bob").get(), exceptions::syntax_exception,
+                        exception_predicate::message_contains("does not support any of the requested permissions"));
+                BOOST_REQUIRE_EXCEPTION(env.execute_cql("GRANT VECTOR_SEARCH_INDEXING ON KEYSPACE ks TO bob").get(), exceptions::syntax_exception,
+                        exception_predicate::message_contains("does not support any of the requested permissions"));
+                cquery_nofail(env, "GRANT VECTOR_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+            },
+            db_config_with_auth());
+}
+
+SEASTAR_TEST_CASE(select_from_vector_indexed_table) {
+    return do_with_cql_env_thread(
+            [](auto&& env) {
+                cquery_nofail(env, "CREATE TABLE ks.t (id int PRIMARY KEY, v vector<float, 4>)");
+                cquery_nofail(env, "CREATE TABLE ks.t2 (id int PRIMARY KEY, v vector<float, 4>)");
+                cquery_nofail(env, "CREATE CUSTOM INDEX ON ks.t(v) USING 'vector_index'");
+                create_user_if_not_exists(env, bob);
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has none of the permissions (VECTOR_SEARCH_INDEXING, SELECT) on"));
+                });
+                cquery_nofail(env, "GRANT VECTOR_SEARCH_INDEXING ON ALL KEYSPACES TO bob");
+                with_user(env, bob, [&env] {
+                    cquery_nofail(env, "SELECT * FROM ks.t");
+                });
+                with_user(env, bob, [&env] {
+                    BOOST_REQUIRE_EXCEPTION(env.execute_cql("SELECT * FROM ks.t2").get(), exceptions::unauthorized_exception,
+                            exception_predicate::message_contains("User bob has no SELECT permission"));
+                });
+            },
+            db_config_with_auth());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
