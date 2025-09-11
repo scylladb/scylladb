@@ -48,6 +48,8 @@ sstable_version_constants::component_map_t sstable_version_constants::create_com
         { component_type::Scylla, "Scylla.db" },
         { component_type::TemporaryTOC, TEMPORARY_TOC_SUFFIX },
         { component_type::TemporaryStatistics, "Statistics.db.tmp" },
+        { component_type::Rows, "Rows.db" },
+        { component_type::Partitions, "Partitions.db" },
     };
 }
 

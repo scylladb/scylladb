@@ -107,8 +107,23 @@ future<data_sink> filesystem_storage::make_data_or_index_sink(sstable& sst, comp
     options.buffer_size = sst.sstable_buffer_size;
     options.write_behind = 10;
 
-    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
-    return make_file_data_sink(type == component_type::Data ? std::move(sst._data_file) : std::move(sst._index_file), options);
+    SCYLLA_ASSERT(
+        type == component_type::Data
+        || type == component_type::Index
+        || type == component_type::Rows
+        || type == component_type::Partitions);
+    switch (type) {
+        case component_type::Data:
+            return make_file_data_sink(std::move(sst._data_file), options);
+        case component_type::Index:
+            return make_file_data_sink(std::move(sst._index_file), options);
+        case component_type::Rows:
+            return make_file_data_sink(std::move(sst._rows_file), options);
+        case component_type::Partitions:
+            return make_file_data_sink(std::move(sst._partitions_file), options);
+        default:
+            abort();
+    }
 }
 
 future<data_source> filesystem_storage::make_data_or_index_source(sstable&, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const {
@@ -664,7 +679,11 @@ static future<data_source> maybe_wrap_source(const sstable& sst, component_type 
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
-    SCYLLA_ASSERT(type == component_type::Data || type == component_type::Index);
+    SCYLLA_ASSERT(
+        type == component_type::Data
+        || type == component_type::Index
+        || type == component_type::Rows
+        || type == component_type::Partitions);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
     return maybe_wrap_sink(sst, type, _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as));
 }
