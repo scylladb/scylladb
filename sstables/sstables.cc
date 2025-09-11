@@ -1486,6 +1486,21 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
         return;
     }
 
+    // The initial partition estimate was inaccurate but perform resize only if it is worth doing, based on the following criteria.
+    // 1. Do not resize if the size difference is less than 10% of the current size, or less than 1K.
+    //    - to prevent resizing for small sstables where the savings are minimal.
+    // 2. Do not resize if the current filter is larger than the optimal one but still under 16K.
+    //    - to avoid downsizing when the savings are minimal.
+    //    - the fp rate is also already atleast at the configured value, so no gain there.
+    // 3. Do not resize filters of garbage_collected sstables.
+    const auto optimal_filter_size = utils::i_filter::get_filter_size(num_partitions, _schema->bloom_filter_fp_chance());
+    const auto filter_size_diff = std::abs<int64_t>(optimal_filter_size - curr_bitset_size);
+    if (filter_size_diff < 1024 || filter_size_diff < 0.1 * curr_bitset_size || // [1]
+            (curr_bitset_size > optimal_filter_size && curr_bitset_size < 16384) || // [2]
+            _origin == "garbage_collection") { // [3]
+        return;
+    }
+
     // Consumer that adds the keys from index entries to the given bloom filter
     class bloom_filter_builder {
         utils::filter_ptr& _filter;

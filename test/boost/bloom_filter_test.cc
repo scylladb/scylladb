@@ -17,6 +17,7 @@
 #include "readers/from_mutations.hh"
 #include "utils/bloom_filter.hh"
 #include "utils/error_injection.hh"
+#include "utils/i_filter.hh"
 
 SEASTAR_TEST_CASE(test_sstable_reclaim_memory_from_components_and_reload_reclaimed_components) {
     return test_env::do_with_async([] (test_env& env) {
@@ -189,19 +190,11 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
     });
 }
 
-static void bloom_filters_require_equal(const utils::filter_ptr &f1, const utils::filter_ptr &f2) {
-    auto filter1 = static_cast<utils::filter::bloom_filter*>(f1.get());
-    auto filter2 = static_cast<utils::filter::bloom_filter*>(f2.get());
-    BOOST_REQUIRE_EQUAL(filter1->memory_size(), filter2->memory_size());
-    BOOST_REQUIRE_EQUAL(filter1->bits().size(), filter2->bits().size());
-    BOOST_REQUIRE(filter1->bits().get_storage() == filter2->bits().get_storage());
-}
-
-SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimate) {
+SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimates) {
     return test_env::do_with_async([](test_env& env) {
         simple_schema ss;
         auto schema = ss.schema();
-        const auto actual_partition_count = 100;
+        const auto actual_partition_count = 10000;
 
         // Create a bloom filter with optimal size for the given partition count.
         utils::filter_ptr optimal_filter = utils::i_filter::get_filter(actual_partition_count, schema->bloom_filter_fp_chance(), utils::filter_format::m_format);
@@ -218,17 +211,38 @@ SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimate) {
             optimal_filter->add(key::from_partition_key(*schema.get(), pk.key()).get_bytes());
         }
 
-        for (auto estimated_partition_count : {
-                 actual_partition_count / 2, // too low estimate
-                 actual_partition_count * 2, // too large estimate
-             }) {
+        // Create sstables with bad partition estimates and verify that the bloom filter was either rebuilt or not depending on the resize criterias.
+        auto do_test = [&] (int estimated_partition_count, bool expect_rebuild, std::string origin = "") {
             // create sstable with the estimated partition count
             auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations(schema, env.make_reader_permit(), mutations),
-                                         env.manager().configure_writer(), sstables::get_highest_sstable_version(), estimated_partition_count);
+                                         env.manager().configure_writer(origin), sstables::get_highest_sstable_version(), estimated_partition_count);
+
+            auto filter1 = static_cast<utils::filter::bloom_filter*>(sstables::test(sst).get_filter().get());
+
+            if (!expect_rebuild) {
+                // Verify that the filter was not rebuilt
+                BOOST_REQUIRE_EQUAL(filter1->bits().memory_size(),
+                    utils::i_filter::get_filter_size(estimated_partition_count, schema->bloom_filter_fp_chance()));
+                return;
+            }
 
             // Verify that the filter was rebuilt into the optimal size
-            bloom_filters_require_equal(sstables::test(sst).get_filter(), optimal_filter);
-        }
+            auto filter2 = static_cast<utils::filter::bloom_filter*>(optimal_filter.get());
+            BOOST_REQUIRE_EQUAL(filter1->memory_size(), filter2->memory_size());
+            BOOST_REQUIRE_EQUAL(filter1->bits().size(), filter2->bits().size());
+            BOOST_REQUIRE(filter1->bits().get_storage() == filter2->bits().get_storage());
+        };
+
+        // Expect rebuild if the estimate is either too low or too large
+        do_test(actual_partition_count / 10, true);
+        do_test(actual_partition_count * 10, true);
+
+        // Verify rebuild is skipped if certain criteria are not met
+        do_test(actual_partition_count + 500, false); // |curr_size(13132) - optimal_size(12508)| < 1KB
+        do_test(actual_partition_count - 500, false); // |curr_size(11884) - optimal_size(12508)| < 1KB
+        do_test(actual_partition_count - 900, false); // |curr_size(11388) - optimal_size(12508)| < 10% of curr_size(11388)
+        do_test(actual_partition_count + 2500, false); // curr_size(15636) not optimal but < 16K
+        do_test(actual_partition_count * 2, false, "garbage_collection"); // curr_size is too large(25012) but origin is garbage_collection
     });
 };
 
