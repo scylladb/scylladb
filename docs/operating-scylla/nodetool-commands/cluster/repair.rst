@@ -53,6 +53,14 @@ ScyllaDB nodetool cluster repair command supports the following options:
 
      nodetool cluster repair --tablet-tokens 1,10474535988
 
+- ``--incremental-mode`` specifies the incremental repair mode. Can be 'disabled', 'regular', or 'full'. 'regular': The incremental repair logic is enabled. Unrepaired sstables will be included for repair. Repaired sstables will be skipped. The incremental repair states will be updated after repair. 'full': The incremental repair logic is enabled. Both repaired and unrepaired sstables will be included for repair. The incremental repair states will be updated after repair. 'disabled': The incremental repair logic is disabled completely. The incremental repair states, e.g., repaired_at in sstables and sstables_repaired_at in the system.tablets table, will not be updated after repair. When the option is not provided, it defaults to regular.
+
+  For example:
+
+  ::
+
+     nodetool cluster repair --incremental-mode regular
+
 - ``keyspace`` executes a repair on a specific keyspace. The default is all keyspaces.
 
   For example:

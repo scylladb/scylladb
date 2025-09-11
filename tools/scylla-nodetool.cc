@@ -557,6 +557,15 @@ void cluster_repair_operation(scylla_rest_client& client, const bpo::variables_m
         repair_params["dcs_filter"] = std::move(dcs.value());
     }
 
+    if (vm.contains("incremental-mode")) {
+        auto mode = vm["incremental-mode"].as<sstring>();
+        const std::unordered_set<sstring> supported_mode{"disabled", "regular", "full"};
+        if (!supported_mode.contains(mode)) {
+            throw std::invalid_argument("nodetool cluster repair --incremental-mode only supports: disabled, regular, full");
+        }
+        repair_params["incremental_mode"] = mode;
+    }
+
     auto log = [&]<typename... Args> (fmt::format_string<Args...> fmt, Args&&... param) {
         const auto msg = fmt::format(fmt, param...);
         using clock = std::chrono::system_clock;
@@ -3709,6 +3718,7 @@ For more information, see: {}"
                             typed_option<std::vector<sstring>>("in-dc", "Constrain repair to specific datacenter(s)"),
                             typed_option<std::vector<sstring>>("in-hosts", "Constrain repair to the specific host(s)"),
                             typed_option<std::vector<sstring>>("tablet-tokens", "Tokens owned by the tablets to repair."),
+                            typed_option<sstring>("incremental-mode", "Specify the incremental repair mode: disabled, regular, full"),
                         },
                         {
                             typed_option<sstring>("keyspace", "The keyspace to repair, if missing all keyspaces are repaired", 1),
