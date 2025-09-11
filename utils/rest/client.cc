@@ -39,14 +39,12 @@ void rest::request_wrapper::method(method_type type) {
     _req._method = httpd::type2str(type);
 }
 
-void rest::request_wrapper::content(std::string_view content) {
-    _req.content_length = content.size();
-    _req.content = sstring(content);
+void rest::request_wrapper::content(std::string_view content_type, std::string_view content) {
+    _req.write_body(sstring(content_type), sstring(content));
 }
 
-void rest::request_wrapper::content(body_writer w, size_t len) {
-    _req.content_length = len;
-    _req.body_writer = std::move(w);
+void rest::request_wrapper::content(std::string_view content_type, body_writer w, size_t len) {
+    _req.write_body(sstring(content_type), len, std::move(w));
 }
 
 void rest::request_wrapper::target(std::string_view s) {
@@ -219,8 +217,7 @@ future<> rest::send_request(std::string_view uri
         if (content_type.empty()) {
             content_type = "application/x-www-form-urlencoded";
         }
-        client.content(std::move(body));
-        client.add_header(httpclient::CONTENT_TYPE_HEADER, content_type);
+        client.content(content_type, std::move(body));
     }
 
     co_await client.send([&] (const http::reply& rep, std::string_view result) {
