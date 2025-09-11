@@ -854,7 +854,11 @@ future<> commit_mutations(service& ser, ::service::group0_batch&& mc) {
     return ser.commit_mutations(std::move(mc));
 }
 
-future<> migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
+future<> service::migrate_to_auth_v2(db::system_keyspace& sys_ks, ::service::raft_group0_client& g0, start_operation_func_t start_operation_func, abort_source& as) {
+    // wait until service is fully started, otherwise some init code assuming auth v1
+    // may run after we migrate it to v2 here
+    co_await ensure_superuser_is_created();
+
     // FIXME: if this function fails it may leave partial data in the new tables
     // that should be cleared
     auto gen = [&sys_ks] (api::timestamp_type ts) -> ::service::mutations_generator {

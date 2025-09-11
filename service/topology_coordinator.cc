@@ -20,6 +20,7 @@
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/util/noncopyable_function.hh>
 
+#include <stdexcept>
 #include <variant>
 
 #include "auth/service.hh"
@@ -127,6 +128,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     abort_source& _as;
     gms::feature_service& _feature_service;
     endpoint_lifecycle_notifier& _lifecycle_notifier;
+    sharded<auth::service>& _auth_service;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -3145,12 +3147,12 @@ public:
             tablet_allocator& tablet_allocator,
             std::chrono::milliseconds ring_delay,
             gms::feature_service& feature_service, endpoint_lifecycle_notifier& lifecycle_notifier,
-            topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
+            sharded<auth::service>& auth_service, topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
         , _tablet_load_stats_refresh_interval_in_seconds(db.get_config().tablet_load_stats_refresh_interval_in_seconds)
         , _group0(group0), _topo_sm(topo_sm), _vb_sm(vb_sm), _as(as)
-        , _feature_service(feature_service), _lifecycle_notifier(lifecycle_notifier)
+        , _feature_service(feature_service), _lifecycle_notifier(lifecycle_notifier), _auth_service( auth_service)
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
@@ -3425,7 +3427,10 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     auto auth_version = co_await _sys_ks.get_auth_version();
     if (auth_version < db::system_keyspace::auth_version_t::v2) {
         rtlogger.info("migrating system_auth keyspace data");
-        co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
+        if (!_auth_service.local_is_initialized()) {
+            throw std::runtime_error("auth service not yet initialized");
+        }
+        co_await _auth_service.local().migrate_to_auth_v2(_sys_ks, _group0.client(),
                 [this] (abort_source&) { return start_operation();}, _as);
     }
 
@@ -3779,6 +3784,7 @@ future<> run_topology_coordinator(
         tablet_allocator& tablet_allocator,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
+        sharded<auth::service>& auth_service,
         gms::feature_service& feature_service,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker) {
 
@@ -3788,7 +3794,7 @@ future<> run_topology_coordinator(
             std::move(raft_topology_cmd_handler),
             tablet_allocator,
             ring_delay,
-            feature_service, lifecycle_notifier,
+            feature_service, lifecycle_notifier, auth_service,
             topology_cmd_rpc_tracker};
 
     std::exception_ptr ex;

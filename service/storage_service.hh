@@ -176,6 +176,7 @@ private:
     sharded<streaming::stream_manager>& _stream_manager;
     sharded<locator::snitch_ptr>& _snitch;
     sharded<qos::service_level_controller>& _sl_controller;
+    sharded<auth::service>& _auth_service;
 
     // Engaged on shard 0 before `join_cluster`.
     service::raft_group0* _group0;
@@ -242,6 +243,7 @@ public:
         sharded<db::view::view_builder>& view_builder,
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
+        sharded<auth::service>& auth_service,
         topology_state_machine& topology_state_machine,
         db::view::view_building_state_machine& view_building_state_machine,
         tasks::task_manager& tm,
