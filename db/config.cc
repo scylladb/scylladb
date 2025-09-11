@@ -1517,7 +1517,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , tablet_load_stats_refresh_interval_in_seconds(this, "tablet_load_stats_refresh_interval_in_seconds", liveness::LiveUpdate, value_status::Used, 60,
         "Tablet load stats refresh rate in seconds.")
     , sstable_index_write_formats(this, "sstable_index_write_formats", liveness::LiveUpdate, value_status::Used, {},
-        "SSTable index file formats for newly created sstables. This must be a subset of set {`big`, `bti`}. `big` is always implicitly added to the set.")
+        "SSTable index file formats for newly created sstables. This must be a subset of set {`big`, `bti`}. If empty, defaults to {`big`}.")
     , sstable_index_preferred_read_formats(this, "sstable_index_preferred_read_formats", liveness::LiveUpdate, value_status::Used, {},
         "Preferred SSTable index file for use during reads, in order of decreasing preference. This is a list with elements `big` and/or `bti`. Unlisted formats are implicitly appended to the end of the list, in order: `big`, `bti`.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")

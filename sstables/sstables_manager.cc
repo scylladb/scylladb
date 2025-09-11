@@ -73,6 +73,15 @@ bool sstables_manager::is_bti_index_enabled() const {
         && std::ranges::contains(_db_config.sstable_index_write_formats(), enum_option<db::sstable_index_format_t>(db::sstable_index_format_t::mode::bti));
 }
 
+bool sstables_manager::is_big_index_enabled() const {
+    // We need at least one index formats.
+    // If BTI index isn't enabled, then we have to default
+    // to writing a BIG index regardless of what the config says.
+    auto bti_enabled = is_bti_index_enabled();
+    auto config_contains_big = std::ranges::contains(_db_config.sstable_index_write_formats(), enum_option<db::sstable_index_format_t>(db::sstable_index_format_t::mode::big));
+    return !bti_enabled || config_contains_big;
+}
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)

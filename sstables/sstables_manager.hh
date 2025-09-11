@@ -237,6 +237,7 @@ public:
     void subscribe(sstables_manager_event_handler& handler);
 
     bool is_bti_index_enabled() const;
+    bool is_big_index_enabled() const;
 
 private:
     void add(sstable* sst);

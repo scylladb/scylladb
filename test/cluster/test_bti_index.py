@@ -151,4 +151,11 @@ async def test_bti_index_enable(manager: ManagerClient) -> None:
     await live_update_config(manager, servers, 'sstable_index_preferred_read_formats', ['bti'])
     await test_bti_usage_during_reads(should_use_bti=True, use_cache=False)
 
+    logger.info("Step 9: Updating write config to ['bti']")
+    await live_update_config(manager, servers, 'sstable_index_write_formats', ['bti'])
+    await asyncio.gather(*[manager.api.keyspace_upgrade_sstables(s.ip_addr, ks_name) for s in servers])
+    await test_files_presence(bti_should_exist=True, big_should_exist=False)
+    await test_bti_usage_during_reads(should_use_bti=True, use_cache=False)
+    await test_bti_usage_during_reads(should_use_bti=True, use_cache=True)
+
     manager.driver_close()
