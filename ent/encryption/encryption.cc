@@ -648,7 +648,7 @@ public:
 
         if (exta->map.count(encrypted_components_attribute_ds)) {
             std::vector<sstables::component_type> ccs;
-            ccs.reserve(9);
+            ccs.reserve(11);
             auto mask = ser::deserialize_from_buffer(exta->map.at(encrypted_components_attribute_ds).value, std::type_identity<uint32_t>{}, 0);
             for (auto c : { sstables::component_type::Index,
                             sstables::component_type::CompressionInfo,
@@ -659,6 +659,8 @@ public:
                             sstables::component_type::Filter,
                             sstables::component_type::Statistics,
                             sstables::component_type::TemporaryStatistics,
+                            sstables::component_type::Partitions,
+                            sstables::component_type::Rows,
             }) {
                 if (mask & (1 << int(c))) {
                     ccs.emplace_back(c);
@@ -825,6 +827,8 @@ public:
         case sstables::component_type::Filter:
         case sstables::component_type::Statistics:
         case sstables::component_type::TemporaryStatistics:
+        case sstables::component_type::Partitions:
+        case sstables::component_type::Rows:
         case sstables::component_type::Unknown:
             break;
         }
@@ -853,6 +857,8 @@ public:
         case sstables::component_type::Statistics:
         case sstables::component_type::Summary:
         case sstables::component_type::TemporaryStatistics:
+        case sstables::component_type::Rows:
+        case sstables::component_type::Partitions:
         case sstables::component_type::Unknown:
             auto [id, esx] = get_encryption_schema_extension(sst, type);
             if (esx) {
