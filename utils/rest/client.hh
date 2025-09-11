@@ -41,8 +41,8 @@ public:
     using body_writer = decltype(std::declval<seastar::http::request>().body_writer);
 
     void method(method_type);
-    void content(std::string_view);
-    void content(body_writer, size_t);
+    void content(std::string_view content_type, std::string_view);
+    void content(std::string_view content_type, body_writer, size_t);
 
     void target(std::string_view);
 
