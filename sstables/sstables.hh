@@ -713,6 +713,7 @@ private:
     void validate_max_local_deletion_time();
     void validate_partitioner();
 
+    // Loads first and last partition keys from appropriate components into `_first` and `_last`.
     void set_first_and_last_keys();
 
     // Create a position range based on the min/max_column_names metadata of this sstable.
