@@ -574,7 +574,7 @@ private:
         bytes_ostream blocks; // Serialized pi_blocks.
         bytes_ostream offsets; // Serialized block offsets (uint32_t) relative to the start of "blocks".
         uint64_t promoted_index_size = 0; // Number of pi_blocks inside blocks and first_entry;
-        tombstone tomb;
+        tombstone partition_tombstone;
         uint64_t block_start_offset;
         uint64_t block_next_start_offset;
         std::optional<clustering_info> first_clustering;
@@ -941,7 +941,7 @@ void writer::consume_new_partition(const dht::decorated_key& dk) {
     _pi_write_m.blocks.clear();
     _pi_write_m.offsets.clear();
     _pi_write_m.promoted_index_size = 0;
-    _pi_write_m.tomb = {};
+    _pi_write_m.partition_tombstone = {};
     _pi_write_m.first_clustering.reset();
     _pi_write_m.last_clustering.reset();
     _pi_write_m.desired_block_size = _pi_write_m.promoted_index_block_size;
@@ -961,7 +961,7 @@ void writer::consume(tombstone t) {
     _partition_header_length += (_data_writer->offset() - current_pos);
     _c_stats.update(t);
 
-    _pi_write_m.tomb = t;
+    _pi_write_m.partition_tombstone = t;
     _tombstone_written = true;
 
     if (t) {
@@ -1388,7 +1388,7 @@ void writer::write_promoted_index() {
         return;
     }
     write_vint(_tmp_bufs, _partition_header_length);
-    write(_sst.get_version(), _tmp_bufs, to_deletion_time(_pi_write_m.tomb));
+    write(_sst.get_version(), _tmp_bufs, to_deletion_time(_pi_write_m.partition_tombstone));
     write_vint(_tmp_bufs, _pi_write_m.promoted_index_size);
     uint64_t pi_size = _tmp_bufs.size() + _pi_write_m.blocks.size() + _pi_write_m.offsets.size();
     write_vint(*_index_writer, pi_size);
