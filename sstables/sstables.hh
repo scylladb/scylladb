@@ -550,7 +550,7 @@ private:
     file _rows_file;
     seastar::shared_ptr<cached_file> _cached_rows_file;
     uint64_t _data_file_size;
-    uint64_t _index_file_size;
+    uint64_t _index_file_size = 0;
     uint64_t _partitions_file_size = 0;
     uint64_t _rows_file_size = 0;
     // on-disk size of components but data and index.
