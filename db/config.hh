@@ -162,6 +162,14 @@ struct tablets_mode_t {
     static std::unordered_map<sstring, mode> map(); // for enum_option<>
 };
 
+struct sstable_index_format_t {
+    enum class mode : int8_t {
+        big,
+        bti,
+    };
+    static std::unordered_map<sstring, mode> map(); // for enum_option<>
+};
+
 class config final : public utils::config_file {
 public:
     config();
@@ -602,6 +610,9 @@ public:
     named_value<bool> rf_rack_valid_keyspaces;
 
     named_value<uint32_t> tablet_load_stats_refresh_interval_in_seconds;
+
+    named_value<std::vector<enum_option<sstable_index_format_t>>> sstable_index_write_formats;
+    named_value<std::vector<enum_option<sstable_index_format_t>>> sstable_index_preferred_read_formats;
 
     static const sstring default_tls_priority;
 private:

@@ -269,6 +269,13 @@ const config_type& config_type_for<enum_option<db::tablets_mode_t>>() {
 }
 
 template <>
+const config_type& config_type_for<std::vector<enum_option<db::sstable_index_format_t>>>() {
+    static config_type ct(
+        "sstable index format", printable_to_json<enum_option<db::sstable_index_format_t>>);
+    return ct;
+}
+
+template <>
 const config_type& config_type_for<db::config::hinted_handoff_enabled_type>() {
     static config_type ct("hinted handoff enabled", hinted_handoff_enabled_to_json);
     return ct;
@@ -418,6 +425,23 @@ template <>
 class convert<enum_option<db::tablets_mode_t>> {
 public:
     static bool decode(const Node& node, enum_option<db::tablets_mode_t>& rhs) {
+        std::string name;
+        if (!convert<std::string>::decode(node, name)) {
+            return false;
+        }
+        try {
+            std::istringstream(name) >> rhs;
+        } catch (boost::program_options::invalid_option_value&) {
+            return false;
+        }
+        return true;
+    }
+};
+
+template <>
+class convert<enum_option<db::sstable_index_format_t>> {
+public:
+    static bool decode(const Node& node, enum_option<db::sstable_index_format_t>& rhs) {
         std::string name;
         if (!convert<std::string>::decode(node, name)) {
             return false;
@@ -1492,6 +1516,10 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     // Bigger tables will take longer to be resized. similar-sized tables can be batched into same iteration.
     , tablet_load_stats_refresh_interval_in_seconds(this, "tablet_load_stats_refresh_interval_in_seconds", liveness::LiveUpdate, value_status::Used, 60,
         "Tablet load stats refresh rate in seconds.")
+    , sstable_index_write_formats(this, "sstable_index_write_formats", liveness::LiveUpdate, value_status::Used, {},
+        "SSTable index file formats for newly created sstables. This must be a subset of set {`big`, `bti`}. `big` is always implicitly added to the set.")
+    , sstable_index_preferred_read_formats(this, "sstable_index_preferred_read_formats", liveness::LiveUpdate, value_status::Used, {},
+        "Preferred SSTable index file for use during reads, in order of decreasing preference. This is a list with elements `big` and/or `bti`. Unlisted formats are implicitly appended to the end of the list, in order: `big`, `bti`.")
     , default_log_level(this, "default_log_level", value_status::Used, seastar::log_level::info, "Default log level for log messages")
     , logger_log_level(this, "logger_log_level", value_status::Used, {}, "Map of logger name to log level. Valid log levels are 'error', 'warn', 'info', 'debug' and 'trace'")
     , log_to_stdout(this, "log_to_stdout", value_status::Used, true, "Send log output to stdout")
@@ -1740,6 +1768,14 @@ std::unordered_map<sstring, db::tablets_mode_t::mode> db::tablets_mode_t::map() 
             {"enforced", db::tablets_mode_t::mode::enforced},
             {"2", db::tablets_mode_t::mode::enforced}
             };
+}
+
+std::unordered_map<sstring, db::sstable_index_format_t::mode> db::sstable_index_format_t::map() {
+    return {{"bti", db::sstable_index_format_t::mode::bti},
+            {"BTI", db::sstable_index_format_t::mode::bti},
+            {"big", db::sstable_index_format_t::mode::big},
+            {"BIG", db::sstable_index_format_t::mode::big},
+    };
 }
 
 template struct utils::config_file::named_value<seastar::log_level>;
