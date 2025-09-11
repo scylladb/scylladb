@@ -948,7 +948,7 @@ private:
                 std::ref(_snitch),
                 std::ref(_tablet_allocator),
                 std::ref(_cdc_generation_service),
-                std::ref(_view_builder),
+                std::ref(_view_builder), std::ref(_view_building_worker),
                 std::ref(_qp),
                 std::ref(_sl_controller),
                 std::ref(_topology_state_machine),

@@ -10,6 +10,7 @@
  */
 
 #include "storage_service.hh"
+#include "db/view/view_building_worker.hh"
 #include "utils/chunked_vector.hh"
 #include <seastar/core/shard_id.hh>
 #include "db/view/view_building_coordinator.hh"
@@ -197,6 +198,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<service::tablet_allocator>& tablet_allocator,
     sharded<cdc::generation_service>& cdc_gens,
     sharded<db::view::view_builder>& view_builder,
+    sharded<db::view::view_building_worker>& view_building_worker,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
     topology_state_machine& topology_state_machine,
@@ -237,6 +239,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _tablet_allocator(tablet_allocator)
         , _cdc_gens(cdc_gens)
         , _view_builder(view_builder)
+        , _view_building_worker(view_building_worker)
         , _topology_state_machine(topology_state_machine)
         , _view_building_state_machine(view_building_state_machine)
         , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
@@ -4753,6 +4756,7 @@ future<> storage_service::do_drain() {
     // Drain view builder before group0, because the view builder uses group0 to coordinate view building.
     // Drain after transport is stopped, because view_builder::drain aborts view writes for user writes as well.
     co_await _view_builder.invoke_on_all(&db::view::view_builder::drain);
+    co_await _view_building_worker.invoke_on_all(&db::view::view_building_worker::drain);
 
     // group0 persistence relies on local storage, so we need to stop group0 first.
     // This must be kept in sync with defer_verbose_shutdown for group0 in main.cc to
