@@ -170,8 +170,7 @@ future<sstring> service_principal_credentials::post(const sstring& body) {
     rest::httpclient client{_host, _port, std::move(creds), options};
     client.target(path);
     client.method(op);
-    client.add_header("Content-Type", mime_type);
-    client.content(std::move(body));
+    client.content(mime_type, std::move(body));
 
     if (az_creds_logger.is_enabled(log_level::trace)) {
         az_creds_logger.trace("[{}] Sending request: {}", *this, rest::redacted_request_type{ client.request(), filter });
