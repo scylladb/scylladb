@@ -532,6 +532,8 @@ private:
     bool _compression_enabled = false;
     std::unique_ptr<file_writer> _data_writer;
     std::unique_ptr<file_writer> _index_writer;
+    std::unique_ptr<file_writer> _rows_writer;
+    std::unique_ptr<file_writer> _partitions_writer;
     bool _tombstone_written = false;
     bool _static_row_written = false;
     // The length of partition header (partition key, partition deletion and static row, if present)
@@ -831,6 +833,8 @@ writer::~writer() {
     };
     close_writer(_index_writer);
     close_writer(_data_writer);
+    close_writer(_partitions_writer);
+    close_writer(_rows_writer);
 }
 
 void writer::maybe_set_pi_first_clustering(const clustering_info& info) {
@@ -897,6 +901,12 @@ void writer::init_file_writers() {
 
     out = _sst._storage->make_data_or_index_sink(_sst, component_type::Index).get();
     _index_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), _sst.index_filename());
+    if (_sst.has_component(component_type::Partitions) && _sst.has_component(component_type::Rows)) {
+        out = _sst._storage->make_data_or_index_sink(_sst, component_type::Rows).get();
+        _rows_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), component_name(_sst, component_type::Rows));
+        out = _sst._storage->make_data_or_index_sink(_sst, component_type::Partitions).get();
+        _partitions_writer = std::make_unique<file_writer>(output_stream<char>(std::move(out)), component_name(_sst, component_type::Partitions));
+    }
 }
 
 std::unique_ptr<file_writer> writer::close_writer(std::unique_ptr<file_writer>& w) {
@@ -1511,6 +1521,14 @@ void writer::consume_end_of_stream() {
     }
 
     close_writer(_index_writer);
+
+    if (_partitions_writer) {
+        close_writer(_partitions_writer);
+    }
+    if (_rows_writer) {
+        close_writer(_rows_writer);
+    }
+
     _sst.set_first_and_last_keys();
 
     _sst._components->statistics.contents[metadata_type::Serialization] = std::make_unique<serialization_header>(std::move(_sst_schema.header));

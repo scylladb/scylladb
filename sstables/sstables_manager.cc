@@ -68,6 +68,11 @@ void sstables_manager::subscribe(sstables_manager_event_handler& handler) {
     }));
 }
 
+bool sstables_manager::is_bti_index_enabled() const {
+    return _features.bti_sstable_index
+        && std::ranges::contains(_db_config.sstable_index_write_formats(), enum_option<db::sstable_index_format_t>(db::sstable_index_format_t::mode::bti));
+}
+
 storage_manager::storage_manager(const db::config& cfg, config stm_cfg)
     : _s3_clients_memory(stm_cfg.s3_clients_memory)
     , _config_updater(this_shard_id() == 0 ? std::make_unique<config_updater>(cfg, *this) : nullptr)

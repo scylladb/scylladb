@@ -81,6 +81,8 @@ public:
 private:
     stats _stats{};
     cached_file_stats _index_cached_file_stats{};
+    cached_file_stats _partitions_cached_file_stats{};
+    cached_file_stats _rows_cached_file_stats{};
     partition_index_cache_stats _partition_index_cache_stats{};
     seastar::metrics::metric_groups _metrics;
     logalloc::region _region;
@@ -138,6 +140,8 @@ public:
     void set_compaction_scheduling_group(seastar::scheduling_group);
     lru& get_lru() { return _lru; }
     cached_file_stats& get_index_cached_file_stats() { return _index_cached_file_stats; }
+    cached_file_stats& get_partitions_cached_file_stats() { return _partitions_cached_file_stats; }
+    cached_file_stats& get_rows_cached_file_stats() { return _rows_cached_file_stats; }
     partition_index_cache_stats& get_partition_index_cache_stats() { return _partition_index_cache_stats; }
     seastar::memory::reclaiming_result evict_from_lru_shallow() noexcept;
 };

@@ -869,6 +869,10 @@ void sstable::generate_toc() {
     _recognized_components.insert(component_type::Digest);
     _recognized_components.insert(component_type::Index);
     _recognized_components.insert(component_type::Summary);
+    if (_manager.is_bti_index_enabled()) {
+        _recognized_components.insert(component_type::Partitions);
+        _recognized_components.insert(component_type::Rows);
+    }
     _recognized_components.insert(component_type::Data);
     if (_schema->bloom_filter_fp_chance() != 1.0) {
         _recognized_components.insert(component_type::Filter);
@@ -1355,10 +1359,16 @@ future<file> sstable::open_file(component_type type, open_flags flags, file_open
 }
 
 future<> sstable::open_or_create_data(open_flags oflags, file_open_options options) noexcept {
-    return when_all_succeed(
-        open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }),
-        open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); })
-    ).discard_result();
+    utils::small_vector<future<>, 4> futures;
+    futures.push_back(open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }));
+    futures.push_back(open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); }));
+    if (has_component(component_type::Partitions)) {
+        futures.push_back(open_file(component_type::Partitions, oflags, options).then([this] (file f) { _partitions_file = std::move(f); }));
+    }
+    if (has_component(component_type::Rows)) {
+        futures.push_back(open_file(component_type::Rows, oflags, options).then([this] (file f) { _rows_file = std::move(f); }));
+    }
+    return when_all_succeed(futures.begin(), futures.end()).discard_result();
 }
 
 future<> sstable::open_data(sstable_open_config cfg) noexcept {
@@ -1408,6 +1418,32 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
                                                             _manager.get_cache_tracker().region(),
                                                             _index_file_size);
     _index_file = make_cached_seastar_file(*_cached_index_file);
+    if (_partitions_file) {
+        auto size = co_await _partitions_file.size();
+        _partitions_file_size = size;
+        _cached_partitions_file = seastar::make_shared<cached_file>(
+            _partitions_file,
+            _manager.get_cache_tracker().get_partitions_cached_file_stats(),
+            _manager.get_cache_tracker().get_lru(),
+            _manager.get_cache_tracker().region(),
+            size,
+            component_name(*this, component_type::Partitions).format()
+        );
+        _partitions_file = make_cached_seastar_file(*_cached_partitions_file);
+    }
+    if (_rows_file) {
+        auto size = co_await _rows_file.size();
+        _rows_file_size = size;
+        _cached_rows_file = seastar::make_shared<cached_file>(
+            _rows_file,
+            _manager.get_cache_tracker().get_rows_cached_file_stats(),
+            _manager.get_cache_tracker().get_lru(),
+            _manager.get_cache_tracker().region(),
+            size,
+            component_name(*this, component_type::Rows).format()
+        );
+        _rows_file = make_cached_seastar_file(*_cached_rows_file);
+    }
 
     this->set_min_max_position_range();
     this->set_first_and_last_keys();
@@ -1432,6 +1468,12 @@ future<> sstable::create_data() noexcept {
 
 future<> sstable::drop_caches() {
     co_await _cached_index_file->evict_gently();
+    if (_cached_partitions_file) {
+        co_await _cached_partitions_file->evict_gently();
+    }
+    if (_cached_rows_file) {
+        co_await _cached_rows_file->evict_gently();
+    }
     co_await _index_cache->evict_gently();
 }
 
@@ -1637,6 +1679,12 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
     _components = std::move(info.components);
     _data_file = make_checked_file(_read_error_handler, info.data.to_file());
     _index_file = make_checked_file(_read_error_handler, info.index.to_file());
+    if (info.partitions) {
+        _partitions_file = make_checked_file(_read_error_handler, info.partitions->to_file());
+    }
+    if (info.rows) {
+        _rows_file = make_checked_file(_read_error_handler, info.rows->to_file());
+    }
     _shards = std::move(info.owners);
     _metadata_size_on_disk = info.metadata_size_on_disk;
     validate_min_max_metadata();
@@ -1649,8 +1697,19 @@ future<> sstable::load(sstables::foreign_sstable_open_info info) noexcept {
 
 future<foreign_sstable_open_info> sstable::get_open_info() & {
     return _components.copy().then([this] (auto c) mutable {
-        return foreign_sstable_open_info{std::move(c), this->get_shards_for_this_sstable(), _data_file.dup(), _index_file.dup(),
-            _generation, _version, _format, data_size(), _metadata_size_on_disk};
+        return foreign_sstable_open_info{
+            .components = std::move(c),
+            .owners = this->get_shards_for_this_sstable(),
+            .data = _data_file.dup(),
+            .index = _index_file.dup(),
+            .partitions = _partitions_file ? std::optional<seastar::file_handle>(_partitions_file.dup()) : std::nullopt,
+            .rows = _rows_file ? std::optional<seastar::file_handle>(_rows_file.dup()) : std::nullopt,
+            .generation = _generation,
+            .version = _version,
+            .format = _format,
+            .uncompressed_data_size = data_size(),
+            .metadata_size_on_disk = _metadata_size_on_disk
+        };
     });
 }
 
@@ -2198,10 +2257,10 @@ uint64_t sstable::bytes_on_disk() const {
     if (!_data_file_size) {
         on_internal_error(sstlog, "On-disk size of sstable data was not set");
     }
-    if (!_index_file_size) {
+    if (!_index_file_size && !_partitions_file_size) {
         on_internal_error(sstlog, "On-disk size of sstable index was not set");
     }
-    return _metadata_size_on_disk + _data_file_size + _index_file_size;
+    return _metadata_size_on_disk + _data_file_size + _index_file_size + _partitions_file_size + _rows_file_size;
 }
 
 uint64_t sstable::filter_size() const {
@@ -2860,19 +2919,30 @@ int sstable::compare_by_max_timestamp(const sstable& other) const {
 }
 
 future<> sstable::close_files() {
-    auto index_closed = make_ready_future<>();
+    utils::small_vector<future<>, 4> close_futures;
     if (_index_file) {
-        index_closed = _index_file.close().handle_exception([me = shared_from_this()] (auto ep) {
+        close_futures.push_back(_index_file.close().handle_exception([me = shared_from_this()] (auto ep) {
             sstlog.warn("sstable close index_file failed: {}", ep);
             general_disk_error();
-        });
+        }));
     }
-    auto data_closed = make_ready_future<>();
     if (_data_file) {
-        data_closed = _data_file.close().handle_exception([me = shared_from_this()] (auto ep) {
+        close_futures.push_back(_data_file.close().handle_exception([me = shared_from_this()] (auto ep) {
             sstlog.warn("sstable close data_file failed: {}", ep);
             general_disk_error();
-        });
+        }));
+    }
+    if (_partitions_file) {
+        close_futures.push_back(_partitions_file.close().handle_exception([me = shared_from_this()] (auto ep) {
+            sstlog.warn("sstable close partitions_db failed: {}", ep);
+            general_disk_error();
+        }));
+    }
+    if (_rows_file) {
+        close_futures.push_back(_rows_file.close().handle_exception([me = shared_from_this()] (auto ep) {
+            sstlog.warn("sstable close rows_db failed: {}", ep);
+            general_disk_error();
+        }));
     }
 
     auto unlinked = make_ready_future<>();
@@ -2898,7 +2968,7 @@ future<> sstable::close_files() {
 
     _on_closed(*this);
 
-    return when_all_succeed(std::move(index_closed), std::move(data_closed), std::move(unlinked)).discard_result().then([this, me = shared_from_this()] {
+    return when_all_succeed(close_futures.begin(), close_futures.end()).discard_result().then([this, me = shared_from_this()] {
         if (_open_mode) {
             if (_open_mode.value() == open_flags::ro) {
                 _stats.on_close_for_reading();
@@ -3279,6 +3349,14 @@ sstable::sstable(schema_ptr schema,
 
 file sstable::uncached_index_file() {
     return _cached_index_file->get_file();
+}
+
+file sstable::uncached_partitions_file() {
+    return _cached_partitions_file->get_file();
+}
+
+file sstable::uncached_rows_file() {
+    return _cached_rows_file->get_file();
 }
 
 void sstable::unused() {

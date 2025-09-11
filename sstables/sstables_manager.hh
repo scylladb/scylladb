@@ -236,6 +236,8 @@ public:
     // unsubscribe happens automatically when the handler is destroyed
     void subscribe(sstables_manager_event_handler& handler);
 
+    bool is_bti_index_enabled() const;
+
 private:
     void add(sstable* sst);
     // Transition the sstable to the "inactive" state. It has no
