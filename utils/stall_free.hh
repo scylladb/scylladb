@@ -49,10 +49,17 @@ void merge_to_gently(std::list<T>& list1, const std::list<T>& list2, Compare com
 }
 
 // The clear_gently functions are meant for
-// gently destroying the contents of containers.
+// gently destroying the contents of containers and smart pointers.
 // The containers can be reused after clear_gently
 // or may be destroyed.  But unlike e.g. std::vector::clear(),
 // clear_gently will not necessarily keep the object allocation.
+//
+// Note that for any type of shared pointer (foreign or not), clear_gently
+// just reduces the reference count if it's greater than 1 and then returns.
+// In other words, it behaves like a normal reset().
+// But if clear_gently is called on the very last copy, the clear_gently() function
+// is recursively called on that last copy before destroying the object
+// to avoid stall in that destruction.
 
 template <typename T>
 concept HasClearGentlyMethod = requires (T x) {
@@ -113,6 +120,7 @@ template <HasClearGentlyMethod T>
 future<> clear_gently(T& o) noexcept;
 
 template <typename T>
+requires (SmartPointer<T> || SharedPointer<T>)
 future<> clear_gently(foreign_ptr<T>& o) noexcept;
 
 template <SharedPointer T>
@@ -177,20 +185,12 @@ future<> clear_gently(T& o) noexcept {
     return futurize_invoke(std::bind(&T::clear_gently, &o));
 }
 
-template <SharedPointer T>
+template <typename T>
+requires (SmartPointer<T> || SharedPointer<T>)
 future<> clear_gently(foreign_ptr<T>& o) noexcept {
     return smp::submit_to(o.get_owner_shard(), [&o] {
-        if (o.unwrap_on_owner_shard().use_count() == 1) {
-            return internal::clear_gently(const_cast<std::remove_const_t<typename foreign_ptr<T>::element_type>&>(*o));
-        }
-        return make_ready_future<>();
-    });
-}
-
-template <SmartPointer T>
-future<> clear_gently(foreign_ptr<T>& o) noexcept {
-    return smp::submit_to(o.get_owner_shard(), [&o] {
-        return internal::clear_gently(const_cast<std::remove_const_t<typename foreign_ptr<T>::element_type>&>(*o));
+        auto wrapped = o.release();
+        return internal::clear_gently(wrapped).then([wrapped = std::move(wrapped)] {});
     });
 }
 
@@ -203,17 +203,18 @@ future<> clear_gently(T&&... o) {
 }
 
 template <SharedPointer T>
-future<> clear_gently(T& o) noexcept {
+future<> clear_gently(T& ptr) noexcept {
+    auto o = std::exchange(ptr, nullptr);
     if (o.use_count() == 1) {
-        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o));
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o)).then([o = std::move(o)] {});
     }
     return make_ready_future<>();
 }
 
 template <SmartPointer T>
-future<> clear_gently(T& o) noexcept {
-    if (auto p = o.get()) {
-        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*p));
+future<> clear_gently(T& ptr) noexcept {
+    if (auto o = std::exchange(ptr, nullptr)) {
+        return internal::clear_gently(const_cast<std::remove_const_t<typename T::element_type>&>(*o)).then([o = std::move(o)] {});
     } else {
         return make_ready_future<>();
     }

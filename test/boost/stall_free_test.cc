@@ -12,6 +12,8 @@
 #include <unordered_set>
 
 #include "test/lib/scylla_test_case.hh"
+#include "test/lib/random_utils.hh"
+
 #include "utils/stall_free.hh"
 #include "utils/small_vector.hh"
 #include "utils/chunked_vector.hh"
@@ -61,8 +63,9 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_string) {
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_trivial_unique_ptr) {
     std::unique_ptr<int> p = std::make_unique<int>(0);
 
+    // The unique_ptr is expected to be reset by clear_gently
     utils::clear_gently(p).get();
-    BOOST_CHECK(p);
+    BOOST_REQUIRE(!p);
 }
 
 template <typename T>
@@ -127,10 +130,13 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_non_trivial_unique_ptr) {
         cleared_gently++;
     });
 
+    // The unique_ptr is expected to be reset by clear_gently
+    // and the wrapped object to be cleared gently before destroyed
     utils::clear_gently(p).get();
-    BOOST_CHECK(p);
+    BOOST_REQUIRE(!p);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
+    // Test re-clearing the already-reset unique_ptr, which should be a no-op
     cleared_gently = 0;
     p.reset();
     utils::clear_gently(p).get();
@@ -144,10 +150,13 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_unique_ptr_const_payload) {
         cleared_gently++;
     });
 
+    // The unique_ptr is expected to be reset by clear_gently
+    // and the wrapped object to be cleared gently before destroyed
     utils::clear_gently(p).get();
-    BOOST_CHECK(p);
+    BOOST_REQUIRE(!p);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
+    // Test re-clearing the already-reset unique_ptr, which should be a no-op
     cleared_gently = 0;
     p.reset();
     utils::clear_gently(p).get();
@@ -163,7 +172,10 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_unique_ptrs) {
     }));
     v.emplace_back(nullptr);
 
+    // The vector is expected to be reset by clear_gently
+    // and the contained objects to be cleared gently before destroyed
     utils::clear_gently(v).get();
+    BOOST_REQUIRE_EQUAL(v.size(), 0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
@@ -180,8 +192,15 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr) {
     };
     foreign_ptr<std::unique_ptr<clear_gently_tracker<int>>> p0 = make_foreign_ptr();
 
+    // The foreign unique_ptr is expected to be reset by clear_gently
+    // and the wrapped object to be cleared gently before destroyed
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test re-clearing the already-reset foreign unique_ptr, which should be a no-op
+    utils::clear_gently(p0).get();
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
@@ -198,8 +217,15 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr_const_payload) {
     };
     foreign_ptr<std::unique_ptr<const clear_gently_tracker<int>>> p0 = make_foreign_ptr();
 
+    // The foreign unique_ptr is expected to be reset by clear_gently
+    // and the wrapped object to be cleared gently before destroyed
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test re-clearing the already-reset foreign unique_ptr, which should be a no-op
+    utils::clear_gently(p0).get();
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
@@ -214,22 +240,35 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr) {
             return make_foreign<lw_shared_ptr<clear_gently_tracker<int>>>(std::move(p));
         }).get();
     };
-    foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>> p0 = make_foreign_ptr();
-
-    utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-
+    std::array<foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>>, 2> ptrs;
+    auto& p0 = ptrs[0];
     p0 = make_foreign_ptr();
-    auto p1 = p0.copy().get();
 
+    // The foreign shared ptr is expected to be reset by clear_gently
+    // and the shared object to be cleared gently before destroyed
+    // since its use_count is 1
     utils::clear_gently(p0).get();
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    p0.reset();
-    utils::clear_gently(p1).get();
+    // Test re-clearing the already-reset foreign shared ptr, which should be a no-op
+    utils::clear_gently(p0).get();
+    BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test clearing of foreign shared ptrs when the use_count is greater than 1
+    // Both are expected to be reset by clear_gently, but the shared object
+    // is expected to be cleared gently only once, before destroyed,
+    // when its use_count reaches 1
+    p0 = make_foreign_ptr();
+    ptrs[1] = p0.copy().get();
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
@@ -244,63 +283,114 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr_const_payload) {
             return make_foreign<lw_shared_ptr<const clear_gently_tracker<int>>>(std::move(p));
         }).get();
     };
-    foreign_ptr<lw_shared_ptr<const clear_gently_tracker<int>>> p0 = make_foreign_ptr();
-
-    utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-
+    std::array<foreign_ptr<lw_shared_ptr<const clear_gently_tracker<int>>>, 2> ptrs;
+    auto& p0 = ptrs[0];
     p0 = make_foreign_ptr();
-    auto p1 = p0.copy().get();
 
+    // The foreign shared ptr is expected to be reset by clear_gently
+    // and the shared object to be cleared gently before destroyed
+    // since its use_count is 1
     utils::clear_gently(p0).get();
-    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    p0.reset();
-    utils::clear_gently(p1).get();
+    // Test re-clearing the already-reset foreign shared ptr, which should be a no-op
+    utils::clear_gently(p0).get();
+    BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test clearing of foreign shared ptrs when the use_count is greater than 1
+    // Both are expected to be reset by clear_gently, but the shared object
+    // is expected to be cleared gently only once, before destroyed,
+    // when its use_count reaches 1
+    p0 = make_foreign_ptr();
+    ptrs[1] = p0.copy().get();
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr) {
     int cleared_gently = 0;
-    lw_shared_ptr<clear_gently_tracker<int>> p0 = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
-        cleared_gently++;
-    });
+    auto make_shared_ptr = [&cleared_gently] () {
+        return make_lw_shared<clear_gently_tracker<int>>(cleared_gently, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+            cleared_gently++;
+        });
+    };
+    std::array<lw_shared_ptr<clear_gently_tracker<int>>, 2> ptrs;
+    auto& p0 = ptrs[0];
+    p0 = make_shared_ptr();
 
+    // The shared ptr is expected to be reset by clear_gently
+    // and the shared object to be cleared gently before destroyed
+    // since its use_count is 1
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    lw_shared_ptr<clear_gently_tracker<int>> p1 = p0;
-
+    // Test re-clearing the already-reset shared ptr, which should be a no-op
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
-    BOOST_CHECK(p1);
+
+    // Test clearing of shared ptrs when the use_count is greater than 1
+    // Both are expected to be reset by clear_gently, but the shared object
+    // is expected to be cleared gently only once, before destroyed,
+    // when its use_count reaches 1
+    p0 = make_shared_ptr();
+    ptrs[1] = p0;
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr_const_payload) {
     int cleared_gently = 0;
-    auto p0 = make_lw_shared<const clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
-        cleared_gently++;
-    });
+    auto make_shared_ptr = [&cleared_gently] () {
+        return make_lw_shared<const clear_gently_tracker<int>>(cleared_gently, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+            cleared_gently++;
+        });
+    };
+    std::array<lw_shared_ptr<const clear_gently_tracker<int>>, 2> ptrs;
+    auto& p0 = ptrs[0];
+    p0 = make_shared_ptr();
 
+    // The shared ptr is expected to be reset by clear_gently
+    // and the shared object to be cleared gently before destroyed
+    // since its use_count is 1
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 
-    auto p1 = p0;
-
+    // Test re-clearing the already-reset shared ptr, which should be a no-op
     utils::clear_gently(p0).get();
-    BOOST_CHECK(p0);
+    BOOST_REQUIRE(!p0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
-    utils::clear_gently(p1).get();
-    BOOST_CHECK(p1);
+
+    // Test clearing of shared ptrs when the use_count is greater than 1
+    // Both are expected to be reset by clear_gently, but the shared object
+    // is expected to be cleared gently only once, before destroyed,
+    // when its use_count reaches 1
+    p0 = make_shared_ptr();
+    ptrs[1] = p0;
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::clear_gently(ptrs[i]).get();
+    BOOST_REQUIRE(!ptrs[i]);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::clear_gently(ptrs[i ^ 1]).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_trivial_array) {
@@ -328,7 +418,7 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_non_trivial_array) {
     utils::clear_gently(a).get();
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 
-    BOOST_REQUIRE(std::ranges::none_of(a, std::mem_fn(&clear_gently_tracker<int>::operator bool)));
+    BOOST_REQUIRE(std::ranges::none_of(a, std::mem_fn(&std::unique_ptr<clear_gently_tracker<int>>::operator bool)));
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_array_const_payload) {
