@@ -368,3 +368,29 @@ def test_repair_keyspace(nodetool):
                 expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=[]),
         ]},
         ["error processing arguments: nodetool cluster repair repairs only tablet keyspaces. To repair vnode keyspaces use nodetool repair."])
+
+@pytest.mark.parametrize("mode", ["disabled", "regular", "full"])
+def test_repair_incremenatal_repair(nodetool, mode):
+    id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
+    res = nodetool("cluster", "repair", "--incremental-mode", mode, "ks", "table1", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks",
+                "table": "table1",
+                "incremental_mode": mode,
+                "tokens": "all"},
+            response={"tablet_task_id": id1}),
+         expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id1}",
+            response={"state": "done"}),
+        ])
+
+    assert _remove_log_timestamp(res.stdout) == f"""\
+Starting repair with task_id={id1} keyspace=ks table=table1
+Repair with task_id={id1} finished
+"""
