@@ -33,7 +33,7 @@
 #include "db/view/view_update_backlog.hh"
 #include "dht/i_partitioner.hh"
 #include "utils/interval.hh"
-#include "frozen_schema.hh"
+#include "schema/frozen_schema.hh"
 #include "repair/repair.hh"
 #include "node_ops/node_ops_ctl.hh"
 #include "service/paxos/proposal.hh"

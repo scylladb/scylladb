@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "column_computation.hh"
+#include "schema/column_computation.hh"
 #include "mutation/atomic_cell.hh"
 #include "timestamp.hh"
 #include <type_traits>

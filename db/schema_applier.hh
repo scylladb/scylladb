@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include "frozen_schema.hh"
+#include "schema/frozen_schema.hh"
 #include "mutation/mutation.hh"
 #include <seastar/core/future.hh>
 #include "service/storage_proxy.hh"

@@ -18,8 +18,8 @@
 #include <seastar/core/on_internal_error.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include "service/broadcast_tables/experimental/query_result.hh"
-#include "schema_mutations.hh"
-#include "frozen_schema.hh"
+#include "schema/schema_mutations.hh"
+#include "schema/frozen_schema.hh"
 #include "serialization_visitors.hh"
 #include "serializer.hh"
 #include "serializer_impl.hh"

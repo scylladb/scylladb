@@ -14,8 +14,8 @@
 #include "raft_group0_client.hh"
 #include "raft_group_registry.hh"
 
-#include "frozen_schema.hh"
-#include "schema_mutations.hh"
+#include "schema/frozen_schema.hh"
+#include "schema/schema_mutations.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "idl/experimental/broadcast_tables_lang.dist.hh"
 #include "idl/experimental/broadcast_tables_lang.dist.impl.hh"

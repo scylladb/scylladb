@@ -7,8 +7,8 @@
  */
 
 #include "mutation/canonical_mutation.hh"
-#include "schema_mutations.hh"
-#include "frozen_schema.hh"
+#include "schema/schema_mutations.hh"
+#include "schema/frozen_schema.hh"
 
 #include "idl/uuid.idl.hh"
 
