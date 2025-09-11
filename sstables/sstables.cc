@@ -1299,6 +1299,12 @@ future<> sstable::read_statistics() {
     return read_simple<component_type::Statistics>(_components->statistics);
 }
 
+future<> sstable::read_partitions_db_footer() {
+    if (_partitions_file) {
+        _partitions_db_footer = co_await trie::read_bti_partitions_db_footer(*_schema, _version, _partitions_file, _partitions_file_size);
+    }
+}
+
 void sstable::write_statistics() {
     write_simple<component_type::Statistics>(_components->statistics);
 }
@@ -1430,6 +1436,7 @@ future<> sstable::update_info_for_opened_data(sstable_open_config cfg) {
             component_name(*this, component_type::Partitions).format()
         );
         _partitions_file = make_cached_seastar_file(*_cached_partitions_file);
+        co_await read_partitions_db_footer();
     }
     if (_rows_file) {
         auto size = co_await _rows_file.size();
