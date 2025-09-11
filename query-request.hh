@@ -26,7 +26,7 @@
 #include "db/per_partition_rate_limit_info.hh"
 #include "query_id.hh"
 #include "bytes.hh"
-#include "cql_serialization_format.hh"
+#include "idl/cql_serialization_format.hh"
 
 class position_in_partition_view;
 class position_in_partition;
