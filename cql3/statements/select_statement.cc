@@ -1221,29 +1221,31 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto ann_vector = util::to_vector<float>(values);
 
         auto as = abort_source();
-        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, as);
-        if (!pkeys.has_value()) {
+        auto ann_results_opt = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, as);
+        if (!ann_results_opt.has_value()) {
             co_await coroutine::return_exception(
-                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, ann_results_opt.error())));
+        }
+
+        auto ann_results = std::move(ann_results_opt).value();
+        std::vector<primary_key> pkeys;
+        pkeys.reserve(ann_results.size());
+
+        for (const auto& [pk, _] : ann_results) {
+            pkeys.emplace_back(primary_key{pk.partition, pk.clustering});
         }
 
         // If there are no clustering columns, we have to convert the partition keys to partition ranges.
         if (_schema->clustering_key_size() == 0) {
             std::vector<dht::partition_range> partition_ranges;
-            std::ranges::transform(pkeys.value(), std::back_inserter(partition_ranges), [](const auto& pkey) {
+            std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
                     return dht::partition_range::make_singular(pkey.partition);
                 });
 
             co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, nullptr);
         } else {
-            std::vector<primary_key> primary_keys;
-            std::ranges::transform(pkeys.value(), std::back_inserter(primary_keys),[](const auto& pkey) {
-                    return primary_key{pkey.partition, pkey.clustering};
-                });
-            co_return co_await this->execute_base_query(qp, std::move(primary_keys), state, options, now, nullptr);
+            co_return co_await this->execute_base_query(qp, std::move(pkeys), state, options, now, nullptr);
         }
-
-        
     }
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
