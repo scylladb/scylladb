@@ -9,7 +9,7 @@
 #include "utils/assert.hh"
 #include "types/collection.hh"
 #include "types/user.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "mutation/mutation_partition.hh"
 #include "compaction/compaction_garbage_collector.hh"
 #include "combine.hh"

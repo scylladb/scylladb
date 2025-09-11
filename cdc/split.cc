@@ -9,7 +9,7 @@
 #include "mutation/mutation.hh"
 #include "schema/schema.hh"
 
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 #include "types/user.hh"
 
 #include "split.hh"

@@ -2,6 +2,7 @@ add_library(types STATIC)
 target_sources(types
   PRIVATE
     comparable_bytes.cc
+    duration.cc
     types.cc)
 target_include_directories(types
   PUBLIC

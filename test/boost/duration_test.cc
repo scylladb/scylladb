@@ -8,7 +8,7 @@
 
 #define BOOST_TEST_MODULE core
 
-#include "duration.hh"
+#include "types/duration.hh"
 
 #include <boost/test/unit_test.hpp>
 

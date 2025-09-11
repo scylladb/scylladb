@@ -12,7 +12,7 @@
 #include "test/lib/data_model.hh"
 
 #include "schema/schema_builder.hh"
-#include "concrete_types.hh"
+#include "types/concrete_types.hh"
 
 namespace tests::data_model {
 
