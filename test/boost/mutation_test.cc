@@ -1437,7 +1437,7 @@ SEASTAR_TEST_CASE(test_mutation_hash) {
 
 static mutation compacted(const mutation& m, gc_clock::time_point now) {
     auto result = m;
-    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, tombstone_gc_state(nullptr));
+    result.partition().compact_for_compaction(*result.schema(), always_gc, result.decorated_key(), now, tombstone_gc_state::for_tests());
     return result;
 }
 
@@ -1829,7 +1829,7 @@ SEASTAR_TEST_CASE(test_tombstone_purge) {
     tombstone tomb(api::new_timestamp(), gc_clock::now() - std::chrono::seconds(1));
     m.partition().apply(tomb);
     BOOST_REQUIRE(!m.partition().empty());
-    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now(), tombstone_gc_state(nullptr));
+    m.partition().compact_for_compaction(*s, always_gc, m.decorated_key(), gc_clock::now(), tombstone_gc_state::for_tests());
     // Check that row was covered by tombstone.
     BOOST_REQUIRE(m.partition().empty());
     // Check that tombstone was purged after compact_for_compaction().
@@ -2029,8 +2029,8 @@ SEASTAR_TEST_CASE(test_mutation_diff_with_random_generator) {
             if (s != m2.schema()) {
                 return;
             }
-            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now, tombstone_gc_state(nullptr));
-            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now, tombstone_gc_state(nullptr));
+            m1.partition().compact_for_compaction(*s, never_gc, m1.decorated_key(), now, tombstone_gc_state::for_tests());
+            m2.partition().compact_for_compaction(*s, never_gc, m2.decorated_key(), now, tombstone_gc_state::for_tests());
             auto m12 = m1;
             m12.apply(m2);
             auto m12_with_diff = m1;
@@ -2869,7 +2869,7 @@ using purged_compacted_fragments_consumer = basic_compacted_fragments_consumer_b
 void run_compaction_data_stream_split_test(const schema& schema, reader_permit permit, gc_clock::time_point query_time,
         utils::chunked_vector<mutation> mutations) {
     for (auto& mut : mutations) {
-        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state(nullptr));
+        mut.partition().compact_for_compaction(schema, never_gc, mut.decorated_key(), query_time, tombstone_gc_state::for_tests());
     }
 
     auto reader = make_mutation_reader_from_mutations(schema.shared_from_this(), std::move(permit), mutations);
@@ -2879,7 +2879,7 @@ void run_compaction_data_stream_split_test(const schema& schema, reader_permit p
             schema,
             query_time,
             get_max_purgeable,
-            tombstone_gc_state(nullptr),
+            tombstone_gc_state::for_tests(),
             survived_compacted_fragments_consumer(schema, query_time, get_max_purgeable),
             purged_compacted_fragments_consumer(schema, query_time, get_max_purgeable));
 
@@ -3494,7 +3494,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("non-paged v2");
     {
         mutation res_mut(s, pk);
-        auto c = compact_for_query<consumer>(*s, query_time, s->full_slice(), max_rows, max_partitions, consumer{permit, res_mut, max_rows});
+        auto c = compact_for_query<consumer>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state::for_tests(), consumer{permit, res_mut, max_rows});
         auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
@@ -3506,7 +3506,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("limited pages v2");
     {
         mutation res_mut(s, pk);
-        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions);
+        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions, tombstone_gc_state::for_tests());
         auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
@@ -3522,7 +3522,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
     testlog.info("short pages v2");
     {
         mutation res_mut(s, pk);
-        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions);
+        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state::for_tests());
         auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
 
@@ -3547,7 +3547,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
             if (detached_state) {
                 restore_state(reader, std::move(*detached_state));
             }
-            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions);
+            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), 1, max_partitions, tombstone_gc_state::for_tests());
             auto c = consumer{permit, res_mut, max_rows};
             reader.consume(compact_for_query<consumer>(compaction_state, std::move(c))).get();
             detached_state = std::move(*compaction_state).detach_state();
@@ -3568,7 +3568,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_range_tombstone_spanning_many_pages) {
             if (detached_state) {
                 restore_state(reader, std::move(*detached_state));
             }
-            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions);
+            auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state::for_tests());
             auto c = consumer{permit, res_mut, 2};
             reader.consume(compact_for_query<consumer>(compaction_state, std::move(c))).get();
             detached_state = std::move(*compaction_state).detach_state();
@@ -3657,7 +3657,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_detach_state) {
 
     auto check = [&] (uint64_t stop_at, bool final_stop) {
         testlog.debug("stop_at={}, final_stop={}", stop_at, final_stop);
-        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions);
+        auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, query_time, s->full_slice(), max_rows, max_partitions, tombstone_gc_state::for_tests());
         auto reader = make_mutation_reader_from_fragments(s, permit, make_frags());
         auto close_reader = deferred_close(reader);
         reader.consume(compact_for_query<consumer>(compaction_state, consumer(stop_at, final_stop))).get();
@@ -3746,7 +3746,7 @@ SEASTAR_THREAD_TEST_CASE(test_compactor_validator) {
         }
 
         auto compaction_state = make_lw_shared<compact_mutation_state<compact_for_sstables::no>>(*s, gc_clock::now(), s->full_slice(),
-                std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), mutation_fragment_stream_validation_level::clustering_key);
+                std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max(), tombstone_gc_state::for_tests(), mutation_fragment_stream_validation_level::clustering_key);
         auto reader = make_mutation_reader_from_fragments(s, permit, std::move(frags));
         auto close_reader = deferred_close(reader);
         bool is_valid = true;
@@ -4072,7 +4072,7 @@ SEASTAR_THREAD_TEST_CASE(test_mutation_compactor_sticky_max_purgeable) {
                 *s,
                 compaction_time,
                 get_max_purgeable,
-                tombstone_gc_state(nullptr),
+                tombstone_gc_state::for_tests(),
                 mutation_rebuilding_consumer(s));
         auto mut_opt = reader.consume(std::move(compactor)).get();
 

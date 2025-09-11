@@ -1504,7 +1504,8 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 database_test_wrapper(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {}),
                 query::full_partition_range,
                 s->full_slice(),
-                nullptr);
+                nullptr,
+                tombstone_gc_state::no_gc());
 
         auto f = replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks", "cf");
 
@@ -1735,7 +1736,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_gc_state_snapshot) {
     // state, while gc-before against the snapshot yields the before state.
 
     const auto now = gc_clock::now() + gc_clock::duration(std::chrono::hours(6));
-    const auto gc_state = tombstone_gc_state(shared_state).with_commitlog_check_disabled();
+    const auto gc_state = tombstone_gc_state(shared_state, 1).with_commitlog_check_disabled();
 
     const auto second_repair_time = gc_clock::now() + gc_clock::duration(std::chrono::hours(3));
 
