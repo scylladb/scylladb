@@ -30,7 +30,8 @@ mutation_reader make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
-        integrity_check integrity);
+        integrity_check integrity,
+        std::unique_ptr<abstract_index_reader>);
 
 // Same as above but the slice is moved and stored inside the reader.
 mutation_reader make_reader(
@@ -39,18 +40,6 @@ mutation_reader make_reader(
         reader_permit permit,
         const dht::partition_range& range,
         query::partition_slice&& slice,
-        tracing::trace_state_ptr trace_state,
-        streamed_mutation::forwarding fwd,
-        mutation_reader::forwarding fwd_mr,
-        read_monitor& monitor,
-        integrity_check integrity);
-
-mutation_reader make_reader_with_index_reader(
-        shared_sstable sstable,
-        schema_ptr schema,
-        reader_permit permit,
-        const dht::partition_range& range,
-        const query::partition_slice& slice,
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
