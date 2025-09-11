@@ -139,6 +139,8 @@ future<> managed_identity_credentials::check_connectivity() {
         }));
     } catch (const timed_out_error&) {
         ex = std::current_exception();
+    } catch (const std::system_error&) {
+        ex = std::current_exception();
     }
 
     sock.shutdown();
