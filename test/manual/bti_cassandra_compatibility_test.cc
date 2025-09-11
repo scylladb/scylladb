@@ -242,11 +242,11 @@ void test_index_files(
     auto region = logalloc::region();
     auto partitions_db_size = partitions_db.size().get();
     auto rows_db_size = rows_db.size().get();
-    auto partitions_db_cached = cached_file(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
-    auto rows_db_cached = cached_file(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
+    auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
+    auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
 
     // Read the Partitions.db footer, check the metadata contained there.
-    auto footer = sstables::trie::read_bti_partitions_db_footer(*s, sstable::version_types::me, partitions_db_cached.get_file(), partitions_db_size).get();
+    auto footer = sstables::trie::read_bti_partitions_db_footer(*s, sstable::version_types::me, partitions_db_cached->get_file(), partitions_db_size).get();
     SCYLLA_ASSERT(footer.partition_count == pm.partition_count);
     SCYLLA_ASSERT(sstables::key_view(footer.first_key) == sstables::key::from_partition_key(*s, pm.first_key.key()));
     SCYLLA_ASSERT(sstables::key_view(footer.last_key) == sstables::key::from_partition_key(*s, pm.last_key.key()));

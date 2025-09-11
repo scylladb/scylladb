@@ -1005,8 +1005,8 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto region = logalloc::region();
         auto partitions_db_size = partitions_db.size().get();
         auto rows_db_size = rows_db.size().get();
-        auto partitions_db_cached = cached_file(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
-        auto rows_db_cached = cached_file(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
+        auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
+        auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
 
         auto partitions_db_footer = sstables::trie::read_bti_partitions_db_footer(*the_schema, sst_ver, partitions_db, partitions_db_size).get();
         auto partitions_db_root_pos = partitions_db_footer.trie_root_position;
