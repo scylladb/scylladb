@@ -353,6 +353,12 @@ public:
 };
 
 class bti_index_reader : public sstables::abstract_index_reader {
+    // These usually point to the cached files owned by the sstable.
+    // But if `BYPASS CACHE` is used, these are owned privately by this reader,
+    // and their cached contents will be evicted when the reader is destroyed.
+    seastar::shared_ptr<cached_file> _local_partitions_db;
+    seastar::shared_ptr<cached_file> _local_rows_db;
+
     bti_node_reader _in_row;
     // We need the schema solely to parse the partition keys serialized in row index headers.
     schema_ptr _s;
@@ -391,7 +397,15 @@ class bti_index_reader : public sstables::abstract_index_reader {
     future<> init_lower_bound();
     future<> maybe_init_lower_bound();
 public:
-    bti_index_reader(bti_node_reader partitions_db, bti_node_reader rows_db, uint64_t root_pos, uint64_t total_file_size, schema_ptr s, reader_permit);
+    bti_index_reader(
+        seastar::shared_ptr<cached_file> local_partitions_db_file,
+        seastar::shared_ptr<cached_file> local_rows_db_file,
+        bti_node_reader partitions_db,
+        bti_node_reader rows_db,
+        uint64_t root_pos,
+        uint64_t total_file_size,
+        schema_ptr,
+        reader_permit);
     // Implementation of the `abstract_index_reader` interface.
     virtual future<> close() noexcept override;
     virtual sstables::data_file_positions_range data_file_positions() const override;
@@ -713,6 +727,8 @@ future<> bti_index_reader::close() noexcept {
     return make_ready_future<>();
 }
 bti_index_reader::bti_index_reader(
+    seastar::shared_ptr<cached_file> partitions_db_file,
+    seastar::shared_ptr<cached_file> rows_db_file,
     bti_node_reader partitions_db,
     bti_node_reader rows_db,
     uint64_t root_offset,
@@ -720,7 +736,9 @@ bti_index_reader::bti_index_reader(
     schema_ptr s,
     reader_permit rp
 )
-    : _in_row(rows_db)
+    : _local_partitions_db(std::move(partitions_db_file))
+    , _local_rows_db(std::move(rows_db_file))
+    , _in_row(rows_db)
     , _s(std::move(s))
     , _permit(std::move(rp))
     // Note that each cursor gets its own copy of the `bti_node_reader`s,
@@ -917,8 +935,8 @@ future<> bti_index_reader::prefetch_lower_bound(position_in_partition_view pos) 
 
 // Creates a BTI index reader over the Partitions.db file and the matching Rows.db file.
 std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
-    cached_file& partitions_db,
-    cached_file& rows_db,
+    seastar::shared_ptr<cached_file> partitions_db,
+    seastar::shared_ptr<cached_file> rows_db,
     uint64_t partitions_db_root_pos,
     uint64_t total_data_db_file_size,
     schema_ptr s,
@@ -928,8 +946,10 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     // is fully contained within a single `cached_file` page.
     static_assert(cached_file::page_size % BTI_PAGE_SIZE == 0);
     return std::make_unique<bti_index_reader>(
-        bti_node_reader(partitions_db),
-        bti_node_reader(rows_db),
+        partitions_db,
+        rows_db,
+        bti_node_reader(*partitions_db),
+        bti_node_reader(*rows_db),
         partitions_db_root_pos,
         total_data_db_file_size,
         std::move(s),
