@@ -19,6 +19,7 @@
 #include "utils/sequenced_set.hh"
 #include "utils/simple_hashers.hh"
 #include "tablets.hh"
+#include "data_dictionary/consistency_config_options.hh"
 
 // forward declaration since replica/database.hh includes this file
 namespace replica {
@@ -48,7 +49,9 @@ using replication_strategy_config_options = std::map<sstring, sstring>;
 struct replication_strategy_params {
     const replication_strategy_config_options options;
     std::optional<unsigned> initial_tablets;
-    explicit replication_strategy_params(const replication_strategy_config_options& o, std::optional<unsigned> it) noexcept : options(o), initial_tablets(it) {}
+    std::optional<data_dictionary::consistency_config_option> consistency;
+    explicit replication_strategy_params(const replication_strategy_config_options& o, std::optional<unsigned> it,
+        std::optional<data_dictionary::consistency_config_option> c) noexcept : options(o), initial_tablets(it), consistency(c) {}
 };
 
 using replication_map = std::unordered_map<token, host_id_vector_replica_set>;

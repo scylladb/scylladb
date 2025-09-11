@@ -315,7 +315,7 @@ void simple_test() {
         {"101", "2"},
         {"102", "3"}
     };
-    locator::replication_strategy_params params323(options323, std::nullopt);
+    locator::replication_strategy_params params323(options323, std::nullopt, std::nullopt);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params323);
@@ -329,7 +329,7 @@ void simple_test() {
         {"101", "2"},
         {"102", "0"}
     };
-    locator::replication_strategy_params params320(options320, std::nullopt);
+    locator::replication_strategy_params params320(options320, std::nullopt, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params320);
@@ -417,7 +417,7 @@ void heavy_origin_test() {
         }
     }).get();
 
-    locator::replication_strategy_params params(config_options, std::nullopt);
+    locator::replication_strategy_params params(config_options, std::nullopt, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
         "NetworkTopologyStrategy", params);
 
@@ -512,7 +512,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         auto options = make_random_options();
         size_t tablet_count = 1 + tests::random::get_int(99);
         testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
-        locator::replication_strategy_params params(options, tablet_count);
+        locator::replication_strategy_params params(options, tablet_count, std::nullopt);
         auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
                 "NetworkTopologyStrategy", params);
         auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
@@ -522,7 +522,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 
         // Test reallocate_tablets after randomizing a different set of options
         auto realloc_options = make_random_options();
-        locator::replication_strategy_params realloc_params(realloc_options, tablet_count);
+        locator::replication_strategy_params realloc_params(realloc_options, tablet_count, std::nullopt);
         auto realloc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
                 "NetworkTopologyStrategy", params);
         auto realloc_tab_awr_ptr = realloc_ars_ptr->maybe_as_tablet_aware();
@@ -604,7 +604,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     auto options = make_options(rf_per_dc);
     size_t tablet_count = 128 * num_dcs * nodes_per_dc * shard_count / rf_per_dc;
     testlog.debug("tablet_count={} options={}", tablet_count, options);
-    locator::replication_strategy_params params(options, tablet_count);
+    locator::replication_strategy_params params(options, tablet_count, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params);
     auto nts_ptr = dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
@@ -617,7 +617,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     if (rf_per_dc < nodes_per_dc) {
         auto inc_options = make_options(rf_per_dc + 1);
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
-        locator::replication_strategy_params inc_params(inc_options, tablet_count);
+        locator::replication_strategy_params inc_params(inc_options, tablet_count, std::nullopt);
         auto inc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
                 "NetworkTopologyStrategy", params);
         auto inc_nts_ptr = dynamic_cast<const network_topology_strategy*>(inc_ars_ptr.get());
@@ -631,7 +631,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     if (rf_per_dc > 1) {
         auto dec_options = make_options(rf_per_dc - 1);
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
-        locator::replication_strategy_params dec_params(dec_options, tablet_count);
+        locator::replication_strategy_params dec_params(dec_options, tablet_count, std::nullopt);
         auto dec_ars_ptr = abstract_replication_strategy::create_replication_strategy(
                 "NetworkTopologyStrategy", params);
         auto dec_nts_ptr = dynamic_cast<const network_topology_strategy*>(dec_ars_ptr.get());
@@ -826,7 +826,7 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
                                                                         return std::make_pair(p.first, to_sstring(p.second));
                                                                     })
                                                 | std::ranges::to<std::map<sstring, sstring>>(),
-                                    std::nullopt));
+                                    std::nullopt, std::nullopt));
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
@@ -1298,7 +1298,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     auto options = make_random_options();
     size_t tablet_count = 1 + tests::random::get_int(99);
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
-    locator::replication_strategy_params params(options, tablet_count);
+    locator::replication_strategy_params params(options, tablet_count, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params);
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
@@ -1451,7 +1451,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     auto options = make_random_options();
     size_t tablet_count = 1 + tests::random::get_int(99);
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
-    locator::replication_strategy_params params(options, tablet_count);
+    locator::replication_strategy_params params(options, tablet_count, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
             "NetworkTopologyStrategy", params);
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();

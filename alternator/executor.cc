@@ -1723,7 +1723,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
-                locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets());
+                locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option());
                 auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
                 if (rs->uses_tablets()) {
                     co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
@@ -5889,7 +5889,7 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
             }
         }
     }
-    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), initial_tablets);
+    return keyspace_metadata::new_keyspace(keyspace_name, "org.apache.cassandra.locator.NetworkTopologyStrategy", std::move(opts), initial_tablets, std::nullopt);
 }
 
 future<> executor::start() {
