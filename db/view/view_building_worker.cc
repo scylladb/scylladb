@@ -621,6 +621,7 @@ future<> view_building_worker::local_state::finish_completed_tasks() {
             ++it;
         } else {
             co_await it->second->work.get_future();
+            co_await it->second->abort_sources.stop();
             finished_tasks.insert(it->first);
             vbw_logger.info("Task {} was completed", it->first);
             it->second->batch_done_cv.broadcast();
@@ -673,6 +674,7 @@ future<> view_building_worker::batch::abort() {
         if (work.valid()) {
             co_await work.get_future();
         }
+        co_await abort_sources.stop();
     }
 }
 
@@ -730,7 +732,6 @@ future<> view_building_worker::batch::do_work() {
     }
 
     state = batch_state::finished;
-    co_await abort_sources.stop();
     _vbw._vb_state_machine.event.broadcast();
 }
 
