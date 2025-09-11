@@ -56,14 +56,14 @@ static logging::logger tlogger("alternator_ttl");
 
 namespace alternator {
 
-// We write the expiration-time attribute enabled on a table using a
+// We write the expiration-time attribute enabled on a table in a
 // tag TTL_TAG_KEY.
 // Currently, the *value* of this tag is simply the name of the attribute,
 // and the expiration scanner interprets it as an Alternator attribute name -
 // It can refer to a real column or if that doesn't exist, to a member of
 // the ":attrs" map column. Although this is designed for Alternator, it may
 // be good enough for CQL as well (there, the ":attrs" column won't exist).
-static const sstring TTL_TAG_KEY("system:ttl_attribute");
+extern const sstring TTL_TAG_KEY;
 
 future<executor::request_return_type> executor::update_time_to_live(client_state& client_state, service_permit permit, rjson::value request) {
     _stats.api_operations.update_time_to_live++;
