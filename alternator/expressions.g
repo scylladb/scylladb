@@ -91,6 +91,18 @@ options {
         throw expressions_syntax_error(format("{} at char {}", err,
             ex->get_charPositionInLine()));
     }
+
+    // ANTLR3 tries to recover missing tokens - it tries to finish parsing
+    // and create valid objects, as if the missing token was there.
+    // But it has a bug and leaks these tokens.
+    // We override offending method and handle abandoned pointers.
+    std::vector<std::unique_ptr<TokenType>> _missing_tokens;
+    TokenType* getMissingSymbol(IntStreamType* istream, ExceptionBaseType* e,
+                                ANTLR_UINT32 expectedTokenType, BitsetListType* follow) {
+        auto token = BaseType::getMissingSymbol(istream, e, expectedTokenType, follow);
+        _missing_tokens.emplace_back(token);
+        return token;
+    }
 }
 @lexer::context {
     void displayRecognitionError(ANTLR_UINT8** token_names, ExceptionBaseType* ex) {
