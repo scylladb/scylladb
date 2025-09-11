@@ -155,8 +155,29 @@ future<row_index_header> read_row_index_header(input_stream<char>&& input, uint6
 }
 
 static future<row_index_header> read_row_index_header(cached_file& _file, uint64_t pos, reader_permit rp) {
+    struct cached_file_data_source_impl : data_source_impl {
+        cached_file& _file;
+        cached_file::stream _stream;
+        cached_file_data_source_impl(cached_file& file, uint64_t pos, reader_permit permit)
+            : _file(file)
+            // Note: we use the `cached_file::stream` without any size hints (readahead).
+            // This means that parsing a large partition key -- which spans many pages -- might
+            // require multiple serialized disk fetches. This could be improved
+            // (e.g. if the first two bytes of the entry, which contain the partition key,
+            // are in the cached page, we could make a size hint out of them) but
+            // we ignore this for now, under the assumption that multi-page partition
+            // keys are a fringe use case.
+            , _stream(_file.read(pos, std::move(permit)))
+        {}
+        future<temporary_buffer<char>> get() override {
+            return _stream.next();
+        }
+    };
+    auto is = input_stream<char>(data_source(
+        std::make_unique<cached_file_data_source_impl>(_file, pos, rp)
+    ));
     return read_row_index_header(
-        make_file_input_stream(file(make_shared<cached_file_impl>(_file)), pos, _file.size() - pos, {.buffer_size = 4096, .read_ahead = 0}),
+        std::move(is),
         pos,
         _file.size() - pos,
         std::move(rp)
