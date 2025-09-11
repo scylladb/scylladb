@@ -470,6 +470,10 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
                 return True
         await wait_for(tablets_merged, time.time() + 60)
 
+        # Workaround for https://github.com/scylladb/scylladb/issues/21779. We don't want the keyspace drop at the end
+        # of new_test_keyspace to fail because of concurrent tablet migrations.
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
