@@ -209,6 +209,24 @@ class ManagerClient:
         return [ServerInfo(ServerNum(int(info[0])), IPAddress(info[1]), IPAddress(info[2]), info[3], info[4])
                 for info in server_info_list]
 
+    async def get_max_running_servers(self) -> int:
+        """Get how many simultaneously running servers was in the cluster or the current limit (if set.)"""
+
+        return await self.client.get_json("/cluster/get-max-running-servers")
+
+    async def set_max_running_servers(self, value: int) -> None:
+        """Set upper boundary to simultaneously running servers in the cluster."""
+
+        await self.client.put_json(
+            resource_uri="/cluster/set-max-running-servers",
+            data={"max_running_servers": value},
+        )
+
+    async def reset_max_running_servers(self) -> None:
+        """Reset statistics about maximum running servers."""
+
+        await self.client.put_json("/cluster/reset-max-running-servers")
+
     async def all_servers(self) -> list[ServerInfo]:
         """Get List of server info (id and IP address) of all servers"""
         try:

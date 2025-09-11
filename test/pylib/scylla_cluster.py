@@ -30,7 +30,7 @@ from test import TOP_SRC_DIR, TEST_DIR
 from test.pylib.host_registry import Host, HostRegistry
 from test.pylib.pool import Pool
 from test.pylib.rest_client import ScyllaRESTAPIClient, HTTPError
-from test.pylib.util import LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id
+from test.pylib.util import DictWithMaxSize, LogPrefixAdapter, read_last_line, gather_safely, get_xdist_worker_id
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from functools import partial
 import aiohttp
@@ -998,7 +998,7 @@ class ScyllaCluster:
         # Every ScyllaServer is in one of self.running, self.stopped.
         # These dicts are disjoint.
         # A server ID present in self.removed may be either in self.running or in self.stopped.
-        self.running: Dict[ServerNum, ScyllaServer] = {}        # started servers
+        self.running: DictWithMaxSize[ServerNum, ScyllaServer] = DictWithMaxSize()        # started servers
         self.stopped: Dict[ServerNum, ScyllaServer] = {}        # servers no longer running but present
         self.servers = ChainMap(self.running, self.stopped)
         self.removed: Set[ServerNum] = set()                    # removed servers (might be running)
@@ -1637,6 +1637,9 @@ class ScyllaClusterManager:
         add_get('/cluster/is-dirty', self._is_dirty)
         add_get('/cluster/replicas', self._cluster_replicas)
         add_get('/cluster/running-servers', self._cluster_running_servers)
+        add_get('/cluster/get-max-running-servers', self._cluster_get_max_running_servers)
+        add_put('/cluster/set-max-running-servers', self._cluster_set_max_running_servers)
+        add_put('/cluster/reset-max-running-servers', self._cluster_reset_max_running_servers)
         add_get('/cluster/all-servers', self._cluster_all_servers)
         add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
         add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
@@ -1690,6 +1693,16 @@ class ScyllaClusterManager:
     async def _cluster_running_servers(self, _request) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
         """Return a dict of running server ids to IPs"""
         return self.cluster.running_servers()
+
+    async def _cluster_get_max_running_servers(self, _request) -> int:
+        return self.cluster.running.max_size
+
+    async def _cluster_set_max_running_servers(self, request) -> None:
+        data = await request.json()
+        self.cluster.running.max_size = int(data["max_running_servers"])
+
+    async def _cluster_reset_max_running_servers(self, _request) -> None:
+        del self.cluster.running.max_size
 
     async def _cluster_all_servers(self, _request) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
         """Return a dict of all server ids to IPs"""

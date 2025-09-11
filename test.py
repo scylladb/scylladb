@@ -143,6 +143,8 @@ def parse_cmd_line() -> argparse.Namespace:
     parser.add_argument("--tmpdir", action="store", default=str(TOP_SRC_DIR / "testlog"),
                         help="Path to temporary test data and log files.  The data is further segregated per build mode.")
     parser.add_argument("--gather-metrics", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--gather-cluster-metrics", action=argparse.BooleanOptionalAction, default=False,
+                        help="Collect metrics for clusters, e.g., maximum number of running servers")
     parser.add_argument("--max-failures", type=int, default=0,
                         help="Maximum number of failures to tolerate before cancelling rest of tests.")
     parser.add_argument('--mode', choices=ALL_MODES, action="append", dest="modes",
@@ -345,6 +347,8 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
         args.append(f'--x-log2-compaction-groups={options.x_log2_compaction_groups}')
     if options.gather_metrics:
         args.append('--gather-metrics')
+    if options.gather_cluster_metrics:
+        args.append('--gather-cluster-metrics')
     if options.timeout:
         args.append(f'--timeout={options.timeout}')
     if options.session_timeout:
