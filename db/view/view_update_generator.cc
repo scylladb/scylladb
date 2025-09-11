@@ -293,6 +293,8 @@ future<> view_update_generator::stop() {
     do_abort();
     return std::move(_started).then([this] {
         _registration_sem.broken();
+    }).then([this] {
+        return _view_update_concurrency_sem.wait(view_update_generator::max_concurrent_updates);
     });
 }
 
