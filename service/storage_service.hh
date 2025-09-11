@@ -77,6 +77,7 @@ class system_keyspace;
 class batchlog_manager;
 namespace view {
 class view_builder;
+class view_building_worker;
 }
 }
 
@@ -240,6 +241,7 @@ public:
         sharded<service::tablet_allocator>& tablet_allocator,
         sharded<cdc::generation_service>& cdc_gs,
         sharded<db::view::view_builder>& view_builder,
+        sharded<db::view::view_building_worker>& view_building_worker,
         cql3::query_processor& qp,
         sharded<qos::service_level_controller>& sl_controller,
         topology_state_machine& topology_state_machine,
@@ -581,6 +583,7 @@ private:
     sharded<service::tablet_allocator>& _tablet_allocator;
     sharded<cdc::generation_service>& _cdc_gens;
     sharded<db::view::view_builder>& _view_builder;
+    sharded<db::view::view_building_worker>& _view_building_worker;
     bool _isolated = false;
 private:
     /**
