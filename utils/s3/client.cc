@@ -233,6 +233,8 @@ void client::group_client::register_metrics(std::string class_name, std::string 
                 sm::description("Total time spent reading data from objects"), {ep_label, sg_label}),
         sm::make_counter("total_write_latency_sec", [this] { return write_stats.duration.count(); },
                 sm::description("Total time spend writing data to objects"), {ep_label, sg_label}),
+        sm::make_counter("total_read_prefetch_bytes", [this] { return prefetch_bytes; },
+                sm::description("Total number of bytes requested from object"), {ep_label, sg_label}),
     });
 }
 
@@ -1182,13 +1184,14 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 s3l.trace("Fiber for object '{}' will make HTTP request within range {}", _object_name, current_range);
                 co_await _client->make_request(
                     std::move(req),
-                    [this, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
+                    [this, start = s3_clock::now(), pf_length = current_range.length()](group_client& gc, const http::reply& reply, input_stream<char>&& in_) mutable -> future<> {
                         if (reply._status != http::reply::status_type::ok && reply._status != http::reply::status_type::partial_content) {
                             s3l.warn("Fiber for object '{}' failed: {}. Exiting", _object_name, reply._status);
                             throw httpd::unexpected_status_error(reply._status);
                         }
                         gc.read_stats.ops++;
                         gc.read_stats.duration += s3_clock::now() - start;
+                        gc.prefetch_bytes += pf_length;
                         if (_range == s3::full_range && !reply.get_header("Content-Range").empty()) {
                             auto content_range_header = parse_content_range(reply.get_header("Content-Range"));
                             _range = range{content_range_header.start, content_range_header.total};
