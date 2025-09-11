@@ -2,7 +2,7 @@
 
 USAGE=$(cat <<-END
 Usage: $(basename "$0") [-h|--help] [-o|--output-dir PATH] [--date-stamp DATE] -- generate Scylla version and build information files.
-
+echo "2"
 Options:
   -h|--help show this help message.
   -o|--output-dir PATH specify destination path at which the version files are to be created.
