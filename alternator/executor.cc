@@ -70,6 +70,8 @@ namespace alternator {
 static const sstring RCU_TAG_KEY("system:provisioned_rcu");
 static const sstring WCU_TAG_KEY("system:provisioned_wcu");
 static const sstring TABLE_CREATION_TIME_TAG_KEY("system:table_creation_time");
+static const sstring ARTIFICIAL_HASH_KEY_ADDED_TO_GSI_TAG_KEY("system:artificial_hash_key_added_to_gsi");
+static const sstring ARTIFICIAL_RANGE_KEY_ADDED_TO_GSI_TAG_KEY("system:artificial_range_key_added_to_gsi");
 
 enum class table_status {
     active = 0,
@@ -563,8 +565,25 @@ static std::optional<int> get_int_attribute(const rjson::value& value, std::stri
 // attributes of the the given schema as being either HASH or RANGE keys.
 // Additionally, adds to a given map mappings between the key attribute
 // names and their type (as a DynamoDB type string).
-void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>* attribute_types) {
+void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>* attribute_types, const std::map<sstring, sstring> *tags) {
     rjson::value key_schema = rjson::empty_array();
+    sstring empty;
+
+    auto get_tag_or_empty = [&](const sstring& key) -> const sstring & {
+        if (!tags) return empty;
+        auto it = tags->find(key);
+        if (it == tags->end()) {
+            return empty;
+        }
+        return it->second;
+    };
+
+    const sstring &hash_key_added_if_any = get_tag_or_empty(ARTIFICIAL_HASH_KEY_ADDED_TO_GSI_TAG_KEY);
+    const sstring &range_key_added_if_any = get_tag_or_empty(ARTIFICIAL_RANGE_KEY_ADDED_TO_GSI_TAG_KEY);
+
+    elogger.info("Describe key schema for table {}.{}: hash key added: '{}', range key added: '{}'",
+            schema.ks_name(), schema.cf_name(), hash_key_added_if_any, range_key_added_if_any);
+
     for (const column_definition& cdef : schema.partition_key_columns()) {
         rjson::value key = rjson::empty_object();
         rjson::add(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
@@ -575,6 +594,12 @@ void executor::describe_key_schema(rjson::value& parent, const schema& schema, s
         }
     }
     for (const column_definition& cdef : schema.clustering_key_columns()) {
+        if (cdef.name_as_text() == hash_key_added_if_any || cdef.name_as_text() == range_key_added_if_any) {
+            // This clustering column was artificially added as a hash key
+            // to a GSI, don't return it to the user.
+            continue;
+        }
+
         rjson::value key = rjson::empty_object();
         rjson::add(key, "AttributeName", rjson::from_string(cdef.name_as_text()));
         rjson::add(key, "KeyType", "RANGE");
@@ -582,18 +607,13 @@ void executor::describe_key_schema(rjson::value& parent, const schema& schema, s
         if (attribute_types) {
             (*attribute_types)[cdef.name_as_text()] = type_to_string(cdef.type);
         }
-        // FIXME: this "break" can avoid listing some clustering key columns
-        // we added for GSIs just because they existed in the base table -
-        // but not in all cases. We still have issue #5320. See also
-        // reproducer in test_gsi_2_describe_table_schema.
-        break;
     }
     rjson::add(parent, "KeySchema", std::move(key_schema));
 
 }
 
-void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>& attribute_types) {
-    describe_key_schema(parent, schema, &attribute_types);
+void executor::describe_key_schema(rjson::value& parent, const schema& schema, std::unordered_map<std::string,std::string>& attribute_types, const std::map<sstring, sstring> *tags) {
+    describe_key_schema(parent, schema, &attribute_types, tags);
 }
 
 static rjson::value generate_arn_for_table(const schema& schema) {
@@ -746,7 +766,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
         rjson::add(table_description, "CreationDateTime", rjson::value(creation_timestamp));
         std::unordered_map<std::string,std::string> key_attribute_types;
         // Add base table's KeySchema and collect types for AttributeDefinitions:
-        executor::describe_key_schema(table_description, *schema, key_attribute_types);
+        executor::describe_key_schema(table_description, *schema, key_attribute_types, tags_ptr);
         if (!t.views().empty()) {
             rjson::value gsi_array = rjson::empty_array();
             rjson::value lsi_array = rjson::empty_array();
@@ -762,7 +782,7 @@ static future<rjson::value> fill_table_description(schema_ptr schema, table_stat
                 rjson::add(view_entry, "IndexName", rjson::from_string(index_name));
                 rjson::add(view_entry, "IndexArn", generate_arn_for_index(*schema, index_name));
                 // Add indexes's KeySchema and collect types for AttributeDefinitions:
-                executor::describe_key_schema(view_entry, *vptr, key_attribute_types);
+                executor::describe_key_schema(view_entry, *vptr, key_attribute_types, db::get_tags_of_table(vptr));
                 // Add projection type
                 rjson::value projection = rjson::empty_object();
                 rjson::add(projection, "ProjectionType", "ALL");
@@ -1607,20 +1627,27 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
                 }
                 unused_attribute_definitions.erase(view_range_key);
             }
+            std::map<sstring, sstring> tags;
+
             // Base key columns which aren't part of the index's key need to
             // be added to the view nonetheless, as (additional) clustering
             // key(s).
             if  (hash_key != view_hash_key && hash_key != view_range_key) {
                 add_column(view_builder, hash_key, *attribute_definitions, column_kind::clustering_key);
+                tags[ARTIFICIAL_HASH_KEY_ADDED_TO_GSI_TAG_KEY] = hash_key;
+                elogger.info("QWERTY added hash key {} to GSI {}", hash_key, index_name);
             }
             if  (!range_key.empty() && range_key != view_hash_key && range_key != view_range_key) {
                 add_column(view_builder, range_key, *attribute_definitions, column_kind::clustering_key);
+                tags[ARTIFICIAL_RANGE_KEY_ADDED_TO_GSI_TAG_KEY] = range_key;
+                elogger.info("QWERTY added range key {} to GSI {}", range_key, index_name);
             }
             // GSIs have no tags:
-            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>());
+            view_builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(std::move(tags)));
             view_builders.emplace_back(std::move(view_builder));
         }
     }
+    elogger.info("QWERTY creating table");
     if (!unused_attribute_definitions.empty()) {
         co_return api_error::validation(fmt::format(
             "AttributeDefinitions defines spurious attributes not used by any KeySchema: {}",
