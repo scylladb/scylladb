@@ -1014,8 +1014,63 @@ protected:
     }
 };
 
+/// Handle commands
+///
+/// Implements a subset of CQLSH options and commands:
+/// * HELP [<command>] - show help.
+/// * SHOW [SESSION <tracing-session-id>] - shows the tracing events for the provided tracing session id.
+///
+/// EXIT and LOGIN are handled by /logout and /login endpoints.
 class command_handler : public gated_handler {
     session_manager& _session_manager;
+
+    static future<query_exec_result> handle_help(std::vector<sstring> args, session_manager& session_manager, service::client_state& client_state) {
+        const char* help = R"(ScyllaDB WebShell
+
+!!! WebShell is still experimental, things are subject to change and there may be bugs !!!
+
+For more information, see https://docs.scylladb.com/manual/master/operating-scylla/admin-tools/webshell.html.
+
+Available commands:
+ * HELP - show this message.
+ * SHOW [SESSION <tracing-session-id>] - show tracing session events for the provided tracing session id.
+
+Available options:
+ * CONSISTENCY [<level>] - set default consistency level for queries, with no args show current setting (default: ONE).
+ * EXPAND [ON|OFF] - enable/disable expanded (vertical) output, with no args show current setting (default: OFF).
+ * OUTPUT FORMAT [TEXT|JSON] - set output format, with no args show current setting (default: TEXT).
+ * PAGING [ON|OFF|<number>] - enable/disable/limit result paging, with no args show current setting (default: 100).
+ * SERIAL CONSISTENCY [<level>] - set default serial consistency level for queries, with no args show current setting (default: SERIAL).
+ * TRACING [ON|OFF] - enable/disable query tracing, with no args show current setting (default: OFF).
+)";
+        return make_ready_future<query_exec_result>(query_exec_success(help, {}, nullptr));
+    }
+
+    static future<query_exec_result> handle_show_session(std::vector<sstring> args, session_manager& session_manager, service::client_state& client_state) {
+        if (args.size() != 1) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::bad_request, "Invalid SHOW command, expected 'SHOW SESSION <tracing_session_id>'."));
+        }
+
+        const session_options options{.consistency = db::consistency_level::ONE, .page_size = 0};
+
+        co_return co_await query_handler::execute_query(session_manager.qp().container(), options, client_state,
+                format("SELECT * FROM system_traces.events WHERE session_id = {}", args[0]), {}, {});
+    }
+
+    static future<query_exec_result> handle_command(sstring command, std::vector<sstring> args, session_manager& session_manager, service::client_state& client_state) {
+        using handler = std::function<future<query_exec_result>(std::vector<sstring>, class session_manager&, service::client_state&)>;
+        static std::unordered_map<sstring, handler> handlers {
+            {"help", command_handler::handle_help},
+            {"show session", command_handler::handle_show_session},
+        };
+
+        auto it = handlers.find(command);
+        if (it == handlers.end()) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::bad_request, format("Unrecognized command: {}", command)));
+        }
+
+        co_return co_await it->second(args, session_manager, client_state);
+    }
 
 public:
     command_handler(request_control& request_control, session_manager& session_manager)
@@ -1025,8 +1080,31 @@ public:
 
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
-        (void)_session_manager;
-        co_return std::move(rep);
+        const auto cookies = handle_cookies(_session_manager.config(), *req, *rep);
+        const session_id session_id = get_session_id(cookies);
+
+        auto command_and_args = rjson::parse_and_validate(
+                co_await util::read_entire_stream_contiguous(*req->content_stream) | std::views::transform([] (char c) { return std::tolower(c); }) | std::ranges::to<sstring>(),
+                rjs::object({
+                    {"command", rjs::scalar::string()},
+                    {"arguments", rjs::array(rjs::scalar::string())}
+                }));
+        if (!command_and_args) {
+            co_return write_response(std::move(rep), reply::status_type::bad_request, command_and_args.error());
+        }
+
+        const auto command = sstring(rjson::to_string_view((*command_and_args)["command"]));
+        std::vector<sstring> arguments;
+        for (const auto& arg : (*command_and_args)["arguments"].GetArray()) {
+            arguments.emplace_back(rjson::to_string_view(arg));
+        }
+
+        auto result = co_await _session_manager.invoke_on_local_shard(session_id, [&, this] (const session_options& options, service::client_state& client_state,
+                tracing::trace_state_ptr&, sstring&) mutable {
+            return handle_command(command, arguments, _session_manager, client_state);
+        });
+
+        co_return write_response(std::move(rep), std::move(result));
     }
 };
 
