@@ -232,6 +232,119 @@ public:
     }
 };
 
+class gated_handler : public handler_base {
+    const char* _name;
+    request_control& _request_control;
+public:
+    explicit gated_handler(const char* name, request_control& request_control)
+        : _name(name), _request_control(request_control)
+    {}
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) = 0;
+    virtual future<std::unique_ptr<reply>> handle(const sstring& path_, std::unique_ptr<request> req, std::unique_ptr<reply> rep) final override {
+        const auto path = path_;
+        const auto method = req->_method;
+        wslog.trace("handler {}: start request {} {}", _name, method, path);
+
+        if (_request_control.too_many_waiters()) {
+            wslog.debug("handler {}: dropping {} {}: too many requests", _name, method, path);
+            rep->set_status(reply::status_type::service_unavailable);
+            rep->write_body("text", "Too many requests, try again later");
+            co_return std::move(rep);
+        }
+
+        try {
+            auto ret = co_await _request_control.run([this, &path, req = std::move(req), rep = std::move(rep)] () mutable {
+                return do_handle(path, std::move(req), std::move(rep));
+            });
+            wslog.trace("handler {}: finish request {} {} {}", _name, method, path, ret->_status);
+            co_return ret;
+        } catch (gate_closed_exception&) {
+            throw base_exception("Server shutting down", reply::status_type::service_unavailable);
+        } catch (broken_semaphore&) {
+            throw base_exception("Server shutting down", reply::status_type::service_unavailable);
+        } catch (base_exception& e) {
+            // Prevent the fall-through to the default handler below, which converts unknonw exceptions to 500 Internal Server Error
+            // Exceptions derived from base_exception already have a proper status code set, so re-throw them as is.
+            wslog.trace("handler {}: finish request {} {} {}", _name, method, path, e.status());
+            throw;
+        } catch (...) {
+            wslog.trace("handler {}: finish request {} {} {}", _name, method, path, reply::status_type::internal_server_error);
+            throw;
+        }
+    }
+};
+
+class resource_handler : public gated_handler {
+public:
+    explicit resource_handler(request_control& request_control)
+        : gated_handler("resource", request_control)
+    {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        co_return std::move(rep);
+    }
+};
+
+class login_handler : public gated_handler {
+    session_manager& _session_manager;
+    const bool _is_https;
+public:
+    login_handler(request_control& request_control, session_manager& session_manager, bool is_https)
+        : gated_handler("login", request_control), _session_manager(session_manager), _is_https(is_https)
+    {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        (void)_is_https;
+        co_return std::move(rep);
+    }
+};
+
+class logout_handler : public gated_handler {
+    session_manager& _session_manager;
+public:
+    logout_handler(request_control& request_control, session_manager& session_manager)
+        : gated_handler("logout", request_control), _session_manager(session_manager)
+    {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+class query_handler : public gated_handler {
+    session_manager& _session_manager;
+
+public:
+    query_handler(request_control& request_control, session_manager& session_manager)
+        : gated_handler("query", request_control)
+        , _session_manager(session_manager)
+    { }
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+class command_handler : public gated_handler {
+    session_manager& _session_manager;
+
+public:
+    command_handler(request_control& request_control, session_manager& session_manager)
+        : gated_handler("option", request_control)
+        , _session_manager(session_manager)
+    { }
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
 struct http_listen_config {
     net::inet_address address;
     uint16_t port;
@@ -270,6 +383,38 @@ public:
 };
 
 void server::set_routes(routes& r, bool is_https) {
+    r.add_default_handler(new resource_handler(_request_control));
+    r.put(operation_type::POST, "/login", new login_handler(_request_control, _session_manager, is_https));
+    r.put(operation_type::POST, "/logout", new logout_handler(_request_control, _session_manager));
+    r.put(operation_type::POST, "/query", new query_handler(_request_control, _session_manager));
+    r.put(operation_type::POST, "/command", new command_handler(_request_control, _session_manager));
+
+    r.register_exeption_handler([] (std::exception_ptr ex) {
+        wslog.trace("handle exception: {}", ex);
+
+        auto handle_exception = [] (reply::status_type status, sstring msg) {
+            auto exception_rep = std::make_unique<reply>();
+            exception_rep->set_status(status);
+            //FIXME: have to use body writer function here, due to https://github.com/scylladb/seastar/issues/2889
+            exception_rep->write_body("text", [msg] (output_stream<char>&& out_) -> future<> {
+                auto out = std::move(out_);
+                co_await out.write(msg.c_str(), msg.size());
+                co_await out.flush();
+                co_await out.close();
+            });
+            return exception_rep;
+        };
+
+        try {
+            std::rethrow_exception(ex);
+        } catch (base_exception& e) {
+            // Prevent the fall-through to the default handler below, which converts unknown exceptions to 500 Internal Server Error
+            // Exceptions derived from base_exception already have a proper status code set, so re-throw them as is.
+            return handle_exception(e.status(), e.str());
+        } catch (...) {
+            return handle_exception(reply::status_type::internal_server_error, fmt::to_string(std::current_exception()));
+        }
+    });
 }
 
 server::server(config cfg, cql3::query_processor& qp, auth::service& auth_service, qos::service_level_controller& sl_controller)
