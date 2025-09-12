@@ -20,10 +20,14 @@
 #include <seastar/util/log.hh>
 
 #include "cql3/query_processor.hh"
+#include "cql3/query_result_printer.hh"
 #include "db/config.hh"
 #include "service/client_state.hh"
 #include "service/qos/service_level_controller.hh"
+#include "service/storage_proxy.hh"
 #include "tools/webshell/webshell.hh"
+#include "utils/base64.hh"
+#include "utils/memory_data_sink.hh"
 #include "utils/observable.hh"
 #include "utils/rjson.hh"
 
@@ -54,6 +58,26 @@ static std::optional<seastar::tls::client_auth> parse_client_auth(std::string_vi
     }
     return std::nullopt;
 }
+
+enum class output_format {
+    text, json
+};
+
+sstring to_string(output_format of) {
+    switch (of) {
+        case output_format::text:
+            return "text";
+        case output_format::json:
+            return "json";
+    }
+    throw std::runtime_error(format("Unknown output format: {}", static_cast<int>(of)));
+}
+
+class unauthorized_access : public base_exception {
+public:
+    unauthorized_access(sstring msg) : base_exception(msg, reply::status_type::unauthorized)
+    { }
+};
 
 class session_id {
     uint64_t _msb;
@@ -228,11 +252,153 @@ struct hash<tools::webshell::session_id> {
 
 namespace tools::webshell {
 
+struct session_options {
+    db::consistency_level consistency = db::consistency_level::ONE;
+    bool expand = false;
+    int32_t page_size = 100; // if <= 0, paging is disabled
+    db::consistency_level serial_consistency = db::consistency_level::SERIAL;
+    bool tracing = false;
+    output_format output_format = output_format::text;
+};
+
+} // namespace tools::webshell
+
+template <>
+struct fmt::formatter<tools::webshell::session_options> : fmt::formatter<string_view> {
+    auto format(tools::webshell::session_options opts, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        return format_to(ctx.out(), "{{consistency={}, expand={}, page_size={}, serial_consistency={}, tracing={}, output_format={}}}",
+                opts.consistency,
+                opts.expand,
+                opts.page_size,
+                opts.serial_consistency,
+                opts.tracing,
+                to_string(opts.output_format));
+    }
+};
+
+namespace tools::webshell {
+
+// The consistency levels accepted by the CONSISTENCY option and by the
+// "consistency" per-request override. Keys are lower-case; callers lower-case
+// the value before looking it up.
+static const std::unordered_map<std::string_view, db::consistency_level>& consistency_levels() {
+    static const std::unordered_map<std::string_view, db::consistency_level> str_to_cl {
+        {"any", db::consistency_level::ANY},
+        {"one", db::consistency_level::ONE},
+        {"two", db::consistency_level::TWO},
+        {"three", db::consistency_level::THREE},
+        {"quorum", db::consistency_level::QUORUM},
+        {"all", db::consistency_level::ALL},
+        {"local_quorum", db::consistency_level::LOCAL_QUORUM},
+        {"each_quorum", db::consistency_level::EACH_QUORUM},
+        {"serial", db::consistency_level::SERIAL},
+        {"local_serial", db::consistency_level::LOCAL_SERIAL},
+        {"local_one", db::consistency_level::LOCAL_ONE},
+    };
+    return str_to_cl;
+}
+
+// The consistency levels accepted by the SERIAL CONSISTENCY option and by the
+// "serial_consistency" per-request override.
+static const std::unordered_map<std::string_view, db::consistency_level>& serial_consistency_levels() {
+    static const std::unordered_map<std::string_view, db::consistency_level> str_to_cl {
+        {"serial", db::consistency_level::SERIAL},
+        {"local_serial", db::consistency_level::LOCAL_SERIAL},
+    };
+    return str_to_cl;
+}
+
+static sstring to_lower(std::string_view sv) {
+    return sv | std::views::transform([] (unsigned char c) { return std::tolower(c); }) | std::ranges::to<sstring>();
+}
+
+static sstring to_upper(std::string_view sv) {
+    return sv | std::views::transform([] (unsigned char c) { return std::toupper(c); }) | std::ranges::to<sstring>();
+}
+
+// Look up a lower-cased consistency level name in one of the maps above.
+// option_name is used in the error message only, so that it can name either the
+// option (CONSISTENCY) or the request field (consistency) the value came from.
+static std::expected<db::consistency_level, sstring> parse_consistency_level(std::string_view cl_str, const std::unordered_map<std::string_view, db::consistency_level>& str_to_cl, const char* option_name) {
+    auto it = str_to_cl.find(cl_str);
+    if (it == str_to_cl.end()) {
+        auto all_cls = std::views::values(str_to_cl) | std::ranges::to<std::vector<db::consistency_level>>();
+        std::ranges::sort(all_cls);
+        const auto all_cls_upper = all_cls
+                | std::views::transform([] (auto cl) { return fmt::to_string(cl); })
+                | std::views::transform([] (const auto& s) { return to_upper(s); })
+                | std::ranges::to<std::vector<sstring>>();
+
+        const auto last = std::prev(all_cls_upper.end());
+        return std::unexpected(seastar::format("Invalid {} argument, expected {} or {}.",
+                    option_name, fmt::join(std::ranges::subrange(all_cls_upper.begin(), last), ", "), *last));
+    }
+
+    return it->second;
+}
+
+static std::expected<enum output_format, sstring> parse_output_format(std::string_view format_str, const char* option_name) {
+    if (format_str == "text") {
+        return output_format::text;
+    } else if (format_str == "json") {
+        return output_format::json;
+    }
+    return std::unexpected(seastar::format("Invalid {} argument, expected TEXT or JSON.", option_name));
+}
+
+static std::expected<void, sstring> apply_option_overrides(session_options& options, const rjson::value& request) {
+    const auto it = request.FindMember("options");
+    if (it == request.MemberEnd() || it->value.IsNull()) {
+        return {};
+    }
+
+    for (const auto& member : it->value.GetObject()) {
+        const auto name = rjson::to_string_view(member.name);
+
+        if (member.value.IsNull()) {
+            continue;
+        }
+
+        if (name == "consistency") {
+            auto cl = parse_consistency_level(to_lower(rjson::to_string_view(member.value)), consistency_levels(), "consistency");
+            if (!cl) {
+                return std::unexpected(std::move(cl.error()));
+            }
+            options.consistency = *cl;
+        } else if (name == "expand") {
+            options.expand = member.value.GetBool();
+        } else if (name == "page_size") {
+            options.page_size = member.value.GetInt();
+        } else if (name == "serial_consistency") {
+            auto cl = parse_consistency_level(to_lower(rjson::to_string_view(member.value)), serial_consistency_levels(), "serial_consistency");
+            if (!cl) {
+                return std::unexpected(std::move(cl.error()));
+            }
+            options.serial_consistency = *cl;
+        } else if (name == "tracing") {
+            options.tracing = member.value.GetBool();
+        } else if (name == "output_format") {
+            auto out_format = parse_output_format(to_lower(rjson::to_string_view(member.value)), "output_format");
+            if (!out_format) {
+                return std::unexpected(std::move(out_format.error()));
+            }
+            options.output_format = *out_format;
+        } else {
+            return std::unexpected(seastar::format("Unrecognized option: {}", name));
+        }
+    }
+
+    return {};
+}
+
 class session {
 public:
     const session_id id;
+    session_options options;
 
     service::client_state client_state;
+    tracing::trace_state_ptr trace_state;
+    sstring last_query;
 
     scheduling_group scheduling_group;
     sstring user_agent;
@@ -356,6 +522,16 @@ public:
         });
     }
 
+    // Like resolve_session(), but throws unauthorized_access if there is no
+    // such session.
+    future<scheduling_group> get_session_scheduling_group(session_id session_id, bool is_https) {
+        const auto sg = co_await resolve_session(session_id, is_https);
+        if (!sg) {
+            throw unauthorized_access("Session not found");
+        }
+        co_return *sg;
+    }
+
     session& create_session(service::client_state client_state, scheduling_group sg, sstring user_agent, bool is_https) {
         auto session_id = session_id::gen();
 
@@ -393,6 +569,59 @@ public:
 
             co_return co_await futurize_invoke(std::move(f), local_this, session_ptr.get());
         });
+    }
+
+    // Invokes f on the local shard, passing session options as well as mutable references to client state, trace state and last query string.
+    // The session is locked for the duration of the call.
+    template <std::invocable<const session_options&, service::client_state&, tracing::trace_state_ptr&, sstring&> F>
+    auto invoke_on_local_shard(session_id session_id, bool is_https, F f) -> futurize_t<std::invoke_result_t<F, const session_options&, service::client_state&, tracing::trace_state_ptr&, sstring&>> {
+        struct remote_session {
+            lw_shared_ptr<session> session;
+            semaphore_units<> session_lock;
+            service::client_state::client_state_for_another_shard gcs;
+            tracing::global_trace_state_ptr gts;
+        };
+        auto rs = co_await smp::submit_to(session_id.shard(), [this, session_id, is_https] () mutable -> future<foreign_ptr<std::unique_ptr<remote_session>>> {
+           auto& local_this = _get_local_manager();
+
+           auto session_ptr = local_this.find_session(session_id, is_https);
+           if (!session_ptr) {
+               throw unauthorized_access("Session not found");
+           }
+
+           auto& session = *session_ptr;
+           co_return make_foreign(std::make_unique<remote_session>(remote_session{
+               .session = session_ptr,
+               .session_lock = co_await get_units(session._semaphore, 1),
+               .gcs = session.client_state.move_to_other_shard(),
+               .gts = tracing::global_trace_state_ptr(session.trace_state)}));
+        });
+
+        service::client_state client_state = rs->gcs.get();
+        // The user's service level may have changed since the login, apply its
+        // current parameters (e.g. timeouts), like the CQL server does for
+        // every request.
+        client_state.maybe_update_per_service_level_params();
+        tracing::trace_state_ptr trace_state = rs->gts.get();
+        sstring last_query = rs->session->last_query;
+        auto res = co_await f(rs->session->options, client_state, trace_state, last_query);
+
+        co_await smp::submit_to(session_id.shard(), [this, rs = std::move(rs), gcs = tracing::global_trace_state_ptr(trace_state), &last_query,
+                keyspace = client_state.get_raw_keyspace()] () mutable {
+            auto& session = *rs->session;
+
+            session.trace_state = gcs;
+            session.last_query = std::move(last_query);
+            // The query may have changed the keyspace (USE <keyspace>), which
+            // has to stick for the next query of the session.
+            session.client_state.set_raw_keyspace(std::move(keyspace));
+
+            session.refresh(_get_local_manager().config().session_ttl);
+
+            rs.release();
+        });
+
+        co_return std::move(res);
     }
 
     future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data() {
@@ -571,6 +800,14 @@ std::pair<std::optional<session_id>, sstring> try_get_session_id(const std::unor
     } catch (...) {
         return {std::nullopt, format("Invalid session_id: {}", std::current_exception())};
     }
+}
+
+session_id get_session_id(const std::unordered_map<sstring, sstring>& cookies) {
+    auto [session_id_opt, error_str] = try_get_session_id(cookies);
+    if (!session_id_opt) {
+        throw unauthorized_access(error_str);
+    }
+    return *session_id_opt;
 }
 
 std::unique_ptr<reply> write_response(std::unique_ptr<reply> rep, reply::status_type status, sstring response) {
@@ -872,8 +1109,370 @@ protected:
     }
 };
 
+// A rows result is wrapped in a foreign_ptr: after a bounce, it is produced on
+// another shard than the one writing the response.
+using query_result = std::variant<sstring, foreign_ptr<shared_ptr<cql_transport::messages::result_message::rows>>>;
+
+struct query_exec_success {
+    query_result result;
+    session_options options;
+    tracing::trace_state_ptr trace_state;
+
+    query_exec_success(query_result result, session_options options, tracing::trace_state_ptr trace_state)
+        : result(std::move(result)), options(std::move(options)), trace_state(std::move(trace_state))
+    { }
+};
+
+struct query_exec_failure {
+    reply::status_type status;
+    sstring message;
+
+    query_exec_failure(reply::status_type status, sstring message) : status(status), message(std::move(message)) { }
+};
+
+using query_exec_result = std::expected<query_exec_success, query_exec_failure>;
+
+static constexpr size_t max_request_body_size = 16*MB;
+
+// Read the request body, at most max_request_body_size bytes of it.
+//
+// The HTTP server enforces its content length limit only on requests that
+// declare a Content-Length. A chunked body declares none, so it is bounded here.
+// Returns std::nullopt if the body is larger than the limit.
+static future<std::optional<sstring>> read_request_body(input_stream<char>& in) {
+    std::vector<temporary_buffer<char>> bufs;
+    size_t size = 0;
+    while (auto buf = co_await in.read()) {
+        size += buf.size();
+        if (size > max_request_body_size) {
+            co_return std::nullopt;
+        }
+        bufs.push_back(std::move(buf));
+    }
+    auto body = uninitialized_string(size);
+    auto it = body.begin();
+    for (const auto& buf : bufs) {
+        it = std::copy(buf.begin(), buf.end(), it);
+    }
+    co_return body;
+}
+
+std::unique_ptr<reply> write_request_body_too_large_response(std::unique_ptr<reply> rep) {
+    return write_response(std::move(rep), reply::status_type::payload_too_large,
+            format("Request body too large, max size is {} bytes", max_request_body_size));
+}
+
+class json_escaping_data_sink : public data_sink_impl {
+    output_stream<char>& _os;
+public:
+    json_escaping_data_sink(output_stream<char>& os) :_os(os) { }
+    virtual future<> put(std::span<temporary_buffer<char>> data) override {
+        for (auto& buf : data) {
+            co_await _os.write(rjson::escape_json_string(std::string_view(buf.get(), buf.size())));
+        }
+    }
+    virtual future<> flush() override { return _os.flush(); }
+    virtual future<> close() override { return make_ready_future<>(); }
+    virtual size_t buffer_size() const noexcept override { return 128*1024; }
+    virtual bool can_batch_flushes() const noexcept override { return false; }
+    virtual void on_batch_flush_error() noexcept override { }
+};
+
+// Write the rows of a query result, followed by its paging state, if any.
+static future<> write_rows(output_stream<char>& out, const cql_transport::messages::result_message::rows& rows, const session_options& options) {
+    switch (options.output_format) {
+        case output_format::text:
+        {
+            co_await out.write("\"");
+
+            auto json_escaping_os = output_stream<char>(data_sink(std::make_unique<json_escaping_data_sink>(out)));
+            std::exception_ptr ex;
+            try {
+                co_await cql3::print_query_results_text(json_escaping_os, rows.rs(), options.expand);
+                co_await json_escaping_os.flush();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await json_escaping_os.close();
+            if (ex) {
+                std::rethrow_exception(std::move(ex));
+            }
+
+            co_await out.write("\"");
+            break;
+        }
+        case output_format::json:
+            co_await cql3::print_query_results_json(out, rows.rs());
+            break;
+    }
+    if (rows.rs().get_metadata().flags().contains<cql3::metadata::flag::HAS_MORE_PAGES>()) {
+        co_await out.write(format(",\"paging_state\":\"{}\"", base64_encode(*rows.rs().get_metadata().paging_state()->serialize())));
+    }
+}
+
+// Like write_rows(), but rows may be owned by another shard.
+//
+// The result set's metadata is made of shared_ptrs, which may only be accessed
+// on the shard owning them. So rows of another shard are rendered there, into
+// memory, and the rendered buffers are written to out on this shard.
+static future<> write_foreign_rows(output_stream<char>& out, const foreign_ptr<shared_ptr<cql_transport::messages::result_message::rows>>& rows, const session_options& options) {
+    if (rows.get_owner_shard() == this_shard_id()) {
+        co_await write_rows(out, *rows, options);
+        co_return;
+    }
+
+    auto bufs = co_await smp::submit_to(rows.get_owner_shard(), [&rows = *rows, &options] () -> future<foreign_ptr<std::unique_ptr<memory_data_sink_buffers>>> {
+        auto bufs = std::make_unique<memory_data_sink_buffers>();
+        auto os = output_stream<char>(data_sink(std::make_unique<memory_data_sink>(*bufs)));
+        std::exception_ptr ex;
+        try {
+            co_await write_rows(os, rows, options);
+            co_await os.flush();
+        } catch (...) {
+            ex = std::current_exception();
+        }
+        co_await os.close();
+        if (ex) {
+            std::rethrow_exception(std::move(ex));
+        }
+        co_return make_foreign(std::move(bufs));
+    });
+
+    for (const auto& buf : bufs->buffers()) {
+        co_await out.write(buf.get(), buf.size());
+    }
+}
+
+// The permit is held until the body is written: rendering a large result is
+// the bulk of the work of a query request.
+//
+// The body is written by the HTTP server, after the handler returned, in the
+// scheduling group of the server. Rendering it is part of processing the
+// request, so it is switched to the scheduling group the handler runs in:
+// that of the user.
+std::unique_ptr<reply> write_response(std::unique_ptr<reply> rep, query_exec_result result, request_control::permit permit) {
+    rep->set_status(result ? reply::status_type::ok : result.error().status);
+    rep->write_body("json", [result = std::move(result), permit = std::move(permit), sg = current_scheduling_group()] (output_stream<char>&& out_) mutable -> future<> {
+        // out_ refers to a temporary of the caller: take it before suspending.
+        auto out = std::move(out_);
+        co_await coroutine::switch_to(sg);
+
+        try {
+            co_await out.write("{\"response\":");
+
+            if (result) {
+                if (std::holds_alternative<sstring>(result->result)) {
+                    co_await out.write(rjson::quote_json_string(std::get<sstring>(result->result)));
+                } else {
+                    co_await write_foreign_rows(out, std::get<foreign_ptr<shared_ptr<cql_transport::messages::result_message::rows>>>(result->result), result->options);
+                }
+                if (result->trace_state) {
+                    co_await out.write(format(",\"trace_session_id\":\"{}\"", result->trace_state->session_id()));
+                }
+            } else {
+                co_await out.write(rjson::quote_json_string(result.error().message));
+            }
+
+            co_await out.write("}");
+
+            co_await out.flush();
+        } catch (...) {
+            // Caller cannot handle exceptions at this point, we already sent HTTP OK in the header.
+            // Best we can do is log the exception, the client will get a truncated response.
+            wslog.error("Unexpected exception while writing query response: {}", std::current_exception());
+        }
+
+        co_await out.close();
+    });
+    return rep;
+}
+
+class query_result_visitor : public cql_transport::messages::result_message::visitor {
+    shared_ptr<cql_transport::messages::result_message> _result_msg;
+    std::optional<query_result> _query_result;
+private:
+    [[noreturn]] void throw_on_unexpected_message(const char* message_kind) {
+        throw std::runtime_error(std::format("unexpected result message {}", message_kind));
+    }
+
+    virtual void visit(const cql_transport::messages::result_message::void_message&) override {
+        _query_result.emplace("");
+    }
+    virtual void visit(const cql_transport::messages::result_message::set_keyspace& msg) override {
+        _query_result.emplace(format("Successfully set keyspace {}", msg.get_keyspace()));
+    }
+    virtual void visit(const cql_transport::messages::result_message::prepared::cql& msg) override {
+        _query_result.emplace(format("Query prepared with id {}", to_hex(msg.get_id())));
+    }
+    virtual void visit(const cql_transport::messages::result_message::schema_change& msg) override {
+        auto& event = *msg.get_change();
+        sstring action, what;
+        switch (event.change) {
+            case cql_transport::event::schema_change::change_type::CREATED:
+                action = "Created ";
+                break;
+            case cql_transport::event::schema_change::change_type::UPDATED:
+                action = "Updated ";
+                break;
+            case cql_transport::event::schema_change::change_type::DROPPED:
+                action = "Dropped ";
+                break;
+        }
+        switch (event.target) {
+            case cql_transport::event::schema_change::target_type::KEYSPACE:
+                what = "keyspace";
+                break;
+            case cql_transport::event::schema_change::target_type::TABLE:
+                what = "table";
+                break;
+            case cql_transport::event::schema_change::target_type::TYPE:
+                what = "type";
+                break;
+            case cql_transport::event::schema_change::target_type::FUNCTION:
+                what = "function";
+                break;
+            case cql_transport::event::schema_change::target_type::AGGREGATE:
+                what = "aggregate";
+                break;
+        }
+        _query_result.emplace(format("{} {}", action, what));
+    }
+    virtual void visit(const cql_transport::messages::result_message::bounce&) override {
+        throw_on_unexpected_message("bounce");
+    }
+    virtual void visit(const cql_transport::messages::result_message::exception&) override {
+        throw_on_unexpected_message("exception");
+    }
+    virtual void visit(const cql_transport::messages::result_message::rows&) override {
+        _query_result.emplace(make_foreign(dynamic_pointer_cast<cql_transport::messages::result_message::rows>(_result_msg)));
+    }
+public:
+    query_result_visitor(shared_ptr<cql_transport::messages::result_message> result_msg) : _result_msg(std::move(result_msg)) {
+        _result_msg->accept(*this);
+    }
+    query_result get() && {
+        if (!_query_result) {
+            throw std::runtime_error("query_result_visitor: no result");
+        }
+        return std::move(_query_result).value();
+    }
+};
+
 class query_handler : public gated_handler {
     session_manager& _session_manager;
+
+    static tracing::trace_state_ptr setup_tracing(const session_options& options, tracing::trace_state_ptr trace_state, const service::client_state& client_state, std::string_view query) {
+        if (!options.tracing) {
+            return {};
+        }
+
+        if (trace_state) {
+            return trace_state;
+        }
+
+        tracing::trace_state_props_set trace_props;
+        trace_props.set<tracing::trace_state_props::full_tracing>();
+
+        trace_state = tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::QUERY, trace_props);
+        tracing::begin(trace_state, "Execute webshell query", client_state.get_client_address());
+        tracing::add_session_param(trace_state, "session_options", fmt::to_string(options));
+        tracing::add_query(trace_state, query);
+
+        return trace_state;
+    }
+
+    static future<std::expected<::shared_ptr<cql_transport::messages::result_message>, query_exec_failure>>
+    do_execute_query_on_shard(cql3::query_processor& qp, const session_options& options, service::client_state& client_state,
+            std::string_view query, tracing::trace_state_ptr trace_state, const bytes_opt& serialized_paging_state,
+            cql3::computed_function_values cached_pk_fn_calls = {}) {
+        auto query_state = service::query_state(client_state, trace_state, empty_service_permit());
+
+        lw_shared_ptr<const service::pager::paging_state> paging_state;
+        if (serialized_paging_state) {
+            try {
+                paging_state = service::pager::paging_state::deserialize(*serialized_paging_state);
+            } catch (...) {
+                co_return std::unexpected(query_exec_failure(reply::status_type::bad_request, format("Invalid paging_state: {}", std::current_exception())));
+            }
+        }
+
+        const auto specific_options = cql3::query_options::specific_options{
+                options.page_size,
+                std::move(paging_state),
+                options.serial_consistency,
+                api::missing_timestamp,
+                service::node_local_only::no};
+
+        auto query_options = cql3::query_options{cql3::default_cql_config, options.consistency, std::nullopt, std::vector<cql3::raw_value_view>(), false, specific_options};
+        if (!cached_pk_fn_calls.empty()) {
+            query_options.set_cached_pk_function_calls(std::move(cached_pk_fn_calls));
+        }
+
+        auto result = co_await qp.execute_direct(query, query_state, {}, query_options);
+        result->throw_if_exception();
+
+        co_return std::move(result);
+    }
+
+    static future<query_exec_result>
+    do_execute_query(sharded<cql3::query_processor>& qp, const session_options& options, service::client_state& client_state,
+            std::string_view query, tracing::trace_state_ptr trace_state, const bytes_opt& serialized_paging_state) {
+        tracing::trace(trace_state, "executing webshell query in scheduling group {}", current_scheduling_group().name());
+        wslog.trace("executing query {} with options {}", query, options);
+
+        auto res = co_await do_execute_query_on_shard(qp.local(), options, client_state, query, trace_state, serialized_paging_state);
+
+        if (!res) {
+            co_return std::unexpected(res.error());
+        }
+
+        if (!res.value()->as_bounce()) {
+            co_return query_exec_success(query_result_visitor(std::move(res.value())).get(), options, trace_state);
+        }
+
+        // Handle bounce to another shard
+        const auto shard = res.value()->as_bounce()->target_shard();
+        // The query can also be bounced to another node: strongly consistent
+        // tables execute queries on the node hosting the tablet's leader. The CQL
+        // transport forwards such queries over RPC, the web shell doesn't.
+        const auto host = res.value()->as_bounce()->target_host();
+        if (host != qp.local().proxy().get_token_metadata_ptr()->get_topology().my_host_id()) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::not_implemented,
+                    format("Query has to be executed on node {}, but the web shell cannot forward queries to other nodes;"
+                            " use the web shell of that node, or a CQL driver", host)));
+        }
+        // The partition key may have been computed by functions (e.g. uuid()),
+        // their values have to be the same on the target shard.
+        auto cached_pk_fn_calls = dynamic_pointer_cast<cql_transport::messages::result_message::bounce>(res.value())->take_cached_pk_function_calls();
+        auto gcs = client_state.move_to_other_shard();
+        auto gts = tracing::global_trace_state_ptr(trace_state);
+
+        tracing::trace(trace_state, "query bounced to shard {}", shard);
+        wslog.trace("query bounced to shard {}", shard);
+
+        auto bounced_res = co_await qp.invoke_on(shard, [&gcs, &gts, &options, query, &serialized_paging_state, &cached_pk_fn_calls] (cql3::query_processor& qp)
+                -> future<std::expected<query_result, query_exec_failure>> {
+            auto client_state = gcs.get();
+            auto trace_state = gts.get();
+            auto res = co_await do_execute_query_on_shard(qp, options, client_state, query, std::move(trace_state), serialized_paging_state, cached_pk_fn_calls);
+
+            if (!res) {
+                co_return std::unexpected(res.error());
+            }
+
+            if (auto bounce = res.value()->as_bounce(); bounce) {
+                throw std::runtime_error(format("Unexpected bounce to another shard, after handling a bounce to {}:{}", bounce->target_host(), bounce->target_shard()));
+            }
+
+            co_return query_result_visitor(std::move(res.value())).get();
+        });
+
+        if (!bounced_res) {
+            co_return std::unexpected(std::move(bounced_res.error()));
+        }
+
+        co_return query_exec_success(std::move(*bounced_res), options, std::move(trace_state));
+    }
 
 public:
     query_handler(request_control& request_control, session_manager& session_manager, bool is_https)
@@ -881,10 +1480,106 @@ public:
         , _session_manager(session_manager)
     { }
 
+    static future<query_exec_result> execute_query(sharded<cql3::query_processor>& qp, const session_options& options, service::client_state& client_state,
+            std::string_view query, tracing::trace_state_ptr trace_state, const bytes_opt& serialized_paging_state) {
+        trace_state = setup_tracing(options, std::move(trace_state), client_state, query);
+
+        try {
+            co_return co_await do_execute_query(qp, options, client_state, query, std::move(trace_state), serialized_paging_state);
+        } catch (exceptions::unauthorized_exception& e) {
+            // This exception is used both when the user is not logged in and
+            // when the user is logged in but does not have permissions to execute
+            // the query.
+            // We want to use distinct HTTP status codes for these cases:
+            // * 401 Unauthorized for not logged in
+            // * 403 Forbidden for logged in user without permissions
+            // We already check the user login when obtaining the session, so the
+            // first case is handled there. Any unauthorized exceptions caught here
+            // should be for the second case, so we use 403 Forbidden here.
+            co_return std::unexpected(query_exec_failure(reply::status_type::forbidden, e.get_message()));
+        } catch (exceptions::syntax_exception& e) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::bad_request, format("Syntax error: {}", e.get_message())));
+        } catch (exceptions::request_validation_exception& e) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::bad_request, e.get_message()));
+        } catch (exceptions::request_timeout_exception& e) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::service_unavailable, e.get_message()));
+        } catch (exceptions::unavailable_exception& e) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::service_unavailable, e.get_message()));
+        } catch (exceptions::overloaded_exception& e) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::service_unavailable, e.get_message()));
+        } catch (exceptions::rate_limit_exception& e) {
+            co_return std::unexpected(query_exec_failure(reply::status_type::service_unavailable, e.get_message()));
+        } catch (exceptions::cassandra_exception& e) {
+            // Any other failure to execute the query, e.g. a read or write
+            // failure on the replicas: report it as such, with its message.
+            co_return std::unexpected(query_exec_failure(reply::status_type::internal_server_error, e.get_message()));
+        }
+    }
+
 protected:
-    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep, request_permit) override {
-        (void)_session_manager;
-        co_return std::move(rep);
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep, request_permit permit) override {
+        const auto cookies = handle_cookies(_session_manager.config(), is_https(), *req, *rep);
+        const auto session_id = get_session_id(cookies);
+        // Don't read and parse the body of a request with no session to execute
+        // it in, and run the rest of the request in the user's scheduling group.
+        co_await coroutine::switch_to(co_await _session_manager.get_session_scheduling_group(session_id, is_https()));
+
+        auto body = co_await read_request_body(*req->content_stream);
+        if (!body) {
+            co_return write_request_body_too_large_response(std::move(rep));
+        }
+
+        auto request = rjson::parse_and_validate(
+                *body,
+                rjs::object({
+                    {"query", rjs::scalar::string()},
+                    {"paging_state", rjs::optional(rjs::scalar::string())},
+                    {"options", rjs::optional(rjs::object({
+                        {"consistency", rjs::optional(rjs::scalar::string())},
+                        {"expand", rjs::optional(rjs::scalar::boolean())},
+                        {"page_size", rjs::optional(rjs::scalar::integer())},
+                        {"serial_consistency", rjs::optional(rjs::scalar::string())},
+                        {"tracing", rjs::optional(rjs::scalar::boolean())},
+                        {"output_format", rjs::optional(rjs::scalar::string())},
+                    }))}
+                }));
+
+        if (!request) {
+            co_return write_response(std::move(rep), reply::status_type::bad_request, request.error());
+        }
+
+        const auto query = rjson::to_string_view((*request)["query"]);
+        bytes_opt serialized_paging_state;
+        if (auto it = request->FindMember("paging_state"); it != request->MemberEnd() && !it->value.IsNull()) {
+            try {
+                serialized_paging_state = base64_decode(rjson::to_string_view(it->value));
+            } catch (...) {
+                co_return write_response(std::move(rep), reply::status_type::bad_request, "Invalid paging_state cookie: not valid base64");
+            }
+        }
+
+        auto result = co_await _session_manager.invoke_on_local_shard(session_id, is_https(), [&, this] (const session_options& options, service::client_state& client_state,
+                tracing::trace_state_ptr& trace_state, sstring& last_query) mutable -> future<query_exec_result> {
+            auto request_options = options;
+            if (auto applied = apply_option_overrides(request_options, *request); !applied) {
+                co_return std::unexpected(query_exec_failure(reply::status_type::bad_request, std::move(applied.error())));
+            }
+
+            if (query != std::exchange(last_query, sstring(query))) {
+                trace_state = nullptr;
+                serialized_paging_state = std::nullopt;
+            }
+
+            auto res = co_await execute_query(_session_manager.qp().container(), request_options, client_state, query, trace_state, serialized_paging_state);
+
+            if (res) {
+                trace_state = res->trace_state;
+            }
+
+            co_return std::move(res);
+        });
+
+        co_return write_response(std::move(rep), std::move(result), std::move(permit));
     }
 };
 
@@ -969,7 +1664,7 @@ struct https_listen_config {
 };
 
 class server : public peering_sharded_service<server> {
-    static constexpr size_t content_length_limit = 16*MB;
+    static constexpr size_t content_length_limit = max_request_body_size;
 
 private:
     config _config;
