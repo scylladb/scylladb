@@ -15,6 +15,8 @@
 #include "data_dictionary/data_dictionary.hh"
 #include "cql3/statements/index_target.hh"
 #include "cql3/statements/index_prop_defs.hh"
+#include "seastar/core/metrics.hh"
+#include "utils/estimated_histogram.hh"
 
 #include <string_view>
 #include <vector>
@@ -103,10 +105,19 @@ public:
     virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) = 0;
 };
 
+struct index_metrics {
+    seastar::metrics::metric_groups metrics;
+    sstring ks_name;
+    utils::time_estimated_histogram query_latency;
+    seastar::metrics::label idx_name{"index_name"};
+    index_metrics(const sstring& ks_name, const sstring& index_name);
+};
+
 class secondary_index_manager {
     data_dictionary::table _cf;
     /// The key of the map is the name of the index as stored in system tables.
     std::unordered_map<sstring, index> _indices;
+    std::unordered_map<sstring, index_metrics> _metrics;
 public:
     secondary_index_manager(data_dictionary::table cf);
     void reload();
@@ -116,6 +127,13 @@ public:
     bool is_index(view_ptr) const;
     bool is_index(const schema& s) const;
     bool is_global_index(const schema& s) const;
+    index_metrics* get_index_metrics(const sstring& index_name) {
+        auto it = _metrics.find(index_name);
+        if (it != _metrics.end()) {
+            return &it->second;
+        }
+        return nullptr;
+    }
     std::optional<sstring> custom_index_class(const schema& s) const;
     static std::optional<std::function<std::unique_ptr<custom_index>()>> get_custom_class_factory(const sstring& class_name);
     static std::optional<std::unique_ptr<custom_index>> get_custom_class(const index_metadata& im);
