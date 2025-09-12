@@ -47,6 +47,8 @@ using operation_type = httpd::operation_type;
 using port_number = service::vector_store_client::port_number;
 using primary_key = service::vector_store_client::primary_key;
 using primary_keys = service::vector_store_client::primary_keys;
+using distances = service::vector_store_client::distances;
+using ann_result = service::vector_store_client::ann_result;
 using service_reply_format_error = service::vector_store_client::service_reply_format_error;
 using tcp_keepalive_params = net::tcp_keepalive_params;
 using time_point = lowres_clock::time_point;
@@ -172,11 +174,20 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
+auto distance_from_json(rjson::value const& item, std::size_t idx) -> std::expected<float, ann_error> {
+    auto const& distance_json = item.GetArray()[idx];
+    if (!distance_json.IsNumber()) {
+        vslogger.error("Vector Store returned invalid JSON: 'distances' array element is not a number");
+        return std::unexpected{service_reply_format_error{}};
+    }
+    return distance_json.GetFloat();
+}
+
 auto write_ann_json(embedding embedding, limit limit) -> json_content {
     return seastar::format(R"({{"embedding":[{}],"limit":{}}})", fmt::join(embedding, ","), limit);
 }
 
-auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
+auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<ann_result, ann_error> {
     if (!json.HasMember("primary_keys")) {
         vslogger.error("Vector Store returned invalid JSON: missing 'primary_keys'");
         return std::unexpected{service_reply_format_error{}};
@@ -196,10 +207,10 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         vslogger.error("Vector Store returned invalid JSON: 'distances' is not an array");
         return std::unexpected{service_reply_format_error{}};
     }
-    auto const& distances_arr = json["distances"].GetArray();
 
-    auto size = distances_arr.Size();
+    auto size = distances_json.Size();
     auto keys = primary_keys{};
+    auto distance_vector = distances{};
     for (auto idx = 0U; idx < size; ++idx) {
         auto pk = pk_from_json(keys_json, idx, schema);
         if (!pk) {
@@ -209,9 +220,14 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
         if (!ck) {
             return std::unexpected{ck.error()};
         }
+        auto distance = distance_from_json(distances_json, idx);
+        if (!distance) {
+            return std::unexpected{distance.error()};
+        }
         keys.push_back(primary_key{dht::decorate_key(*schema, *pk), *ck});
+        distance_vector.push_back(*distance);
     }
-    return std::move(keys);
+    return std::make_pair(keys, distance_vector);
 }
 
 class client_connection_factory : public http::experimental::connection_factory {
@@ -580,7 +596,7 @@ auto vector_store_client::port() const -> std::expected<port_number, disabled> {
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
-        -> future<std::expected<primary_keys, ann_error>> {
+        -> future<std::expected<ann_result, ann_error>> {
     if (is_disabled()) {
         vslogger.error("Disabled Vector Store while calling ann");
         co_return std::unexpected{disabled{}};
