@@ -12,6 +12,7 @@
 #include <seastar/core/units.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/http/httpd.hh>
+#include <seastar/http/short_streams.hh>
 #include <seastar/util/log.hh>
 
 #include "cql3/query_processor.hh"
@@ -23,6 +24,8 @@
 using namespace httpd;
 using request = http::request;
 using reply = http::reply;
+
+namespace rjs = rjson::schema;
 
 using namespace tools::webshell;
 
@@ -111,13 +114,26 @@ public:
     sstring user_agent;
     bool is_https;
 
-    session(session_id session_id, service::client_state client_state, ::scheduling_group sg, sstring user_agent, bool is_https)
+private:
+    seastar::timer<lowres_clock> _ttl_timer;
+
+public:
+    session(session_id session_id, service::client_state client_state, ::scheduling_group sg, sstring user_agent, bool is_https, noncopyable_function<void(::session_id)> expire_callback)
         : id(std::move(session_id))
         , client_state(std::move(client_state))
         , scheduling_group(sg)
         , user_agent(std::move(user_agent))
         , is_https(is_https)
-    { }
+        , _ttl_timer([expire_callback = std::move(expire_callback), id = id] {
+            wslog.debug("session with session_id {} expired", id);
+            expire_callback(id);
+        })
+    {
+    }
+
+    void refresh(db_clock::duration session_ttl) {
+        _ttl_timer.rearm(lowres_clock::now() + session_ttl);
+    }
 
     sstring auth_user() const {
         return client_state.user().value().name.value_or("anonymous");
@@ -156,6 +172,36 @@ public:
         return _sl_controller;
     }
 
+    size_t session_count() const noexcept {
+        return _sessions.size();
+    }
+
+    bool has_session(const session_id& session_id) const noexcept {
+        return _sessions.find(session_id) != _sessions.end();
+    }
+
+    session& create_session(service::client_state client_state, scheduling_group sg, sstring user_agent, bool is_https) {
+        auto session_id = session_id::gen();
+
+        wslog.debug("creating session with session_id {} for user {}", session_id, client_state.user().value().name.value_or("anonymous"));
+
+        auto [it, inserted] = _sessions.emplace(session_id, make_lw_shared<session>(session_id, std::move(client_state), sg, std::move(user_agent), is_https, [this] (const ::session_id& id) {
+            remove_session(id);
+        }));
+        if (!inserted) {
+            throw std::runtime_error("Failed to create new session, session already exists");
+        }
+        it->second->refresh(_config.session_ttl);
+        return *it->second;
+    }
+
+    void remove_session(const session_id& session_id) {
+        auto it = _sessions.find(session_id);
+        if (it != _sessions.end()) {
+            _sessions.erase(it);
+        }
+    }
+
     utils::chunked_vector<client_data> get_client_data() {
         utils::chunked_vector<client_data> ret;
 
@@ -183,6 +229,83 @@ public:
         return ret;
     }
 };
+
+const std::string_view session_cookies[] {
+    "session_id",
+    "user_name",
+    "cluster_name",
+};
+const std::string_view http_only_session_cookies[] {
+    "session_id",
+};
+
+template <typename T>
+void set_session_cookie(reply& rep, config cfg, std::string_view key, const T& value) {
+    const bool http_only = std::ranges::find(http_only_session_cookies, key) != std::end(http_only_session_cookies);
+    const auto max_age = std::chrono::duration_cast<std::chrono::seconds>(cfg.session_ttl).count();
+    rep.set_cookie(sstring(key), fmt::format("{}; {}Max-Age={}", value, http_only ? "HttpOnly; " : "", max_age));
+}
+
+// FIXME: assumes the Cookie: <cookie-list> syntax, which most clients seems to
+// use, but this is not guranteed. If a client uses multiple Cookie headers, this
+// will not work.
+std::unordered_map<sstring, sstring> handle_cookies(const config& cfg, const request& req, reply& rep) {
+    const auto cookie_header = req.get_header("Cookie");
+
+    wslog.trace("handle_cookies({})", cookie_header);
+
+    std::unordered_map<sstring, sstring> cookies;
+
+    auto stripped = [] (std::string_view sv) {
+        auto start = sv.find_first_not_of(" \t");
+        auto end = sv.find_last_not_of(" \t");
+        return sv.substr(start, end - start + 1);
+    };
+
+    for (const auto cookie_pair : std::views::split(cookie_header, ';')) {
+        auto cookie_pair_v = stripped(std::string_view(cookie_pair.begin(), cookie_pair.end()));
+        if (cookie_pair_v.empty()) {
+            continue;
+        }
+        auto eq_pos = cookie_pair_v.find_first_of('=');
+        std::unordered_map<sstring, sstring>::iterator it;
+        bool inserted = false;
+        if (eq_pos == std::string_view::npos) {
+            std::tie(it, inserted) = cookies.emplace(sstring(cookie_pair_v), "");
+        } else {
+            auto name = cookie_pair_v.substr(0, eq_pos);
+            auto value = cookie_pair_v.substr(eq_pos + 1);
+            std::tie(it, inserted) = cookies.emplace(sstring(name), sstring(value));
+        }
+
+        if (std::ranges::find(session_cookies, it->first) == std::end(session_cookies)) {
+            rep.set_cookie(it->first, it->second);
+        } else {
+            set_session_cookie(rep, cfg, it->first, it->second);
+        }
+    }
+
+    return cookies;
+}
+
+void set_session_cookies(reply& rep, const config& cfg, session_id session_id, sstring auth_user) {
+    set_session_cookie(rep, cfg, "session_id", session_id);
+    set_session_cookie(rep, cfg, "user_name", auth_user);
+    set_session_cookie(rep, cfg, "cluster_name", cfg.cluster_name);
+}
+
+std::pair<std::optional<session_id>, sstring> try_get_session_id(const std::unordered_map<sstring, sstring>& cookies) {
+    auto it = cookies.find("session_id");
+    if (it == cookies.end()) {
+        return {std::nullopt, "session_id not found in cookies"};
+    }
+
+    try {
+        return {session_id(it->second), ""};
+    } catch (...) {
+        return {std::nullopt, format("Invalid session_id: {}", std::current_exception())};
+    }
+}
 
 std::unique_ptr<reply> write_response(std::unique_ptr<reply> rep, reply::status_type status, sstring response) {
     rep->set_status(status);
@@ -281,6 +404,8 @@ protected:
 };
 
 class login_handler : public gated_handler {
+    constexpr static size_t max_authentication_credentials_length = 128 * 1024; // Maximum length of authentication credentials, just for sanity
+
     session_manager& _session_manager;
     const bool _is_https;
 public:
@@ -289,9 +414,95 @@ public:
     {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
-        (void)_session_manager;
-        (void)_is_https;
-        co_return std::move(rep);
+        const auto cookies = handle_cookies(_session_manager.config(), *req, *rep);
+        auto [session_id_opt, _] = try_get_session_id(cookies);
+
+        if (session_id_opt) {
+            const auto has_session = co_await smp::submit_to(session_id_opt->shard(), [&] {
+                return _session_manager.has_session(*session_id_opt);
+            });
+            if (has_session) {
+                co_return write_response(std::move(rep), reply::status_type::ok, "Already logged in, erase cookies or send request to /logout to log in with another user.");
+            }
+        }
+
+        if (_session_manager.session_count() >= _session_manager.config().max_sessions) {
+            co_return write_response(std::move(rep), reply::status_type::service_unavailable, "Too many sessions, try again later");
+        }
+
+        auto client_state = service::client_state(
+                service::client_state::external_tag{},
+                _session_manager.auth_service(),
+                &_session_manager.sl_controller(),
+                _session_manager.config().timeout_config.current_values(),
+                req->get_client_address());
+
+        auto& sl_controller = _session_manager.sl_controller();
+        auto sg = sl_controller.get_default_scheduling_group();
+
+        auto& auth = client_state.get_auth_service()->underlying_authenticator();
+        sstring success_response;
+        if (auth.require_authentication()) {
+            if (req->content_length == 0) {
+                co_return write_response(std::move(rep), reply::status_type::bad_request,
+                        "No credentials provided, provide credentials in the request body in the format: {\"username\": \"$username\", \"password\": \"$password\"}");
+            }
+            if (req->content_length > max_authentication_credentials_length) {
+                co_return write_response(std::move(rep), reply::status_type::bad_request,
+                        format("Credentials too long, max length is {}", max_authentication_credentials_length));
+            }
+
+            auto credentials = rjson::parse_and_validate(
+                    co_await util::read_entire_stream_contiguous(*req->content_stream),
+                    rjs::object({
+                        {"username", rjs::scalar::string()},
+                        {"password", rjs::scalar::string()}
+                    }));
+            if (!credentials) {
+                co_return write_response(std::move(rep), reply::status_type::bad_request, credentials.error());
+            }
+
+            const auto& username = (*credentials)["username"];
+            const auto& password = (*credentials)["password"];
+
+            bytes_ostream buf;
+            buf.write(username.GetString(), username.GetStringLength()); // authzId (username)
+            buf.write("\0", 1); // Add NUL byte as delimiter
+            buf.write(username.GetString(), username.GetStringLength()); // authnId (username)
+            buf.write("\0", 1); // Add NUL byte as delimiter
+            buf.write(password.GetString(), password.GetStringLength()); // password
+            buf.write("\0", 1); // Add NUL byte as delimiter
+
+            auto sasl_challenge = client_state.get_auth_service()->underlying_authenticator().new_sasl_challenge();
+
+            try {
+                sasl_challenge->evaluate_response(buf.linearize());
+
+                if (sasl_challenge->is_complete()) {
+                    auto user = co_await sasl_challenge->get_authenticated_user();
+                    client_state.set_login(std::move(user));
+                    sg = co_await sl_controller.get_user_scheduling_group(client_state.user());
+                    co_await client_state.check_user_can_login();
+                    co_await client_state.maybe_update_per_service_level_params();
+                } else {
+                    co_return write_response(std::move(rep), reply::status_type::internal_server_error, "Configured SASL is a multistage authentication mechanism, currently unsupported by webshell");
+                }
+
+                success_response = format("Successfully logged in as user {}", client_state.user().value().name.value());
+            } catch (exceptions::authentication_exception& e) {
+                co_return write_response(std::move(rep), reply::status_type::bad_request, e.what());
+            }
+        } else {
+            success_response = "Successfully logged in as anonymous user";
+        }
+
+        const auto user_agent = req->get_header("User-Agent");
+
+        auto& session = _session_manager.create_session(std::move(client_state), sg, std::move(user_agent), _is_https);
+
+        set_session_cookies(*rep, _session_manager.config(), session.id, session.auth_user());
+
+        co_return write_response(std::move(rep), reply::status_type::ok, std::move(success_response));
     }
 };
 
