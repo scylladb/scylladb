@@ -18,6 +18,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_result_printer.hh"
 #include "db/config.hh"
+#include "resources/tools/webshell/webshell.resources.hh"
 #include "service/client_state.hh"
 #include "tools/webshell/webshell.hh"
 #include "utils/base64.hh"
@@ -514,7 +515,38 @@ public:
     {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
-        co_return std::move(rep);
+        if (httpd::str2type(req->_method) != operation_type::GET) {
+            rep->set_status(reply::status_type::not_found);
+            return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+        }
+
+        const sstring file_path = path == "/" ? "webshell.html" : path.substr(1); // Remove leading slash
+
+        auto resource_it = std::ranges::find_if(resources::webshell_resources_manifest, [&file_path] (const resources::resource& r) { return r.name == file_path; });
+        if (resource_it == std::end(resources::webshell_resources_manifest)) {
+            rep->set_status(reply::status_type::not_found);
+            return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
+        }
+
+        rep->add_header("Content-Encoding", "gzip");
+        rep->set_status(reply::status_type::ok);
+        rep->write_body("text", [content = resource_it->content] (output_stream<char>&& out_) -> future<> {
+            auto out = std::move(out_);
+            std::exception_ptr ex;
+            try {
+                co_await out.write(reinterpret_cast<const char*>(content.data()), content.size());
+                co_await out.flush();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+            co_await out.close();
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+        });
+        rep->set_mime_type(resource_it->content_type);
+
+        return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
     }
 };
 
