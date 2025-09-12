@@ -1453,7 +1453,8 @@ scylla_tools = ['tools/scylla-local-file-key-generator.cc',
                 'tools/schema_loader.cc',
                 'tools/load_system_tablets.cc',
                 'tools/utils.cc',
-                'tools/lua_sstable_consumer.cc']
+                'tools/lua_sstable_consumer.cc',
+                'tools/webshell/webshell.cc']
 scylla_perfs = ['test/perf/perf_alternator.cc',
                 'test/perf/perf_fast_forward.cc',
                 'test/perf/perf_row_cache_update.cc',
