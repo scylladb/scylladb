@@ -619,12 +619,11 @@ class TestCommitLog(Tester):
         # Create keyspace
         self.ks = "test_ks"
         create_ks(session, self.ks, rf=1)
-        self.node1.nodetool(f"disableautocompaction {self.ks}")  # so data is not written to disk
 
         # the mutation limit is about half of the segment size (default 32MB)
         # so 20 columns of 1MB each is guaranteed to be above it
         self.big_columns = 20
-        # add one more collumn as the primary key is not allowed to be this big
+        # add one more column as the primary key is not allowed to be this big
         columns = self.big_columns + 1
         self.values = [1, *[f"value_{i:05d}_{'x' * 1024 * 1024}" for i in range(1, columns)]]
 
@@ -632,12 +631,12 @@ class TestCommitLog(Tester):
         self.cf = "big_commitlog"
         create_statement = f"CREATE TABLE {self.cf} (c00000 int PRIMARY KEY, {', '.join(f'c{i:05d} varchar' for i in range(1, columns))});"
         session.execute(create_statement)
-        self.insert_statement = session.prepare(f"INSERT INTO {self.ks}.{self.cf} ({', '.join(f'c{i:05d}' for i in range(columns))}) VALUES({', '.join(f'?' for i in range(columns))});")
+        self.insert_statement = session.prepare(f"INSERT INTO {self.ks}.{self.cf} ({', '.join(f'c{i:05d}' for i in range(columns))}) VALUES({', '.join('?' for i in range(columns))});")
 
     def test_one_big_mutation_replay_on_startup(self):
         """
         Test commit log replay with a single big (larger than mutation limit) commitlog mutation
-        The node is forcefully shut down after the transaction is commited
+        The node is forcefully shut down after the transaction is committed
         After restarting the node, check for relevant logs and whether the data exists
         """
         self.prepare_big_mutation()
@@ -649,8 +648,7 @@ class TestCommitLog(Tester):
         in_table = rows_to_list(session.execute(f"SELECT * FROM {self.ks}.{self.cf};"))
         assert in_table == [self.values]
 
-        # stop node
-        # because the mutation is large, it uses a code path that puts the commilog to disk before acknowledging the insert
+        # stop node forcibly so no memtable flush happens
         node1.stop(gently=False)
 
         # restart the node
@@ -661,7 +659,6 @@ class TestCommitLog(Tester):
         assert node1.grep_log(f"large_data - Writing large row {self.ks}/{self.cf}:")
         assert in_table == [self.values]
 
-    @pytest.mark.skip(reason="issue #25627")
     def test_one_big_mutation_corrupted_on_startup(self):
         """
         Test commit log replay with a single big (larger than mutation limit) commitlog mutation
@@ -677,8 +674,7 @@ class TestCommitLog(Tester):
         in_table = rows_to_list(session.execute(f"SELECT * FROM {self.ks}.{self.cf};"))
         assert in_table == [self.values]
 
-        # stop node
-        # because the mutation is large, it uses a code path that puts the commitlog to disk before acknowledging the insert
+        # stop node forcibly so no memtable flush happens
         node1.stop(gently=False)
 
         # corrupt the commitlogs
@@ -707,7 +703,7 @@ class TestCommitLog(Tester):
         # execute_async so it can be interrupted
         session.execute_async(self.insert_statement, self.values)
 
-        # stop node
+        # stop node forcibly so no memtable flush happens
         node1.stop(gently=False)
 
         if self._get_commitlog_size()[0] > self.big_columns:
