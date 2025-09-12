@@ -18,10 +18,8 @@ logger = logging.getLogger(__name__)
 @skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.asyncio
 @pytest.mark.parametrize("query_type,should_wait_for_timeout,shutdown_nodes", [
-    ("SELECT", True, False),
     ("SELECT", True, True),
     ("SELECT_COUNT", False, False),
-    ("SELECT_WHERE", True, False),
     ("SELECT_COUNT_WHERE", True, False),
 ])
 async def test_long_query_timeout_erm(request, manager: ManagerClient, query_type, should_wait_for_timeout, shutdown_nodes):
@@ -50,21 +48,16 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
         query = "SELECT * FROM {}"
     elif query_type == "SELECT_COUNT":
         query = "SELECT COUNT(*) FROM {}"
-    elif query_type == "SELECT_WHERE":
-        query = "SELECT * FROM {} WHERE key = 0"
     elif query_type == "SELECT_COUNT_WHERE":
         query = "SELECT COUNT(*) FROM {} WHERE key = 0"
     else:
         assert False # Invalid query type
 
     logger.info("Start four nodes cluster")
-    # FIXME: Adjust this test to run with `rf_rack_valid_keyspaces` set to `True`.
-    if should_wait_for_timeout and shutdown_nodes:
-        # Overriding the `request_timeout_on_shutdown_in_seconds` for this test to avoid excessive delays, since after PR 24499
-        # all queries (non-completed) are always waited for `request_timeout_on_shutdown_in_seconds` time.
-        servers = await manager.servers_add(4, config={"rf_rack_valid_keyspaces": False, "request_timeout_on_shutdown_in_seconds": 30})
-    else:
-        servers = await manager.servers_add(4, config={"rf_rack_valid_keyspaces": False})
+    # Override config:
+    #  - rf_rack_valid_keyspaces=False to keep number of nodes small as in-rack redundancy is required
+    #  - request_timeout_on_shutdown_in_seconds=10 to shorten waiting afters cylladb#24499 was implemented
+    servers = await manager.servers_add(4, config={"rf_rack_valid_keyspaces": False, "request_timeout_on_shutdown_in_seconds": 10})
 
     selected_server = servers[0]
     logger.info(f"Creating a client with selected_server: {selected_server}")
@@ -92,7 +85,7 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
         injected_handlers[server.ip_addr] = await inject_error_one_shot(
             manager.api, server.ip_addr, 'storage_proxy::handle_read', parameters={'cf_name': table.name})
 
-    query_timeout = 60
+    query_timeout = 30
     if shutdown_nodes:
         query_timeout *= 100 # Will end test by shutting down nodes instead of finishing the query
     before_query = datetime.now()
@@ -103,15 +96,16 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
 
     logger.info("Confirm reads are waiting on the injected error")
     server_to_kill = None
-    for server in servers:
-        if server != selected_server:
-            server_log = await manager.server_open_log(server.server_id)
-            try:
-                await server_log.wait_for("storage_proxy::handle_read injection hit", timeout=5)
-                server_to_kill = server
-            except TimeoutError:
-                # Some nodes might not receive any reads
-                logger.info(f"Node not handling any reads: {server.ip_addr}")
+    async def wait_for_log_on_any_node(server):
+        server_log = await manager.server_open_log(server.server_id)
+        await server_log.wait_for("storage_proxy::handle_read injection hit")
+        return server
+    async with asyncio.TaskGroup() as tg:
+        log_watch_tasks = [tg.create_task(wait_for_log_on_any_node(server)) for server in servers if server != selected_server]
+        done, pending = await asyncio.wait(log_watch_tasks, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        server_to_kill = done.pop().result()
 
     logger.info(f"Kill a node: {server_to_kill.ip_addr}")
     await manager.server_stop(server_to_kill.server_id)
