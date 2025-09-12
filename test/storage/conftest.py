@@ -10,11 +10,11 @@ import shutil
 import subprocess
 import uuid
 
-from typing import Callable
+from typing import Callable, Generator
 from contextlib import asynccontextmanager, contextmanager
 
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import *
+from test.cluster.conftest import *  # noqa: F403
 
 
 # Mounting volumes outside of the toolchain environment, requires root privileges. To overcome it,
@@ -22,21 +22,24 @@ from test.cluster.conftest import *
 # works with test.py but breaks the execution of the tests with pytest without test.py.
 # FIXME: Find a more robust solution to ditch unshare.
 @pytest.fixture(scope="function")
-def volumes_factory(pytestconfig, build_mode, request):
+def volumes_factory(pytestconfig, build_mode, request) -> Generator[dict[pathlib.Path, dict[str, str]], None, None]:
     hash = str(uuid.uuid4())
     base = pathlib.Path(f"{pytestconfig.getoption("tmpdir")}/{build_mode}/volumes/{hash}")
-    volumes = []
+    topology = dict()
 
     @contextmanager
-    def wrapper(sizes: list[str]):
+    def wrapper(topology_sizes: dict[str, dict[str, list[str]]]) -> Generator[dict[pathlib.Path, tuple[str, str]], None, None]:
         try:
-            for id, size in enumerate(sizes):
-                path = base / f"scylla-{id}"
-                path.mkdir(parents=True)
-
-                subprocess.run(["sudo", "mount", "-o", f"size={size}", "-t", "tmpfs", "tmpfs", path], check=True)
-                volumes.append(path)
-            yield volumes
+            id = 0
+            for dc, racks in topology_sizes.items():
+                for rack, sizes in racks.items():
+                    for size in sizes:
+                        path = base / f"scylla-{id}"
+                        path.mkdir(parents=True)
+                        subprocess.run(["sudo", "mount", "-o", f"size={size}", "-t", "tmpfs", "tmpfs", path], check=True)
+                        topology[path] = {"dc": dc, "rack": rack}
+                        id += 1
+            yield topology
         finally:
             pass
     yield wrapper
@@ -50,24 +53,36 @@ def volumes_factory(pytestconfig, build_mode, request):
     #
     # Note that since volumes are created within unshare, they will be automatically unmounted and
     # files will be deleted so no additional cleanup is needed.
-    report = request.node.stash[PHASE_REPORT_KEY]
+    report = request.node.stash[PHASE_REPORT_KEY]  # noqa: F405
     test_failed = report.when == "call" and report.failed
     preserve_data = test_failed or request.config.getoption("save_log_on_success")
 
     if preserve_data:
-        for id, path in enumerate(volumes):
+        for id, path in enumerate(list(topology.keys())):
             shutil.copytree(path, base.parent.parent / f"scylla-{hash}-{id}", ignore=shutil.ignore_patterns('commitlog*'))
 
 
 @asynccontextmanager
-async def space_limited_servers(manager: ManagerClient, volumes_factory: Callable, sizes: list[str], **server_args):
+async def space_limited_servers(manager: ManagerClient, volumes_factory: Callable, topology_sizes: dict[str, dict[str, list[str]]], **server_args):
+    """
+    Context manager that creates and destroys a set of Scylla servers with limited disk space.  
+    The servers are created with the given server_args and with volumes created according to topology_sizes.  
+    The volumes are created using the volumes_factory fixture.
+
+    :param manager: ManagerClient instance to use for creating and destroying servers.
+    :param volumes_factory: volumes_factory fixture to use for creating volumes.
+    :param server_args: additional arguments to pass to manager.server_add.
+    :param topology_sizes: dictionary defining the topology and the size of the volumes for each server. Example:
+
+        `{"dc1": {"r1": ["300M"], "r2": ["300M"], "r3": ["300M"]}, "dc2": {"r1": ["300M", "200M"], "r2": ["300M", "200M"]}}`
+    """
     servers = []
     cmdline = server_args.pop("cmdline", [])
-    with volumes_factory(sizes) as volumes:
+    with volumes_factory(topology_sizes) as topology:
         try:
             servers = [await manager.server_add(cmdline = [*cmdline, '--workdir', str(path)],
-                                                property_file={"dc": "dc1", "rack": f"r{id}"},
-                                                **server_args) for id, path in enumerate(volumes)]
+                                                property_file={"dc": prop["dc"], "rack": prop["rack"]},
+                                                **server_args) for path, prop in topology.items()]
             yield servers
         finally:
             pass
