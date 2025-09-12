@@ -441,8 +441,8 @@ const resource_set& password_authenticator::protected_resources() const {
     });
 }
 
-future<> password_authenticator::ensure_superuser_is_created() const {
-    return _superuser_created_promise.get_shared_future();
+future<> password_authenticator::ensure_superuser_is_created(abort_source& as) const {
+    return _superuser_created_promise.get_shared_future(as);
 }
 
 }

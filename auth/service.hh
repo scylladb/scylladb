@@ -136,7 +136,7 @@ public:
 
     // Some startup is done in the background so this future resolves when
     // service is fully ready.
-    future<> ready();
+    future<> ready(seastar::abort_source&);
 
     void update_cache_config();
 

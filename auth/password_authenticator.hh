@@ -87,7 +87,7 @@ public:
 
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 
-    virtual future<> ensure_superuser_is_created() const override;
+    virtual future<> ensure_superuser_is_created(seastar::abort_source& as) const override;
 
 private:
     bool legacy_metadata_exists() const;

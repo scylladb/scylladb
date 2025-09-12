@@ -342,9 +342,9 @@ future<> standard_role_manager::stop() {
     return _stopped.handle_exception_type([] (const sleep_aborted&) { }).handle_exception_type([](const abort_requested_exception&) {});;
 }
 
-future<> standard_role_manager::ensure_superuser_is_created() {
+future<> standard_role_manager::ensure_superuser_is_created(abort_source& as) {
     SCYLLA_ASSERT(this_shard_id() == 0);
-    return _superuser_created_promise.get_shared_future();
+    return _superuser_created_promise.get_shared_future(as);
 }
 
 future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {

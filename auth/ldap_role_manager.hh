@@ -108,7 +108,7 @@ class ldap_role_manager : public role_manager {
     /// Used to auto-create roles returned by ldap.
     future<> create_role(std::string_view role_name);
 
-    future<> ensure_superuser_is_created() override;
+    future<> ensure_superuser_is_created(seastar::abort_source& as) override;
 };
 
 } // namespace auth

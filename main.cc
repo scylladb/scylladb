@@ -2484,7 +2484,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 ss.local().drain_on_shutdown().get();
             });
 
-            auth_service.local().ready().get();
+            auth_service.local().ready(stop_signal.as_local_abort_source()).get();
             ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
             api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {

@@ -112,7 +112,7 @@ public:
     ///
     /// \returns a future once it is ensured that the superuser role exists.
     ///
-    virtual future<> ensure_superuser_is_created() = 0;
+    virtual future<> ensure_superuser_is_created(seastar::abort_source& as) = 0;
 
     ///
     /// \returns an exceptional future with \ref role_already_exists for a role that has previously been created.

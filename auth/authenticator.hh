@@ -17,6 +17,7 @@
 #include <functional>
 
 #include <seastar/core/future.hh>
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/sstring.hh>
 
 #include "auth/authentication_options.hh"
@@ -160,7 +161,7 @@ public:
 
     virtual ::shared_ptr<sasl_challenge> new_sasl_challenge() const = 0;
 
-    virtual future<> ensure_superuser_is_created() const = 0;
+    virtual future<> ensure_superuser_is_created(seastar::abort_source& as) const = 0;
 };
 
 }

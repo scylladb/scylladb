@@ -337,8 +337,8 @@ future<std::vector<cql3::description>> ldap_role_manager::describe_role_grants()
     co_return std::vector<cql3::description>();
 }
 
-future<> ldap_role_manager::ensure_superuser_is_created() {
-    return _std_mgr.ensure_superuser_is_created();
+future<> ldap_role_manager::ensure_superuser_is_created(seastar::abort_source& as) {
+    return _std_mgr.ensure_superuser_is_created(as);
 }
 
 } // namespace auth
