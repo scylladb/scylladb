@@ -14,6 +14,7 @@ sstring to_string(client_type ct) {
         case client_type::cql: return "cql";
         case client_type::thrift: return "thrift";
         case client_type::alternator: return "alternator";
+        case client_type::webshell: return "webshell";
     }
     throw std::runtime_error("Invalid client_type");
 }
