@@ -97,17 +97,11 @@ public:
     /// Start background tasks.
     void start_background_tasks();
 
+    /// Start the service.
+    auto start() -> future<>;
+
     /// Stop the service.
     auto stop() -> future<>;
-
-    /// Check if the vector_store_client is disabled.
-    auto is_disabled() const -> bool;
-
-    /// Get the current host name.
-    [[nodiscard]] auto host() const -> std::expected<host_name, disabled>;
-
-    /// Get the current port number.
-    [[nodiscard]] auto port() const -> std::expected<port_number, disabled>;
 
     /// Request the vector store service for the primary keys of the nearest neighbors
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
@@ -120,11 +114,7 @@ private:
 /// A tester for the vector_store_client, used for testing purposes.
 struct vector_store_client_tester {
     static void set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval);
-    static void set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout);
-    static void set_http_request_retries(vector_store_client& vsc, unsigned retries);
     static void set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<net::inet_address>>(sstring const&)> resolver);
-    static void trigger_dns_resolver(vector_store_client& vsc);
-    static auto resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::optional<net::inet_address>>;
 };
 
 } // namespace service
