@@ -1,0 +1,5 @@
+[
+    {"name": "favicon.ico", "content-type": "image/vnd.microsoft.icon", "file": "resources/favicon.ico"},
+    {"name": "webshell.html", "content-type": "text/html", "file": "resources/webshell.html"},
+    {"name": "webshell.js", "content-type": "application/javascript", "file": "resources/webshell.js"}
+]

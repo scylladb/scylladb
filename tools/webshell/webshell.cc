@@ -9,6 +9,7 @@
 
 #include <random>
 #include <ranges>
+#include <seastar/core/fstream.hh>
 #include <seastar/core/units.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/http/httpd.hh>
@@ -18,6 +19,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_result_printer.hh"
 #include "db/config.hh"
+#include "resources/tools/webshell/webshell.resources.hh"
 #include "service/client_state.hh"
 #include "tools/webshell/webshell.hh"
 #include "utils/base64.hh"
@@ -535,12 +537,87 @@ public:
 };
 
 class resource_handler : public gated_handler {
+    const config& _config;
+    std::vector<resources::resource> _resource_manifest_storage;
+    std::span<const resources::resource> _resource_manifest;
 public:
-    explicit resource_handler(request_control& request_control)
+    explicit resource_handler(request_control& request_control, const config& cfg)
         : gated_handler("resource", request_control)
+        , _config(cfg)
     {}
+
+    future<> load_manifest() {
+        if (_config.webshell_resource_manifest_path.empty()) {
+            _resource_manifest = resources::webshell_resources_manifest;
+        } else {
+            try {
+                _resource_manifest_storage = co_await resources::load_resource_manifest(_config.webshell_resource_manifest_path);
+                _resource_manifest = std::span(_resource_manifest_storage.data(), _resource_manifest_storage.size());
+            } catch (...) {
+                throw std::runtime_error(format("Failed to load resource manifest from {}: {}", _config.webshell_resource_manifest_path, std::current_exception()));
+            }
+        }
+    }
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        if (httpd::str2type(req->_method) != operation_type::GET) {
+            rep->set_status(reply::status_type::not_found);
+            co_return std::move(rep);
+        }
+
+        co_await load_manifest();
+
+        const sstring file_path = path == "/" ? "webshell.html" : path.substr(1); // Remove leading slash
+
+        auto resource_it = std::ranges::find_if(_resource_manifest, [&file_path] (const resources::resource& r) { return r.name == file_path; });
+        if (resource_it == std::end(_resource_manifest)) {
+            rep->set_status(reply::status_type::not_found);
+            co_return std::move(rep);
+        }
+
+        auto& resource = *resource_it;
+
+        if (auto file_path = std::get_if<std::filesystem::path>(&resource.content); file_path) {
+            const auto path = _config.webshell_resource_manifest_path.parent_path() / std::get<std::filesystem::path>(resource.content);
+            if (!co_await file_accessible(path.native(), access_flags::exists | access_flags::read)) {
+                rep->set_status(reply::status_type::not_found);
+                rep->write_body("text", "Resource file exists in manifest but either doesn't exists or not readable on disk");
+                co_return std::move(rep);
+            }
+        }
+
+        if (resource.compressed) {
+            rep->add_header("Content-Encoding", "gzip");
+        }
+
+        rep->set_status(reply::status_type::ok);
+        rep->write_body("text", [this, &resource] (output_stream<char>&& out_) -> future<> {
+            auto out = std::move(out_);
+
+            std::exception_ptr ex;
+            try {
+                if (auto content_view = std::get_if<bytes_view>(&resource.content); content_view) {
+                    co_await out.write(reinterpret_cast<const char*>(content_view->data()), content_view->size());
+                } else {
+                    const auto path = _config.webshell_resource_manifest_path.parent_path() / std::get<std::filesystem::path>(resource.content);
+                    auto f = co_await open_file_dma(path.native(), open_flags::ro);
+                    auto in = make_file_input_stream(f);
+                    co_await copy(in, out);
+                    co_await in.close();
+                }
+                co_await out.flush();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+
+            co_await out.close();
+
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+        });
+        rep->set_content_type(resource.content_type);
+
         co_return std::move(rep);
     }
 };
@@ -1423,7 +1500,7 @@ public:
 };
 
 void server::set_routes(routes& r, bool is_https) {
-    r.add_default_handler(new resource_handler(_request_control));
+    r.add_default_handler(new resource_handler(_request_control, _config));
     r.put(operation_type::POST, "/login", new login_handler(_request_control, _session_manager, is_https));
     r.put(operation_type::POST, "/logout", new logout_handler(_request_control, _session_manager));
     r.put(operation_type::POST, "/query", new query_handler(_request_control, _session_manager));
