@@ -940,8 +940,289 @@ protected:
     }
 };
 
+/// Handle session commands
+///
+/// Implements a subset of CQLSH options and commands:
+/// * CONSISTENCY [<level>] - set default consistency level for queries, with no args show current setting>
+/// * EXPAND [ON|OFF] - enable/disable expanded (vertical) output, with no args show current setting.
+/// * HELP [<command>] - show help.
+/// * PAGING [ON|OFF|<number>] - enable/disable/limit result paging, with no args show current setting.
+/// * SERIAL CONSISTENCY [<level>] - set default serial consistency level for queries, with no args show current setting.
+/// * SHOW [SESSION <tracing-session-id>] - shows the tracing events for the provided tracing session id.
+/// * TRACING [ON|OFF] - enable/disable query tracing, with no args show current setting.
+///
+/// EXIT and LOGIN are handled by /logout and /login endpoints.
+///
+/// Extra options (not in CQLSH):
+/// * OUTPUT FORMAT [<format>] - set output format, supported formats are TEXT and JSON, with no args show current setting.
 class command_handler : public gated_handler {
     session_manager& _session_manager;
+
+    static db::consistency_level parse_consistency_level(std::string_view cl_str, const std::unordered_map<std::string_view, db::consistency_level>& str_to_cl, const char* option_name) {
+        auto it = str_to_cl.find(cl_str);
+        if (it == str_to_cl.end()) {
+            const auto to_upper = [] (std::string_view sv) {
+                return sv | std::views::transform([] (char c) { return std::toupper(c); }) | std::ranges::to<sstring>();
+            };
+
+            auto all_cls = std::views::values(str_to_cl) | std::ranges::to<std::vector<db::consistency_level>>();
+            std::ranges::sort(all_cls);
+            const auto all_cls_upper = all_cls
+                    | std::views::transform([] (auto cl) { return fmt::to_string(cl); })
+                    | std::views::transform(to_upper)
+                    | std::ranges::to<std::vector<sstring>>();
+
+            const auto last = std::prev(all_cls_upper.end());
+            throw bad_request_exception(fmt::format("Invalid {} argument, expected {} or {}.",
+                        option_name, fmt::join(std::ranges::subrange(all_cls_upper.begin(), last), ", "), *last));
+        }
+
+        return it->second;
+    }
+
+    static future<sstring> handle_consistency(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        if (option_with_args.size() > 2) {
+            throw bad_request_exception("Invalid CONSISTENCY option, expected 'CONSISTENCY [<consistency_level>]'.");
+        }
+
+        if (option_with_args.size() == 1) {
+            co_return format("Current consistency level is {}.", session.options.consistency);
+        }
+
+        const static std::unordered_map<std::string_view, db::consistency_level> str_to_cl {
+            {"any", db::consistency_level::ANY},
+            {"one", db::consistency_level::ONE},
+            {"two", db::consistency_level::TWO},
+            {"three", db::consistency_level::THREE},
+            {"quorum", db::consistency_level::QUORUM},
+            {"all", db::consistency_level::ALL},
+            {"local_quorum", db::consistency_level::LOCAL_QUORUM},
+            {"each_quorum", db::consistency_level::EACH_QUORUM},
+            {"serial", db::consistency_level::SERIAL},
+            {"local_serial", db::consistency_level::LOCAL_SERIAL},
+            {"local_one", db::consistency_level::LOCAL_ONE},
+        };
+
+        session.options.consistency = parse_consistency_level(option_with_args[1], str_to_cl, "CONSISTENCY");
+
+        co_return format("Consistency level set to {}.", session.options.consistency);
+    }
+
+    static future<sstring> handle_expand(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        if (option_with_args.size() > 2) {
+            throw bad_request_exception("Invalid EXPAND option, expected 'EXPAND [ON|OFF]'.");
+        }
+
+        if (option_with_args.size() == 1) {
+            co_return format("Expanded output is currently {}. Use EXPAND {} to {}.",
+                    session.options.expand ? "enabled" : "disabled",
+                    session.options.expand ? "OFF" : "ON",
+                    session.options.expand ? "disable" : "enable");
+        }
+
+        const auto arg = option_with_args[1];
+
+        if (arg == "on") {
+            if (session.options.expand) {
+                throw bad_request_exception("Expanded output is already enabled. Use EXPAND OFF to disable.");
+            }
+            session.options.expand = true;
+            co_return "Now Expanded output is enabled.";
+        } else if (arg == "off") {
+            if (!session.options.expand) {
+                throw bad_request_exception("Expanded output is not enabled.");
+            }
+            session.options.expand = false;
+            co_return "Disabled Expanded output.";
+        } else {
+            throw bad_request_exception("Invalid EXPAND argument, expected ON or OFF.");
+        }
+    }
+
+    static future<sstring> handle_help(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        return make_ready_future<sstring>(R"(ScyllaDB WebShell
+
+!!! WebShell is still experimental, things are subject to change and there may be bugs !!!
+
+For more information, see https://docs.scylladb.com/manual/master/operating-scylla/admin-tools/webshell.html.
+
+Available commands:
+ * CONSISTENCY [<level>] - set default consistency level for queries, with no args show current setting (default: ONE).
+ * EXPAND [ON|OFF] - enable/disable expanded (vertical) output, with no args show current setting (default: OFF).
+ * HELP - show this message.
+ * OUTPUT FORMAT [TEXT|JSON] - set output format, with no args show current setting (default: TEXT).
+ * PAGING [ON|OFF|<number>] - enable/disable/limit result paging, with no args show current setting (default: 100).
+ * SERIAL CONSISTENCY [<level>] - set default serial consistency level for queries, with no args show current setting (default: SERIAL).
+ * SHOW [SESSION <tracing-session-id>] - show tracing session events for the provided tracing session id.
+ * TRACING [ON|OFF] - enable/disable query tracing, with no args show current setting (default: OFF).
+)");
+    }
+
+    static future<sstring> handle_paging(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        if (option_with_args.size() > 2) {
+            throw bad_request_exception("Invalid PAGING option, expected 'PAGING [ON|OFF|<number>]'.");
+        }
+
+        if (option_with_args.size() == 1) {
+            const auto response_template = "Query paging is currently {}. Use PAGING {} to {}.{}";
+            if (session.options.page_size <= 0) {
+                co_return fmt::format(fmt::runtime(response_template), "disabled", "ON", "enable", "");
+            } else {
+                co_return fmt::format(fmt::runtime(response_template), "enabled", "OFF", "disable", fmt::format("\nPage size: {}.", session.options.page_size));
+            }
+        }
+
+        sstring arg = option_with_args[1];
+        if (arg == "off") {
+            if (session.options.page_size <= 0) {
+                throw bad_request_exception("Query paging is not enabled.");
+            }
+            session.options.page_size = 0;
+            co_return "Query paging disabled";
+        } else if (arg == "on") {
+            if (session.options.page_size > 0) {
+                throw bad_request_exception("Query paging is already enabled. Use PAGING OFF to disable.");
+            }
+            session.options.page_size = 100; // default page size
+            co_return "Now query paging is enabled.\nPage size: 100.";
+        } else {
+            try {
+                session.options.page_size = std::stoi(arg);
+            } catch (std::invalid_argument&) {
+                throw bad_request_exception("Page size must be a number.");
+            } catch (std::out_of_range&) {
+                throw bad_request_exception("Page size must be a 32 bit integer.");
+            }
+            co_return fmt::format("Page size: {}.", session.options.page_size);
+        }
+    }
+
+    static future<sstring> handle_serial(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        if (option_with_args.size() > 3 || option_with_args.size() < 2 || option_with_args[1] != "consistency") {
+            throw bad_request_exception("Invalid SERIAL CONSISTENCY option, expected 'SERIAL CONSISTENCY [<serial_consistency_level>]'.");
+        }
+
+        if (option_with_args.size() == 2) {
+            co_return format("Current serial consistency level is {}.", session.options.serial_consistency);
+        }
+
+        const static std::unordered_map<std::string_view, db::consistency_level> str_to_cl {
+            {"serial", db::consistency_level::SERIAL},
+            {"local_serial", db::consistency_level::LOCAL_SERIAL},
+        };
+
+        session.options.serial_consistency = parse_consistency_level(option_with_args[2], str_to_cl, "SERIAL CONSISTENCY");
+
+        co_return format("Serial consistency level set to {}.", session.options.serial_consistency);
+    }
+
+    static future<sstring> handle_show(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        if (option_with_args.size() > 3 || option_with_args.size() < 2) {
+            throw bad_request_exception("Invalid SHOW command, expected 'SHOW SESSION <tracing_session_id>'.");
+        }
+
+        if (option_with_args[1] != "session") {
+            throw bad_request_exception("Invalid SHOW command, expected 'SHOW SESSION <tracing_session_id>'.");
+        }
+
+        session_options options{.consistency = db::consistency_level::ONE, .page_size = 0};
+        session_data data(session.id());
+
+        auto [status, response] = co_await query_handler::execute_query(
+                session_manager.qp().container(),
+                options,
+                data,
+                session.client_state,
+                format("SELECT * FROM system_traces.events WHERE session_id = {}", option_with_args[2]),
+                {});
+
+        if (status != reply::status_type::ok) {
+            throw base_exception(format("Failed to retrieve tracing session: {}.", response.result), status);
+        }
+
+        co_return std::move(response.result);
+    }
+
+    static future<sstring> handle_tracing(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        if (option_with_args.size() > 2) {
+            throw bad_request_exception("Invalid TRACING option, expected 'TRACING [ON|OFF]'.");
+        }
+
+        if (option_with_args.size() == 1) {
+            const auto response_template = "Tracing is currently {}. Use TRACING {} to {}.";
+            if (session.options.tracing) {
+                co_return fmt::format(fmt::runtime(response_template), "enabled", "OFF", "disable");
+            } else {
+                co_return fmt::format(fmt::runtime(response_template), "disabled", "ON", "enable");
+            }
+        }
+
+        sstring arg = option_with_args[1];
+        if (arg == "off") {
+            if (!session.options.tracing) {
+                throw bad_request_exception("Tracing is not enabled.");
+            }
+            session.options.tracing = false;
+            co_return "Disabled Tracing.";
+        } else if (arg == "on") {
+            if (session.options.tracing) {
+                throw bad_request_exception("Tracing is already enabled. Use TRACING OFF to disable.");
+            }
+            session.options.tracing = true;
+            co_return "Now tracing is enabled.";
+        } else {
+            throw bad_request_exception("Invalid TRACING option, expected 'TRACING [ON|OFF]'.");
+        }
+    }
+
+    static future<sstring> handle_output(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        if (option_with_args.size() > 3) {
+            throw bad_request_exception("Invalid OUTPUT FORMAT option, expected 'OUTPUT FORMAT [TEXT|JSON]'.");
+        }
+        if (option_with_args[1] != "format") {
+            throw bad_request_exception("Invalid OUTPUT FORMAT option, expected 'OUTPUT FORMAT [TEXT|JSON]'.");
+        }
+
+        if (option_with_args.size() == 2) {
+            co_return to_string(session.options.output_format) | std::views::transform([] (char c) { return std::toupper(c); }) | std::ranges::to<sstring>();
+        }
+
+        sstring format_str = option_with_args[2];
+        if (format_str == "text") {
+            session.options.output_format = output_format::text;
+            co_return "Output format set to TEXT.";
+        } else if (format_str == "json") {
+            session.options.output_format = output_format::json;
+            co_return "Output format set to JSON.";
+        } else {
+            throw bad_request_exception("Invalid OUTPUT FORMAT argument, expected TEXT or JSON.");
+        }
+    }
+
+    static future<sstring> handle_command(std::vector<sstring> option_with_args, session_manager& session_manager, session& session) {
+        using handler = std::function<future<sstring>(std::vector<sstring>, class session_manager&, class session&)>;
+        static std::unordered_map<sstring, handler> handlers {
+            {"consistency", command_handler::handle_consistency},
+            {"expand", command_handler::handle_expand},
+            {"help", command_handler::handle_help},
+            {"paging", command_handler::handle_paging},
+            {"serial", command_handler::handle_serial},
+            {"show", command_handler::handle_show},
+            {"tracing", command_handler::handle_tracing},
+            {"output", command_handler::handle_output},
+        };
+
+        auto it = handlers.find(option_with_args[0]);
+        if (it == handlers.end()) {
+            throw bad_request_exception(format("Unrecognized option: {}", option_with_args[0]));
+        }
+
+        const auto response = co_await it->second(option_with_args, session_manager, session);
+
+        session.refresh(session_manager.config().session_ttl);
+
+        co_return response;
+    }
 
 public:
     command_handler(request_control& request_control, session_manager& session_manager)
@@ -951,8 +1232,30 @@ public:
 
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
-        (void)_session_manager;
-        co_return std::move(rep);
+        const auto cookies = handle_cookies(_session_manager.config(), *req, *rep);
+        const session_id session_id = get_session_id(cookies);
+
+        const auto option = co_await util::read_entire_stream_contiguous(*req->content_stream) | std::views::transform([] (char c) { return std::tolower(c); }) | std::ranges::to<sstring>();
+
+        const auto components = std::views::split(option, ' ') | std::ranges::to<std::vector<sstring>>();
+
+        if (components.empty()) {
+            rep->set_status(reply::status_type::bad_request);
+            rep->write_body("text", "Empty option");
+        }
+
+        try {
+            const auto response = co_await _session_manager.invoke_on(session_id, [&components] (session_manager& session_manager, session& session) {
+                return handle_command(components, session_manager, session);
+            });
+            rep->set_status(reply::status_type::ok);
+            rep->write_body("text", std::move(response));
+            co_return std::move(rep);
+        } catch (bad_request_exception& e) {
+            rep->set_status(reply::status_type::bad_request);
+            rep->write_body("text", e.what());
+            co_return std::move(rep);
+        }
     }
 };
 
