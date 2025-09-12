@@ -303,31 +303,33 @@ future<> standard_role_manager::start() {
 
         auto handler = [this] () -> future<> {
             const bool legacy = legacy_mode(_qp);
-            if (legacy) {
+            auto ready = [this] () {
                 if (!_superuser_created_promise.available()) {
                     _superuser_created_promise.set_value();
                 }
+            };
+            if (legacy) {
                 co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
 
                 if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
                     if (legacy_metadata_exists()) {
                         log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                     }
+                    ready();
                     co_return;
                 }
 
                 if (legacy_metadata_exists()) {
                     co_await migrate_legacy_metadata();
+                    ready();
                     co_return;
                 }
                 co_await legacy_create_default_role_if_missing();
             }
             if (!legacy) {
                 co_await maybe_create_default_role_with_retries();
-                if (!_superuser_created_promise.available()) {
-                    _superuser_created_promise.set_value();
-                }
             }
+            ready();
         };
 
         _stopped = auth::do_after_system_ready(_as, handler);

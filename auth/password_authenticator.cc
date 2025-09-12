@@ -209,22 +209,25 @@ future<> password_authenticator::start() {
 
         _stopped = do_after_system_ready(_as, [this] {
             return async([this] {
-                if (legacy_mode(_qp)) {
-                    if (!_superuser_created_promise.available()) {
+                auto ready = [this] () {
+                if (!_superuser_created_promise.available()) {
                         _superuser_created_promise.set_value();
                     }
+                };
+                if (legacy_mode(_qp)) {
                     _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
                     if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
                         if (legacy_metadata_exists()) {
                             plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
                         }
-
+                        ready();
                         return;
                     }
 
                     if (legacy_metadata_exists()) {
                         migrate_legacy_metadata().get();
+                        ready();
                         return;
                     }
                     legacy_create_default_if_missing().get();
@@ -232,10 +235,8 @@ future<> password_authenticator::start() {
                 utils::get_local_injector().inject("password_authenticator_start_pause", utils::wait_for_message(5min)).get();
                 if (!legacy_mode(_qp)) {
                     maybe_create_default_password_with_retries().get();
-                    if (!_superuser_created_promise.available()) {
-                        _superuser_created_promise.set_value();
-                    }
                 }
+                ready();
             });
         });
 
