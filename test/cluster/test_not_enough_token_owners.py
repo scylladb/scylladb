@@ -61,11 +61,11 @@ async def test_not_enough_token_owners(manager: ManagerClient):
         # FIXME: Once scylladb/scylladb#16195 is fixed, we will have to replace the expected error message.
         # A similar change may be needed for remove_node below.
         logging.info(f'Trying to decommission {server_a} - one of the two token owners')
-        await manager.decommission_node(server_a.server_id, expected_error='Unable to find new replica for tablet')
+        await manager.decommission_node(server_a.server_id, expected_error='Decommission failed')
 
         logging.info(f'Stopping {server_a}')
         await manager.server_stop_gracefully(server_a.server_id)
 
         logging.info(f'Trying to remove {server_a}, one of the two token owners, by {server_b}')
         await manager.remove_node(server_b.server_id, server_a.server_id,
-                                  expected_error='Unable to find new replica for tablet')
+                                  expected_error='Removenode failed')
