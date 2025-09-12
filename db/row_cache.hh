@@ -133,6 +133,8 @@ public:
     bool is_dummy_entry() const noexcept { return _flags._dummy_entry; }
 };
 
+using cache_invalidation_filter = std::function<bool(const dht::decorated_key&)>;
+
 //
 // A data source which wraps another data source such that data obtained from the underlying data source
 // is cached in-memory in order to serve queries faster.
@@ -454,8 +456,8 @@ public:
     // completes will see all writes from the underlying
     // mutation source made prior to the call to invalidate().
     future<> invalidate(external_updater, const dht::decorated_key&);
-    future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range);
-    future<> invalidate(external_updater, dht::partition_range_vector&&);
+    future<> invalidate(external_updater, const dht::partition_range& = query::full_partition_range, cache_invalidation_filter filter = [] (const auto&) { return true; });
+    future<> invalidate(external_updater, dht::partition_range_vector&&, cache_invalidation_filter filter = [] (const auto&) { return true; });
 
     // Evicts entries from cache.
     //

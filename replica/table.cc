@@ -17,6 +17,7 @@
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 
+#include "dht/decorated_key.hh"
 #include "replica/database.hh"
 #include "replica/data_dictionary_impl.hh"
 #include "replica/compaction_group.hh"
@@ -1395,7 +1396,9 @@ table::do_add_sstable_and_update_cache(compaction_group& cg, sstables::shared_ss
         if (trigger_compaction) {
             try_trigger_compaction(cg);
         }
-    }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}));
+    }), dht::partition_range::make({sst->get_first_decorated_key(), true}, {sst->get_last_decorated_key(), true}), [sst, schema = _schema] (const dht::decorated_key& key) {
+        return sst->filter_has_key(sstables::key::from_partition_key(*schema, key.key()));
+    });
 }
 
 future<>
