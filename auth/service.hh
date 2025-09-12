@@ -134,7 +134,9 @@ public:
 
     future<> stop();
 
-    future<> ensure_superuser_is_created();
+    // Some startup is done in the background so this future resolves when
+    // service is fully ready.
+    future<> ready();
 
     void update_cache_config();
 

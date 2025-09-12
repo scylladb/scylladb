@@ -270,7 +270,7 @@ future<> service::stop() {
     });
 }
 
-future<> service::ensure_superuser_is_created() {
+future<> service::ready() {
     co_await _role_manager->ensure_superuser_is_created();
     co_await _authenticator->ensure_superuser_is_created();
 }
