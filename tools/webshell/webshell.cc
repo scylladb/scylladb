@@ -240,6 +240,7 @@ public:
 
 private:
     seastar::timer<lowres_clock> _ttl_timer;
+    semaphore _semaphore{1}; // enforce one concurrent request per session
 
 public:
     session(session_id session_id, service::client_state client_state, ::scheduling_group sg, sstring user_agent, bool is_https, noncopyable_function<void(::session_id)> expire_callback)
@@ -262,6 +263,8 @@ public:
     sstring auth_user() const {
         return client_state.user().value().name.value_or("anonymous");
     }
+
+    friend class session_manager;
 };
 
 class session_manager {
@@ -373,6 +376,23 @@ public:
         if (it != _sessions.end()) {
             _sessions.erase(it);
         }
+    }
+
+    template <std::invocable<session_manager&, session*> F>
+    auto invoke_on_unchecked(session_id session_id, bool is_https, F f) {
+        return smp::submit_to(session_id.shard(), [this, session_id, is_https, f = std::move(f)] () mutable
+                -> futurize_t<std::invoke_result_t<F, session_manager&, session*>> {
+            auto& local_this = _get_local_manager();
+
+            auto session_ptr = local_this.find_session(session_id, is_https);
+
+            std::optional<semaphore_units<>> units;
+            if (session_ptr) {
+                units.emplace(co_await get_units(session_ptr->_semaphore, 1));
+            }
+
+            co_return co_await futurize_invoke(std::move(f), local_this, session_ptr.get());
+        });
     }
 
     future<utils::chunked_vector<foreign_ptr<std::unique_ptr<client_data>>>> get_client_data() {
@@ -530,6 +550,14 @@ void set_session_cookies(reply& rep, const config& cfg, bool is_https, session_i
     // decodes them with decodeURIComponent().
     set_session_cookie(rep, cfg, is_https, "user_name", http::internal::url_encode(auth_user));
     set_session_cookie(rep, cfg, is_https, "cluster_name", http::internal::url_encode(cfg.cluster_name));
+}
+
+void erase_session_cookie(reply& rep, bool is_https, std::string_view key) {
+    // Repeat the attributes the cookie was set with: a browser only replaces a
+    // cookie when they match, so an expiry that dropped them could leave the
+    // original in place.
+    const bool http_only = std::ranges::find(http_only_session_cookies, key) != std::end(http_only_session_cookies);
+    rep.set_cookie(sstring(key), fmt::format("; {}Max-Age=0", session_cookie_attributes(is_https, http_only)));
 }
 
 std::pair<std::optional<session_id>, sstring> try_get_session_id(const std::unordered_map<sstring, sstring>& cookies) {
@@ -813,8 +841,34 @@ public:
     {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep, request_permit) override {
-        (void)_session_manager;
-        co_return std::move(rep);
+        const auto cookies = handle_cookies(_session_manager.config(), is_https(), *req, *rep);
+        auto [session_id_opt, _] = try_get_session_id(cookies);
+
+        if (!session_id_opt) {
+            co_return write_response(std::move(rep), reply::status_type::ok, "Already logged out");
+        }
+
+        // Run the rest of the request in the user's scheduling group.
+        if (const auto sg = co_await _session_manager.resolve_session(*session_id_opt, is_https())) {
+            co_await coroutine::switch_to(*sg);
+        }
+
+        const auto response = co_await _session_manager.invoke_on_unchecked(*session_id_opt, is_https(),
+                [] (session_manager& session_manager, session* session_ptr) {
+            if (session_ptr) {
+                session_manager.remove_session(session_ptr->id);
+                return "Successfully logged out";
+            }
+            return "Already logged out";
+        });
+
+        // Erase cookies, relies on well-behaved client.
+        // Not a problem because we dropped the session internally.
+        for (const auto& cookie_name : session_cookies) {
+            erase_session_cookie(*rep, is_https(), cookie_name);
+        }
+
+        co_return write_response(std::move(rep), reply::status_type::ok, std::move(response));
     }
 };
 
