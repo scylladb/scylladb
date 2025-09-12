@@ -17,6 +17,7 @@ enum class client_type {
     cql = 0,
     thrift,
     alternator,
+    webshell,
 };
 
 sstring to_string(client_type ct);
