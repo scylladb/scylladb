@@ -116,6 +116,7 @@ public:
 
 private:
     seastar::timer<lowres_clock> _ttl_timer;
+    semaphore _semaphore{1}; // enforce one concurrent request per session
 
 public:
     session(session_id session_id, service::client_state client_state, ::scheduling_group sg, sstring user_agent, bool is_https, noncopyable_function<void(::session_id)> expire_callback)
@@ -138,6 +139,8 @@ public:
     sstring auth_user() const {
         return client_state.user().value().name.value_or("anonymous");
     }
+
+    friend class session_manager;
 };
 
 class session_manager {
@@ -200,6 +203,27 @@ public:
         if (it != _sessions.end()) {
             _sessions.erase(it);
         }
+    }
+
+    template <std::invocable<session_manager&, session*> F>
+    auto invoke_on_unchecked(session_id session_id, F f) {
+        return smp::submit_to(session_id.shard(), [this, session_id, f = std::move(f)] () mutable
+                -> futurize_t<std::invoke_result_t<F, session_manager&, session*>> {
+            auto& local_this = _get_local_manager();
+
+            lw_shared_ptr<session> session_ptr;
+            auto it = local_this._sessions.find(session_id);
+            if (it != local_this._sessions.end()) {
+                session_ptr = it->second;
+            }
+
+            std::optional<semaphore_units<>> units;
+            if (session_ptr) {
+                units.emplace(co_await get_units(session_ptr->_semaphore, 1));
+            }
+
+            co_return co_await futurize_invoke(std::move(f), local_this, session_ptr.get());
+        });
     }
 
     utils::chunked_vector<client_data> get_client_data() {
@@ -292,6 +316,10 @@ void set_session_cookies(reply& rep, const config& cfg, session_id session_id, s
     set_session_cookie(rep, cfg, "session_id", session_id);
     set_session_cookie(rep, cfg, "user_name", auth_user);
     set_session_cookie(rep, cfg, "cluster_name", cfg.cluster_name);
+}
+
+void erase_session_cookie(reply& rep, std::string_view key) {
+    rep.set_cookie(sstring(key), "; Max-Age=0");
 }
 
 std::pair<std::optional<session_id>, sstring> try_get_session_id(const std::unordered_map<sstring, sstring>& cookies) {
@@ -514,8 +542,29 @@ public:
     {}
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
-        (void)_session_manager;
-        co_return std::move(rep);
+        const auto cookies = handle_cookies(_session_manager.config(), *req, *rep);
+        auto [session_id_opt, _] = try_get_session_id(cookies);
+
+        if (!session_id_opt) {
+            co_return write_response(std::move(rep), reply::status_type::ok, "Already logged out");
+        }
+
+        const auto response = co_await _session_manager.invoke_on_unchecked(*session_id_opt,
+                [] (session_manager& session_manager, session* session_ptr) {
+            if (session_ptr) {
+                session_manager.remove_session(session_ptr->id);
+                return "Successfully logged out";
+            }
+            return "Already logged out";
+        });
+
+        // Erase cookies, relies on well-behaved client.
+        // Not a problem because we dropped the session internally.
+        for (const auto& cookie_name : session_cookies) {
+            erase_session_cookie(*rep, cookie_name);
+        }
+
+        co_return write_response(std::move(rep), reply::status_type::ok, std::move(response));
     }
 };
 
