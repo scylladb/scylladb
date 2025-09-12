@@ -1321,6 +1321,141 @@ SEASTAR_TEST_CASE(test_continuity_flag_and_invalidate_race) {
     });
 }
 
+SEASTAR_TEST_CASE(test_cache_invalidation_with_filter) {
+    return seastar::async([] {
+        auto s = make_schema();
+        tests::reader_concurrency_semaphore_wrapper semaphore;
+
+        auto ring = make_ring(s, 5);
+        auto mt = make_memtable(s, ring);
+
+        cache_tracker tracker;
+
+        int secondary_calls_count = 0;
+
+        mutation_source secondary{[&mt, &secondary_calls_count] (schema_ptr s, reader_permit permit, const dht::partition_range& range,
+                const query::partition_slice& slice, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+            return make_counting_reader(mt->make_mutation_reader(s, std::move(permit), range, slice, std::move(trace), std::move(fwd)), secondary_calls_count);
+        }};
+        auto cache = make_lw_shared<row_cache>(s, snapshot_source_from_snapshot(secondary), tracker);
+
+        auto ds = mutation_source([cache] (schema_ptr s, reader_permit permit, const dht::partition_range& range,
+                const query::partition_slice& slice, tracing::trace_state_ptr trace, streamed_mutation::forwarding fwd) {
+            return cache->make_reader(s, std::move(permit), range, slice, std::move(trace), std::move(fwd));
+        });
+
+        auto test = [&] (const dht::partition_range& range, int expected_count) {
+            assert_that(ds.make_mutation_reader(s, semaphore.make_permit(), range))
+                .produces(slice(ring, range))
+                .produces_end_of_stream();
+            BOOST_CHECK_EQUAL(expected_count, secondary_calls_count);
+        };
+
+        // [beg] [end]
+        auto expected = ring.size() + 1;
+        test(query::full_partition_range, expected);
+        // [beg, 0, 1, 2, 3, 4, end]
+
+        cache->invalidate(row_cache::external_updater([] {}), query::full_partition_range, [] (const auto& _) { return true; }).get();
+        // [beg] [end]
+
+        expected += ring.size() + 1;
+        test(query::full_partition_range, expected);
+        // [beg, 0, 1, 2, 3, 4, end]
+
+        cache->invalidate(row_cache::external_updater([] {}), dht::partition_range::make(
+            {ring[1].decorated_key(), true},
+            {ring[2].decorated_key(), true}), [] (const auto& _) { return true; }).get();
+        // [beg, 0] [3, 4, end]
+
+        expected += 3;
+        test(query::full_partition_range, expected);
+        // [beg, 0, 1, 2, 3, 4, end]
+
+        cache->invalidate(row_cache::external_updater([] {}), dht::partition_range::make(
+            {ring[0].decorated_key(), true},
+            {ring[1].decorated_key(), true}), [] (const auto& _) { return true; }).get();
+        // [beg] [2, 3, 4, end]
+        cache->invalidate(row_cache::external_updater([] {}), dht::partition_range::make_singular(ring[3].decorated_key()), [] (const auto& _) { return true; }).get();
+        // [beg] [2] [4, end]
+
+        expected += 5;
+        test(query::full_partition_range, expected);
+        // [beg, 0, 1, 2, 3, 4, end]
+
+        cache->invalidate(row_cache::external_updater([] {}), query::full_partition_range, [] (const auto& _) { return false; }).get();
+        // [beg] [0] [1] [2] [3] [4] [end]
+
+        test(dht::partition_range::make_singular(ring[2].decorated_key()), expected);
+        // [beg] [0] [1] [2] [3] [4] [end]
+
+        expected += 1;
+        test(dht::partition_range::make(
+            {ring[0].decorated_key(), true},
+            {ring[1].decorated_key(), true}), expected);
+        // [beg] [0, 1] [2] [3] [4] [end]
+
+        expected += 2;
+        test(dht::partition_range::make(
+            {ring[2].decorated_key(), true},
+            {ring[4].decorated_key(), false}), expected);
+        // [beg] [0, 1] [2, 3, 4] [end]
+
+        cache->invalidate(row_cache::external_updater([] {}), dht::partition_range::make(
+            {ring[2].decorated_key(), true},
+            {ring[3].decorated_key(), false}), [] (const auto& _) { return false; }).get();
+        // [beg] [0, 1] [2] [3, 4] [end]
+
+        expected += 4;
+        test(query::full_partition_range, expected);
+        // [beg, 0, 1, 2, 3, 4, end]
+
+        cache->invalidate(row_cache::external_updater([] {}), query::full_partition_range, [&] (const auto& key) { return !key.equal(*s, ring[2].decorated_key()); }).get();
+        // [beg] [2] [end]
+
+        test(dht::partition_range::make_singular(ring[2].decorated_key()), expected);
+        // [beg] [2] [end]
+
+        expected += 2;
+        test(dht::partition_range::make(
+            {ring[1].decorated_key(), true},
+            {ring[2].decorated_key(), true}), expected);
+        // [beg] [1, 2] [end]
+
+        expected += ring.size();
+        test(query::full_partition_range, expected);
+        // [beg, 0, 1, 2, 3, 4, end]
+
+        cache->invalidate(row_cache::external_updater([] {}), query::full_partition_range, [&] (const auto& key) { return key.equal(*s, ring[2].decorated_key()); }).get();
+        // [beg] [0] [1] [3] [4] [end]
+
+        test(dht::partition_range::make_singular(ring[3].decorated_key()), expected);
+        // [beg] [0] [1] [3] [4] [end]
+
+        expected += 1;
+        test(dht::partition_range::make_singular(ring[2].decorated_key()), expected);
+        // [beg] [0] [1] [2] [3] [4] [end]
+
+        expected += ring.size() + 1;
+        test(query::full_partition_range, expected);
+        // [beg, 0, 1, 2, 3, 4, end]
+
+        cache->invalidate(row_cache::external_updater([] {}), query::full_partition_range, [&] (const auto& key) { return !key.equal(*s, ring[2].decorated_key()) && !key.equal(*s, ring[3].decorated_key()); }).get();
+        // [beg] [2] [3] [end]
+
+        expected += 1;
+        test(dht::partition_range::make(
+            {ring[2].decorated_key(), true},
+            {ring[3].decorated_key(), true}), expected);
+        // [beg] [2, 3] [end]
+
+        test(dht::partition_range::make(
+            {ring[2].decorated_key(), true},
+            {ring[3].decorated_key(), true}), expected);
+        // [beg] [2, 3] [end]
+    });
+}
+
 SEASTAR_TEST_CASE(test_cache_population_and_update_race) {
     return seastar::async([] {
         auto s = make_schema();

@@ -1214,13 +1214,13 @@ future<> row_cache::invalidate(external_updater eu, const dht::decorated_key& dk
     return invalidate(std::move(eu), dht::partition_range::make_singular(dk));
 }
 
-future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range) {
-    return invalidate(std::move(eu), dht::partition_range_vector({range}));
+future<> row_cache::invalidate(external_updater eu, const dht::partition_range& range, cache_invalidation_filter filter) {
+    return invalidate(std::move(eu), dht::partition_range_vector({range}), std::move(filter));
 }
 
-future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&& ranges) {
-    return do_update(std::move(eu), [this, ranges = std::move(ranges)] {
-        return seastar::async([this, ranges = std::move(ranges)] {
+future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&& ranges, cache_invalidation_filter filter) {
+    return do_update(std::move(eu), [this, ranges = std::move(ranges), filter = std::move(filter)] mutable {
+        return seastar::async([this, ranges = std::move(ranges), filter = std::move(filter)] {
             auto on_failure = defer([this] () noexcept {
                 this->clear_now();
                 _prev_snapshot_pos = {};
@@ -1238,6 +1238,7 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                         auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
                         return with_allocator(_tracker.allocator(), [&] {
                             while (it != end) {
+                              if (filter(it->key())) {
                                 it = it.erase_and_dispose(dht::raw_token_less_comparator{},
                                     [&] (cache_entry* p) mutable noexcept {
                                         _tracker.on_partition_erase();
@@ -1251,6 +1252,10 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                                     });
                                     break;
                                 }
+                              } else {
+                                _tracker.clear_continuity(*it);
+                                ++it;
+                              }
                             }
                             SCYLLA_ASSERT(it != _partitions.end());
                             _tracker.clear_continuity(*it);
