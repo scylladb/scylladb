@@ -1,5 +1,6 @@
 * :doc:`Nodetool Reference</operating-scylla/nodetool>` - ScyllaDB commands for managing ScyllaDB node or cluster using the command-line nodetool utility.
 * :doc:`CQLSh - the CQL shell</cql/cqlsh>`.
+* :doc:`ScyllaDB Web Shell</operating-scylla/admin-tools/webshell/>`.
 * :doc:`Admin REST API - ScyllaDB Node Admin API</operating-scylla/rest>`.
 * :doc:`Tracing </using-scylla/tracing>` - a ScyllaDB tool for debugging and analyzing internal flows in the server. 
 * :doc:`SSTableloader </operating-scylla/admin-tools/sstableloader>` - Bulk load the sstables found in the directory to a ScyllaDB cluster
