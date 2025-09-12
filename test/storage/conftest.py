@@ -29,6 +29,11 @@ def volumes_factory(pytestconfig, build_mode, request) -> Generator[dict[pathlib
 
     @contextmanager
     def wrapper(topology_sizes: dict[str, dict[str, list[str]]]) -> Generator[dict[pathlib.Path, tuple[str, str]], None, None]:
+        """
+        Create a set of temporary directories for the given topology sizes.
+
+        Returns a dictionary mapping the directory paths to their datacenter and rack.
+        """
         try:
             id = 0
             for dc, racks in topology_sizes.items():
@@ -58,7 +63,7 @@ def volumes_factory(pytestconfig, build_mode, request) -> Generator[dict[pathlib
     preserve_data = test_failed or request.config.getoption("save_log_on_success")
 
     if preserve_data:
-        for id, path in enumerate(list(topology.keys())):
+        for id, path in enumerate(topology.keys()):
             shutil.copytree(path, base.parent.parent / f"scylla-{hash}-{id}", ignore=shutil.ignore_patterns('commitlog*'))
 
 
