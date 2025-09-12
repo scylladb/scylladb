@@ -22,6 +22,7 @@
 #include "service/client_state.hh"
 #include "tools/webshell/webshell.hh"
 #include "utils/observable.hh"
+#include "utils/rjson.hh"
 
 using namespace httpd;
 using request = http::request;
@@ -309,6 +310,23 @@ public:
     }
 };
 
+std::unique_ptr<reply> write_response(std::unique_ptr<reply> rep, reply::status_type status, sstring response) {
+    rep->set_status(status);
+    rep->write_body("json", [response = std::move(response)] (output_stream<char>&& out_) -> future<> {
+        auto out = std::move(out_);
+
+        co_await out.write("{\"response\": ");
+
+        co_await out.write(rjson::quote_json_string(response));
+
+        co_await out.write("}");
+
+        co_await out.flush();
+        co_await out.close();
+    });
+    return rep;
+}
+
 class request_control {
     named_gate _gate;
     named_semaphore _semaphore;
@@ -334,6 +352,177 @@ public:
     future<> stop() noexcept {
         _semaphore.broken();
         return _gate.close();
+    }
+};
+
+class gated_handler : public handler_base {
+    const char* _name;
+    request_control& _request_control;
+    // Whether this handler belongs to the HTTPS listener. Each listener gets its
+    // own set of handlers (see server::set_routes()), so this is fixed per
+    // handler rather than being a property of the request; the cookie code needs
+    // it to decide whether to mark session cookies Secure.
+    const bool _is_https;
+public:
+    explicit gated_handler(const char* name, request_control& request_control, bool is_https)
+        : _name(name), _request_control(request_control), _is_https(is_https)
+    {}
+
+    bool is_https() const noexcept {
+        return _is_https;
+    }
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) = 0;
+    virtual future<std::unique_ptr<reply>> handle(const sstring& path_, std::unique_ptr<request> req, std::unique_ptr<reply> rep) final override {
+        const auto path = path_;
+        const auto method = req->_method;
+        wslog.trace("handler {}: start request {} {}", _name, method, path);
+
+        if (_request_control.too_many_waiters()) {
+            wslog.debug("handler {}: dropping {} {}: too many requests", _name, method, path);
+            co_return write_response(std::move(rep), reply::status_type::service_unavailable, "Too many requests, try again later");
+        }
+
+        try {
+            auto ret = co_await _request_control.run([this, &path, req = std::move(req), rep = std::move(rep)] () mutable {
+                return do_handle(path, std::move(req), std::move(rep));
+            });
+            wslog.trace("handler {}: finish request {} {} {}", _name, method, path, ret->_status);
+            co_return ret;
+        } catch (gate_closed_exception&) {
+            throw base_exception("Server shutting down", reply::status_type::service_unavailable);
+        } catch (broken_semaphore&) {
+            throw base_exception("Server shutting down", reply::status_type::service_unavailable);
+        } catch (base_exception& e) {
+            // Prevent the fall-through to the default handler below, which converts unknown exceptions to 500 Internal Server Error
+            // Exceptions derived from base_exception already have a proper status code set, so re-throw them as is.
+            wslog.trace("handler {}: finish request {} {} {}", _name, method, path, e.status());
+            throw;
+        } catch (...) {
+            wslog.trace("handler {}: finish request {} {} {}", _name, method, path, reply::status_type::internal_server_error);
+            throw;
+        }
+    }
+};
+
+class resource_handler : public gated_handler {
+public:
+    explicit resource_handler(request_control& request_control, bool is_https)
+        : gated_handler("resource", request_control, is_https)
+    {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        co_return std::move(rep);
+    }
+};
+
+class login_handler : public gated_handler {
+    session_manager& _session_manager;
+public:
+    login_handler(request_control& request_control, session_manager& session_manager, bool is_https)
+        : gated_handler("login", request_control, is_https), _session_manager(session_manager)
+    {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+class logout_handler : public gated_handler {
+    session_manager& _session_manager;
+public:
+    logout_handler(request_control& request_control, session_manager& session_manager, bool is_https)
+        : gated_handler("logout", request_control, is_https), _session_manager(session_manager)
+    {}
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+class query_handler : public gated_handler {
+    session_manager& _session_manager;
+
+public:
+    query_handler(request_control& request_control, session_manager& session_manager, bool is_https)
+        : gated_handler("query", request_control, is_https)
+        , _session_manager(session_manager)
+    { }
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+class command_handler : public gated_handler {
+    session_manager& _session_manager;
+
+public:
+    command_handler(request_control& request_control, session_manager& session_manager, bool is_https)
+        : gated_handler("command", request_control, is_https)
+        , _session_manager(session_manager)
+    { }
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+class option_handler : public gated_handler {
+    session_manager& _session_manager;
+
+public:
+    option_handler(request_control& request_control, session_manager& session_manager, bool is_https)
+        : gated_handler("option", request_control, is_https)
+        , _session_manager(session_manager)
+    { }
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+class option_query_handler : public gated_handler {
+    session_manager& _session_manager;
+
+public:
+    option_query_handler(request_control& request_control, session_manager& session_manager, bool is_https)
+        : gated_handler("option-query", request_control, is_https)
+        , _session_manager(session_manager)
+    { }
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        (void)_session_manager;
+        co_return std::move(rep);
+    }
+};
+
+/// Answer a request that named a real endpoint with the wrong method.
+///
+/// The endpoints are all POST. Without this, a GET to one of them would fall
+/// through to the resource handler, be looked up as a file, and come back as a
+/// bodyless 404 - the one way an API request could get an answer that is not
+/// JSON. Other methods are caught by the resource handler itself, which cannot
+/// tell an endpoint from a misspelled path.
+class method_not_allowed_handler : public gated_handler {
+public:
+    explicit method_not_allowed_handler(request_control& request_control, bool is_https)
+        : gated_handler("method-not-allowed", request_control, is_https)
+    {}
+
+protected:
+    virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        rep->add_header("Allow", "POST");
+        co_return write_response(std::move(rep), reply::status_type::method_not_allowed,
+                format("{} is not allowed on {}, use POST", req->_method, path));
     }
 };
 
@@ -386,6 +575,39 @@ public:
 };
 
 void server::set_routes(routes& r, bool is_https) {
+    r.add_default_handler(new resource_handler(_request_control, is_https));
+    r.put(operation_type::POST, "/login", new login_handler(_request_control, _session_manager, is_https));
+    r.put(operation_type::POST, "/logout", new logout_handler(_request_control, _session_manager, is_https));
+    r.put(operation_type::POST, "/query", new query_handler(_request_control, _session_manager, is_https));
+    r.put(operation_type::POST, "/command", new command_handler(_request_control, _session_manager, is_https));
+    r.put(operation_type::POST, "/option", new option_handler(_request_control, _session_manager, is_https));
+    r.put(operation_type::GET, "/option", new option_query_handler(_request_control, _session_manager, is_https));
+
+    // A GET to an endpoint would otherwise be indistinguishable from a request
+    // for a file and answered with a bodyless 404. /option is left out, as GET
+    // is how its options are read. Every other method lands in the resource
+    // handler, which answers with JSON.
+    for (const auto& endpoint : {"/login", "/logout", "/query", "/command"}) {
+        r.put(operation_type::GET, endpoint, new method_not_allowed_handler(_request_control, is_https));
+    }
+
+    r.register_exeption_handler([] (std::exception_ptr ex) {
+        wslog.trace("handle exception: {}", ex);
+
+        auto handle_exception = [] (reply::status_type status, sstring msg) {
+            return write_response(std::make_unique<reply>(), status, std::move(msg));
+        };
+
+        try {
+            std::rethrow_exception(ex);
+        } catch (base_exception& e) {
+            // Prevent the fall-through to the default handler below, which converts unknown exceptions to 500 Internal Server Error
+            // Exceptions derived from base_exception already have a proper status code set, so re-throw them as is.
+            return handle_exception(e.status(), e.str());
+        } catch (...) {
+            return handle_exception(reply::status_type::internal_server_error, fmt::to_string(std::current_exception()));
+        }
+    });
 }
 
 server::server(config cfg, scheduling_group sg, cql3::query_processor& qp, auth::service& auth_service, qos::service_level_controller& sl_controller)
