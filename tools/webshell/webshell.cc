@@ -22,6 +22,7 @@
 #include "cql3/query_processor.hh"
 #include "cql3/query_result_printer.hh"
 #include "db/config.hh"
+#include "resources/tools/webshell/webshell.resources.hh"
 #include "service/client_state.hh"
 #include "tools/webshell/webshell.hh"
 #include "utils/base64.hh"
@@ -903,12 +904,111 @@ public:
 };
 
 class resource_handler : public gated_handler {
+    // The manifest a single request looks its resource up in.
+    //
+    // An external manifest is re-read on every request, so that a developer can
+    // edit the resources without restarting the server. The response body is
+    // streamed after do_handle() has returned, by which time another request
+    // may already have loaded a replacement, so the body has to keep the
+    // manifest it was made from alive - hence `owner`. The built-in manifest
+    // has static storage duration and needs no owner.
+    struct manifest {
+        lw_shared_ptr<const std::vector<resources::resource>> owner;
+        std::span<const resources::resource> entries;
+    };
+
+    const config& _config;
 public:
-    explicit resource_handler(request_control& request_control, bool is_https)
+    explicit resource_handler(request_control& request_control, const config& cfg, bool is_https)
         : gated_handler("resource", request_control, is_https)
+        , _config(cfg)
     {}
+
+    future<manifest> load_manifest() {
+        if (_config.webshell_resource_manifest_path.empty()) {
+            co_return manifest{{}, resources::webshell_resources_manifest};
+        }
+        try {
+            auto storage = make_lw_shared<const std::vector<resources::resource>>(
+                    co_await resources::load_resource_manifest(_config.webshell_resource_manifest_path));
+            co_return manifest{storage, std::span(*storage)};
+        } catch (...) {
+            throw std::runtime_error(format("Failed to load resource manifest from {}: {}", _config.webshell_resource_manifest_path, std::current_exception()));
+        }
+    }
 protected:
     virtual future<std::unique_ptr<reply>> do_handle(const sstring& path, std::unique_ptr<request> req, std::unique_ptr<reply> rep) override {
+        const auto method = httpd::str2type(req->_method);
+
+        // Being the default handler, this also catches every request that missed
+        // all of the endpoints - a POST to a misspelled path, for one. Those are
+        // API requests rather than requests for a file, so they are answered
+        // with the same JSON error body as any endpoint would produce. HEAD is
+        // left out of that, since a HEAD response must not carry a body.
+        if (method != operation_type::GET) {
+            if (method == operation_type::HEAD) {
+                rep->set_status(reply::status_type::not_found);
+                co_return std::move(rep);
+            }
+            co_return write_response(std::move(rep), reply::status_type::not_found,
+                    format("No such endpoint: {} {}", req->_method, path));
+        }
+
+        const auto manifest = co_await load_manifest();
+
+        const sstring file_path = path == "/" ? "webshell.html" : path.substr(1); // Remove leading slash
+
+        auto resource_it = std::ranges::find_if(manifest.entries, [&file_path] (const resources::resource& r) { return r.name == file_path; });
+        if (resource_it == std::end(manifest.entries)) {
+            rep->set_status(reply::status_type::not_found);
+            co_return std::move(rep);
+        }
+
+        auto& resource = *resource_it;
+
+        if (auto file_path = std::get_if<std::filesystem::path>(&resource.content); file_path) {
+            const auto path = _config.webshell_resource_manifest_path.parent_path() / std::get<std::filesystem::path>(resource.content);
+            if (!co_await file_accessible(path.native(), access_flags::exists | access_flags::read)) {
+                rep->set_status(reply::status_type::not_found);
+                rep->write_body("text", "Resource file exists in manifest but either doesn't exists or not readable on disk");
+                co_return std::move(rep);
+            }
+        }
+
+        if (resource.compressed) {
+            rep->add_header("Content-Encoding", "gzip");
+        }
+
+        rep->set_status(reply::status_type::ok);
+        // The manifest owner is captured so that `resource` stays alive for as
+        // long as the body is being streamed; see resource_handler::manifest.
+        rep->write_body("text", [this, manifest_owner = manifest.owner, &resource] (output_stream<char>&& out_) -> future<> {
+            auto out = std::move(out_);
+
+            std::exception_ptr ex;
+            try {
+                if (auto content_view = std::get_if<bytes_view>(&resource.content); content_view) {
+                    co_await out.write(reinterpret_cast<const char*>(content_view->data()), content_view->size());
+                } else {
+                    const auto path = _config.webshell_resource_manifest_path.parent_path() / std::get<std::filesystem::path>(resource.content);
+                    auto f = co_await open_file_dma(path.native(), open_flags::ro);
+                    auto in = make_file_input_stream(f);
+                    co_await copy(in, out);
+                    co_await in.close();
+                }
+                co_await out.flush();
+            } catch (...) {
+                ex = std::current_exception();
+            }
+
+            co_await out.close();
+
+            if (ex) {
+                co_await coroutine::return_exception_ptr(std::move(ex));
+            }
+        });
+        rep->set_content_type(resource.content_type);
+
         co_return std::move(rep);
     }
 };
@@ -1881,7 +1981,7 @@ public:
 };
 
 void server::set_routes(routes& r, bool is_https) {
-    r.add_default_handler(new resource_handler(_request_control, is_https));
+    r.add_default_handler(new resource_handler(_request_control, _config, is_https));
     r.put(operation_type::POST, "/login", new login_handler(_request_control, _session_manager, is_https));
     r.put(operation_type::POST, "/logout", new logout_handler(_request_control, _session_manager, is_https));
     r.put(operation_type::POST, "/query", new query_handler(_request_control, _session_manager, is_https));
