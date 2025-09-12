@@ -1,0 +1,403 @@
+/*
+ * Copyright (C) 2026-present ScyllaDB
+ *
+ * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.1
+ */
+
+/*
+ * The whole interface is laid out on the same character grid as the query
+ * output the server sends us: every horizontal measure is expressed in `ch`,
+ * so the chrome lines up with the columns of the ASCII tables inside it.
+ *
+ * The left gutter is the one place where the interface talks about itself:
+ * it carries the block kind in the scrollback (error, notice) and the busy
+ * indicator while a query is running. Everything else stays quiet.
+ */
+
+:root {
+    color-scheme: light dark;
+
+    --font: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace;
+    --fs: 13.5px;
+    --fs-chrome: 11px;
+    --lh: 1.55;
+
+    /* Width of the self-referential left gutter, in characters. */
+    --gutter: 3ch;
+    /* Horizontal breathing room, also in characters. */
+    --pad: 2ch;
+
+    /* Colours follow the ScyllaDB documentation site: the dark scheme below is
+     * taken from it directly, and this light one is derived from the same hues,
+     * since the site was only sampled in dark mode. The navy surfaces and the
+     * cyan accent are the brand's; the neutrals are tinted towards the same
+     * navy rather than being pure greys, which is what keeps the two looking
+     * related. Every pair a user has to read clears WCAG AA (4.5:1 for text,
+     * 3:1 for the gutter marks), which is what fixes the accent's lightness. */
+    --bg: #f7f9fb;
+    --bg-chrome: #eaeef4;
+    --fg: #1e2031;
+    --fg-dim: #636a88;
+    --fg-faint: #8087a3;
+    --accent: #157584;
+    --error: #c03a30;
+    --rule: #d6dce8;
+    --selection: #cfe9ef;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        /* --bg, --bg-chrome and --fg are the site's page background, its raised
+         * surfaces (header bar, cards) and its body text. --accent is the cyan
+         * of the mascot and the "Ask AI" button. */
+        --bg: #23263b;
+        --bg-chrome: #2f324b;
+        --fg: #d8e5eb;
+        --fg-dim: #98a3b8;
+        --fg-faint: #6b7490;
+        --accent: #57d1e5;
+        --error: #f4796b;
+        --rule: #484d63;
+        --selection: #2a4a5c;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    display: grid;
+    /* Explicit column: an implicit one is sized to its widest content, so a
+     * bar or a result wider than the viewport would stretch the page itself
+     * instead of scrolling inside its own box. */
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: 100dvh;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font);
+    font-size: var(--fs);
+    line-height: var(--lh);
+    font-variant-ligatures: none;
+    -webkit-text-size-adjust: 100%;
+}
+
+::selection {
+    background: var(--selection);
+}
+
+/* ---------------------------------------------------------------- chrome -- */
+
+.bar {
+    display: flex;
+    align-items: center;
+    gap: var(--pad);
+    padding: 0 var(--pad);
+    min-height: 2.6em;
+    background: var(--bg-chrome);
+    font-size: var(--fs-chrome);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--fg-dim);
+    user-select: none;
+}
+
+.bar--top {
+    border-bottom: 1px solid var(--rule);
+}
+
+.bar--status {
+    border-top: 1px solid var(--rule);
+    gap: 0;
+}
+
+/* The options scroll inside the bar rather than the bar itself, so the fade
+ * below can be applied without eating the bar's own background and rule.
+ * Filling the width keeps the fade over empty space until it is needed. */
+.opts {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* With more options than fit, the last value would otherwise end at the
+     * edge looking accidentally cut off. The fade is the only hint that the
+     * bar scrolls; when everything fits it lands on empty space and cannot be
+     * seen. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 2ch), transparent);
+}
+
+.opts::-webkit-scrollbar {
+    display: none;
+}
+
+.brand {
+    color: var(--fg);
+    font-weight: 600;
+}
+
+.identity {
+    margin-left: auto;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.signout {
+    flex: none;
+    padding: 0.35em 1ch;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    background: transparent;
+    color: var(--fg-dim);
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+}
+
+.signout:hover {
+    color: var(--fg);
+    border-color: var(--fg-faint);
+}
+
+.signout[hidden] {
+    display: none;
+}
+
+/* Session options. A value that differs from the server default is worth
+ * noticing -- tracing and expanded output change what every later query
+ * costs and returns -- so deviation, and only deviation, gets the accent. */
+.opt {
+    flex: none;
+    white-space: nowrap;
+}
+
+.opt + .opt::before {
+    content: "·";
+    color: var(--fg-faint);
+    padding: 0 1ch;
+}
+
+.opt > b {
+    color: var(--fg);
+    font-weight: 500;
+}
+
+.opt--changed > b {
+    color: var(--accent);
+}
+
+/* ------------------------------------------------------------- terminal -- */
+
+#screen {
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 1em 0 1.4em;
+    cursor: text;
+}
+
+/* The terminal is only focusable so that keys have a target while the input
+ * row is hidden; it is not a control, and a ring around the whole scrollback
+ * would read as one. The prompt is the affordance. */
+#screen:focus,
+#screen:focus-visible {
+    outline: none;
+}
+
+/* Every line of the shell -- output, echoed input, the live prompt -- uses
+ * this one grid, so the prompt you type at sits in the same columns as the
+ * prompt that scrolled past. */
+.block {
+    display: grid;
+    grid-template-columns: var(--gutter) auto minmax(0, 1fr);
+    padding: 0 var(--pad);
+}
+
+.mark {
+    grid-column: 1;
+    color: var(--fg-faint);
+    user-select: none;
+}
+
+.prompt {
+    grid-column: 2;
+    white-space: pre;
+    user-select: none;
+}
+
+.prompt-user {
+    color: var(--accent);
+}
+
+.prompt-host {
+    color: var(--fg-dim);
+}
+
+/* Scrollbars are chrome the rest of the interface does without. Left at the
+ * platform default a wide result puts a thick, bright bar across the terminal,
+ * so they are kept thin and in the palette. */
+#screen,
+.body {
+    scrollbar-width: thin;
+    scrollbar-color: var(--fg-faint) transparent;
+}
+
+/* Body spans the prompt column too when there is no prompt, so plain output
+ * starts at the same place the prompt does. */
+.body {
+    grid-column: 2 / -1;
+    white-space: pre;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+}
+
+/* Query results are laid out in columns by the server and must keep their
+ * line breaks exactly, scrolling sideways when they are too wide. Everything
+ * else on screen is prose or the user's own input, which should wrap -- the
+ * echo in particular has to wrap the same way the input above it does, or the
+ * line jumps when it is submitted. */
+.block--banner .body,
+.block--busy .body,
+.block--echo .body,
+.block--error .body,
+.block--more .body,
+.block--notice .body {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-x: visible;
+}
+
+.prompt + .body,
+.prompt + .input {
+    grid-column: 3;
+}
+
+.block--error .mark {
+    color: var(--error);
+}
+
+.block--error .body {
+    color: var(--error);
+}
+
+.block--notice .body {
+    color: var(--fg-dim);
+}
+
+.block--echo .body {
+    color: var(--fg);
+}
+
+.block--banner .body {
+    color: var(--fg-dim);
+}
+
+.block--banner b {
+    color: var(--fg);
+    font-weight: 600;
+}
+
+.block--warn .body {
+    color: var(--fg);
+}
+
+.block--warn .mark {
+    color: var(--error);
+}
+
+.body a {
+    color: var(--accent);
+}
+
+/* The "-- more --" affordance for paged results. */
+.block--more .body {
+    color: var(--accent);
+}
+
+.block--busy .mark {
+    color: var(--accent);
+    animation: pulse 1.1s ease-in-out infinite;
+}
+
+.block--busy .body {
+    color: var(--fg-faint);
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .block--busy .mark {
+        animation: none;
+    }
+}
+
+/* ---------------------------------------------------------------- input -- */
+
+.input {
+    grid-column: 3;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    line-height: inherit;
+    letter-spacing: inherit;
+    resize: none;
+    overflow: hidden;
+    white-space: pre-wrap;
+    word-break: break-word;
+    caret-color: var(--accent);
+}
+
+.input[hidden] {
+    display: none;
+}
+
+#row[hidden] {
+    display: none;
+}
+
+/* The password field is a real password input: the browser handles every
+ * keyboard layout, paste, and password manager for us. */
+#password {
+    white-space: pre;
+}
+
+/* Keyboard focus has to stay visible on the only thing that is focusable
+ * besides the input itself. */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.input:focus-visible {
+    outline: none;
+}
+
+@media (max-width: 640px) {
+    :root {
+        --fs: 12.5px;
+        --pad: 1ch;
+    }
+
+    .brand span {
+        display: none;
+    }
+}
