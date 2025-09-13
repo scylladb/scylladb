@@ -55,7 +55,7 @@ class bti_partition_index_writer {
     std::unique_ptr<impl> _impl;
 private:
     friend class optimized_optional<bti_partition_index_writer>;
-    bti_partition_index_writer();
+    bti_partition_index_writer() noexcept;
 public:
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
@@ -63,6 +63,8 @@ public:
     // because `finish()` writes a footer which is used by the reader
     // to find the root of the trie.
     explicit bti_partition_index_writer(sstables::file_writer&);
+    bti_partition_index_writer(bti_partition_index_writer&&) noexcept;
+    bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
     ~bti_partition_index_writer();
     // Add a new partition key to the index.
     void add(const schema&, dht::decorated_key, int64_t data_or_rowsdb_file_pos);
@@ -77,6 +79,7 @@ struct bti_partitions_db_footer {
     sstables::key last_key;
     uint64_t partition_count;
     uint64_t trie_root_position;
+    operator bool() const { return bool(_impl); }
 };
 
 future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, sstable_version_types v, const seastar::file& f, uint64_t file_size);
@@ -90,13 +93,15 @@ class bti_row_index_writer {
     std::unique_ptr<impl> _impl;
 private:
     friend class optimized_optional<bti_row_index_writer>;
-    bti_row_index_writer();
+    bti_row_index_writer() noexcept;
 public:
     ~bti_row_index_writer();
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
     // and it can be extended later.
     explicit bti_row_index_writer(sstables::file_writer&);
+    bti_row_index_writer(bti_row_index_writer&&) noexcept;
+    bti_row_index_writer& operator=(bti_row_index_writer&&) noexcept;
     // Add a new row index entry.
     // Must be called in ascending order.
     // (`first_ck` must be strictly greater than the previous `last_ck`).
@@ -127,6 +132,7 @@ public:
         int64_t partition_data_end,
         const sstables::key&,
         const sstables::deletion_time& partition_tombstone);
+    operator bool() const { return bool(_impl); }
 };
 
 // Creates a BTI index reader over the Partitions.db file and the matching Rows.db file.
