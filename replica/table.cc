@@ -4517,4 +4517,27 @@ dht::shard_replica_set table::shard_for_writes(dht::token t) const {
                 : dht::shard_replica_set{dht::static_shard_of(*_schema, t)}; // for tests.
 }
 
+future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const {
+    // FIXME: use a better estimation for the set than a simple sum of individual estimations for each sstable.
+    //
+    // If sstables can be grouped by token range,
+    // and tokens within each sstable are uniformly distributed
+    // over the token range, (that's the usual case, and it's always
+    // the case with tablets), then we could use an alternative calculation.
+    //
+    // The result would be the sum of sub-results for each compaction group.
+    // To get an estimate for a compaction group,
+    // we could first use the sstable cardinality sketches (hyperloglog)
+    // to get a decent post-compaction estimate of total cardinality.
+    // And then, we could multiply the total estimate by the fraction of the group's
+    // range which is covered by `tr`.
+    auto sstables = select_sstables(dht::to_partition_range(tr));
+    uint64_t partition_count = 0;
+    co_await seastar::max_concurrent_for_each(sstables, 10, [&partition_count, &tr] (sstables::shared_sstable sst) -> future<> {
+        partition_count += sst->estimated_keys_for_range(tr);
+        co_return;
+    });
+    co_return partition_count;
+}
+
 } // namespace replica
