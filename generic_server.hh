@@ -60,6 +60,10 @@ protected:
     seastar::named_gate _pending_requests_gate;
     seastar::gate::holder _hold_server;
 
+    bool _ssl_enabled = false;
+    std::optional<sstring> _ssl_cipher_suite = std::nullopt;
+    std::optional<sstring> _ssl_protocol = std::nullopt;;
+
 private:
     future<> process_until_tenant_switch();
     bool shutdown_input();
@@ -144,7 +148,7 @@ public:
         std::function<server&()> get_shard_instance = {}
         );
 
-    future<> do_accepts(int which, bool keepalive, socket_address server_addr);
+    future<> do_accepts(int which, bool keepalive, socket_address server_addr, bool is_tls);
 
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) = 0;
