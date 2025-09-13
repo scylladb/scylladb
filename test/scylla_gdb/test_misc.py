@@ -212,6 +212,9 @@ def test_read_stats(gdb, sstable):
 def test_get_config_value(gdb):
     scylla(gdb, f'get-config-value compaction_static_shares')
 
+def test_prepared_statements(gdb):
+    scylla(gdb, f'prepared-statements')
+
 @pytest.mark.without_scylla
 def test_run_without_scylla(scylla_gdb):
     # just try to load the scylla-gdb module without attaching to scylla.
