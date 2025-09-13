@@ -4551,4 +4551,21 @@ dht::shard_replica_set table::shard_for_writes(dht::token t) const {
                 : dht::shard_replica_set{dht::static_shard_of(*_schema, t)}; // for tests.
 }
 
+future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const {
+    // FIXME: use a better estimation for the set than a simple sum of estimations for individual sstables.
+    //
+    // If we assume that sstables cover a continuous token range (always the case with tablets?)
+    // then we can use sstable cardinality sketches (hyperloglog) to get a more accurate
+    // total keys estimate for each tablet.
+    // Then we can sum the results weighted by the fraction of the tablet's token range
+    // which is covered by the queried token range.
+    auto sstables = select_sstables(dht::to_partition_range(tr));
+    uint64_t partition_count = 0;
+    co_await seastar::max_concurrent_for_each(sstables, 10, [&partition_count, &tr] (sstables::shared_sstable sst) -> future<> {
+        partition_count += sst->estimated_keys_for_range(tr);
+        co_return;
+    });
+    co_return partition_count;
+}
+
 } // namespace replica
