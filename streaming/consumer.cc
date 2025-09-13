@@ -82,7 +82,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                     co_await cf->add_sstable_and_update_cache(sst, offstrategy);
                 }).then([cf, s, sst, use_view_update_path, &vb, &vbw]() mutable -> future<> {
                     if (use_view_update_path == db::view::sstable_destination_decision::staging_managed_by_vbc) {
-                        return vbw.local().register_staging_sstable_tasks({sst}, std::move(cf));
+                        return vbw.local().register_staging_sstable_tasks({sst}, cf->schema()->id());
                     } else if (use_view_update_path == db::view::sstable_destination_decision::staging_directly_to_generator) {
                         return vb.local().register_staging_sstable(sst, std::move(cf));
                     }

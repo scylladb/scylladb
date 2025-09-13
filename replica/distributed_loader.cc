@@ -150,7 +150,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
     });
 
     if (needs_view_update == db::view::sstable_destination_decision::staging_managed_by_vbc) {
-        co_await vbw.local().register_staging_sstable_tasks(new_sstables, table.shared_from_this());
+        co_await vbw.local().register_staging_sstable_tasks(new_sstables, table.schema()->id());
     } else if (needs_view_update == db::view::sstable_destination_decision::staging_directly_to_generator) {
         co_await coroutine::parallel_for_each(new_sstables, [&vb, &table] (sstables::shared_sstable sst) -> future<> {
             if (sst->requires_view_building()) {
