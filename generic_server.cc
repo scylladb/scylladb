@@ -15,6 +15,7 @@
 #include <seastar/core/reactor.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <utility>
 
 namespace generic_server {
@@ -366,6 +367,7 @@ server::listen(socket_address addr, std::shared_ptr<seastar::tls::credentials_bu
 
 future<> server::do_accepts(int which, bool keepalive, socket_address server_addr) {
     while (!_gate.is_closed()) {
+        co_await coroutine::switch_to(get_scheduling_group_for_new_connection());
         seastar::gate::holder holder(_gate);
         bool shed = false;
         try {

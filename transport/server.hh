@@ -280,6 +280,7 @@ private:
         void handle_error(future<>&& f) override;
         client_data make_client_data() const;
         const service::client_state& get_client_state() const { return _client_state; }
+        void set_service_level_state_for_ready_client();
         void update_scheduling_group();
         service::client_state& get_client_state() { return _client_state; }
         scheduling_group get_scheduling_group() const { return _current_scheduling_group; }
@@ -367,6 +368,9 @@ private:
 
 private:
     virtual shared_ptr<generic_server::connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override;
+    scheduling_group get_scheduling_group_for_new_connection() const override {
+        return _sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+    }
 
     ::timeout_config timeout_config() const { return _config.timeout_config.current_values(); }
 };
