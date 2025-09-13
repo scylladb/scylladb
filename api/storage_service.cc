@@ -1893,7 +1893,7 @@ void unset_load_meter(http_context& ctx, routes& r) {
 void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_ctl) {
     ss::get_snapshot_details.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto result = co_await snap_ctl.local().get_snapshot_details();
-        co_return std::function([res = std::move(result)] (output_stream<char>&& o) -> future<> {
+        co_return noncopyable_function<future<> (output_stream<char>&&)>([res = std::move(result)] (output_stream<char>&& o) -> future<> {
             std::exception_ptr ex;
             output_stream<char> out = std::move(o);
             try {
