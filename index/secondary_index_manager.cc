@@ -26,6 +26,7 @@
 #include "db/view/view.hh"
 #include "concrete_types.hh"
 #include "db/tags/extension.hh"
+#include "utils/histogram_metrics_helper.hh"
 
 namespace secondary_index {
 
@@ -94,6 +95,9 @@ void secondary_index_manager::reload() {
         auto index_name = it->first;
         if (!table_indices.contains(index_name)) {
             it = _indices.erase(it);
+            if (_metrics.contains(index_name)) {
+                _metrics.erase(index_name);
+            }
         } else {
             ++it;
         }
@@ -107,6 +111,9 @@ void secondary_index_manager::add_index(const index_metadata& im) {
     sstring index_target = im.options().at(cql3::statements::index_target::target_option_name);
     sstring index_target_name = target_parser::get_target_column_name_from_string(index_target);
     _indices.emplace(im.name(), index{index_target_name, im});
+    if (!_metrics.contains(im.name())) {
+        _metrics.try_emplace(im.name(), _cf.schema()->ks_name(), im.name());
+    }
 }
 
 static const data_type collection_keys_type(const abstract_type& t) {
@@ -388,4 +395,17 @@ std::optional<std::unique_ptr<custom_index>> secondary_index_manager::get_custom
     return (*custom_class_factory)();
 }
 
+index_metrics::index_metrics(const sstring& ks_name, const sstring& index_name)
+    : ks_name(ks_name)
+    , query_latency() {
+    metrics.add_group("index_metrics",
+            {seastar::metrics::make_histogram(
+                    fmt::format("query_latencies"),
+                    [this]() {
+                        return to_metrics_histogram(query_latency);
+                    },
+                    seastar::metrics::description("Histogram of the latencies of index queries"))(idx_name(fmt::format("{}.{}", ks_name, index_name)))
+                            .aggregate({seastar::metrics::shard_label})
+                            .set_skip_when_empty()});
+}
 }
