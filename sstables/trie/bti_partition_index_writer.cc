@@ -210,9 +210,9 @@ struct bti_partition_index_writer::impl
     impl(impl&&) = delete;
 };
 
-bti_partition_index_writer::bti_partition_index_writer() = default;
+bti_partition_index_writer::bti_partition_index_writer() noexcept = default;
 
-bti_partition_index_writer::~bti_partition_index_writer() = default;
+bti_partition_index_writer::~bti_partition_index_writer() noexcept = default;
 
 bti_partition_index_writer::bti_partition_index_writer(sstables::file_writer& fw)
     : _impl(std::make_unique<impl>(fw))
@@ -223,6 +223,8 @@ void bti_partition_index_writer::add(const schema& s, dht::decorated_key dk, int
 void bti_partition_index_writer::finish(sstable_version_types ver, disk_string_view<uint16_t> first_key, disk_string_view<uint16_t> last_key) && {
     _impl->finish(ver, first_key, last_key);
 }
+bti_partition_index_writer::bti_partition_index_writer(bti_partition_index_writer&&) noexcept = default;
+bti_partition_index_writer& bti_partition_index_writer::operator=(bti_partition_index_writer&&) noexcept = default;
 
 std::byte hash_byte_from_key(const schema &s, const partition_key& x) {
     auto hk = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(s, x)));

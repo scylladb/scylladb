@@ -55,7 +55,7 @@ class bti_partition_index_writer {
     std::unique_ptr<impl> _impl;
 private:
     friend class optimized_optional<bti_partition_index_writer>;
-    bti_partition_index_writer();
+    bti_partition_index_writer() noexcept;
 public:
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
@@ -63,7 +63,10 @@ public:
     // because `finish()` writes a footer which is used by the reader
     // to find the root of the trie.
     explicit bti_partition_index_writer(sstables::file_writer&);
-    ~bti_partition_index_writer();
+    bti_partition_index_writer(bti_partition_index_writer&&) noexcept;
+    bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
+    ~bti_partition_index_writer() noexcept;
+    explicit operator bool() const noexcept { return bool(_impl); }
     // Add a new partition key to the index.
     void add(const schema&, dht::decorated_key, int64_t data_or_rowsdb_file_pos);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
@@ -90,13 +93,16 @@ class bti_row_index_writer {
     std::unique_ptr<impl> _impl;
 private:
     friend class optimized_optional<bti_row_index_writer>;
-    bti_row_index_writer();
+    bti_row_index_writer() noexcept;
 public:
-    ~bti_row_index_writer();
+    ~bti_row_index_writer() noexcept;
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
     // and it can be extended later.
     explicit bti_row_index_writer(sstables::file_writer&);
+    bti_row_index_writer(bti_row_index_writer&&) noexcept;
+    bti_row_index_writer& operator=(bti_row_index_writer&&) noexcept;
+    explicit operator bool() const noexcept { return bool(_impl); }
     // Add a new row index entry.
     // Must be called in ascending order.
     // (`first_ck` must be strictly greater than the previous `last_ck`).
