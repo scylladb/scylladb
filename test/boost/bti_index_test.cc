@@ -989,7 +989,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 },
             }, entry);
         }
-        std::move(partition_index_writer).finish(sst_ver, {}, {});
+        std::move(partition_index_writer).finish(sst_ver, sstables::key::from_bytes({}), sstables::key::from_bytes({}));
     }
 
     // Step 3: create the reader (or, more precisely, a factory of readers) over the index files.
