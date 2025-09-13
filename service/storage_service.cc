@@ -820,6 +820,14 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
         co_await _messaging.local().ban_host(locator::host_id{id.uuid()});
     }
 
+    std::unordered_set<raft::server_id> ignored_normal_nodes;
+    for (auto& id : _topology_state_machine._topology.ignored_nodes) {
+        if (_topology_state_machine._topology.normal_nodes.contains(id)) {
+            ignored_normal_nodes.insert(id);
+        }
+    }
+    _topology_state_machine._topology.ignored_nodes = std::move(ignored_normal_nodes);
+
     slogger.debug("topology_state_load: excluded nodes: {}", _topology_state_machine._topology.get_excluded_nodes());
 }
 
@@ -1209,7 +1217,10 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
             }
             id = raft::server_id{hid->uuid()};
         }
-        if (!_topology_state_machine._topology.find(*id)) {
+        if (_topology_state_machine._topology.left_nodes.contains(*id)) {
+            continue;
+        }
+        else if (!_topology_state_machine._topology.find(*id)) {
             throw std::runtime_error(::format("Node {} is not found in the cluster", *id));
         }
         ids.insert(*id);
@@ -4209,7 +4220,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
 }
 
 future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
-    return run_with_api_lock_conditionally(sstring("removenode"), !raft_topology_change_enabled(), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
+    return run_with_api_lock_in_gossiper_mode_only(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             ss.check_ability_to_perform_topology_operation("removenode");
             if (ss.raft_topology_change_enabled()) {
