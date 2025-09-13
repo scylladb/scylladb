@@ -119,7 +119,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             });
         });
 
-        std::function<future<>(output_stream<char>&&)> f = [r = std::move(res)] (output_stream<char>&& os) -> future<> {
+        noncopyable_function<future<>(output_stream<char>&&)> f = [r = std::move(res)] (output_stream<char>&& os) -> future<> {
             auto s = std::move(os);
             std::exception_ptr ex;
             try {
@@ -196,7 +196,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
             auto task = tasks::task_handler{tm.local(), id};
             auto res = co_await task.get_status_recursively(true);
 
-            std::function<future<>(output_stream<char>&&)> f = [r = std::move(res), &gossiper] (output_stream<char>&& os) -> future<> {
+            noncopyable_function<future<>(output_stream<char>&&)> f = [r = std::move(res), &gossiper] (output_stream<char>&& os) -> future<> {
                 auto s = std::move(os);
                 auto res = std::move(r);
                 co_await s.write("[");
