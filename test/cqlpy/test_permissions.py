@@ -673,9 +673,6 @@ def test_auto_grant_view(cql, test_keyspace):
 # then enables CDC. Both should work.
 # This is a scylla_only test because it tests the Scylla-only CDC feature.
 # Reproduces #19798:
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 @pytest.mark.parametrize("cdc_on_create", [True, False])
 def test_auto_grant_cdc(cql, test_keyspace, cdc_on_create, scylla_only):
     with new_user(cql) as username:
@@ -762,9 +759,6 @@ def test_auto_revoke_view(cql, test_keyspace):
                     eventually_authorized(lambda: user2_session.execute(f'DROP MATERIALIZED VIEW {mv}'))
 
 # This is a scylla_only test because it tests the Scylla-only CDC feature.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_auto_revoke_cdc(cql, test_keyspace, scylla_only):
     with new_user(cql) as user1, new_user(cql) as user2:
         # Grant user1 and user2 CREATE permissions on test_keyspace, but no

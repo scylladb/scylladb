@@ -1,11 +1,16 @@
-======================
-CDC Stream Generations
-======================
+==================
+CDC Stream Changes
+==================
 
-Stream IDs used for CDC log entries change over time. A single base partition key might be mapped to one stream in the log today, but to a different stream tomorrow. If you build a query which follows changes made to your favorite partition by using a ``WHERE`` clause to specify the proper stream ID, you might need to update the query due to a CDC generation change. The good news is:
+Stream IDs used for CDC log entries change over time. A single base partition key might be mapped to one stream in the log today, but to a different stream tomorrow. If you build a query which follows changes made to your favorite partition by using a ``WHERE`` clause to specify the proper stream ID, you might need to update the query due to CDC streams changes.
 
-* stream IDs will only change if you join a new node to the cluster,
-* it is easy to learn what the used stream IDs are (:doc:`./cdc-querying-streams`).
+The good news is, it is easy to learn what the used stream IDs are (:doc:`./cdc-querying-streams`). The method depends on whether the keyspace is vnode-based or tablets-based.
+
+-----------------------------------------------
+CDC Stream Generations (vnodes-based keyspaces)
+-----------------------------------------------
+
+In a vnode-based keyspace, stream IDs will only change if you join a new node to the cluster.
 
 .. note::
     Stream IDs are chosen to maintain the following invariant:
@@ -60,7 +65,7 @@ Example: The Next Generation
 #. Create a table and insert a row:
 
    .. code-block:: cql
-      
+
       CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH cdc = {'enabled': true};
       INSERT INTO ks.t (pk, ck, v) values (0,0,0);
 
@@ -191,3 +196,169 @@ In ScyllaDB 4.3 the tables ``cdc_generation_timestamps`` and ``cdc_streams_descr
 Unfortunately, the ``time`` column is the partition key column of this table. Therefore the values are not sorted, unlike the values of the ``time`` column of the ``cdc_generation_timestamps`` table (in which ``time`` is the clustering key). You will have to sort them yourselves in order to learn the timestamp of the last generation. Furthermore, querying the table with a full range scan like above requires the coordinator to contact the entire cluster, potentially increasing resource usage and latency. Thus we recommend upgrading to ScyllaDB 4.4 and use the new description tables instead.
 
 .. TODO: CDC generation expiration
+
+---------------------------------------------
+CDC Stream Changes in tablets-based keyspaces
+---------------------------------------------
+
+In a tablets-based keyspace, each base table has its own set of streams operating at any given moment, determined by the current shape of the table's tablets.
+
+.. note::
+    Stream IDs are chosen to maintain the following invariant:
+
+    * Given a base write with partition key ``pk``, the corresponding log table entries will have partition key ``s_id`` such that the token of ``pk`` is in the same tablet as the token of ``s_id``.
+
+When CDC streams change
+-----------------------
+
+When a CDC log table is first created, a new stream set is created for it, with a single stream ID corresponding to each tablet of the base table.
+As the base table grows or shrinks, its tablets may be split or merged.
+When that happens, a new CDC stream set is created for the table, with a new stream ID for each new tablet, and it replaces the old stream set.
+Each stream set has an associated timestamp that indicates when the stream set starts operating.
+
+Example: Tablet Split
+^^^^^^^^^^^^^^^^^^^^^
+
+#. Create a table and insert a row:
+
+   .. code-block:: cql
+
+      CREATE TABLE ks.t (pk int, ck int, v int, PRIMARY KEY (pk, ck)) WITH cdc = {'enabled': true} AND tablets = {'min_tablet_count': 2};
+      INSERT INTO ks.t (pk, ck, v) values (0,0,0);
+
+#. Query the CDC timestamps:
+
+   .. code-block:: cql
+
+      SELECT * FROM system.cdc_timestamps;
+
+   returns:
+
+   .. code-block:: cql
+
+       keyspace_name | table_name | timestamp
+      ---------------+------------+---------------------------------
+                  ks |          t | 2025-09-09 14:41:36.977000+0000
+
+      (1 rows)
+
+#. Query the CDC streams:
+
+   .. code-block:: cql
+
+      SELECT * FROM system.cdc_streams;
+
+   returns:
+
+      .. code-block:: none
+
+          keyspace_name | table_name | timestamp                       | stream_state | stream_id
+         ---------------+------------+---------------------------------+--------------+------------------------------------
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            0 | 0xffffffffffffffff50e84c99d4000001
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            0 | 0x7fffffffffffffff55ebbda510000001
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            2 | 0xffffffffffffffff50e84c99d4000001
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            2 | 0x7fffffffffffffff55ebbda510000001
+
+         (4 rows)
+
+   We see that we have a single stream set with an associated timestamp and it has two streams - one for each tablet of the base table.
+
+   The stream kind value ``0`` indicates that these streams are the current streams for this timestamps, and the stream kind value ``2`` indicates that these are newly opened streams in this timestamp.
+
+#. Query the CDC log table:
+
+   .. code-block:: cql
+
+      SELECT "cdc$stream_id", pk FROM ks.t_scylla_cdc_log;
+
+   returns:
+
+      .. code-block:: none
+
+          cdc$stream_id                      | pk
+         ------------------------------------+----
+          0xffffffffffffffff50e84c99d4000001 |  0
+
+         (1 rows)
+
+#. Now trigger a tablet split:
+
+   .. code-block:: cql
+
+      ALTER TABLE ks.t WITH tablets={'min_tablet_count':4};
+
+#. Wait for tablet split to complete and a new CDC timestamp to be created:
+
+   .. code-block:: cql
+
+      SELECT * FROM system.cdc_timestamps;
+
+   eventually a new timestamp appears:
+
+      .. code-block:: none
+
+          keyspace_name | table_name | timestamp
+         ---------------+------------+---------------------------------
+                     ks |          t | 2025-09-09 14:44:47.820000+0000
+                     ks |          t | 2025-09-09 14:41:36.977000+0000
+
+         (2 rows)
+
+   note the timestamps are sorted in descending order to make it easy to check for new timestamps.
+
+#. Query the CDC streams again:
+
+   .. code-block:: cql
+
+      SELECT * FROM system.cdc_streams;
+
+   returns:
+
+      .. code-block:: none
+
+          keyspace_name | table_name | timestamp                       | stream_state | stream_id
+         ---------------+------------+---------------------------------+--------------+------------------------------------
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            0 | 0xffffffffffffffff50e84c99d4000001
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            0 | 0x7fffffffffffffff55ebbda510000001
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            2 | 0xffffffffffffffff50e84c99d4000001
+                     ks |          t | 2025-09-09 14:41:36.977000+0000 |            2 | 0x7fffffffffffffff55ebbda510000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            0 | 0xbfffffffffffffffa67123f568000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            0 | 0xffffffffffffffffe28e96d4f4000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            0 | 0x3fffffffffffffff296a1c0f24000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            0 | 0x7fffffffffffffff9573ad2614000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            1 | 0xffffffffffffffff50e84c99d4000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            1 | 0x7fffffffffffffff55ebbda510000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            2 | 0xbfffffffffffffffa67123f568000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            2 | 0xffffffffffffffffe28e96d4f4000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            2 | 0x3fffffffffffffff296a1c0f24000001
+                     ks |          t | 2025-09-09 14:44:47.820000+0000 |            2 | 0x7fffffffffffffff9573ad2614000001
+
+         (14 rows)
+
+   Now, for the new timestamp, we have 4 new streams that are indicated as the current streams and also as newly opened streams by their stream_state value.
+   We also see that the two streams from the previous timestamps are now indicated as closed by the stream_state value ``1``.
+
+#. Insert a row to the table again:
+
+   .. code-block:: cql
+
+      INSERT INTO ks.t (pk, ck, v) values (0,0,0);
+
+#. Query the log table:
+
+   .. code-block:: cql
+
+      SELECT "cdc$stream_id", pk FROM ks.t_scylla_cdc_log;
+
+   returns:
+
+      .. code-block:: none
+
+          cdc$stream_id                      | pk
+         ------------------------------------+----
+          0xffffffffffffffff50e84c99d4000001 |  0
+          0xffffffffffffffffe28e96d4f4000001 |  0
+
+         (2 rows)
+
+   The new entry is written to one of the new streams.
