@@ -4368,7 +4368,7 @@ public:
     explicit node_ops_meta_data(
             node_ops_id ops_uuid,
             gms::inet_address coordinator,
-            std::list<gms::inet_address> ignore_nodes,
+            std::list<locator::host_id> ignore_nodes,
             std::chrono::seconds watchdog_interval,
             std::function<future<> ()> abort_func,
             std::function<void ()> signal_func);
@@ -4427,7 +4427,8 @@ void storage_service::node_ops_insert(node_ops_id ops_uuid,
                                       std::list<inet_address> ignore_nodes,
                                       std::function<future<>()> abort_func) {
     auto watchdog_interval = std::chrono::seconds(_db.local().get_config().nodeops_watchdog_timeout_seconds());
-    auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(ignore_nodes), watchdog_interval, std::move(abort_func),
+    auto in = ignore_nodes | std::views::transform([this] (gms::inet_address ip) { return _gossiper.get_host_id(ip); }) | std::ranges::to<std::list<locator::host_id>>();
+    auto meta = node_ops_meta_data(ops_uuid, coordinator, std::move(in), watchdog_interval, std::move(abort_func),
                                    [this, ops_uuid]() mutable { node_ops_signal_abort(ops_uuid); });
     _node_ops.emplace(ops_uuid, std::move(meta));
     on_node_ops_registered(ops_uuid);
@@ -6038,15 +6039,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                                 }
                             });
                             if (is_repair_based_node_ops_enabled(streaming::stream_reason::removenode)) {
-                                // FIXME: we should not need to translate ids to IPs here. See #6403.
-                                std::list<gms::inet_address> ignored_ips;
-                                for (const auto& ignored_id : _topology_state_machine._topology.ignored_nodes) {
-                                    auto ip = _address_map.find(locator::host_id{ignored_id.uuid()});
-                                    if (!ip) {
-                                        on_fatal_internal_error(rtlogger, ::format("Cannot find a mapping from node id {} to its ip", ignored_id));
-                                    }
-                                    ignored_ips.push_back(*ip);
-                                }
+                                std::list<locator::host_id> ignored_ips = _topology_state_machine._topology.ignored_nodes | std::views::transform([] (const auto& id) {
+                                    return locator::host_id(id.uuid());
+                                }) | std::ranges::to<std::list<locator::host_id>>();
                                 auto ops = seastar::make_shared<node_ops_info>(node_ops_id::create_random_id(), as, std::move(ignored_ips));
                                 return _repair.local().removenode_with_repair(get_token_metadata_ptr(), id, ops);
                             } else {
@@ -7983,7 +7978,7 @@ future<> storage_service::start_maintenance_mode() {
 node_ops_meta_data::node_ops_meta_data(
         node_ops_id ops_uuid,
         gms::inet_address coordinator,
-        std::list<gms::inet_address> ignore_nodes,
+        std::list<locator::host_id> ignore_nodes,
         std::chrono::seconds watchdog_interval,
         std::function<future<> ()> abort_func,
         std::function<void ()> signal_func)
