@@ -342,8 +342,6 @@ public:
 
     uint64_t estimated_keys_for_range(const dht::token_range& range);
 
-    std::vector<dht::decorated_key> get_key_samples(const schema& s, const dht::token_range& range);
-
     // mark_for_deletion() specifies that a sstable isn't relevant to the
     // current shard, and thus can be deleted by the deletion manager, if
     // all shards sharing it agree. In case the sstable is unshared, it's

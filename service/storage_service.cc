@@ -7674,67 +7674,6 @@ future<> storage_service::force_remove_completion() {
     return make_exception_future<>(std::runtime_error("The unsafe nodetool removenode force is not supported anymore"));
 }
 
-/**
- * Takes an ordered list of adjacent tokens and divides them in the specified number of ranges.
- */
-static std::vector<std::pair<dht::token_range, uint64_t>>
-calculate_splits(std::vector<dht::token> tokens, uint64_t split_count, replica::column_family& cf) {
-    auto sstables = cf.get_sstables();
-    const double step = static_cast<double>(tokens.size() - 1) / split_count;
-    auto prev_token_idx = 0;
-    std::vector<std::pair<dht::token_range, uint64_t>> splits;
-    splits.reserve(split_count);
-    for (uint64_t i = 1; i <= split_count; ++i) {
-        auto index = static_cast<uint32_t>(std::round(i * step));
-        dht::token_range range({{ std::move(tokens[prev_token_idx]), false }}, {{ tokens[index], true }});
-        // always return an estimate > 0 (see CASSANDRA-7322)
-        uint64_t estimated_keys_for_range = 0;
-        for (auto&& sst : *sstables) {
-            estimated_keys_for_range += sst->estimated_keys_for_range(range);
-        }
-        splits.emplace_back(std::move(range), std::max(static_cast<uint64_t>(cf.schema()->min_index_interval()), estimated_keys_for_range));
-        prev_token_idx = index;
-    }
-    return splits;
-};
-
-std::vector<std::pair<dht::token_range, uint64_t>>
-storage_service::get_splits(const sstring& ks_name, const sstring& cf_name, wrapping_interval<dht::token> range, uint32_t keys_per_split) {
-    using range_type = dht::token_range;
-    auto& cf = _db.local().find_column_family(ks_name, cf_name);
-    auto schema = cf.schema();
-    auto sstables = cf.get_sstables();
-    uint64_t total_row_count_estimate = 0;
-    std::vector<dht::token> tokens;
-    std::vector<range_type> unwrapped;
-    if (range.is_wrap_around(dht::token_comparator())) {
-        auto uwr = range.unwrap();
-        unwrapped.emplace_back(std::move(uwr.second));
-        unwrapped.emplace_back(std::move(uwr.first));
-    } else {
-        unwrapped.emplace_back(std::move(range));
-    }
-    tokens.push_back(std::move(unwrapped[0].start_copy().value_or(range_type::bound(dht::minimum_token()))).value());
-    for (auto&& r : unwrapped) {
-        std::vector<dht::token> range_tokens;
-        for (auto &&sst : *sstables) {
-            total_row_count_estimate += sst->estimated_keys_for_range(r);
-            auto keys = sst->get_key_samples(*cf.schema(), r);
-            std::transform(keys.begin(), keys.end(), std::back_inserter(range_tokens), [](auto&& k) { return std::move(k.token()); });
-        }
-        std::sort(range_tokens.begin(), range_tokens.end());
-        std::move(range_tokens.begin(), range_tokens.end(), std::back_inserter(tokens));
-    }
-    tokens.push_back(std::move(unwrapped[unwrapped.size() - 1].end_copy().value_or(range_type::bound(dht::maximum_token()))).value());
-
-    // split_count should be much smaller than number of key samples, to avoid huge sampling error
-    constexpr uint32_t min_samples_per_split = 4;
-    uint64_t max_split_count = tokens.size() / min_samples_per_split + 1;
-    uint64_t split_count = std::max(uint64_t(1), std::min(max_split_count, total_row_count_estimate / keys_per_split));
-
-    return calculate_splits(std::move(tokens), split_count, cf);
-};
-
 future<dht::token_range_vector>
 storage_service::get_ranges_for_endpoint(const locator::effective_replication_map& erm, const locator::host_id& ep) const {
     return erm.get_ranges(ep);

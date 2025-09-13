@@ -3008,18 +3008,6 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(
     return std::nullopt;
 }
 
-std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const dht::token_range& range) {
-    auto index_range = get_sample_indexes_for_range(range);
-    std::vector<dht::decorated_key> res;
-    if (index_range) {
-        for (auto idx = index_range->first; idx < index_range->second; ++idx) {
-            auto pkey = _components->summary.entries[idx].get_key().to_partition_key(s);
-            res.push_back(dht::decorate_key(s, std::move(pkey)));
-        }
-    }
-    return res;
-}
-
 uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
     auto page_range = get_index_pages_for_range(range);
     if (!page_range) {
