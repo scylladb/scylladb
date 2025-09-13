@@ -7,6 +7,7 @@
  */
 
 #include "alternator/server.hh"
+#include "db/config.hh"
 #include "gms/application_state.hh"
 #include "utils/log.hh"
 #include <fmt/ranges.h>
@@ -267,22 +268,37 @@ protected:
 };
 
 future<std::string> server::verify_signature(const request& req, const chunked_content& content) {
-    if (!_enforce_authorization) {
+    if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::FALSE) {
         slogger.debug("Skipping authorization");
         return make_ready_future<std::string>();
     }
     auto host_it = req._headers.find("Host");
     if (host_it == req._headers.end()) {
+        _executor._stats.authentication_failures++;
+        if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Host header is mandatory for signature verification");
+            return make_ready_future<std::string>();
+        }
         throw api_error::invalid_signature("Host header is mandatory for signature verification");
     }
     auto authorization_it = req._headers.find("Authorization");
     if (authorization_it == req._headers.end()) {
+        _executor._stats.authentication_failures++;
+        if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Authorization header is mandatory for signature verification");
+            return make_ready_future<std::string>();
+        }
         throw api_error::missing_authentication_token("Authorization header is mandatory for signature verification");
     }
     std::string host = host_it->second;
     std::string_view authorization_header = authorization_it->second;
     auto pos = authorization_header.find_first_of(' ');
     if (pos == std::string_view::npos || authorization_header.substr(0, pos) != "AWS4-HMAC-SHA256") {
+        _executor._stats.authentication_failures++;
+        if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Authorization header must use AWS4-HMAC-SHA256 algorithm");
+            return make_ready_future<std::string>();
+        }
         throw api_error::invalid_signature(fmt::format("Authorization header must use AWS4-HMAC-SHA256 algorithm: {}", authorization_header));
     }
     authorization_header.remove_prefix(pos+1);
@@ -318,6 +334,11 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
 
     std::vector<std::string_view> credential_split = split(credential, '/');
     if (credential_split.size() != 5) {
+        _executor._stats.authentication_failures++;
+        if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+            slogger.warn("alternator_enforce_authorization=warn: Incorrect credential information format");
+            return make_ready_future<std::string>();
+        }
         throw api_error::validation(fmt::format("Incorrect credential information format: {}", credential));
     }
     std::string user(credential_split[0]);
@@ -342,7 +363,7 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
     auto cache_getter = [&proxy = _proxy, &as = _auth_service] (std::string username) {
         return get_key_from_roles(proxy, as, std::move(username));
     };
-    return _key_cache.get_ptr(user, cache_getter).then([this, &req, &content,
+    return _key_cache.get_ptr(user, cache_getter).then_wrapped([this, &req, &content,
                                                     user = std::move(user),
                                                     host = std::move(host),
                                                     datestamp = std::move(datestamp),
@@ -350,17 +371,38 @@ future<std::string> server::verify_signature(const request& req, const chunked_c
                                                     signed_headers_map = std::move(signed_headers_map),
                                                     region = std::move(region),
                                                     service = std::move(service),
-                                                    user_signature = std::move(user_signature)] (key_cache::value_ptr key_ptr) {
+                                                    user_signature = std::move(user_signature)] (future<key_cache::value_ptr> key_ptr_fut) {
+        key_cache::value_ptr key_ptr(nullptr);
+        try {
+            key_ptr = key_ptr_fut.get();
+        } catch (const api_error& e) {
+            _executor._stats.authentication_failures++;
+            if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+                slogger.warn("alternator_enforce_authorization=warn: Failed to retrieve key for user {}, client address {}", user, req.get_client_address());
+                return std::string();
+            }
+            throw;
+        }
         std::string signature;
         try {
             signature = utils::aws::get_signature(user, *key_ptr, std::string_view(host), "/", req._method,
                 datestamp, signed_headers_str, signed_headers_map, &content, region, service, "");
         } catch (const std::exception& e) {
+            _executor._stats.authentication_failures++;
+            if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+                slogger.warn("alternator_enforce_authorization=warn: invalid signature for user {}, client address {}", user, req.get_client_address());
+                return std::string();
+            }
             throw api_error::invalid_signature(e.what());
         }
 
         if (signature != std::string_view(user_signature)) {
             _key_cache.remove(user);
+            _executor._stats.authentication_failures++;
+            if (_enforce_authorization.get() == db::tri_mode_restriction_t::mode::WARN) {
+                slogger.warn("alternator_enforce_authorization=warn: wrong signature for user {}, client address {}", user, req.get_client_address());
+                return std::string();
+            }
             throw api_error::unrecognized_client("The security token included in the request is invalid.");
         }
         return user;
@@ -512,7 +554,6 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _auth_service(auth_service)
         , _sl_controller(sl_controller)
         , _key_cache(1024, 1min, slogger)
-        , _enforce_authorization(false)
         , _enabled_servers{}
         , _pending_requests("alternator::server::pending_requests")
         , _timeout_config(_proxy.data_dictionary().get_config())
@@ -593,7 +634,7 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-        utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        utils::updateable_value<db::tri_mode_restriction> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
     _max_concurrent_requests = std::move(max_concurrent_requests);

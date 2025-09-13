@@ -32,7 +32,8 @@ import requests
 from botocore.exceptions import ClientError
 
 from test.alternator.test_manual_requests import get_signed_request
-from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read
+from test.alternator.test_cql_rbac import new_dynamodb, new_role
+from test.alternator.util import random_string, new_test_table, is_aws, scylla_config_read, scylla_config_temporary
 
 # Fixture for checking if we are able to test Scylla metrics. Scylla metrics
 # are not available on AWS (of course), but may also not be available for
@@ -509,6 +510,102 @@ def test_ttl_stats(dynamodb, metrics, alternator_ttl_period_in_seconds):
                     break
                 time.sleep(0.1)
             assert not 'Item' in table.get_item(Key={'p': p0})
+
+# The following tests check the authentication and authorization failure
+# counters:
+#  * scylla_alternator_authentication_failures
+#  * scylla_alternator_authorization_failures
+# as well as their interaction with the alternator_enforce_authorization
+# configuration option:
+#
+# 1. When alternator_enforce_authorization is set to "false", these two metrics
+#    aren't incremented (and operations are allowed).
+# 2. When alternator_enforce_authorization is set to "warn", the two metrics
+#    are incremented but the operations are still allowed.
+# 3. When alternator_enforce_authorization is set to "true", the two metrics
+#    are incremented and the operations are not allowed.
+#
+# We have several tests here, for several kinds of authentication and
+# authorization errors. These are tests for issue #25308.
+
+# authentication failure 1: bogus username and secret key
+@pytest.mark.parametrize("enforce_auth", ['true', 'false', 'warn'])
+def test_authentication_failure_1(dynamodb, metrics, test_table_s, enforce_auth):
+    with scylla_config_temporary(dynamodb, 'alternator_enforce_authorization', enforce_auth):
+        with new_dynamodb(dynamodb, 'bogus_username', 'bogus_secret_key') as d:
+            # We don't expect get_item() to find any item, we just care if
+            # to see if it experiences an authentication failure, and if
+            # it increments the authentication failure metric.
+            saved_auth_failures = get_metric(metrics, 'scylla_alternator_authentication_failures')
+            tab = d.Table(test_table_s.name)
+            try:
+                tab.get_item(Key={'p': 'dog'})
+                operation_succeeded = True
+            except ClientError as e:
+                assert 'UnrecognizedClientException' in str(e)
+                operation_succeeded = False
+            if enforce_auth == 'true':
+                assert not operation_succeeded
+            else:
+                assert operation_succeeded
+            new_auth_failures = get_metric(metrics, 'scylla_alternator_authentication_failures')
+            if enforce_auth == 'false':
+                assert new_auth_failures == saved_auth_failures
+            else:
+                assert new_auth_failures == saved_auth_failures + 1
+
+# authentication failure 2: real username, wrong secret key
+# Unfortunately, tests that create a new role need to use CQL too.
+@pytest.mark.parametrize("enforce_auth", ['true', 'false', 'warn'])
+def test_authentication_failure_2(dynamodb, cql, metrics, test_table_s, enforce_auth):
+    with scylla_config_temporary(dynamodb, 'alternator_enforce_authorization', enforce_auth):
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, 'bogus_secret_key') as d:
+                saved_auth_failures = get_metric(metrics, 'scylla_alternator_authentication_failures')
+                tab = d.Table(test_table_s.name)
+                try:
+                    tab.get_item(Key={'p': 'dog'})
+                    operation_succeeded = True
+                except ClientError as e:
+                    assert 'UnrecognizedClientException' in str(e)
+                    operation_succeeded = False
+                if enforce_auth == 'true':
+                    assert not operation_succeeded
+                else:
+                    assert operation_succeeded
+                new_auth_failures = get_metric(metrics, 'scylla_alternator_authentication_failures')
+                if enforce_auth == 'false':
+                    assert new_auth_failures == saved_auth_failures
+                else:
+                    assert new_auth_failures == saved_auth_failures + 1
+
+# Authorization failure - a valid user but without permissions to do a
+# given operation.
+@pytest.mark.parametrize("enforce_auth", ['true', 'false', 'warn'])
+def test_authorization_failure(dynamodb, cql, metrics, test_table_s, enforce_auth):
+    with scylla_config_temporary(dynamodb, 'alternator_enforce_authorization', enforce_auth):
+        with new_role(cql) as (role, key):
+            with new_dynamodb(dynamodb, role, key) as d:
+                saved_auth_failures = get_metric(metrics, 'scylla_alternator_authorization_failures')
+                tab = d.Table(test_table_s.name)
+                try:
+                    # Note that the new role is not a superuser, so should
+                    # not have permissions to read from this table created
+                    # earlier by the superuser.
+                    tab.get_item(Key={'p': 'dog'})
+                    operation_succeeded = True
+                except ClientError as e:
+                    assert 'AccessDeniedException' in str(e)
+                    operation_succeeded = False
+                if enforce_auth == 'true':
+                    assert not operation_succeeded
+                else:
+                    assert operation_succeeded
+                new_auth_failures = get_metric(metrics, 'scylla_alternator_authorization_failures')
+                if enforce_auth == 'false':
+                    assert new_auth_failures == saved_auth_failures
+                else:
+                    assert new_auth_failures == saved_auth_failures + 1
 
 # TODO: there are additional metrics which we don't yet test here. At the
 # time of this writing they are:
