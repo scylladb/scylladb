@@ -1364,6 +1364,7 @@ public:
 
     future<compaction_reenablers_and_lock_holders> get_compaction_reenablers_and_lock_holders_for_repair(replica::database& db,
             const service::frozen_topology_guard& guard, dht::token_range range);
+    future<uint64_t> estimated_partitions_in_range(dht::token_range tr) const;
 private:
     future<std::vector<compaction::compaction_group_view*>> get_compaction_group_views_for_repair(dht::token_range range);
 };
