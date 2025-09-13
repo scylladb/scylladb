@@ -46,6 +46,13 @@ namespace sstables::trie {
 // until a cluster feature guarding the new page size is set.
 constexpr static uint64_t BTI_PAGE_SIZE = 4096;
 
+struct bti_partitions_db_footer {
+    sstables::key first_key;
+    sstables::key last_key;
+    uint64_t partition_count;
+    uint64_t trie_root_position;
+};
+
 // Transforms a stream of (partition key, offset in Data.db, hash bits) tuples
 // into a stream of trie nodes fed into bti_trie_sink.
 // Used to populate the Partitions.db file of the BTI format
@@ -71,14 +78,7 @@ public:
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
     // The writer mustn't be used again after this.
-    void finish(sstable_version_types ver, disk_string_view<uint16_t> first_key, disk_string_view<uint16_t> last_key) &&;
-};
-
-struct bti_partitions_db_footer {
-    sstables::key first_key;
-    sstables::key last_key;
-    uint64_t partition_count;
-    uint64_t trie_root_position;
+    std::optional<bti_partitions_db_footer> finish(sstable_version_types ver, const sstables::key& first_key, const sstables::key& last_key) &&;
     operator bool() const { return bool(_impl); }
 };
 

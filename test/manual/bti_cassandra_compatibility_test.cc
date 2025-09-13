@@ -570,8 +570,8 @@ void do_test(const test_config& cfg) {
             }
             std::move(bti_partition_index_writer).finish(
                 sst->get_version(),
-                disk_string_view<uint16_t>(sstables::key::from_partition_key(*adjusted_schema, mutations.front().key()).get_bytes()),
-                disk_string_view<uint16_t>(sstables::key::from_partition_key(*adjusted_schema, mutations.back().key()).get_bytes())
+                sstables::key::from_partition_key(*adjusted_schema, mutations.front().key()),
+                sstables::key::from_partition_key(*adjusted_schema, mutations.back().key())
             );
             testlog.info("Finished BTI index writing");
         }
