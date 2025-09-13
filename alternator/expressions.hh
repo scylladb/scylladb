@@ -18,6 +18,8 @@
 
 #include "expressions_types.hh"
 #include "utils/rjson.hh"
+#include "utils/updateable_value.hh"
+#include "stats.hh"
 
 namespace alternator {
 
@@ -26,6 +28,22 @@ public:
     using runtime_error::runtime_error;
 };
 
+class prepared_expression_cache_impl;
+class prepared_expression_cache {
+    std::unique_ptr<prepared_expression_cache_impl> _impl;
+public:
+    struct config {
+        utils::updateable_value<uint32_t> max_cache_entries;
+    };
+    prepared_expression_cache(config cfg, stats& stats);
+    ~prepared_expression_cache();
+
+    parsed::update_expression parse_update_expression(std::string_view query);
+    std::vector<parsed::path> parse_projection_expression(std::string_view query);
+    parsed::condition_expression parse_condition_expression(std::string_view query, const char* caller);
+};
+
+// Preferably use prepared_expression_cache instance instead of this free functions.
 parsed::update_expression parse_update_expression(std::string_view query);
 std::vector<parsed::path> parse_projection_expression(std::string_view query);
 parsed::condition_expression parse_condition_expression(std::string_view query, const char* caller);
