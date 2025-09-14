@@ -44,6 +44,25 @@ require_ordering_and_on_equal_return(
     }
 }
 
+template <typename T>
+class interval_bound_const_ref {
+    const T* _value_ptr;
+    bool _inclusive;
+public:
+    interval_bound_const_ref(const T& value, bool inclusive = true)
+              : _value_ptr(&value)
+              , _inclusive(inclusive)
+    { }
+    const T& value() const & { return *_value_ptr; }
+    bool is_inclusive() const { return _inclusive; }
+    bool operator==(const interval_bound_const_ref& other) const {
+        return (*_value_ptr == *other._value_ptr) && (_inclusive == other._inclusive);
+    }
+    bool equal(const interval_bound_const_ref& other, IntervalComparatorFor<T> auto&& cmp) const {
+        return _inclusive == other._inclusive && cmp(*_value_ptr, *other._value_ptr) == 0;
+    }
+};
+
 template<typename T>
 class interval_bound {
     T _value;
@@ -53,11 +72,11 @@ public:
               : _value(std::move(value))
               , _inclusive(inclusive)
     { }
-    interval_bound(interval_bound<const T&> b) requires (!std::is_reference_v<T>)
+    interval_bound(interval_bound_const_ref<T> b)
               : interval_bound(b.value(), b.is_inclusive())
     { }
-    operator interval_bound<const T&>() const requires (!std::is_reference_v<T>) {
-        return interval_bound<const T&>(_value, _inclusive);
+    operator interval_bound_const_ref<T>() const {
+        return interval_bound_const_ref<T>(_value, _inclusive);
     }
     const T& value() const & { return _value; }
     T&& value() && { return std::move(_value); }
@@ -69,9 +88,6 @@ public:
         return _inclusive == other._inclusive && cmp(_value, other._value) == 0;
     }
 };
-
-template <typename T>
-using interval_bound_const_ref = interval_bound<const T&>;
 
 template <class T>
 class interval_data {
