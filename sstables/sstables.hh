@@ -338,7 +338,7 @@ public:
         return get_stats_metadata().estimated_partition_size.count();
     }
 
-    uint64_t estimated_keys_for_range(const dht::token_range& range);
+    future<uint64_t> estimated_keys_for_range(const dht::token_range& range);
 
     // mark_for_deletion() specifies that a sstable isn't relevant to the
     // current shard, and thus can be deleted by the deletion manager, if
