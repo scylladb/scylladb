@@ -1510,7 +1510,7 @@ public:
 
         // Deduce the estimated keys based on the token range that will end up in this new sstable after the split.
         auto token_range_of_new_sst = _table_s.get_token_range_after_split(dk.token());
-        const auto estimated_keys = _sstables[0]->estimated_keys_for_range(token_range_of_new_sst);
+        const auto estimated_keys = _sstables[0]->estimated_keys_for_range(token_range_of_new_sst).get();
 
         auto monitor = std::make_unique<compaction_write_monitor>(sst, _table_s, maximum_timestamp(), _sstable_level);
         sstable_writer_config cfg = make_sstable_writer_config(_type);

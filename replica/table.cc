@@ -4562,8 +4562,7 @@ future<uint64_t> table::estimated_partitions_in_range(dht::token_range tr) const
     auto sstables = select_sstables(dht::to_partition_range(tr));
     uint64_t partition_count = 0;
     co_await seastar::max_concurrent_for_each(sstables, 10, [&partition_count, &tr] (sstables::shared_sstable sst) -> future<> {
-        partition_count += sst->estimated_keys_for_range(tr);
-        co_return;
+        partition_count += co_await sst->estimated_keys_for_range(tr);
     });
     co_return partition_count;
 }
