@@ -30,6 +30,7 @@
 #include "test/lib/tmpdir.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "utils/cached_file.hh"
+#include "utils/i_filter.hh"
 #include "utils/memory_data_sink.hh"
 #include <fmt/std.h>
 
@@ -955,14 +956,16 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto push_partition = [&] () {
             if (last_partition_entry) {
                 auto& last = *last_partition_entry;
+                auto pk = sstables::key::from_partition_key(*the_schema, last.dk.key());
+                auto hash = utils::make_hashed_key(bytes_view(pk));
                 auto payload = row_index_writer.finish(
                     sst_ver,
                     *the_schema,
                     last.data_file_offset,
                     last_partition_end_entry.value().data_file_offset,
-                    sstables::key::from_partition_key(*the_schema, last.dk.key()),
+                    pk,
                     last.partition_tombstone);
-                partition_index_writer.add(*the_schema, last.dk, payload);
+                partition_index_writer.add(*the_schema, last.dk, hash, payload);
             }
             last_partition_entry.reset();
         };

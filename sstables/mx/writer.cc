@@ -1596,6 +1596,7 @@ stop_iteration writer::consume_end_of_partition() {
         _bti_partition_index_writer->add(
             _schema,
             *std::exchange(_current_dk_for_bti, std::nullopt),
+            _current_murmur_hash,
             partitions_db_payload
         );
     }

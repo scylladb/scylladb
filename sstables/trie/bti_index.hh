@@ -26,6 +26,10 @@ namespace seastar {
     class file;
 }
 
+namespace utils {
+    class hashed_key;
+}
+
 class schema;
 class cached_file;
 class reader_permit;
@@ -74,7 +78,7 @@ public:
     bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
     ~bti_partition_index_writer();
     // Add a new partition key to the index.
-    void add(const schema&, dht::decorated_key, int64_t data_or_rowsdb_file_pos);
+    void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t data_or_rowsdb_file_pos);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
     // The writer mustn't be used again after this.

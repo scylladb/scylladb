@@ -47,7 +47,7 @@ public:
     // If the partition has a intra-partition index in Rows.db,
     // `file_pos` is the bit-negated position of the relevant entry in Rows.db.
     // Otherwise, `file_pos` is the position of the partition in Data.db.
-    void add(const schema&, dht::decorated_key, int64_t pos_payload);
+    void add(const schema&, dht::decorated_key, const utils::hashed_key&, int64_t pos_payload);
     std::optional<bti_partitions_db_footer> finish(
         sstable_version_types ver,
         const sstables::key& first_key,
@@ -158,11 +158,8 @@ void bti_partition_index_writer_impl::write_last_key(size_t needed_prefix) {
     }
 }
 
-void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk, int64_t pos_payload) {
-    // FIXME: we calculate the murmur hash when inserting keys into bloom filters.
-    // It's a waste of work to hash the key again.
-    // The hash should be passed to here from above.
-    uint8_t hash_bits = static_cast<uint8_t>(hash_byte_from_key(s, dk.key()));
+void bti_partition_index_writer_impl::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t pos_payload) {
+    uint8_t hash_bits = static_cast<uint8_t>(murmur_hash.hash()[1]);
     expensive_log("partition_index_writer_impl::add: this={} key={}, pos_payload={}", fmt::ptr(this), dk, pos_payload);
     (*_tmp_key).emplace(s, dk);
     if (_added_keys > 0) {
@@ -230,8 +227,8 @@ bti_partition_index_writer::~bti_partition_index_writer() = default;
 bti_partition_index_writer::bti_partition_index_writer(sstables::file_writer& fw)
     : _impl(std::make_unique<impl>(fw))
 {}
-void bti_partition_index_writer::add(const schema& s, dht::decorated_key dk, int64_t data_or_rowsdb_file_pos) {
-    _impl->add(s, std::move(dk), data_or_rowsdb_file_pos);
+void bti_partition_index_writer::add(const schema& s, dht::decorated_key dk, const utils::hashed_key& murmur_hash, int64_t data_or_rowsdb_file_pos) {
+    _impl->add(s, std::move(dk), murmur_hash, data_or_rowsdb_file_pos);
 }
 std::optional<bti_partitions_db_footer> bti_partition_index_writer::finish(
     sstable_version_types ver,
