@@ -544,6 +544,7 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
 
 namespace perf {
 
+<<<<<<< HEAD
 void run_add_dec(const bpo::variables_map& opts) {
     if (opts.contains("runs")) {
         run_simulations(opts).get();
@@ -598,6 +599,50 @@ const std::map<operation, operation_func> operations_with_func{
     }
 };
 
+||||||| parent of 0dcaaa061e (test: perf: perf-load-balancing: Convert to tool_app_template)
+=======
+void run_add_dec(const bpo::variables_map& opts) {
+    if (opts.contains("runs")) {
+        run_simulations(opts).get();
+    } else {
+        params p {
+            .iterations = opts["iterations"].as<int>(),
+            .nodes = opts["nodes"].as<int>(),
+            .tablets1 = opts["tablets1"].as<int>(),
+            .tablets2 = opts["tablets2"].as<int>(),
+            .rf1 = opts["rf1"].as<int>(),
+            .rf2 = opts["rf2"].as<int>(),
+            .shards = opts["shards"].as<int>(),
+        };
+        run_simulation(p).get();
+    }
+}
+
+using operation_func = std::function<void(const bpo::variables_map&)>;
+
+const std::vector<operation_option> global_options {};
+const std::vector<operation_option> global_positional_options{};
+
+const std::map<operation, operation_func> operations_with_func{
+    {
+        {{"rolling-add-dec",
+         "Sequence of bootstraps and decommissions with two tables",
+         "",
+         {
+            typed_option<int>("runs", "Number of simulation runs."),
+            typed_option<int>("iterations", 8, "Number of topology-changing cycles in each run."),
+            typed_option<int>("tablets1", 512, "Number of tablets for the first table."),
+            typed_option<int>("tablets2", 128, "Number of tablets for the second table."),
+            typed_option<int>("rf1", 1, "Replication factor for the first table."),
+            typed_option<int>("rf2", 1, "Replication factor for the second table."),
+            typed_option<int>("nodes", 3, "Number of nodes in the cluster."),
+            typed_option<int>("shards", 30, "Number of shards per node.")
+          }
+        }, &run_add_dec}
+    }
+};
+
+>>>>>>> 0dcaaa061e (test: perf: perf-load-balancing: Convert to tool_app_template)
 int scylla_tablet_load_balancing_main(int argc, char** argv) {
     const auto operations = operations_with_func | std::views::keys | std::ranges::to<std::vector>();
     tool_app_template::config app_cfg{
