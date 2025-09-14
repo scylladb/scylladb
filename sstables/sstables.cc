@@ -3094,17 +3094,17 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(
     return std::nullopt;
 }
 
-uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
+future<uint64_t> sstable::estimated_keys_for_range(const dht::token_range& range) {
     auto page_range = get_index_pages_for_range(range);
     if (!page_range) {
-        return 0;
+        co_return 0;
     }
     using uint128_t = unsigned __int128;
     uint64_t range_pages = page_range->second - page_range->first;
     auto total_keys = get_estimated_key_count();
     auto total_pages = _components->summary.entries.size();
     uint64_t estimated_keys = (uint128_t)range_pages * total_keys / total_pages;
-    return std::max(uint64_t(1), estimated_keys);
+    co_return std::max(uint64_t(1), estimated_keys);
 }
 
 std::vector<unsigned>
