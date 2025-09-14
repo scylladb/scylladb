@@ -329,16 +329,13 @@ public:
 
     future<> seal_sstable(bool backup);
 
-    static uint64_t get_estimated_key_count(const uint32_t size_at_full_sampling, const uint32_t min_index_interval) {
-        return ((uint64_t)size_at_full_sampling + 1) * min_index_interval;
-    }
     // Size at full sampling is calculated as if sampling were static, using minimum index as a strict sampling interval.
     static uint64_t get_size_at_full_sampling(const uint64_t key_count, const uint32_t min_index_interval) {
         return std::ceil(float(key_count) / min_index_interval) - 1;
     }
 
     uint64_t get_estimated_key_count() const {
-        return get_estimated_key_count(_components->summary.header.size_at_full_sampling, _components->summary.header.min_index_interval);
+        return get_stats_metadata().estimated_partition_size.count();
     }
 
     uint64_t estimated_keys_for_range(const dht::token_range& range);
