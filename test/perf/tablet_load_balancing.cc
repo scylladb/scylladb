@@ -27,6 +27,7 @@
 #include "schema/schema_builder.hh"
 #include "service/storage_proxy.hh"
 #include "db/system_keyspace.hh"
+#include "tools/utils.hh"
 
 #include "test/perf/perf.hh"
 #include "test/lib/log.hh"
@@ -37,6 +38,9 @@
 using namespace locator;
 using namespace replica;
 using namespace service;
+using namespace tools::utils;
+
+namespace bpo = boost::program_options;
 
 static seastar::abort_source aborted;
 
@@ -484,50 +488,72 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
 
 namespace perf {
 
+void run_add_dec(const bpo::variables_map& opts) {
+    if (opts.contains("runs")) {
+        run_simulations(opts).get();
+    } else {
+        params p {
+            .iterations = opts["iterations"].as<int>(),
+            .nodes = opts["nodes"].as<int>(),
+            .tablets1 = opts["tablets1"].as<int>(),
+            .tablets2 = opts["tablets2"].as<int>(),
+            .rf1 = opts["rf1"].as<int>(),
+            .rf2 = opts["rf2"].as<int>(),
+            .shards = opts["shards"].as<int>(),
+        };
+        run_simulation(p).get();
+    }
+}
+
+using operation_func = std::function<void(const bpo::variables_map&)>;
+
+const std::vector<operation_option> global_options {};
+const std::vector<operation_option> global_positional_options{};
+
+const std::map<operation, operation_func> operations_with_func{
+    {
+        {{"rolling-add-dec",
+         "Sequence of bootstraps and decommissions with two tables",
+         "",
+         {
+            typed_option<int>("runs", "Number of simulation runs."),
+            typed_option<int>("iterations", 8, "Number of topology-changing cycles in each run."),
+            typed_option<int>("tablets1", 512, "Number of tablets for the first table."),
+            typed_option<int>("tablets2", 128, "Number of tablets for the second table."),
+            typed_option<int>("rf1", 1, "Replication factor for the first table."),
+            typed_option<int>("rf2", 1, "Replication factor for the second table."),
+            typed_option<int>("nodes", 3, "Number of nodes in the cluster."),
+            typed_option<int>("shards", 30, "Number of shards per node.")
+          }
+        }, &run_add_dec}
+    }
+};
+
 int scylla_tablet_load_balancing_main(int argc, char** argv) {
-    namespace bpo = boost::program_options;
-    app_template app;
-    app.add_options()
-            ("runs", bpo::value<int>(), "Number of simulation runs.")
-            ("iterations", bpo::value<int>()->default_value(8), "Number of topology-changing cycles in each run.")
-            ("nodes", bpo::value<int>(), "Number of nodes in the cluster.")
-            ("tablets1", bpo::value<int>(), "Number of tablets for the first table.")
-            ("tablets2", bpo::value<int>(), "Number of tablets for the second table.")
-            ("rf1", bpo::value<int>(), "Replication factor for the first table.")
-            ("rf2", bpo::value<int>(), "Replication factor for the second table.")
-            ("shards", bpo::value<int>(), "Number of shards per node.")
-            ("verbose", "Enables standard logging")
-            ;
-    return app.run(argc, argv, [&] {
-        return seastar::async([&] {
-            if (!app.configuration().contains("verbose")) {
-                auto testlog_level = logging::logger_registry().get_logger_level("testlog");
-                logging::logger_registry().set_all_loggers_level(seastar::log_level::warn);
-                logging::logger_registry().set_logger_level("testlog", testlog_level);
-            }
-            auto stop_test = defer([] {
-                aborted.request_abort();
-            });
-            logalloc::prime_segment_pool(memory::stats().total_memory(), memory::min_free_memory()).get();
-            try {
-                if (app.configuration().contains("runs")) {
-                    run_simulations(app.configuration()).get();
-                } else {
-                    params p {
-                        .iterations = app.configuration()["iterations"].as<int>(),
-                        .nodes = app.configuration()["nodes"].as<int>(),
-                        .tablets1 = app.configuration()["tablets1"].as<int>(),
-                        .tablets2 = app.configuration()["tablets2"].as<int>(),
-                        .rf1 = app.configuration()["rf1"].as<int>(),
-                        .rf2 = app.configuration()["rf2"].as<int>(),
-                        .shards = app.configuration()["shards"].as<int>(),
-                    };
-                    run_simulation(p).get();
-                }
-            } catch (seastar::abort_requested_exception&) {
-                // Ignore
-            }
+    const auto operations = operations_with_func | std::views::keys | std::ranges::to<std::vector>();
+    tool_app_template::config app_cfg{
+            .name = "perf-load-balancing",
+            .description = "Tests tablet load balancer in various scenarios",
+            .logger_name = testlog.name(),
+            .lsa_segment_pool_backend_size_mb = 100,
+            .operations = std::move(operations),
+            .global_options = &global_options,
+            .global_positional_options = &global_positional_options,
+            .db_cfg_ext = db_config_and_extensions()
+    };
+    tool_app_template app(std::move(app_cfg));
+
+    return app.run_async(argc, argv, [] (const operation& operation, const bpo::variables_map& app_config) {
+        auto stop_test = defer([] {
+            aborted.request_abort();
         });
+        try {
+            operations_with_func.at(operation)(app_config);
+            return 0;
+        } catch (seastar::abort_requested_exception&) {
+            // Ignore
+        }
+        return 1;
     });
 }
 
