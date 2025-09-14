@@ -12,6 +12,7 @@
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/testing/test_case.hh>
 #include "sstables/trie/trie_traversal.hh"
+#include "test/lib/reader_concurrency_semaphore.hh"
 #include <generator>
 #include <numeric>
 
@@ -220,7 +221,7 @@ struct custom_node_reader {
         return const_bytes();
     }
 
-    seastar::future<> load(int64_t pos) {
+    seastar::future<> load(int64_t pos, const reader_permit&, const tracing::trace_state_ptr&) {
         cached_pos = pos;
         return seastar::make_ready_future<>();
     }
@@ -325,12 +326,16 @@ void test_traverse(std::span<const_bytes> key_domain, std::span<const_bytes> key
     SCYLLA_ASSERT(!keys.empty());
     testlog.debug("test_traverse: testing key set: {}", keys);
 
+    auto semaphore = tests::reader_concurrency_semaphore_wrapper();
+    auto permit = semaphore.make_permit();
+    auto trace_state = tracing::trace_state_ptr();
+
     auto ref_trie = reference_trie(keys);
     auto legal_states = ref_trie.enumerate_all_legal_states();
     custom_node_reader input{.rt = ref_trie};
 
     auto traverse_from_root = [&] (const_bytes key, fragment_generator_fn frag_gen) -> trie::traversal_state {
-        return trie::traverse(input, frag_gen(key).begin(), ref_trie._nodes.size() - 1).get();
+        return trie::traverse(input, frag_gen(key).begin(), ref_trie._nodes.size() - 1, permit, trace_state).get();
     };
 
     for (bool multibyte_traverse : {true, false})
@@ -361,6 +366,10 @@ void test_traverse(std::span<const_bytes> key_domain, std::span<const_bytes> key
 void test_step(std::span<const_bytes> keys) {
     testlog.debug("test_step: testing key set: {}", keys);
 
+    auto semaphore = tests::reader_concurrency_semaphore_wrapper();
+    auto permit = semaphore.make_permit();
+    auto trace_state = tracing::trace_state_ptr();
+
     auto ref_trie = reference_trie(keys);
     auto legal_states = ref_trie.enumerate_all_legal_states();
     custom_node_reader input{.rt = ref_trie};
@@ -369,7 +378,7 @@ void test_step(std::span<const_bytes> keys) {
         testlog.trace("Testing state {}", fmt::join(x.first.trail, ", "));
         {
             auto trail = x.first.trail;
-            trie::step(input, trail).get();
+            trie::step(input, trail, permit, trace_state).get();
             // step() moves to the next key.
             // So if the starting state corresponds to a key (rank % 2 == 1), 
             // rank should grow by 2,
@@ -383,7 +392,7 @@ void test_step(std::span<const_bytes> keys) {
         }
         {
             auto trail = x.first.trail;
-            trie::step_back(input, trail).get();
+            trie::step_back(input, trail, permit, trace_state).get();
             // step_back() moves to the previous key.
             // So if the starting state corresponds to a key (rank % 2 == 1), 
             // rank should shrink by 2,

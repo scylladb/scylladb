@@ -251,13 +251,16 @@ void test_index_files(
     SCYLLA_ASSERT(sstables::key_view(footer.first_key) == sstables::key::from_partition_key(*s, pm.first_key.key()));
     SCYLLA_ASSERT(sstables::key_view(footer.last_key) == sstables::key::from_partition_key(*s, pm.last_key.key()));
 
+    auto trace_state = tracing::trace_state_ptr();
     auto ir = sstables::trie::make_bti_index_reader(
         partitions_db_cached,
         rows_db_cached,
         footer.trie_root_position,
         data_db_size,
         s,
-        env.make_reader_permit());
+        env.make_reader_permit(),
+        trace_state
+    );
 
     // We validate the index by iterating over fragments and checking that
     // the index gives the right results when it's forwarded to the position of each fragment. 

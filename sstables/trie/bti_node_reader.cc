@@ -438,11 +438,11 @@ bool bti_node_reader::cached(int64_t pos) const {
     return _cached_page && _cached_page->pos() / cached_file::page_size == pos / cached_file::page_size;
 }
 
-seastar::future<> bti_node_reader::load(int64_t pos) {
+seastar::future<> bti_node_reader::load(int64_t pos, const reader_permit& permit, const tracing::trace_state_ptr& trace_ptr) {
     if (cached(pos)) {
         return make_ready_future<>();
     }
-    return _file.get().get_shared_page(pos, nullptr).then([this](auto page) {
+    return _file.get().get_shared_page(pos, permit, trace_ptr).then([this](cached_file::page_read_result page) {
         _cached_page = std::move(page.ptr);
     });
 }

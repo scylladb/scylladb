@@ -15,6 +15,11 @@
 // stepped forwards and backwards) and the format-specific part
 // (which actually understand the bytes and bits of the nodes on disk).
 
+class reader_permit;
+namespace tracing {
+    class trace_state_ptr;
+}
+
 namespace sstables::trie {
 
 using const_bytes = std::span<const std::byte>;
@@ -93,7 +98,7 @@ struct load_final_node_result {
 // needs to provide in order so that a trie cursor can be implemented
 // over them.
 template <typename T>
-concept node_reader = requires(T& o, int64_t pos, const_bytes key, int child_idx, bool forwards) {
+concept node_reader = requires(T& o, int64_t pos, const_bytes key, int child_idx, bool forwards, const reader_permit& permit, const tracing::trace_state_ptr& trace_ptr) {
     // Checks if the page containing the given file position has been loaded.
     //
     // Note: forcing the caller to explicitly call `load` before use
@@ -106,7 +111,7 @@ concept node_reader = requires(T& o, int64_t pos, const_bytes key, int child_idx
     // Ensures `cached(pos)` until the next `load(pos)` call.
     //
     // Precondition: pos lies within the file.
-    { o.load(pos) } -> std::same_as<seastar::future<>>;
+    { o.load(pos, permit, trace_ptr) } -> std::same_as<seastar::future<>>;
     // Reads some basic information (payload and number of children)
     // about the node.
     //
