@@ -288,7 +288,9 @@ public:
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor(),
-            integrity_check integrity = integrity_check::no);
+            integrity_check integrity = integrity_check::no,
+            const utils::hashed_key* single_partition_read_murmur_hash = nullptr
+        );
 
     // A reader which doesn't use the index at all. It reads everything from the
     // sstable and it doesn't support skipping.
