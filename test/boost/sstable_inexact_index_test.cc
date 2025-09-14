@@ -117,6 +117,9 @@ struct inexact_partition_index : abstract_index_reader {
         testlog.trace("<inexact_partition_index/advance_lower_and_check_if_present: _lower={}, _upper={}, pk_idx={}", _lower, _upper, pk_idx);
         return make_ready_future<bool>(true);
     }
+    future<bool> advance_lower_and_check_if_present(dht::ring_position_view rpv, const utils::hashed_key& hash) override {
+        return advance_lower_and_check_if_present(rpv);
+    }
     future<> advance_upper_past(position_in_partition_view pos) override {
         auto cmp = position_in_partition::less_compare(*_s);
         auto pk_idx = pos_idx_to_pk_idx(_lower);

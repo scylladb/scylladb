@@ -13,6 +13,7 @@
 #include "bti_node_reader.hh"
 #include "trie_traversal.hh"
 #include "bti_key_translation.hh"
+#include "utils/i_filter.hh"
 #include <seastar/core/fstream.hh>
 #include <fmt/format.h>
 #include <fmt/std.h>
@@ -432,6 +433,7 @@ public:
     virtual sstables::data_file_positions_range data_file_positions() const override;
     virtual future<std::optional<uint64_t>> last_block_offset() override;
     virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key) override;
+    virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key, const utils::hashed_key&) override;
     virtual future<> advance_to_next_partition() override;
     virtual sstables::indexable_element element_kind() const override;
     virtual future<> advance_past_definitely_present_partition(const dht::decorated_key& dk) override;
@@ -778,13 +780,21 @@ bti_index_reader::bti_index_reader(
 }
 
 future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_position_view key) {
+    const partition_key* pk = key.key();
+    // Note: if `pk` is null, then `key` is not a "at partition key" position,
+    // and in this case the return value of the function doesn't matter.
+    // So we can just make up some hash instead of adding a code path
+    // for no hash.
+    auto hk = pk
+        ? utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(*_s, *pk)))
+        : utils::hashed_key({0, 0});
+    return advance_lower_and_check_if_present(key, hk);
+}
+
+future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_position_view key, const utils::hashed_key& hash) {
     trie_logger.debug("bti_index_reader::advance_lower_and_check_if_present: this={} key={}", fmt::ptr(this), key);
     auto k = lazy_comparable_bytes_from_ring_position(*_s, key);
-    // FIXME: we calculate the murmur hash when creating the "presence checker"
-    // on bloom filters.
-    // It's a waste of work to hash the key again.
-    // The hash should be passed to here from above.
-    std::byte expected_hash = hash_byte_from_key(*_s, *key.key());
+    std::byte expected_hash = std::byte(hash.hash()[1]);
     auto res = co_await _lower.set_to_partition(k, expected_hash);
     co_return res == set_result::possible_match;
     co_return true;
