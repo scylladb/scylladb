@@ -1017,14 +1017,14 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         // Step 4: run the reader test on the opened readers.
         test_index(dataset, [&] {
             return sstables::trie::make_bti_index_reader(
-            partitions_db_cached,
-            rows_db_cached,
-            partitions_db_root_pos,
-            std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
-            the_schema,
-            semaphore.make_permit(),
-            trace_state
-        );
+                partitions_db_cached,
+                rows_db_cached,
+                partitions_db_root_pos,
+                std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
+                the_schema,
+                semaphore.make_permit(),
+                trace_state
+            );
         }, max_ops);
     }
 }
