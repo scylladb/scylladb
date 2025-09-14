@@ -895,11 +895,11 @@ public:
 //
 // Assumes the given `pos` and `schema` are alive during the function's lifetime.
 static std::predicate<const sstable&> auto
-make_pk_filter(const dht::ring_position& pos, const schema& schema) {
-    return [&pos, key = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(schema, *pos.key()))), cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
+make_pk_filter(const dht::ring_position& pos, const utils::hashed_key& hash, const schema& schema) {
+    return [&pos, hash, cmp = dht::ring_position_comparator(schema)] (const sstable& sst) {
         return cmp(pos, sst.get_first_decorated_key()) >= 0 &&
                cmp(pos, sst.get_last_decorated_key()) <= 0 &&
-               sst.filter_has_key(key);
+               sst.filter_has_key(hash);
     };
 }
 
@@ -909,16 +909,16 @@ const sstable_predicate& default_sstable_predicate() {
 }
 
 static std::predicate<const sstable&> auto
-make_sstable_filter(const dht::ring_position& pos, const schema& schema, const sstable_predicate& predicate) {
-    return [pk_filter = make_pk_filter(pos, schema), &predicate] (const sstable& sst) {
+make_sstable_filter(const dht::ring_position& pos, const utils::hashed_key& hash, const schema& schema, const sstable_predicate& predicate) {
+    return [pk_filter = make_pk_filter(pos, hash, schema), &predicate] (const sstable& sst) {
         return predicate(sst) && pk_filter(sst);
     };
 }
 
 // Filter out sstables for reader using bloom filter and supplied predicate
 static std::vector<shared_sstable>
-filter_sstable_for_reader(std::vector<shared_sstable>&& sstables, const schema& schema, const dht::ring_position& pos, const sstable_predicate& predicate) {
-    auto filter = [_filter = make_sstable_filter(pos, schema, predicate)] (const shared_sstable& sst) { return !_filter(*sst); };
+filter_sstable_for_reader(std::vector<shared_sstable>&& sstables, const schema& schema, const dht::ring_position& pos, const utils::hashed_key& hash, const sstable_predicate& predicate) {
+    auto filter = [_filter = make_sstable_filter(pos, hash, schema, predicate)] (const shared_sstable& sst) { return !_filter(*sst); };
     std::erase_if(sstables, filter);
     return std::move(sstables);
 }
@@ -990,7 +990,8 @@ sstable_set_impl::create_single_key_sstable_reader(
         const sstable_predicate& predicate) const
 {
     const auto& pos = pr.start()->value();
-    auto selected_sstables = filter_sstable_for_reader(select(pr), *schema, pos, predicate);
+    auto hash = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(*schema, *pos.key())));
+    auto selected_sstables = filter_sstable_for_reader(select(pr), *schema, pos, hash, predicate);
     auto num_sstables = selected_sstables.size();
     if (!num_sstables) {
         return make_empty_mutation_reader(schema, permit);
@@ -998,7 +999,8 @@ sstable_set_impl::create_single_key_sstable_reader(
     auto readers = filter_sstable_for_reader_by_ck(std::move(selected_sstables), *cf, schema, slice)
         | std::views::transform([&] (const shared_sstable& sstable) {
             tracing::trace(trace_state, "Reading key {} from sstable {}", pos, seastar::value_of([&sstable] { return sstable->get_filename(); }));
-            return sstable->make_reader(schema, permit, pr, slice, trace_state, fwd);
+            return sstable->make_reader(schema, permit, pr, slice, trace_state, fwd, mutation_reader::forwarding::yes,
+                default_read_monitor(), integrity_check::no, &hash);
           })
         | std::ranges::to<std::vector<mutation_reader>>();
 
@@ -1054,7 +1056,8 @@ time_series_sstable_set::create_single_key_sstable_reader(
                 pr, slice, std::move(trace_state), fwd_sm, fwd_mr, predicate);
     }
 
-    auto sst_filter = make_sstable_filter(pos, *schema, predicate);
+    auto hash = utils::make_hashed_key(static_cast<bytes_view>(key::from_partition_key(*schema, *pos.key())));
+    auto sst_filter = make_sstable_filter(pos, hash, *schema, predicate);
     auto it = std::find_if(_sstables->begin(), _sstables->end(), [&] (const sst_entry& e) { return sst_filter(*e.second); });
     if (it == _sstables->end()) {
         // No sstables contain data for the queried partition.
@@ -1064,11 +1067,12 @@ time_series_sstable_set::create_single_key_sstable_reader(
     auto& stats = *cf->cf_stats();
     stats.clustering_filter_count++;
 
-    auto create_reader = [schema, permit, &pr, &slice, trace_state, fwd_sm] (sstable& sst) {
-        return sst.make_reader(schema, permit, pr, slice, trace_state, fwd_sm);
+    auto create_reader = [schema, permit, &pr, &slice, trace_state, fwd_sm, hash] (sstable& sst) {
+        return sst.make_reader(schema, permit, pr, slice, trace_state, fwd_sm, mutation_reader::forwarding::yes,
+                default_read_monitor(), integrity_check::no, &hash);
     };
 
-    auto pk_filter = make_pk_filter(pos, *schema);
+    auto pk_filter = make_pk_filter(pos, hash, *schema);
     auto ck_filter = [ranges = slice.get_all_ranges()] (const sstable& sst) { return sst.may_contain_rows(ranges); };
 
     // We're going to pass this filter into sstable_position_reader_queue. The queue guarantees that
