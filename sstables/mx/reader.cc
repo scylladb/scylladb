@@ -1267,6 +1267,7 @@ class mx_sstable_mutation_reader : public mp_row_consumer_reader_mx {
     // We avoid unnecessary lookup for single partition reads thanks to this flag
     bool _single_partition_read = false;
     std::reference_wrapper<const dht::partition_range> _pr;
+    std::optional<utils::hashed_key> _single_partition_read_murmur_hash;
     streamed_mutation::forwarding _fwd;
     mutation_reader::forwarding _fwd_mr;
     read_monitor& _monitor;
@@ -1288,7 +1289,8 @@ public:
                             mutation_reader::forwarding fwd_mr,
                             read_monitor& mon,
                             integrity_check integrity,
-                            std::unique_ptr<abstract_index_reader> ir)
+                            std::unique_ptr<abstract_index_reader> ir,
+                            const utils::hashed_key* single_partition_read_murmur_hash)
             : mp_row_consumer_reader_mx(std::move(schema), permit, std::move(sst))
             , _slice_holder(std::move(slice))
             , _slice(_slice_holder.get())
@@ -1299,6 +1301,10 @@ public:
             // `mutation_reader::forwarding` which is `yes`.
             , _single_partition_read(pr.is_singular())
             , _pr(pr)
+            , _single_partition_read_murmur_hash(
+                single_partition_read_murmur_hash
+                    ? std::optional<utils::hashed_key>(*single_partition_read_murmur_hash)
+                    : std::nullopt)
             , _fwd(fwd)
             , _fwd_mr(fwd_mr)
             , _monitor(mon)
@@ -1523,7 +1529,9 @@ private:
             _sst->get_stats().on_single_partition_read();
             const auto& key = dht::ring_position_view(_pr.get().start()->value());
 
-            const auto present = co_await get_index_reader().advance_lower_and_check_if_present(key);
+            const auto present = _single_partition_read_murmur_hash
+                ? co_await get_index_reader().advance_lower_and_check_if_present(key, *_single_partition_read_murmur_hash)
+                : co_await get_index_reader().advance_lower_and_check_if_present(key);
 
             if (!present) {
                 _sst->get_filter_tracker().add_false_positive();
@@ -1853,10 +1861,12 @@ static mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
-        std::unique_ptr<abstract_index_reader> ir) {
+        std::unique_ptr<abstract_index_reader> ir,
+        const utils::hashed_key* single_partition_read_murmur_hash
+    ) {
     return make_mutation_reader<mx_sstable_mutation_reader>(
         std::move(sstable), std::move(schema), std::move(permit), range,
-        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir));
+        std::move(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
 }
 
 mutation_reader make_reader(
@@ -1870,9 +1880,11 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
-        std::unique_ptr<abstract_index_reader> ir) {
+        std::unique_ptr<abstract_index_reader> ir,
+        const utils::hashed_key* single_partition_read_murmur_hash
+) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir));
+            value_or_reference(slice), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
 }
 
 mutation_reader make_reader(
@@ -1886,9 +1898,11 @@ mutation_reader make_reader(
         mutation_reader::forwarding fwd_mr,
         read_monitor& monitor,
         integrity_check integrity,
-        std::unique_ptr<abstract_index_reader> ir) {
+        std::unique_ptr<abstract_index_reader> ir,
+        const utils::hashed_key* single_partition_read_murmur_hash
+) {
     return make_reader(std::move(sstable), std::move(schema), std::move(permit), range,
-            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir));
+            value_or_reference(std::move(slice)), std::move(trace_state), fwd, fwd_mr, monitor, integrity, std::move(ir), single_partition_read_murmur_hash);
 }
 
 /// a reader which does not support seeking to given position.

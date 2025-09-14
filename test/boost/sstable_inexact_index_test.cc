@@ -428,7 +428,8 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_range_query) {
                         mutation_reader::forwarding::yes,
                         default_read_monitor(),
                         sstables::integrity_check::no,
-                        std::make_unique<inexact_partition_index>(ncs, partition_positions, ck_positions, present_dks, cks, table.schema())
+                        std::make_unique<inexact_partition_index>(ncs, partition_positions, ck_positions, present_dks, cks, table.schema()),
+                        static_cast<utils::hashed_key*>(nullptr)
                     ));
                 }
                 // Check that the reader produces correct output for the chosen partition range.
@@ -519,7 +520,8 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_singular_query) {
                     std::span<uint64_t>(),
                     present_dks,
                     std::span<clustering_key>(),
-                    table.schema())
+                    table.schema()),
+                static_cast<utils::hashed_key*>(nullptr)
             ));
             testlog.debug("Check that the reader produces nothing");
             reader.produces_end_of_stream();

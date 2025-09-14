@@ -2493,7 +2493,9 @@ sstable::make_reader(
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
         read_monitor& mon,
-        integrity_check integrity) {
+        integrity_check integrity,
+        const utils::hashed_key* single_partition_read_murmur_hash
+) {
     const auto reversed = slice.is_reversed();
 
     auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
@@ -2504,7 +2506,19 @@ sstable::make_reader(
     auto index_reader = make_index_reader(permit, trace_state, prefer_bti, index_caching, range.is_singular());
 
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
-        return mx::make_reader(shared_from_this(), std::move(query_schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon, integrity, std::move(index_reader));
+        return mx::make_reader(
+            shared_from_this(),
+            std::move(query_schema),
+            std::move(permit),
+            range,
+            slice,
+            std::move(trace_state),
+            fwd,
+            fwd_mr,
+            mon,
+            integrity,
+            std::move(index_reader),
+            single_partition_read_murmur_hash);
     }
 
     // Multi-partition reversed queries are not yet supported natively in the mx reader.
@@ -2515,7 +2529,8 @@ sstable::make_reader(
     if (_version >= version_types::mc) {
         // The only mx case falling through here is reversed multi-partition reader
         auto rd = make_reversing_reader(mx::make_reader(shared_from_this(), query_schema->make_reversed(), std::move(permit),
-                range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon, integrity, std::move(index_reader)),
+                range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon,
+                integrity, std::move(index_reader), single_partition_read_murmur_hash),
             max_result_size);
         if (fwd) {
             rd = make_forwardable(std::move(rd));
