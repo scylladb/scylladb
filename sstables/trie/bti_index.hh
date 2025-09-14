@@ -144,6 +144,7 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     uint64_t partitions_db_root_pos,
     uint64_t total_data_db_file_size,
     schema_ptr,
-    reader_permit);
+    reader_permit,
+    tracing::trace_state_ptr);
 
 } // namespace sstables::trie

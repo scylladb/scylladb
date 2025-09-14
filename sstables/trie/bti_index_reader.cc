@@ -154,11 +154,11 @@ future<row_index_header> read_row_index_header(input_stream<char>&& input, uint6
     std::rethrow_exception(ex);
 }
 
-static future<row_index_header> read_row_index_header(cached_file& _file, uint64_t pos, reader_permit rp) {
+static future<row_index_header> read_row_index_header(cached_file& file, uint64_t pos, reader_permit rp, tracing::trace_state_ptr trace_state) {
     struct cached_file_data_source_impl : data_source_impl {
         cached_file& _file;
         cached_file::stream _stream;
-        cached_file_data_source_impl(cached_file& file, uint64_t pos, reader_permit permit)
+        cached_file_data_source_impl(cached_file& file, uint64_t pos, reader_permit permit, tracing::trace_state_ptr trace_state)
             : _file(file)
             // Note: we use the `cached_file::stream` without any size hints (readahead).
             // This means that parsing a large partition key -- which spans many pages -- might
@@ -167,19 +167,19 @@ static future<row_index_header> read_row_index_header(cached_file& _file, uint64
             // are in the cached page, we could make a size hint out of them) but
             // we ignore this for now, under the assumption that multi-page partition
             // keys are a fringe use case.
-            , _stream(_file.read(pos, std::move(permit)))
+            , _stream(_file.read(pos, std::move(permit), std::move(trace_state)))
         {}
         future<temporary_buffer<char>> get() override {
             return _stream.next();
         }
     };
     auto is = input_stream<char>(data_source(
-        std::make_unique<cached_file_data_source_impl>(_file, pos, rp)
+        std::make_unique<cached_file_data_source_impl>(file, pos, rp, std::move(trace_state))
     ));
     return read_row_index_header(
         std::move(is),
         pos,
-        _file.size() - pos,
+        file.size() - pos,
         std::move(rp)
     );
 }
@@ -233,18 +233,18 @@ public:
     // Walks down from the given root along the given key,
     // until the key is fully traversed or there's no child matching the next key byte.
     // Postcondition: initialized()
-    future<> set_to(uint64_t root, comparable_bytes_iterator auto&& key);
+    future<> set_to(uint64_t root, comparable_bytes_iterator auto&& key, const reader_permit&, const tracing::trace_state_ptr&);
     // Moves the cursor forward to the closest payloaded node to the
     // right of the current position.
     // (Or to EOF, if there's no such node).
     // Precondition: initialized() && !eof()
-    future<> step();
+    future<> step(const reader_permit&, const tracing::trace_state_ptr&);
     // Moves the cursor to the closest payloaded node to the left
     // of the current position.
     // (Or, if there's no such node, moves to the first payloaded node).
     // (Or, if there's no payloaded node, moves to EOF).
     // If there is no previous key, doesn't do anything.
-    future<> step_back();
+    future<> step_back(const reader_permit&, const tracing::trace_state_ptr&);
     // Returns the payload (if any) of the current node.
     payload_result payload() const;
     // Checks whether the cursor in the EOF position.
@@ -303,6 +303,7 @@ class index_cursor {
     // but doesn't account for the 8 kiB used by the trie cursors.
     // Does it need to?
     reader_permit _permit;
+    tracing::trace_state_ptr _trace_state;
     uint64_t _par_root;
 private:
     // If the current partition has a row index, reads its header.
@@ -310,7 +311,7 @@ private:
     // The colder part of set_after_row, just to hint at inlining the hotter part.
     future<> set_after_row_cold(lazy_comparable_bytes_from_clustering_position&);
 public:
-    index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, reader_permit);
+    index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, reader_permit, tracing::trace_state_ptr);
     index_cursor& operator=(const index_cursor&) = default;
     // Returns the data file position of the cursor. Can only be called after the cursor is set.
     //
@@ -383,10 +384,8 @@ class bti_index_reader : public sstables::abstract_index_reader {
     bti_node_reader _in_row;
     // We need the schema solely to parse the partition keys serialized in row index headers.
     schema_ptr _s;
-    // Supposed to account the memory usage of the index reader.
-    // FIXME: it doesn't actually do that yet.
-    // FIXME: it should also mark the permit as blocked on disk?
     reader_permit _permit;
+    tracing::trace_state_ptr _trace_state;
     // The index is, in essence, a pair of cursors.
     index_cursor _lower;
     index_cursor _upper;
@@ -426,7 +425,8 @@ public:
         uint64_t root_pos,
         uint64_t total_file_size,
         schema_ptr,
-        reader_permit);
+        reader_permit,
+        tracing::trace_state_ptr);
     // Implementation of the `abstract_index_reader` interface.
     virtual future<> close() noexcept override;
     virtual sstables::data_file_positions_range data_file_positions() const override;
@@ -457,19 +457,19 @@ trie_cursor::trie_cursor(bti_node_reader in)
 }
 
 // Documented near the declaration.
-future<> trie_cursor::set_to(uint64_t root, comparable_bytes_iterator auto&& key) {
-    auto result = co_await trie::traverse(_in, std::move(key), root);
+future<> trie_cursor::set_to(uint64_t root, comparable_bytes_iterator auto&& key, const reader_permit& permit, const tracing::trace_state_ptr& trace_state) {
+    auto result = co_await trie::traverse(_in, std::move(key), root, permit, trace_state);
     _trail = std::move(result.trail);
 }
 
 // Documented near the declaration.
-future<> trie_cursor::step() {
-    co_await trie::step(_in, _trail);
+future<> trie_cursor::step(const reader_permit& permit, const tracing::trace_state_ptr& trace_state) {
+    co_await trie::step(_in, _trail, permit, trace_state);
 }
 
 // Documented near the declaration.
-future<> trie_cursor::step_back() {
-    co_await trie::step_back(_in, _trail);
+future<> trie_cursor::step_back(const reader_permit& permit, const tracing::trace_state_ptr& trace_state) {
+    co_await trie::step_back(_in, _trail, permit, trace_state);
 }
 
 payload_result trie_cursor::payload() const {
@@ -507,11 +507,12 @@ const ancestor_trail& trie_cursor::trail() const {
     return _trail;
 }
 
-index_cursor::index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, reader_permit permit)
+index_cursor::index_cursor(uint64_t par_root, bti_node_reader par, bti_node_reader row, reader_permit permit, tracing::trace_state_ptr trace_state)
     : _partition_cursor(par)
     , _row_cursor(row)
     , _in_row(row)
-    , _permit(permit)
+    , _permit(std::move(permit))
+    , _trace_state(std::move(trace_state))
     , _par_root(par_root)
 {}
 
@@ -561,11 +562,11 @@ future<std::optional<uint64_t>> index_cursor::last_block_offset() const {
     auto cur = _row_cursor;
     const std::byte past_all_keys[] = {std::byte(0xff)};
 
-    co_await cur.set_to(_partition_metadata->trie_root, single_fragment_generator(past_all_keys).begin());
+    co_await cur.set_to(_partition_metadata->trie_root, single_fragment_generator(past_all_keys).begin(), _permit, _trace_state);
     // Sic. The last payloaded node points to the END_OF_PARTITION byte.
     // The second-to-last payloaded node points to the last clustering key block.
-    co_await cur.step_back();
-    co_await cur.step_back();
+    co_await cur.step_back(_permit, _trace_state);
+    co_await cur.step_back(_permit, _trace_state);
 
     auto result = _partition_metadata->data_file_offset + row_payload_to_offset(cur.payload());
     expensive_log("last_block_offset: {}", result);
@@ -640,7 +641,7 @@ future<> index_cursor::maybe_read_metadata() {
         return make_ready_future<>();
     }
     if (auto res = partition_payload_to_pos(_partition_cursor.payload()); res >= 0) {
-        return read_row_index_header(_in_row._file.get(), res, _permit).then([this] (auto result) {
+        return read_row_index_header(_in_row._file.get(), res, _permit, _trace_state).then([this] (auto result) {
             _partition_metadata = result;
         });
     }
@@ -650,11 +651,11 @@ future<> index_cursor::maybe_read_metadata() {
 future<> index_cursor::set_before_partition(lazy_comparable_bytes_from_ring_position& key) {
     _row_cursor.reset();
     _partition_metadata.reset();
-    co_await _partition_cursor.set_to(_par_root, key.begin());
+    co_await _partition_cursor.set_to(_par_root, key.begin(), _permit, _trace_state);
     if (_partition_cursor.at_leaf()) {
         _partition_cursor.snap_to_leaf();
     } else {
-        co_await _partition_cursor.step();
+        co_await _partition_cursor.step(_permit, _trace_state);
     }
     co_await maybe_read_metadata();
 }
@@ -662,7 +663,7 @@ future<> index_cursor::set_before_partition(lazy_comparable_bytes_from_ring_posi
 future<set_result> index_cursor::set_to_partition(lazy_comparable_bytes_from_ring_position& key, std::byte expected_hash_byte) {
     _row_cursor.reset();
     _partition_metadata.reset();
-    co_await _partition_cursor.set_to(_par_root, key.begin());
+    co_await _partition_cursor.set_to(_par_root, key.begin(), _permit, _trace_state);
     if (!_partition_cursor.at_leaf()) {
         expensive_log("index_cursor::set_to_partition, not at leaf, trail={}", fmt::join(_partition_cursor.trail(), ", "));
         co_return set_result::definitely_not_a_match;
@@ -680,14 +681,14 @@ future<set_result> index_cursor::set_to_partition(lazy_comparable_bytes_from_rin
 future<> index_cursor::set_after_partition(lazy_comparable_bytes_from_ring_position& key) {
     _row_cursor.reset();
     _partition_metadata.reset();
-    co_await _partition_cursor.set_to(_par_root, key.begin());
-    co_await _partition_cursor.step();
+    co_await _partition_cursor.set_to(_par_root, key.begin(), _permit, _trace_state);
+    co_await _partition_cursor.step(_permit, _trace_state);
     co_await maybe_read_metadata();
 }
 future<> index_cursor::next_partition() {
     _row_cursor.reset();
     _partition_metadata.reset();
-    return _partition_cursor.step().then([this] {
+    return _partition_cursor.step(_permit, _trace_state).then([this] {
         return maybe_read_metadata();
     });
 }
@@ -696,7 +697,7 @@ future<> index_cursor::set_before_row(lazy_comparable_bytes_from_clustering_posi
         co_return;
     }
     _row_cursor.reset();
-    co_await _row_cursor.set_to(_partition_metadata->trie_root, key.begin());
+    co_await _row_cursor.set_to(_partition_metadata->trie_root, key.begin(), _permit, _trace_state);
     if (!_row_cursor.at_key()) [[likely]] {
         // Note: in practice this branch is always taken
         // because of our choice of clustering block separators.
@@ -711,13 +712,13 @@ future<> index_cursor::set_before_row(lazy_comparable_bytes_from_clustering_posi
         // are encoded clustering key prefixes, which have been
         // trimmed and "nudged" by incrementing their last byte.
         // Something like this never looks like another encoded position_in_partition.
-        co_await _row_cursor.step_back();
+        co_await _row_cursor.step_back(_permit, _trace_state);
     }
 }
 
 future<> index_cursor::set_after_row_cold(lazy_comparable_bytes_from_clustering_position& key) {
-    co_await _row_cursor.set_to(_partition_metadata->trie_root, key.begin());
-    co_await _row_cursor.step();
+    co_await _row_cursor.set_to(_partition_metadata->trie_root, key.begin(), _permit, _trace_state);
+    co_await _row_cursor.step(_permit, _trace_state);
     if (_row_cursor.eof()) {
         co_await next_partition();
     }
@@ -755,19 +756,21 @@ bti_index_reader::bti_index_reader(
     uint64_t root_offset,
     uint64_t total_file_size,
     schema_ptr s,
-    reader_permit rp
+    reader_permit rp,
+    tracing::trace_state_ptr trace_state
 )
     : _local_partitions_db(std::move(partitions_db_file))
     , _local_rows_db(std::move(rows_db_file))
     , _in_row(rows_db)
     , _s(std::move(s))
     , _permit(std::move(rp))
+    , _trace_state(std::move(trace_state))
     // Note that each cursor gets its own copy of the `bti_node_reader`s,
     // not a reference to some shared one, because `bti_node_reader`
     // holds the currently-active page, and each bound might be in a different page.
     // (And both are needed to read lower and upper Data.db bounds).
-    , _lower(root_offset, partitions_db, rows_db, _permit)
-    , _upper(root_offset, partitions_db, rows_db, _permit)
+    , _lower(root_offset, partitions_db, rows_db, _permit, _trace_state)
+    , _upper(root_offset, partitions_db, rows_db, _permit, _trace_state)
     , _total_file_size(total_file_size)
 {
     trie_logger.debug("bti_index_reader::constructor: this={} root_offset={} total_file_size={} table={}.{}",
@@ -961,7 +964,8 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
     uint64_t partitions_db_root_pos,
     uint64_t total_data_db_file_size,
     schema_ptr s,
-    reader_permit permit
+    reader_permit permit,
+    tracing::trace_state_ptr trace_state
 ) {
     // The reader currently assumes that every index page (as chosen by the writer)
     // is fully contained within a single `cached_file` page.
@@ -974,7 +978,8 @@ std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
         partitions_db_root_pos,
         total_data_db_file_size,
         std::move(s),
-        std::move(permit)
+        std::move(permit),
+        std::move(trace_state)
     );
 }
 

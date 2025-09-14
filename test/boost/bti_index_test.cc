@@ -1012,6 +1012,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto partitions_db_root_pos = partitions_db_footer.trie_root_position;
 
         auto semaphore = tests::reader_concurrency_semaphore_wrapper();
+        auto trace_state = tracing::trace_state_ptr();
 
         // Step 4: run the reader test on the opened readers.
         test_index(dataset, [&] {
@@ -1021,7 +1022,9 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
             partitions_db_root_pos,
             std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
             the_schema,
-            semaphore.make_permit());
+            semaphore.make_permit(),
+            trace_state
+        );
         }, max_ops);
     }
 }
