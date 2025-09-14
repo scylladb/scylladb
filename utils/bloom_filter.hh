@@ -39,6 +39,7 @@ public:
     ~bloom_filter() noexcept;
 
     virtual void add(const bytes_view& key) override;
+    virtual void add(const hashed_key& key) override;
 
     virtual bool is_present(const bytes_view& key) override;
 
@@ -77,6 +78,7 @@ struct always_present_filter: public i_filter {
     }
 
     virtual void add(const bytes_view& key) override { }
+    virtual void add(const hashed_key& key) override { }
 
     virtual void clear() override { }
 
