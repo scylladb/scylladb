@@ -638,7 +638,20 @@ const std::map<operation, operation_func> operations_with_func{
             typed_option<int>("nodes", 3, "Number of nodes in the cluster."),
             typed_option<int>("shards", 30, "Number of shards per node.")
           }
-        }, &run_add_dec}
+        }, &run_add_dec},
+
+        {{"parallel-scaleout",
+         "Simulates a single scale-out involving simultaneous addition of multiple nodes per rack",
+         "",
+         {
+            typed_option<int>("tablets_per_table", 256, "Number of tablets per table."),
+            typed_option<int>("tables", 70, "Table count."),
+            typed_option<int>("nodes-per-rack", 5, "Number of initial nodes per rack."),
+            typed_option<int>("extra-nodes-per-rack", 3, "Number of nodes to add per rack."),
+            typed_option<int>("racks", 2, "Number of racks."),
+            typed_option<int>("shards", 88, "Number of shards per node.")
+          }
+        }, &test_parallel_scaleout},
     }
 };
 
