@@ -421,6 +421,60 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
     co_return global_res;
 }
 
+void test_parallel_scaleout(const bpo::variables_map& opts) {
+    const shard_id shard_count = opts["shards"].as<int>();
+    const int nr_tables = opts["tables"].as<int>();
+    const int tablets_per_table = opts["tablets_per_table"].as<int>();
+    const int nr_racks = opts["racks"].as<int>();
+    const int initial_nodes = nr_racks * opts["nodes-per-rack"].as<int>();
+    const int extra_nodes = nr_racks * opts["extra-nodes-per-rack"].as<int>();
+
+    auto cfg = tablet_cql_test_config();
+    cfg.db_config->rf_rack_valid_keyspaces(true);
+    results global_res;
+    do_with_cql_env_thread([&] (auto& e) {
+        topology_builder topo(e);
+        locator::load_stats stats;
+
+        auto make_stats = [&] {
+            return make_lw_shared<locator::load_stats>(stats);
+        };
+
+        std::vector<endpoint_dc_rack> racks;
+        racks.push_back(topo.rack());
+        for (int i = 1; i < nr_racks; ++i) {
+            racks.push_back(topo.start_new_rack());
+        }
+
+        auto add_host = [&] (endpoint_dc_rack rack) {
+            auto host = topo.add_node(service::node_state::normal, shard_count, rack);
+            stats.capacity[host] = default_target_tablet_size * shard_count;
+            testlog.info("Added new node: {}", host);
+        };
+
+        auto add_hosts = [&] (int n) {
+            for (int i = 0; i < n; ++i) {
+                add_host(racks[i % racks.size()]);
+            }
+        };
+
+        add_hosts(initial_nodes);
+
+        testlog.info("Creating schema");
+        auto ks1 = add_keyspace(e, {{topo.dc(), nr_racks}}, tablets_per_table);
+        seastar::parallel_for_each(std::views::iota(0, nr_tables), [&] (int) -> future<> {
+            return add_table(e, ks1).discard_result();
+        }).get();
+
+        testlog.info("Initial rebalancing");
+        rebalance_tablets(e, make_stats());
+
+        testlog.info("Scaleout");
+        add_hosts(extra_nodes);
+        global_res.stats += rebalance_tablets(e, make_stats());
+    }, cfg).get();
+}
+
 future<> run_simulation(const params& p, const sstring& name = "") {
     testlog.info("[run {}] params: {}", name, p);
 
@@ -527,7 +581,20 @@ const std::map<operation, operation_func> operations_with_func{
             typed_option<int>("nodes", 3, "Number of nodes in the cluster."),
             typed_option<int>("shards", 30, "Number of shards per node.")
           }
-        }, &run_add_dec}
+        }, &run_add_dec},
+
+        {{"parallel-scaleout",
+         "Simulates a single scale-out involving simultaneous addition of multiple nodes per rack",
+         "",
+         {
+            typed_option<int>("tablets_per_table", 256, "Number of tablets per table."),
+            typed_option<int>("tables", 70, "Table count."),
+            typed_option<int>("nodes-per-rack", 5, "Number of initial nodes per rack."),
+            typed_option<int>("extra-nodes-per-rack", 3, "Number of nodes to add per rack."),
+            typed_option<int>("racks", 2, "Number of racks."),
+            typed_option<int>("shards", 88, "Number of shards per node.")
+          }
+        }, &test_parallel_scaleout},
     }
 };
 
