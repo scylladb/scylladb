@@ -439,6 +439,9 @@ bool bti_node_reader::cached(int64_t pos) const {
 }
 
 seastar::future<> bti_node_reader::load(int64_t pos) {
+    if (cached(pos)) {
+        return make_ready_future<>();
+    }
     return _file.get().get_shared_page(pos, nullptr).then([this](auto page) {
         _cached_page = std::move(page.ptr);
     });
