@@ -67,3 +67,23 @@ public:
 
     virtual void accept_row_cell(column_id id, collection_mutation_view) = 0;
 };
+
+class async_mutation_partition_visitor {
+public:
+    virtual void accept_partition_tombstone(tombstone) = 0;
+
+    virtual void accept_static_cell(column_id, atomic_cell_view) = 0;
+
+    virtual void accept_static_cell(column_id, collection_mutation_view) = 0;
+
+    virtual future<> accept_row_tombstone(const range_tombstone&) = 0;
+
+    virtual future<> accept_row(position_in_partition_view key, const row_tombstone& deleted_at, const row_marker& rm,
+        is_dummy = is_dummy::no, is_continuous = is_continuous::yes) = 0;
+
+    virtual void accept_row_cell(column_id id, atomic_cell_view) = 0;
+
+    virtual void accept_row_cell(column_id id, collection_mutation_view) = 0;
+
+    virtual future<> accept_end_of_partition() { return make_ready_future(); };
+};
