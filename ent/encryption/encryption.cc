@@ -661,6 +661,7 @@ public:
                             sstables::component_type::TemporaryStatistics,
                             sstables::component_type::Partitions,
                             sstables::component_type::Rows,
+                            sstables::component_type::TemporaryHashes,
             }) {
                 if (mask & (1 << int(c))) {
                     ccs.emplace_back(c);
@@ -829,6 +830,7 @@ public:
         case sstables::component_type::TemporaryStatistics:
         case sstables::component_type::Partitions:
         case sstables::component_type::Rows:
+        case sstables::component_type::TemporaryHashes:
         case sstables::component_type::Unknown:
             break;
         }
@@ -859,6 +861,7 @@ public:
         case sstables::component_type::TemporaryStatistics:
         case sstables::component_type::Rows:
         case sstables::component_type::Partitions:
+        case sstables::component_type::TemporaryHashes:
         case sstables::component_type::Unknown:
             auto [id, esx] = get_encryption_schema_extension(sst, type);
             if (esx) {
