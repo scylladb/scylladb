@@ -1182,15 +1182,23 @@ zstd_cdict::zstd_cdict(dictionary_holder& owner, lw_shared_ptr<const raw_dict> r
         if (_owner) {
             _owner->account_memory_delta(n);
         }})
-    , _dict(
+    , _dict(({
+        // With our parameters,
+        // a level 3 CDict allocates about 400 kiB of contiguous memory,
+        // a level 4 CDict allocates about 1.1 MiB of contiguous memory,
+        // a level 5 CDict allocates about 600 kiB of contiguous memory.
+        //
+        // So a threshold of 2 MiB should silence the warning in
+        // the typical and expected uses.
+        const memory::scoped_large_allocation_warning_threshold slawt{2*1024*1024};
         ZSTD_createCDict_advanced(
             _raw->raw().data(),
             _raw->raw().size(),
             ZSTD_dlm_byRef,
             ZSTD_dct_auto,
             ZSTD_getCParams(level, 4096, _raw->raw().size()),
-            _alloc.as_zstd_custommem()),
-        ZSTD_freeCDict)
+            _alloc.as_zstd_custommem());
+        }), ZSTD_freeCDict)
 {
     if (!_dict) {
         throw std::bad_alloc();
