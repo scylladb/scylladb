@@ -98,6 +98,7 @@ public:
     virtual future<uint64_t> free_space() const override {
         return seastar::fs_avail(prefix());
     }
+    virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
     virtual sstring prefix() const override { return _dir.native(); }
 };
@@ -555,6 +556,21 @@ future<> filesystem_storage::remove_by_registry_entry(entry_descriptor desc) {
     on_internal_error(sstlog, "Filesystem storage doesn't keep its entries in registry");
 }
 
+future<> filesystem_storage::unlink_component(const sstable& sst, component_type type) noexcept {
+    std::string name;
+    try {
+        name = fmt::to_string(sst.filename(type));
+        co_await sst.sstable_write_io_check(remove_file, name);
+    } catch (...) {
+        // Log and ignore the failure since there is nothing much we can do about it at this point.
+        // a. Compaction will retry deleting the sstable in the next pass, and
+        // b. in the future sstables_manager is planned to handle sstables deletion.
+        // c. Eventually we may want to record these failures in a system table
+        //    and notify the administrator about that for manual handling (rather than aborting).
+        sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
+    }
+}
+
 class s3_storage : public sstables::storage {
     shared_ptr<s3::client> _client;
     sstring _bucket;
@@ -603,6 +619,7 @@ public:
         // assumes infinite space on s3 (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
     }
+    virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
     virtual sstring prefix() const override { return std::visit([] (const auto& v) { return fmt::to_string(v); }, _location); }
 };
@@ -764,6 +781,15 @@ future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
         }
     });
     co_await _client->delete_object(prefix + "/" + sstable_version_constants::TOC_SUFFIX);
+}
+
+future<> s3_storage::unlink_component(const sstable& sst, component_type type) noexcept {
+    auto name = make_s3_object_name(sst, type);
+    try {
+        co_await _client->delete_object(name);
+    } catch (...) {
+        sstlog.warn("Failed to delete {}: {}. Ignoring.", name, std::current_exception());
+    }
 }
 
 future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
