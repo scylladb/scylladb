@@ -193,6 +193,16 @@ void sstable_directory::filesystem_components_lister::handle(sstables::entry_des
         // and we'll go with it.
         _state->files_for_removal.insert(filename.native());
         break;
+    case component_type::TemporaryHashes:
+        // We generate TemporaryHashes when writing the sstable,
+        // and it's removed before the sstable is sealed.
+        // If it's present, then it's a leftover from a partially-written sstable,
+        // and should be removed.
+        // This file isn't included in the TOC, so we can't remove on the "usual"
+        // mechanism for partially-written components, and instead we have to explicitly
+        // mark it for removal here.
+        _state->files_for_removal.insert(filename.native());
+        break;
     case component_type::TOC:
         _state->descriptors.emplace(desc.generation, std::move(desc));
         break;

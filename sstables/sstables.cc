@@ -187,6 +187,10 @@ future<file> sstable::new_sstable_component_file(const io_error_handler& error_h
   }
 }
 
+future<> sstable::unlink_component(component_type type) noexcept {
+    return _storage->unlink_component(*this, type);
+}
+
 const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_version_types>> version_string = {
     { sstable_version_types::ka , "ka" },
     { sstable_version_types::la , "la" },
@@ -1597,6 +1601,51 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
 
     // Replace the existing filter with the new optimal filter.
     _components->filter.swap(optimal_filter);
+}
+
+void sstable::build_delayed_filter(uint64_t num_partitions) {
+    auto optimal_filter = utils::i_filter::get_filter(num_partitions, _schema->bloom_filter_fp_chance(), get_filter_format(_version));
+    sstlog.info("Building delayed bloom filter {}: {} filter bytes. sstable origin: {}", filename(component_type::Filter),
+        downcast_ptr<utils::filter::bloom_filter>(optimal_filter.get())->bits().memory_size(), _origin);
+
+    auto hashes_file = open_file(component_type::TemporaryHashes, open_flags::ro).get();
+    auto hashes_file_closer = deferred_close(hashes_file);
+    constexpr uint64_t murmur_hash_size_bytes = 16;
+
+    file_input_stream_options options = {
+        .buffer_size = sstable_buffer_size,
+        .read_ahead = 1,
+    };
+    auto in = make_file_input_stream(hashes_file, 0, num_partitions * murmur_hash_size_bytes, options);
+    auto in_closer = deferred_close(in);
+
+    constexpr uint64_t batch_size_bytes = 4096;
+    static_assert(batch_size_bytes % murmur_hash_size_bytes == 0, "Batch size must be a multiple of hash size");
+
+    size_t processed_hashes = 0;
+    while (processed_hashes < num_partitions) {
+        auto buf = in.read_exactly(batch_size_bytes).get();
+        auto p = buf.get();
+        for (uint64_t offset = 0; offset + murmur_hash_size_bytes <= buf.size(); offset += murmur_hash_size_bytes) {
+            std::array<uint64_t, 2> hash;
+            std::memcpy(hash.data(), p + offset, sizeof(hash));
+            hash[0] = seastar::le_to_cpu(hash[0]);
+            hash[1] = seastar::le_to_cpu(hash[1]);
+            auto hashed_key = utils::hashed_key(hash);
+            optimal_filter->add(hashed_key);
+            processed_hashes++;
+        }
+        if (buf.size() < batch_size_bytes) {
+            break;
+        }
+    }
+    if (processed_hashes != num_partitions) {
+        throw malformed_sstable_exception(fmt::format("Temporary hashes file {} was supposed to contain {} hashes, but it contains only {} hashes",
+            filename(component_type::TemporaryHashes), num_partitions, processed_hashes));
+    }
+
+    _components->filter.swap(optimal_filter);
+    unlink_component(component_type::TemporaryHashes).get();
 }
 
 size_t sstable::total_reclaimable_memory_size() const {

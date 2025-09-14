@@ -653,6 +653,8 @@ private:
 
     future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) const noexcept;
 
+    future<> unlink_component(component_type type) noexcept;
+
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
@@ -677,6 +679,8 @@ private:
     // filter initialisation was not good.
     // This should be called only before an sstable is sealed.
     void maybe_rebuild_filter_from_index(uint64_t num_partitions);
+
+    void build_delayed_filter(uint64_t num_partitions);
 
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
