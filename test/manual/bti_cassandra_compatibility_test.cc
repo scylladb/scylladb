@@ -559,15 +559,17 @@ void do_test(const test_config& cfg) {
                     if (current_clustering_block) {
                         push_clustering_block();
                     }
+                    auto pk = sstables::key::from_partition_key(*adjusted_schema, current_partition->dk.key());
+                    auto hash = utils::make_hashed_key(bytes_view(pk));
                     auto payload = bti_row_index_writer.finish(
                         sst->get_version(),
                         *adjusted_schema,
                         current_partition->data_file_offset,
                         frag.offset,
-                        sstables::key::from_partition_key(*adjusted_schema, current_partition->dk.key()),
+                        pk,
                         sstable_deletion_time_from_tombstone(current_partition->partition_tombstone)
                     );
-                    bti_partition_index_writer.add(*adjusted_schema, current_partition->dk, payload);
+                    bti_partition_index_writer.add(*adjusted_schema, current_partition->dk, hash, payload);
                     current_partition.reset();
                 }
             }
