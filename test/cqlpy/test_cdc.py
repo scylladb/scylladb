@@ -6,7 +6,7 @@ from cassandra.cluster import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
 
-from .util import new_test_table, unique_name
+from .util import new_test_table, unique_name, keyspace_has_tablets
 from .nodetool import flush
 import pytest
 import time
@@ -22,15 +22,18 @@ def wait_for_first_cdc_generation(cql, timeout):
         assert time.time() < deadline, "Timed out waiting for the first CDC generation"
         time.sleep(1)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
     '''Test that the stream IDs chosen for CDC log entries come from the CDC generation
     whose streams are listed in the streams description table. Since this test is executed
     on a single-node cluster, there is only one generation.'''
 
-    wait_for_first_cdc_generation(cql, 60)
+    has_tablets = keyspace_has_tablets(cql, test_keyspace)
+
+    if not has_tablets:
+        wait_for_first_cdc_generation(cql, 60)
+
+    stream_ids = set()
 
     schema = "pk int primary key"
     extra = " with cdc = {'enabled': true}"
@@ -41,22 +44,26 @@ def test_cdc_log_entries_use_cdc_streams(scylla_only, cql, test_keyspace):
 
         log_stream_ids = set(r[0] for r in cql.execute(f'select "cdc$stream_id" from {table}_scylla_cdc_log'))
 
+        if has_tablets:
+            streams_desc = cql.execute(SimpleStatement(
+                    'select stream_id from system.cdc_streams',
+                    consistency_level=ConsistencyLevel.ONE))
+            for entry in streams_desc:
+                stream_ids.add(entry.stream_id)
+
     # There should be exactly one generation, so we just select the streams
-    streams_desc = cql.execute(SimpleStatement(
-            'select streams from system_distributed.cdc_streams_descriptions_v2',
-            consistency_level=ConsistencyLevel.ONE))
-    stream_ids = set()
-    for entry in streams_desc:
-        stream_ids.update(entry.streams)
+    if not has_tablets:
+        streams_desc = cql.execute(SimpleStatement(
+                'select streams from system_distributed.cdc_streams_descriptions_v2',
+                consistency_level=ConsistencyLevel.ONE))
+        for entry in streams_desc:
+            stream_ids.update(entry.streams)
 
     assert(log_stream_ids.issubset(stream_ids))
 
 
 # Test for #10473 - reading logs (from sstable) after dropping
 # column in base.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
     schema = "pk int primary key, v int"
     extra = " with cdc = {'enabled': true}"
@@ -70,9 +77,6 @@ def test_cdc_alter_table_drop_column(scylla_only, cql, test_keyspace):
 
 # Regression test for #12098 - check that LWT inserts don't observe
 # themselves inside preimages
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace):
     schema = "pk int primary key"
     extra = " with cdc = {'enabled': true, 'preimage':true}"
@@ -93,9 +97,6 @@ def test_cdc_with_lwt_preimage(scylla_only, cql, test_keyspace):
 # use for its backing view, the CDC code doesn't do that, but creating the
 # table with CDC (or enabling CDC) should fail gracefully with a clear
 # error message, and this test verifies that.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cdc_taken_log_name(scylla_only, cql, test_keyspace):
     name = test_keyspace + "." + unique_name()
     cql.execute(f"CREATE TABLE {name}_scylla_cdc_log (p int PRIMARY KEY)")
@@ -117,9 +118,6 @@ def test_cdc_taken_log_name(scylla_only, cql, test_keyspace):
     finally:
         cql.execute(f"DROP TABLE {name}_scylla_cdc_log")
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_alter_column_of_cdc_log_table(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int", "with cdc = {'enabled': true}") as table:
         cdc_log_table_name = f"{table}_scylla_cdc_log"
@@ -141,9 +139,6 @@ def test_alter_column_of_cdc_log_table(cql, test_keyspace, scylla_only):
         with pytest.raises(InvalidRequest, match=errmsg):
             cql.execute(f'ALTER TABLE {cdc_log_table_name} DROP "cdc$deleted_u"')
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_rename_column_of_cdc_log_table(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int", "with cdc = {'enabled': true}") as table:
         cdc_log_table_name = f"{table}_scylla_cdc_log"
@@ -160,9 +155,6 @@ def test_rename_column_of_cdc_log_table(cql, test_keyspace, scylla_only):
             cql.execute(f'ALTER TABLE {cdc_log_table_name} RENAME "cdc$deleted_u" TO c')
 
 # Verify that you cannot modify the set of columns on a CDC log table, even when it stops being active.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_alter_column_of_inactive_cdc_log_table(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int", "with cdc = {'enabled': true}") as table:
         cdc_log_table_name = f"{table}_scylla_cdc_log"
@@ -204,9 +196,6 @@ def test_alter_column_of_fake_cdc_log_table(cql, test_keyspace, scylla_only):
         cql.execute(f"DROP TABLE IF EXISTS {test_keyspace}.{fake_cdc_log_table_name}")
 
 # Verify that you cannot rename a column of a CDC log table, even when it stops being active.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_rename_column_of_inactive_cdc_log_table(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int, u int", "with cdc = {'enabled': true}") as table:
         cdc_log_table_name = f"{table}_scylla_cdc_log"
@@ -246,9 +235,7 @@ def test_rename_column_of_fake_cdc_log_table(cql, test_keyspace, scylla_only):
 #
 # Verify that changes in the base table after disabling CDC are reflected on the log table after re-enabling CDC.
 # Verify that we can perform basic operations on the log table without running into problems.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_reattach_cdc_log_table_after_altering_base(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int, v int, u int, a int, PRIMARY KEY (p, v)", "WITH cdc = {'enabled': true}") as table:
         cdc_log_table = f"{table}_scylla_cdc_log"
@@ -309,9 +296,7 @@ def test_reattach_cdc_log_table_after_altering_base(cql, test_keyspace, scylla_o
 #
 # Verify that changes in the base table after disabling CDC are reflected on the log table after re-enabling CDC,
 # and that the log table ends up with the same definition as if it had never been detached.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
+@pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_reattach_cdc_log_table_after_altering_base_schema(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int, v int, u int, a int, PRIMARY KEY (p, v)", "WITH cdc = {'enabled': true}") as t1, \
           new_test_table(cql, test_keyspace, "p int, v int, u int, a int, PRIMARY KEY (p, v)", "WITH cdc = {'enabled': true}") as t2:
@@ -345,9 +330,6 @@ def test_reattach_cdc_log_table_after_altering_base_schema(cql, test_keyspace, s
 
 # Verify that the `tombstone_gc` property is present after creating a CDC log table.
 # Reproducer of scylladb/scylladb#25187.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_log_table_tombstone_gc_present(cql, test_keyspace, scylla_only):
     def get_log_alter_stmt(log_table_name: str):
         descs_it = cql.execute(f"DESCRIBE KEYSPACE {test_keyspace} WITH INTERNALS")
@@ -366,9 +348,6 @@ def test_log_table_tombstone_gc_present(cql, test_keyspace, scylla_only):
 # Verify that performing a no-op ALTER TABLE statement (changing a property to the same value)
 # on the log table doesn't change anything.
 # Reproducer of scylladb/scylladb#25187.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_desc_log_table_properties_preserved_after_noop_alter(cql, test_keyspace, scylla_only):
     def get_log_alter_stmt(log_table_name: str):
         descs_it = cql.execute(f"DESCRIBE KEYSPACE {test_keyspace} WITH INTERNALS")

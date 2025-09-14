@@ -53,9 +53,6 @@ def test_cannot_query_empty_vector_column(cql, test_keyspace):
 #         .hasMessage("Invalid vector literal for val of type vector<float, 3>; expected 3 elements, but given 2");
 #     }
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cannot_query_wrong_number_of_dimensions(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, str_val text, val vector<float, 3>, PRIMARY KEY(pk))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -72,9 +69,6 @@ def test_cannot_query_wrong_number_of_dimensions(cql, test_keyspace):
             "SELECT * FROM %s ORDER BY val ANN OF [2.5, 3.5] LIMIT 5"
         )
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_multi_vector_orderings_not_allowed(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, str_val text, val1 vector<float, 3>, val2 vector<float, 3>, PRIMARY KEY(pk))") as table:
 
@@ -89,9 +83,6 @@ def test_multi_vector_orderings_not_allowed(cql, test_keyspace):
             "SELECT * FROM %s ORDER BY val1 ANN OF [2.5, 3.5, 4.5], val2 ANN OF [2.1, 3.2, 4.0] LIMIT 2"
         )
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_descending_vector_ordering_is_not_allowed(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, val vector<float, 3>, PRIMARY KEY(pk))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -100,9 +91,6 @@ def test_descending_vector_ordering_is_not_allowed(cql, test_keyspace):
         assert_invalid_message(cql, table, "Descending ANN ordering is not supported",
                                "SELECT val FROM %s where val=[1.2, 1.2, 1.2] ORDER BY val ann of [2.5, 3.5, 4.5] DESC LIMIT 2")
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_vector_ordering_is_not_allowed_with_clustering_ordering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -130,9 +118,6 @@ def test_invalid_column_name_with_ann(cql, test_keyspace):
             "SELECT k FROM %s ORDER BY bad_col ANN OF [1.0] LIMIT 1"
         )
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cannot_perform_non_ann_query_on_vector_index(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(pk int, ck int, val vector<float, 3>, PRIMARY KEY(pk, ck))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -165,9 +150,6 @@ def test_cannot_order_with_ann_on_non_vector_column(cql, test_keyspace):
 #         assertThatThrownBy(() -> execute("SELECT * FROM %s ORDER BY value ann of [0.0, 0.0] LIMIT 2")).isInstanceOf(InvalidRequestException.class);
 #     }
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -205,9 +187,6 @@ def test_must_have_limit_specified_and_within_max_allowed(cql, test_keyspace):
 #         assertEquals(1, result.size());
 #     }
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v vector<float, 1>, c int)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -223,9 +202,6 @@ def test_cannot_have_aggregation_on_ann_query(cql, test_keyspace):
             "SELECT sum(c) FROM %s WHERE k = 1 ORDER BY v ANN OF [0] LIMIT 4"
         )
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_multiple_vector_columns_in_query_fail_correctly(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, v1 vector<float, 1>, v2 vector<float, 1>)") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
@@ -254,9 +230,6 @@ def test_ann_ordering_not_allowed_without_index_where_indexed_column_exists_in_q
             "SELECT * FROM %s WHERE c >= 100 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_keyspace):
     ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = (
         SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE if is_scylla(cql) else CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE
@@ -303,9 +276,6 @@ def test_cannot_post_filter_on_non_indexed_column_with_ann_ordering(cql, test_ke
             "SELECT * FROM %s WHERE token(pk1, pk2) = token(1, 1) AND ck2 = 1 ORDER BY v ANN OF [1] LIMIT 4 ALLOW FILTERING"
         )
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cannot_have_per_partition_limit_with_ann_ordering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v vector<float, 1>, PRIMARY KEY(k, c))") as table:
         custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
