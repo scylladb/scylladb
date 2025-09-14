@@ -53,9 +53,13 @@ public:
               : _value(std::move(value))
               , _inclusive(inclusive)
     { }
-    interval_bound(interval_bound<const T&> b) requires (!std::is_reference_v<T>)
+    interval_bound(const interval_bound& b) = default;
+    interval_bound(interval_bound&& b) = default;
+    interval_bound(const interval_bound<const T&>& b) requires (!std::is_reference_v<T>)
               : interval_bound(b.value(), b.is_inclusive())
     { }
+    interval_bound& operator=(const interval_bound&) = default;
+    interval_bound& operator=(interval_bound&&) = default;
     operator interval_bound<const T&>() const requires (!std::is_reference_v<T>) {
         return interval_bound<const T&>(_value, _inclusive);
     }
