@@ -352,10 +352,10 @@ std::optional<sstring> secondary_index_manager::custom_index_class(const schema&
 
     auto idx = _indices.find(index_name_from_table_name(s.cf_name()));
 
-    if (idx == _indices.end() || !(*idx).second.metadata().options().contains(db::index::secondary_index::custom_index_option_name)) {
+    if (idx == _indices.end() || !(*idx).second.metadata().options().contains(db::index::secondary_index::custom_class_option_name)) {
         return std::nullopt;
     } else {
-        return (*idx).second.metadata().options().at(db::index::secondary_index::custom_index_option_name);
+        return (*idx).second.metadata().options().at(db::index::secondary_index::custom_class_option_name);
     }
 }
 
@@ -377,7 +377,7 @@ std::optional<std::function<std::unique_ptr<custom_index>()>> secondary_index_ma
 }
 
 std::optional<std::unique_ptr<custom_index>> secondary_index_manager::get_custom_class(const index_metadata& im) {
-    auto it = im.options().find(db::index::secondary_index::custom_index_option_name);
+    auto it = im.options().find(db::index::secondary_index::custom_class_option_name);
     if (it == im.options().end()) {
         return std::nullopt;
     }

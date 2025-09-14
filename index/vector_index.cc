@@ -49,7 +49,7 @@ static void validate_similarity_function(const sstring& value) {
     }
 }
 
-const static std::unordered_map<sstring, std::function<void(const sstring&)>> supported_options = {
+const static std::unordered_map<sstring, std::function<void(const sstring&)>> vector_index_options = {
         {"similarity_function", validate_similarity_function},
         {"maximum_node_connections", validate_unsigned_option<512>},
         {"construction_beam_width", validate_unsigned_option<4096>},
@@ -135,8 +135,8 @@ void vector_index::check_cdc_options(const schema& schema) {
 
 void vector_index::check_index_options(cql3::statements::index_prop_defs& properties) {
     for (auto option: properties.get_raw_options()) {
-        auto it = supported_options.find(option.first);
-        if (it == supported_options.end()) {
+        auto it = vector_index_options.find(option.first);
+        if (it == vector_index_options.end()) {
             throw exceptions::invalid_request_exception(format("Unsupported option {} for vector index", option.first));
         }
         it->second(option.second);
@@ -153,13 +153,20 @@ void vector_index::validate(const schema &schema, cql3::statements::index_prop_d
 bool vector_index::has_vector_index(const schema& s) {
     auto i = s.indices();
     return std::any_of(i.begin(), i.end(), [](const auto& index) {
-        auto it = index.options().find(db::index::secondary_index::custom_index_option_name);
+        auto it = index.options().find(db::index::secondary_index::custom_class_option_name);
         if (it != index.options().end()) {
             auto custom_class = secondary_index_manager::get_custom_class_factory(it->second);
             return (custom_class && dynamic_cast<vector_index*>((*custom_class)().get()));
         }
         return false;
     });
+}
+
+/// Returns the schema version of the base table at which the index was created.
+/// This is used to determine if the index needs to be rebuilt after a schema change.
+/// The CREATE INDEX and DROP INDEX statements does change the schema version.
+table_schema_version vector_index::index_version(const schema& schema) {
+    return schema.version();
 }
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {
