@@ -3462,6 +3462,10 @@ future<> topology_coordinator::build_coordinator_state(group0_guard guard) {
     auto auth_version = co_await _sys_ks.get_auth_version();
     if (auth_version < db::system_keyspace::auth_version_t::v2) {
         rtlogger.info("migrating system_auth keyspace data");
+        // wait until service is fully started, otherwise some
+        // init code assuming auth v1 may run after we migrate
+        // it to v2 here
+        co_await _auth_ready_cb(_as);
         co_await auth::migrate_to_auth_v2(_sys_ks, _group0.client(),
                 [this] (abort_source&) { return start_operation();}, _as);
     }
