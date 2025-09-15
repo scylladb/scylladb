@@ -568,7 +568,7 @@ future<std::optional<uint64_t>> index_cursor::last_block_offset() const {
     co_await cur.step_back(_permit, _trace_state);
     co_await cur.step_back(_permit, _trace_state);
 
-    auto result = _partition_metadata->data_file_offset + row_payload_to_offset(cur.payload());
+    auto result = row_payload_to_offset(cur.payload());
     expensive_log("last_block_offset: {}", result);
     co_return result;
 }
