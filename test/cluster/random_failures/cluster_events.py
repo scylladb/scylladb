@@ -189,10 +189,6 @@ async def drop_keyspace(manager: ManagerClient,
     )
 
 
-@deselect_for(
-    # TODO: remove this skip when #16317 will be resolved.
-    reason="Cannot create CDC log for tables, because keyspace uses tablets. See issue #16317",
-)
 async def add_cdc(manager: ManagerClient,
                   random_tables: RandomTables,
                   error_injection: str) -> AsyncIterator[None]:
@@ -208,10 +204,6 @@ async def add_cdc(manager: ManagerClient,
     yield
 
 
-@deselect_for(
-    # TODO: remove this skip when #16317 will be resolved.
-    reason="Cannot create CDC log for tables, because keyspace uses tablets. See issue #16317",
-)
 async def drop_cdc(manager: ManagerClient,
                    random_tables: RandomTables,
                    error_injection: str) -> AsyncIterator[None]:
