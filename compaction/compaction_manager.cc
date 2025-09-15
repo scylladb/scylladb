@@ -1281,14 +1281,14 @@ future<> compaction_manager::really_do_stop() noexcept {
     _metrics.clear();
     co_await stop_ongoing_compactions("shutdown");
     co_await _task_manager_module->stop();
-    if (!_tasks.empty()) {
-        on_fatal_internal_error(cmlog, format("{} tasks still exist after being stopped", _tasks.size()));
-    }
     co_await coroutine::parallel_for_each(_compaction_state | std::views::values, [] (compaction_state& cs) -> future<> {
         if (!cs.gate.is_closed()) {
             co_await cs.gate.close();
         }
     });
+    if (!_tasks.empty()) {
+        on_fatal_internal_error(cmlog, format("{} tasks still exist after being stopped", _tasks.size()));
+    }
     reevaluate_postponed_compactions();
     co_await std::move(_waiting_reevalution);
     co_await _sys_ks.close();
