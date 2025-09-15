@@ -22,7 +22,7 @@ ERROR_INJECTIONS = (
     "stop_after_starting_gossiping",
     "stop_after_sending_join_node_request",
     "stop_after_setting_mode_to_normal_raft_topology",
-    "stop_before_becoming_raft_voter",
+    "REMOVED_stop_before_becoming_raft_voter",
     "stop_after_updating_cdc_generation",
     "stop_before_streaming",
     "stop_after_streaming",

@@ -845,8 +845,6 @@ future<> raft_group0::finish_setup_after_join(service::storage_service& ss, cql3
             if (!ss.raft_topology_change_enabled() || !_feat.group0_limited_voters) {
                 // still using the gossip topology, or limited voters feature not enabled yet
                 // - need to become a voter in here
-                utils::get_local_injector().inject("stop_before_becoming_raft_voter",
-                    [] { std::raise(SIGSTOP); });
                 group0_log.info("finish_setup_after_join: becoming a voter in the group 0 configuration...");
                 // Just bootstrapped and joined as non-voter. Become a voter.
                 auto pause_shutdown = _shutdown_gate.hold();
