@@ -115,7 +115,13 @@ public:
 };
 
 class tombstone_gc_state {
+    enum class mode { no_gc, gc_all, gc_expired };
+
+private:
+    mode _mode{mode::gc_expired};
     const shared_tombstone_gc_state* _shared_state{nullptr};
+    // 0 is a sentinel value meaning we don't have information on RF.
+    size_t _table_replication_factor{};
     bool _check_commitlog{true};
 
 private:
@@ -125,18 +131,27 @@ private:
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
 
-    explicit tombstone_gc_state(const shared_tombstone_gc_state* shared_state, bool check_commitlog) noexcept
-        : _shared_state(shared_state)
+    explicit tombstone_gc_state(mode m, const shared_tombstone_gc_state* shared_state, size_t table_replication_factor, bool check_commitlog) noexcept
+        : _mode(m)
+        , _shared_state(shared_state)
+        , _table_replication_factor(table_replication_factor)
         , _check_commitlog(check_commitlog)
     { }
 
 public:
     tombstone_gc_state() = delete;
-    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept : tombstone_gc_state(&shared_state, check_commitlog) {}
-    explicit tombstone_gc_state(std::nullptr_t) noexcept : tombstone_gc_state(nullptr, true) {}
+    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, size_t table_replication_factor, bool check_commitlog = true) noexcept
+        : tombstone_gc_state(mode::gc_expired, &shared_state, table_replication_factor, check_commitlog) {}
 
-    explicit operator bool() const noexcept {
-        return _shared_state != nullptr;
+    static tombstone_gc_state no_gc() { return tombstone_gc_state(mode::no_gc, nullptr, 0, false); }
+
+    static tombstone_gc_state gc_all() { return tombstone_gc_state(mode::gc_all, nullptr, 0, false); }
+
+    // To be used by tests only -- only non-repair mode gc works.
+    static tombstone_gc_state for_tests(size_t table_replication_factor = 0) { return tombstone_gc_state(mode::gc_expired, nullptr, table_replication_factor, true); }
+
+    bool is_gc_enabled() const noexcept {
+        return _mode != mode::no_gc;
     }
 
     // Returns true if it's cheap to retrieve gc_before, e.g. the mode will not require accessing a system table.
@@ -153,10 +168,11 @@ public:
     [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const;
 
     // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
-    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_shared_state, false); }
+    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_mode, _shared_state, _table_replication_factor, false); }
+    bool is_commitlog_check_enabled() const noexcept { return _check_commitlog; }
 };
 
-std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy&, const locator::token_metadata&);
+std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy&);
 std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name);
 
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name);

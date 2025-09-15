@@ -58,6 +58,12 @@ void shared_tombstone_gc_state::drop_repair_history_for_table(const table_id& id
 // 1) if the tombstone_gc_mode is not repair, since we have the same value for all the keys in the ranges.
 // 2) if the tombstone_gc_mode is repair, and the range is a sub range of a range in the repair history map.
 tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
+    switch (_mode) {
+        case mode::no_gc: return get_gc_before_for_range_result{gc_clock::time_point::min(), gc_clock::time_point::min(), true};
+        case mode::gc_all: return get_gc_before_for_range_result{gc_clock::time_point::max(), gc_clock::time_point::max(), true};
+        case mode::gc_expired: break;
+    }
+
     bool knows_entire_range = true;
 
     if (s->static_props().is_group0_table) {
@@ -90,8 +96,13 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
         auto max_repair_timestamp = gc_clock::time_point::min();
         int hits = 0;
         knows_entire_range = false;
-        auto m = get_repair_history_for_table(s->id());
-        if (m) {
+        if (_table_replication_factor == 1) {
+            // We don't have repair history, but the table is RF=1 so we return the same as tombstone_gc_mode::immediate would.
+            auto t = check_min(s, query_time);
+            min_gc_before = t;
+            max_gc_before = t;
+            knows_entire_range = true;
+        } else if (auto m = get_repair_history_for_table(s->id()); m) {
             auto interval = locator::token_metadata::range_to_interval(range);
             auto min = gc_clock::time_point::max();
             auto max = gc_clock::time_point::min();
@@ -124,6 +135,9 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
 }
 
 bool tombstone_gc_state::cheap_to_get_gc_before(const schema& s) const noexcept {
+    if (_mode != mode::gc_expired) {
+        return true;
+    }
     return s.tombstone_gc_options().mode() != tombstone_gc_mode::repair;
 }
 
@@ -135,6 +149,12 @@ gc_clock::time_point tombstone_gc_state::check_min(schema_ptr s, gc_clock::time_
 }
 
 gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
+    switch (_mode) {
+        case mode::no_gc: return gc_clock::time_point::max();
+        case mode::gc_all: return gc_clock::time_point::min();
+        case mode::gc_expired: break;
+    }
+
     if (s->static_props().is_group0_table) {
         const auto gc_before = get_gc_before_for_group0(s);
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=reconcile, gc_before={}", s->ks_name(), s->cf_name(), dk, gc_before);
@@ -160,8 +180,9 @@ gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, con
         const std::chrono::seconds& propagation_delay = options.propagation_delay_in_seconds();
         auto gc_before = gc_clock::time_point::min();
         auto repair_timestamp = gc_clock::time_point::min();
-        auto m = get_repair_history_for_table(s->id());
-        if (m) {
+        if (_table_replication_factor == 1) {
+            gc_before = query_time;
+        } else if (auto m = get_repair_history_for_table(s->id()); m) {
             const auto it = m->find(dk.token());
             if (it == m->end()) {
                 gc_before = gc_clock::time_point::min();
@@ -258,19 +279,14 @@ gc_clock::time_point tombstone_gc_state_snapshot::get_gc_before_for_key(schema_p
     return tombstone_gc_state(_shared_state, check_commitlog).get_gc_before_for_key(s, dk, _query_time);
 }
 
-static bool needs_repair_before_gc(const locator::abstract_replication_strategy& rs, const locator::token_metadata& tm) {
-    // If a table uses local replication strategy or rf one, there is no
+static bool is_local_replication_table(const locator::abstract_replication_strategy& rs) {
+    // If a table uses local replication strategy, there is no
     // need to run repair even if tombstone_gc mode = repair.
-    bool needs_repair = !rs.is_local() && rs.get_replication_factor(tm) != 1;
-    return needs_repair;
+    return rs.get_type() == locator::replication_strategy_type::local;
 }
 
-static bool requires_repair_before_gc(const locator::abstract_replication_strategy& rs, const locator::token_metadata& tm) {
-    return rs.uses_tablets() && needs_repair_before_gc(rs, tm);
-}
-
-std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy& rs, const locator::token_metadata& tm) {
-    return {{"mode", requires_repair_before_gc(rs, tm) ? "repair" : "timeout"}};
+std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy& rs) {
+    return {{"mode", is_local_replication_table(rs) ? "timeout" : "repair"}};
 }
 
 std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::database db, sstring ks_name) {
@@ -280,9 +296,8 @@ std::map<sstring, sstring> get_default_tombstone_gc_mode(data_dictionary::databa
     }
 
     const replica::keyspace& ks = real_db_ptr->find_keyspace(ks_name);
-    const locator::token_metadata& tm = real_db_ptr->get_token_metadata();
 
-    return get_default_tombstone_gc_mode(ks.get_replication_strategy(), tm);
+    return get_default_tombstone_gc_mode(ks.get_replication_strategy());
 }
 
 void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dictionary::database db, sstring ks_name) {
@@ -293,13 +308,8 @@ void validate_tombstone_gc_options(const tombstone_gc_options* options, data_dic
         throw exceptions::configuration_exception("tombstone_gc option not supported by the cluster");
     }
 
-    auto real_db_ptr = db.real_database_ptr();
-    if (!real_db_ptr) {
-        return;
-    }
-
     const replica::keyspace& ks = db.real_database().find_keyspace(ks_name);
-    if (options->mode() == tombstone_gc_mode::repair && !needs_repair_before_gc(ks.get_replication_strategy(), real_db_ptr->get_token_metadata())) {
-        throw exceptions::configuration_exception("tombstone_gc option with mode = repair not supported for table with RF one or local replication strategy");
+    if (options->mode() == tombstone_gc_mode::repair && is_local_replication_table(ks.get_replication_strategy())) {
+        throw exceptions::configuration_exception("tombstone_gc option with mode = repair not supported for table with local replication strategy");
     }
 }
