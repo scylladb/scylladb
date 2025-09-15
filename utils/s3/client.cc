@@ -51,6 +51,7 @@
 #include "utils/log.hh"
 
 using namespace std::chrono_literals;
+using namespace aws;
 template <>
 struct fmt::formatter<s3::tag> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
@@ -88,7 +89,7 @@ future<> ignore_reply(const http::reply& rep, input_stream<char>&& in_) {
     co_await util::skip_entire_stream(in);
 }
 
-client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<aws::retry_strategy> rs)
+client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global_factory gf, private_tag, std::unique_ptr<http::experimental::retry_strategy> rs)
         : _host(std::move(host))
         , _cfg(std::move(cfg))
         , _creds_sem(1)
@@ -206,8 +207,7 @@ future<semaphore_units<>> client::claim_memory(size_t size, abort_source* as) {
     return get_units(_memory, size);
 }
 
-client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy)
-    : retryable_client(std::move(f), max_conn, map_s3_client_exception, http::experimental::client::retry_requests::no, retry_strategy) {
+client::group_client::group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn) : http(std::move(f), max_conn) {
 }
 
 void client::group_client::register_metrics(std::string class_name, std::string host) {
@@ -215,11 +215,11 @@ void client::group_client::register_metrics(std::string class_name, std::string 
     auto ep_label = sm::label("endpoint")(host);
     auto sg_label = sm::label("class")(class_name);
     metrics.add_group("s3", {
-        sm::make_gauge("nr_connections", [this] { return retryable_client.get_http_client().connections_nr(); },
+        sm::make_gauge("nr_connections", [this] { return http.connections_nr(); },
                 sm::description("Total number of connections"), {ep_label, sg_label}),
-        sm::make_gauge("nr_active_connections", [this] { return retryable_client.get_http_client().connections_nr() - retryable_client.get_http_client().idle_connections_nr(); },
+        sm::make_gauge("nr_active_connections", [this] { return http.connections_nr() - http.idle_connections_nr(); },
                 sm::description("Total number of connections with running requests"), {ep_label, sg_label}),
-        sm::make_counter("total_new_connections", [this] { return retryable_client.get_http_client().total_new_connections_nr(); },
+        sm::make_counter("total_new_connections", [this] { return http.total_new_connections_nr(); },
                 sm::description("Total number of new connections created so far"), {ep_label, sg_label}),
         sm::make_counter("total_read_requests", [this] { return read_stats.ops; },
                 sm::description("Total number of object read requests"), {ep_label, sg_label}),
@@ -247,7 +247,7 @@ client::group_client& client::find_or_create_client() {
         unsigned max_connections = _cfg->max_connections.has_value() ? *_cfg->max_connections : std::max((unsigned)(sg.get_shares() / 100), 1u);
         it = _https.emplace(std::piecewise_construct,
             std::forward_as_tuple(sg),
-            std::forward_as_tuple(std::move(factory), max_connections, *_retry_strategy)
+            std::forward_as_tuple(std::move(factory), max_connections)
         ).first;
 
         it->second.register_metrics(sg.name(), _host);
@@ -290,27 +290,76 @@ client::group_client& client::find_or_create_client() {
         }
 
         throw storage_io_error {EIO, format("S3 request failed with ({})", status)};
-    } catch (const filler_exception&) {
-        throw;
     } catch (...) {
         auto e = std::current_exception();
         throw storage_io_error {EIO, format("S3 error ({})", e)};
     }
 }
 
+static future<http::experimental::client::reply_handler> wrap_handler(http::experimental::client::reply_handler handler,
+                                                                       std::optional<http::reply::status_type> expected) {
+    co_return [expected, handler = std::move(handler)](const http::reply& rep, input_stream<char>&& in) -> future<> {
+        auto _in = std::move(in);
+        auto status_class = seastar::http::reply::classify_status(rep._status);
+
+        if (status_class != seastar::http::reply::status_class::informational && status_class != seastar::http::reply::status_class::success) {
+            std::optional<aws_error> possible_error = aws_error::parse(co_await seastar::util::read_entire_stream_contiguous(_in));
+            if (possible_error) {
+                throw aws_exception(std::move(possible_error.value()));
+            }
+            throw aws_exception(aws_error::from_http_code(rep._status));
+        }
+
+        if (expected && rep._status != *expected) {
+            throw seastar::httpd::unexpected_status_error(rep._status);
+        }
+        try {
+            // We need to be able to simulate a retry in s3 tests
+            if (utils::get_local_injector().enter("s3_client_fail_authorization")) {
+                throw aws::aws_exception(
+                    aws::aws_error{aws::aws_error_type::HTTP_UNAUTHORIZED, "EACCESS fault injected to simulate authorization failure", aws::retryable::no});
+            }
+            co_return co_await handler(rep, std::move(_in));
+        } catch (...) {
+            throw aws_exception(aws_error::from_exception_ptr(std::current_exception()));
+        }
+    };
+}
+
 future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
     co_await authorize(req);
     auto& gc = find_or_create_client();
-    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+
+    auto response_handler = co_await wrap_handler(std::move(handle), expected);
+
+    co_await gc.http.make_request(std::move(req), std::move(response_handler), *_retry_strategy, std::nullopt, as).handle_exception([](auto ex) {
+        map_s3_client_exception(std::move(ex));
+    });
 }
 
-future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+future<> client::make_request(http::request req,
+                              reply_handler_ext handle_ex,
+                              const http::experimental::retry_strategy& rs,
+                              error_handler err_handler,
+                              std::optional<http::reply::status_type> expected,
+                              seastar::abort_source* as) {
     co_await authorize(req);
     auto& gc = find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+    auto response_handler = co_await wrap_handler(std::move(handle), expected);
+    co_await gc.http.make_request(std::move(req), std::move(response_handler), rs, std::nullopt, as)
+        .handle_exception([err_handler = std::move(err_handler)](auto ex) {
+            err_handler(std::move(ex));
+        });
+}
+
+future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+    return make_request(
+        std::move(req), std::move(handle_ex), *_retry_strategy, [](std::exception_ptr ex) {
+            map_s3_client_exception(std::move(ex));
+        }, expected, as);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
@@ -665,16 +714,15 @@ private:
         // Ignoring the result of make_request() because we don't want to block and it is safe since we have a gate we are going to wait on and all argument are
         // captured by value or moved into the fiber
         std::ignore = _client->make_request(std::move(req),[this, part_number, start = s3_clock::now()](group_client& gc, const http::reply& reply, input_stream<char>&& in) -> future<> {
-            return util::read_entire_stream_contiguous(in).then([this, part_number](auto body) mutable {
-                auto etag = parse_multipart_copy_upload_etag(body);
-                if (etag.empty()) {
-                    return make_exception_future<>(std::runtime_error("Cannot parse ETag"));
-                }
-                s3l.trace("Part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
-                _part_etags[part_number] = std::move(etag);
-                return make_ready_future<>();
-            });
-        },http::reply::status_type::ok,_as)
+            auto _in = std::move(in);
+            auto body = co_await util::read_entire_stream_contiguous(_in);
+            auto etag = parse_multipart_copy_upload_etag(body);
+            if (etag.empty()) {
+                throw std::runtime_error("Cannot parse ETag");
+            }
+            s3l.trace("Part data -> etag = {} (upload id {})", part_number, etag, _upload_id);
+            _part_etags[part_number] = std::move(etag);
+        },http::reply::status_type::ok, _as)
         .handle_exception([this, part_number](auto ex) {
             s3l.warn("Failed to upload part {}, upload id {}. Reason: {}", part_number, _upload_id, ex);
         })
@@ -1137,6 +1185,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     }
 
     future<> make_filling_fiber() {
+        seastar::http::experimental::no_retry_strategy rs;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         while (!_is_finished) {
             try {
@@ -1195,71 +1244,63 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header", _object_name, _range);
                         }
                         auto in = std::move(in_);
-                        std::exception_ptr ex;
-                        try {
-                            while (_buffers_size < _max_buffers_size && !_is_finished) {
-                                utils::get_local_injector().inject("kill_s3_inflight_req", [] {
-                                    // Inject non-retryable error to emulate source failure
-                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
-                                });
-                                s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
-                                temporary_buffer<char> buf;
-                                auto units = try_get_units(_client->_memory, _socket_buff_size);
-                                if (_buffers.empty() || units) {
-                                    buf = co_await in.read();
-                                    assert(buf.size() <= _socket_buff_size);
-                                    if (units) {
-                                        units->return_units(_socket_buff_size - buf.size());
-                                    }
-                                } else {
-                                    break;
+                        while (_buffers_size < _max_buffers_size && !_is_finished) {
+                            utils::get_local_injector().inject("kill_s3_inflight_req", [] {
+                                // Inject non-retryable error to emulate source failure
+                                throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
+                            });
+
+                            s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
+                            temporary_buffer<char> buf;
+                            auto units = try_get_units(_client->_memory, _socket_buff_size);
+                            if (_buffers.empty() || units) {
+                                buf = co_await in.read();
+                                assert(buf.size() <= _socket_buff_size);
+                                if (units) {
+                                    units->return_units(_socket_buff_size - buf.size());
                                 }
-                                auto buff_size = buf.size();
-                                gc.read_stats.bytes += buff_size;
-                                _range += buff_size;
-                                _buffers_size += buff_size;
-                                if (buff_size == 0 && _range.length() == 0) {
-                                    s3l.trace("Fiber for object '{}' signals EOS", _object_name);
-                                    _buffers.emplace_back(std::move(buf), std::move(units));
-                                    _get_cv.signal();
-                                    _is_finished = true;
-                                    break;
-                                }
-                                if (buff_size == 0) {
-                                    // The requested range is fully downloaded
-                                    break;
-                                }
-                                s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
+                            } else {
+                                break;
+                            }
+                            auto buff_size = buf.size();
+                            gc.read_stats.bytes += buff_size;
+                            _range += buff_size;
+                            _buffers_size += buff_size;
+                            if (buff_size == 0 && _range.length() == 0) {
+                                s3l.trace("Fiber for object '{}' signals EOS", _object_name);
                                 _buffers.emplace_back(std::move(buf), std::move(units));
                                 _get_cv.signal();
-                                utils::get_local_injector().inject("break_s3_inflight_req", [] {
-                                    // Inject a non-`aws_error` after partial data download to verify proper
-                                    // handling and that the fiber retries missing chunks
-                                    throw std::system_error(ECONNRESET, std::system_category());
-                                });
+                                _is_finished = true;
+                                break;
                             }
-                        } catch (...) {
-                            ex = std::current_exception();
+                            if (buff_size == 0) {
+                                // The requested range is fully downloaded
+                                break;
+                            }
+                            s3l.trace("Fiber for object '{}' pushes {} bytes buffer", _object_name, buff_size);
+                            _buffers.emplace_back(std::move(buf), std::move(units));
+                            _get_cv.signal();
+                            utils::get_local_injector().inject("break_s3_inflight_req", [] {
+                                // Inject a non-`aws_error` after partial data download to verify proper
+                                // handling and that the fiber retries missing chunks
+                                throw std::system_error(ECONNRESET, std::system_category());
+                            });
                         }
                         co_await in.close();
-                        if (ex) {
-                            auto aws_ex = aws::aws_error::from_exception_ptr(ex);
-                            if (aws_ex.is_retryable()) {
-                                s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
-                                throw filler_exception(format("{}", ex).c_str());
-                            }
-                            std::rethrow_exception(ex);
-                        }
                     },
+                    rs,
+                    [](std::exception_ptr ex) { std::rethrow_exception(std::move(ex)); },
                     {},
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
-            } catch (const filler_exception& ex) {
-                s3l.warn("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex);
             } catch (...) {
-                s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
-                _get_cv.broken(std::current_exception());
-                co_return;
+                auto ex = std::current_exception();
+                auto aws_ex = aws::aws_error::from_exception_ptr(ex);
+                if (!aws_ex.is_retryable() && aws_ex.get_error_type() != aws::aws_error_type::EXPIRED_TOKEN) {
+                    s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, ex);
+                    _get_cv.broken(ex);
+                    co_return;
+                }
             }
         }
         s3l.trace("Fiber for object '{}' completed", _object_name);
@@ -1746,7 +1787,7 @@ future<> client::close() {
         _creds_update_timer.cancel();
     }
     co_await coroutine::parallel_for_each(_https, [] (auto& it) -> future<> {
-        co_await it.second.retryable_client.close();
+        co_await it.second.http.close();
     });
 }
 
