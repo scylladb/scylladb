@@ -3430,6 +3430,57 @@ SEASTAR_TEST_CASE(scrubbed_sstable_removal_test) {
     });
 }
 
+// Test to verify that `scrub --validate` is not affected by a concurrent regular compaction
+SEASTAR_TEST_CASE(compact_uncompressed_sstable_during_scrub_validate_test) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    return make_ready_future();
+#endif
+    return test_env::do_with_async([] (test_env& env) {
+        auto s = schema_builder("unlinked_sstable_scrub_test", "t1")
+            .with_column("pk", utf8_type, column_kind::partition_key)
+            .with_column("ck", utf8_type, column_kind::clustering_key)
+            .with_column("v", utf8_type)
+            .set_compressor_params(compression_parameters::no_compression())
+            .build();
+        auto cf = env.make_table_for_tests(s);
+        auto close_cf = deferred_stop(cf);
+        cf->disable_auto_compaction().get();
+
+        // Add 2 sstables to the column family
+        api::timestamp_type timestamp = api::min_timestamp;
+        for (int i = 0; i < 2; i++) {
+            auto mut = mutation(s, tests::generate_partition_key(s));
+            mut.partition().apply_insert(*s, tests::generate_clustering_key(s), timestamp++);
+            auto sst = make_sstable_containing(env.make_sstable(s), {std::move(mut)});
+            cf->add_sstable_and_update_cache(std::move(sst)).get();
+        }
+
+        // Start a scrub on the table; Use an injector to pause the scrub after it has collected the sstables to be scrubbed.
+        utils::get_local_injector().enable("sstable_validate/pause");
+        sstables::compaction_type_options::scrub opts = {};
+        opts.operation_mode = sstables::compaction_type_options::scrub::mode::validate;
+        auto scrub_task = cf->get_compaction_manager().perform_sstable_scrub(cf.as_compaction_group_view(), opts, {});
+
+        // When the scrub is paused, compact the two sstables in the table; this should not affect the scrub
+        cf->get_compaction_manager().perform_major_compaction(cf.as_compaction_group_view(), {}).get();
+
+        // Now resume the scrub and ensure it completes without error
+        utils::get_local_injector().receive_message("sstable_validate/pause");
+        BOOST_REQUIRE_EQUAL(scrub_task.get().value().validation_errors, 0);
+
+        // Test the reverse case : start a compaction and pause it, then start a scrub --validate
+        utils::get_local_injector().enable("major_compaction_wait");
+        auto compaction_task = cf->get_compaction_manager().perform_major_compaction(cf.as_compaction_group_view(), {});
+        // Perform scrub --validate while compaction is in progress
+        scrub_task = cf->get_compaction_manager().perform_sstable_scrub(cf.as_compaction_group_view(), opts, {});
+        // Resume compaction and ensure that it doesn't interfere with the scrub
+        utils::get_local_injector().receive_message("major_compaction_wait");
+        BOOST_REQUIRE_EQUAL(scrub_task.get().value().validation_errors, 0);
+        compaction_task.get();
+    });
+}
+
 SEASTAR_TEST_CASE(sstable_run_based_compaction_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto builder = schema_builder("tests", "sstable_run_based_compaction_test")
