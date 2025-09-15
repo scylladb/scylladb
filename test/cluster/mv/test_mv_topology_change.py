@@ -11,12 +11,15 @@ import requests
 import re
 
 from cassandra.cluster import ConnectionException, NoHostAvailable  # type: ignore
+from cassandra.query import SimpleStatement, ConsistencyLevel
+
+from test.cluster.conftest import skip_mode
+from test.cluster.util import new_test_keyspace
 
 from test.pylib.manager_client import ManagerClient
+from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for
-from test.cluster.util import new_test_keyspace
 
 
 logger = logging.getLogger(__name__)
@@ -201,3 +204,47 @@ async def test_mv_write_to_dead_node(manager: ManagerClient):
         # will be held for long time until the write timeouts.
         # Otherwise, it is expected to complete in short time.
         await manager.remove_node(servers[0].server_id, servers[-1].server_id, timeout=180)
+
+async def test_mv_pairing_during_replace(manager: ManagerClient):
+    servers = await manager.servers_add(3, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"}
+    ])
+    cql = manager.get_cql()
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2};")
+    await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.t_view AS SELECT pk, v FROM ks.t WHERE v IS NOT NULL PRIMARY KEY (v, pk)")
+
+    stop_event = asyncio.Event()
+    async def do_writes() -> int:
+        i = 0
+        while not stop_event.is_set():
+            start_time = time.time()
+            try:
+                await cql.run_async(SimpleStatement(f"INSERT INTO ks.t (pk, v) VALUES ({i}, {i+1})", consistency_level=ConsistencyLevel.ONE))
+            except NoHostAvailable as e:
+                for _, err in e.errors.items():
+                    # ConnectionException can be raised when the node is shutting down.
+                    if not isinstance(err, ConnectionException):
+                        logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                        raise
+            except Exception as e:
+                logger.error(f"Write started {time.time() - start_time}s ago failed: {e}")
+                raise
+            i += 1
+            await asyncio.sleep(0.1)
+
+    write_task = asyncio.create_task(do_writes())
+    metrics_before = await manager.metrics.query(servers[2].ip_addr)
+    failed_pairing_before = metrics_before.get('scylla_database_total_view_updates_failed_pairing')
+
+    await manager.server_stop_gracefully(servers[1].server_id)
+    await manager.others_not_see_server(server_ip=servers[1].ip_addr)
+    replace_cfg = ReplaceConfig(replaced_id = servers[1].server_id, reuse_ip_addr = False, use_host_id = True)
+    await manager.server_add(replace_cfg=replace_cfg, property_file={"dc": "dc1", "rack": "r1"},)
+    stop_event.set()
+    await write_task
+    metrics_after = await manager.metrics.query(servers[2].ip_addr)
+    failed_pairing_after = metrics_after.get('scylla_database_total_view_updates_failed_pairing')
+    assert failed_pairing_before == failed_pairing_after
