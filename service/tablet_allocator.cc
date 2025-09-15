@@ -659,6 +659,8 @@ class load_balancer {
     replica::database& _db;
     token_metadata_ptr _tm;
     std::optional<locator::load_sketch> _load_sketch;
+    // Holds the set of tablets already scheduled for transition during plan-making.
+    std::unordered_set<global_tablet_id> _scheduled_tablets;
     // Holds tablet replica count per table in the balanced node set (within a single DC).
     absl::flat_hash_map<table_id, size_t> _tablet_count_per_table;
     dc_name _dc;
@@ -1161,6 +1163,7 @@ public:
                 apply_load(nodes, mig_streaming_info);
 
                 lblogger.info("Created migration for replica ({}, {}) to co-habit same shard as ({}, {})", t2_id, src, t1_id, dst);
+                mark_as_scheduled(mig);
                 plan.add(std::move(mig));
                 return make_ready_future<>();
             });
@@ -1972,6 +1975,16 @@ public:
         }
     }
 
+    void mark_as_scheduled(const tablet_migration_info& mig) {
+        _scheduled_tablets.insert(mig.tablet);
+    }
+
+    void mark_as_scheduled(const migration_plan::migrations_vector& migs) {
+        for (auto&& mig : migs) {
+            mark_as_scheduled(mig);
+        }
+    }
+
     future<migration_plan> make_node_plan(node_load_map& nodes, host_id host, node_load& node_load) {
         migration_plan plan;
         const tablet_metadata& tmeta = _tm->tablets();
@@ -2071,6 +2084,7 @@ public:
             lblogger.debug("Adding migration: {}", mig);
             _stats.for_dc(node_load.dc()).migrations_produced++;
             _stats.for_dc(node_load.dc()).intranode_migrations_produced++;
+            mark_as_scheduled(mig);
             plan.add(std::move(mig));
 
             erase_candidates(nodes, tmap, tablets);
@@ -2727,6 +2741,7 @@ public:
                 apply_load(nodes, mig_streaming_info);
                 lblogger.debug("Adding migration: {}", mig);
                 _stats.for_dc(dc).migrations_produced++;
+                mark_as_scheduled(mig);
                 plan.add(std::move(mig));
             } else {
                 // Shards are overloaded with streaming. Do not include the migration in the plan, but
@@ -3051,8 +3066,8 @@ public:
             auto get_replicas = [this] (std::optional<tablet_desc> t) -> tablet_replica_set {
                 return t ? sorted_replicas_for_tablet_load(*t->info, t->transition) : tablet_replica_set{};
             };
-            auto migrating = [] (std::optional<tablet_desc> t) {
-                return t && bool(t->transition);
+            auto migrating = [&] (std::optional<tablet_desc> t) {
+                return t && (bool(t->transition) || _scheduled_tablets.contains(global_tablet_id{table, t->tid}));
             };
             auto maybe_apply_load = [&] (std::optional<tablet_desc> t) {
                 if (t && is_streaming(t->transition)) {
