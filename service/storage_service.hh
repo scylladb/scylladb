@@ -250,6 +250,7 @@ public:
         tasks::task_manager& tm,
         gms::gossip_address_map& address_map,
         std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
+        std::function<future<>(abort_source&)> auth_ready_cb,
         utils::disk_space_monitor* disk_space_minitor);
     ~storage_service();
 
@@ -1077,6 +1078,8 @@ private:
     std::function<future<void>(std::string_view)> _compression_dictionary_updated_callback;
     using byte_vector = std::vector<std::byte>;
     std::function<future<byte_vector>(std::vector<byte_vector>)> _train_dict;
+
+    std::function<future<>(abort_source&)> _auth_ready_cb;
 
     utils::disk_space_monitor* _disk_space_monitor; // != nullptr only on shard0.
 

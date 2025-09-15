@@ -206,6 +206,7 @@ storage_service::storage_service(abort_source& abort_source,
     tasks::task_manager& tm,
     gms::gossip_address_map& address_map,
     std::function<future<void>(std::string_view)> compression_dictionary_updated_callback,
+    std::function<future<>(seastar::abort_source&)> auth_ready_cb,
     utils::disk_space_monitor* disk_space_monitor
     )
         : _abort_source(abort_source)
@@ -243,6 +244,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _topology_state_machine(topology_state_machine)
         , _view_building_state_machine(view_building_state_machine)
         , _compression_dictionary_updated_callback(std::move(compression_dictionary_updated_callback))
+        , _auth_ready_cb(std::move(auth_ready_cb))
         , _disk_space_monitor(disk_space_monitor)
 {
     tm.register_module(_node_ops_module->get_name(), _node_ops_module);
@@ -1196,6 +1198,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _cdc_gens.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
+                    _auth_ready_cb,
                     _feature_service,
                     _sl_controller.local(),
                     _topology_cmd_rpc_tracker);

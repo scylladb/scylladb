@@ -129,6 +129,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     gms::feature_service& _feature_service;
     endpoint_lifecycle_notifier& _lifecycle_notifier;
     qos::service_level_controller& _sl_controller;
+    std::function<future<>(abort_source&)> _auth_ready_cb;
 
     raft::server& _raft;
     const raft::term_t _term;
@@ -3166,6 +3167,7 @@ public:
             gms::feature_service& feature_service,
             endpoint_lifecycle_notifier& lifecycle_notifier,
             qos::service_level_controller& sl_controller,
+            std::function<future<>(abort_source&)> auth_ready_cb,
             topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker)
         : _sys_dist_ks(sys_dist_ks), _gossiper(gossiper), _messaging(messaging)
         , _shared_tm(shared_tm), _sys_ks(sys_ks), _db(db)
@@ -3173,6 +3175,7 @@ public:
         , _group0(group0), _topo_sm(topo_sm), _vb_sm(vb_sm), _as(as)
         , _feature_service(feature_service), _lifecycle_notifier(lifecycle_notifier)
         , _sl_controller(sl_controller)
+        , _auth_ready_cb(std::move(auth_ready_cb))
         , _raft(raft_server), _term(raft_server.get_current_term())
         , _raft_topology_cmd_handler(std::move(raft_topology_cmd_handler))
         , _tablet_allocator(tablet_allocator)
@@ -3816,6 +3819,7 @@ future<> run_topology_coordinator(
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
+        std::function<future<>(abort_source&)> auth_ready_cb,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker) {
 
     topology_coordinator coordinator{
@@ -3826,7 +3830,7 @@ future<> run_topology_coordinator(
             cdc_gens,
             ring_delay,
             feature_service, lifecycle_notifier,
-            sl_controller,
+            sl_controller, std::move(auth_ready_cb),
             topology_cmd_rpc_tracker};
 
     std::exception_ptr ex;
