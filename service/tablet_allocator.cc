@@ -2126,12 +2126,12 @@ public:
 
             for (auto&& r : tmap.get_tablet_info(tablet.tablet).replicas) {
                 viable_targets.erase(r.host);
-                auto i = nodes.find(r.host);
-                if (i != nodes.end()) {
-                    auto& node = i->second;
-                    if (node.dc() == src_info.dc()) {
-                        rack_load[node.rack()] += 1;
-                    }
+                auto* node = _tm->get_topology().find_node(r.host);
+                if (!node) {
+                    on_internal_error(lblogger, format("Node {} not found in topology", r.host));
+                }
+                if (node->dc() == src_info.dc()) {
+                    rack_load[node->rack()] += 1;
                 }
             }
 
