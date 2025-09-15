@@ -12,6 +12,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/semaphore.hh>
+#include "seastar/coroutine/switch_to.hh"
 #include "types/collection.hh"
 #include "types/list.hh"
 #include "types/set.hh"
@@ -993,11 +994,19 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
 }
 
 void cql_server::connection::update_scheduling_group() {
+    if (_client_state.is_control_connection()) {
+        switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
+            auto shg = _server._sl_controller.get_scheduling_group(qos::service_level_controller::driver_service_level_name);
+            _current_scheduling_group = shg;
+            co_return co_await _server._sl_controller.with_service_level(qos::service_level_controller::driver_service_level_name, std::move(process_loop));
+        });
+    } else {
         switch_tenant([this] (noncopyable_function<future<> ()> process_loop) -> future<> {
             auto shg = co_await _server._sl_controller.get_user_scheduling_group(_client_state.user());
             _current_scheduling_group = shg;
             co_return co_await _server._sl_controller.with_user_service_level(_client_state.user(), std::move(process_loop));
         });
+    }
 }
 
 future<std::unique_ptr<cql_server::response>> cql_server::connection::process_auth_response(uint16_t stream, request_reader in, service::client_state& client_state,
@@ -1436,6 +1445,13 @@ future<std::unique_ptr<cql_server::response>>
 cql_server::connection::process_register(uint16_t stream, request_reader in, service::client_state& client_state,
         tracing::trace_state_ptr trace_state) {
     using ret_type = std::unique_ptr<cql_server::response>;
+
+    if (!_client_state.is_control_connection()) {
+        if (_server._sl_controller.has_service_level(qos::service_level_controller::driver_service_level_name)) {
+            _client_state.set_control_connection();
+            update_scheduling_group();
+        }
+    }
 
     std::vector<sstring> event_types;
     auto sl = in.read_string_list(event_types);
