@@ -864,18 +864,18 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
         ++stats.total_reads_failed;
     });
 
-        auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
+    auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result = co_await coroutine::try_future(query_method(db, s, cmd, ranges, std::move(trace_state), timeout, tombstone_gc_enabled,
-                [result_builder_factory, accounter = std::move(accounter)] () mutable {
-			return result_builder_factory(std::move(accounter));
-		}));
+    auto result = co_await coroutine::try_future(query_method(db, s, cmd, ranges, std::move(trace_state), timeout, tombstone_gc_enabled,
+            [result_builder_factory, accounter = std::move(accounter)] () mutable {
+        return result_builder_factory(std::move(accounter));
+    }));
 
-        stats.short_mutation_queries += bool(result->is_short_read());
-        auto hit_rate = local_db.find_column_family(s).get_global_cache_hit_rate();
-        account_failed_read.cancel();
-        ++stats.total_reads;
-        co_return std::tuple(std::move(result), hit_rate);
+    stats.short_mutation_queries += bool(result->is_short_read());
+    auto hit_rate = local_db.find_column_family(s).get_global_cache_hit_rate();
+    account_failed_read.cancel();
+    ++stats.total_reads;
+    co_return std::tuple(std::move(result), hit_rate);
 }
 
 namespace {
