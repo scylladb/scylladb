@@ -74,7 +74,8 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
 
                     logger.info("Write data and verify it did not reach the target node")
                     query = next(write_generator(cf, 1))
-                    await cql.run_async(query)
+                    cl_quorum_profile = cql.execution_profile_clone_update(EXEC_PROFILE_DEFAULT, consistency_level = ConsistencyLevel.QUORUM)
+                    await cql.run_async(query, execution_profile=cl_quorum_profile)
 
                     cl_one_profile = cql.execution_profile_clone_update(EXEC_PROFILE_DEFAULT, consistency_level = ConsistencyLevel.ONE)
                     res = cql.execute(f"SELECT * from {cf} where pk = 0;", host=hosts[0], execution_profile=cl_one_profile)
