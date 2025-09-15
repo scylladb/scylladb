@@ -191,13 +191,13 @@ std::vector<db::object_storage_endpoint_param> make_storage_options_config(const
                     s3::endpoint_config {
                     .port = std::stoul(tests::getenv_safe("S3_SERVER_PORT_FOR_TEST")),
                     .use_https = ::getenv("AWS_DEFAULT_REGION") != nullptr,
-                    .region = ::getenv("AWS_DEFAULT_REGION") ? : "local",
+                    .region = tests::getenv_or_default("AWS_DEFAULT_REGION", "local"),
                 });
             }
             if (os.type == data_dictionary::storage_options::GS_NAME) {
                 endpoints.emplace_back(db::object_storage_endpoint_param::gs_storage{
                     .endpoint = os.endpoint, 
-                    .credentials_file = ::getenv("GS_CREDENTIALS_FILE") ? : ""
+                    .credentials_file = tests::getenv_or_default("GS_CREDENTIALS_FILE", "none")
                 });
             }
         }
@@ -540,9 +540,9 @@ void test_env::request_abort() {
     _impl->abort.request_abort();
 }
 
-data_dictionary::storage_options make_test_object_storage_options(std::optional<std::string> type) {
+data_dictionary::storage_options make_test_object_storage_options(std::string_view type) {
     data_dictionary::storage_options ret;
-    auto t = type.value_or("S3");
+    auto t = std::string(type);
     ret.value = data_dictionary::storage_options::object_storage {
         .bucket = tests::getenv_safe(t + "_BUCKET_FOR_TEST"),
         .endpoint = tests::getenv_safe(t + "_SERVER_ADDRESS_FOR_TEST"),

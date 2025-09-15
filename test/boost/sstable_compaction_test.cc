@@ -23,6 +23,7 @@
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/testing/test_fixture.hh>
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "replica/database.hh"
@@ -69,6 +70,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/test_utils.hh"
 #include "test/lib/eventually.hh"
+#include "test/lib/gcs_fixture.hh"
 #include "readers/from_mutations.hh"
 #include "readers/from_fragments.hh"
 #include "readers/combined.hh"
@@ -6106,7 +6108,11 @@ SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness_local) {
 }
 
 SEASTAR_TEST_CASE(test_sstables_excluding_staging_correctness_s3) {
-    return test_sstables_excluding_staging_correctness({ .storage = make_test_object_storage_options() });
+    return test_sstables_excluding_staging_correctness({ .storage = make_test_object_storage_options("S3") });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_sstables_excluding_staging_correctness_gs, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_sstables_excluding_staging_correctness({ .storage = make_test_object_storage_options("GS") });
 }
 
 // Reproducer for https://github.com/scylladb/scylladb/issues/15726.

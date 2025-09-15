@@ -9,6 +9,7 @@
 #include <seastar/core/sharded.hh>
 #include "sstables/sstables.hh"
 #include "test/lib/scylla_test_case.hh"
+#include <seastar/testing/test_fixture.hh>
 #include "schema/schema.hh"
 #include "replica/database.hh"
 #include "compaction/compaction_manager.hh"
@@ -18,6 +19,7 @@
 #include "test/lib/sstable_utils.hh"
 #include "test/lib/test_services.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/gcs_fixture.hh"
 #include "db/config.hh"
 
 using namespace sstables;
@@ -149,7 +151,15 @@ SEASTAR_TEST_CASE(sstable_resharding_over_s3_test, *boost::unit_test::preconditi
     return sstables::test_env::do_with_async([] (auto& env) {
         run_sstable_resharding_test(env);
     }, test_env_config{
-        .storage = make_test_object_storage_options(),
+        .storage = make_test_object_storage_options("S3"),
+    });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(sstable_resharding_over_gs_test, gcs_fixture, *tests::check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return sstables::test_env::do_with_async([] (auto& env) {
+        run_sstable_resharding_test(env);
+    }, test_env_config{
+        .storage = make_test_object_storage_options("GS"),
     });
 }
 
