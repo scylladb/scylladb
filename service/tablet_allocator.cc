@@ -24,6 +24,7 @@
 #include <utility>
 #include <fmt/ranges.h>
 #include <seastar/coroutine/maybe_yield.hh>
+#include <seastar/coroutine/switch_to.hh>
 #include <absl/container/flat_hash_map.h>
 
 using namespace locator;
@@ -2848,6 +2849,7 @@ public:
     future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
         load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats, _db.get_config().target_tablet_size_in_bytes(), std::move(skiplist));
         lb.set_use_table_aware_balancing(_use_tablet_aware_balancing);
+        co_await coroutine::switch_to(_db.get_streaming_scheduling_group());
         co_return co_await lb.make_plan();
     }
 
