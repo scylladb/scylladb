@@ -14,6 +14,7 @@
 #include <seastar/core/align.hh>
 #include <seastar/core/aligned_buffer.hh>
 #include <seastar/util/closeable.hh>
+#include <seastar/testing/test_fixture.hh>
 
 #include "sstables/sstables.hh"
 #include "sstables/compress.hh"
@@ -55,6 +56,7 @@
 #include "test/lib/random_schema.hh"
 #include "test/lib/exception_utils.hh"
 #include "test/lib/cql_assertions.hh"
+#include "test/lib/gcs_fixture.hh"
 
 namespace fs = std::filesystem;
 
@@ -288,7 +290,11 @@ SEASTAR_TEST_CASE(datafile_generation_16) {
 }
 
 SEASTAR_TEST_CASE(datafile_generation_16_s3, *boost::unit_test::precondition(tests::has_scylla_test_env)) {
-    return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options() });
+    return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options("S3") });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(datafile_generation_16_gs, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_datafile_generation_16(test_env_config{ .storage = make_test_object_storage_options("GS") });
 }
 
 // mutation_reader for sstable keeping all the required objects alive.
@@ -3181,7 +3187,11 @@ SEASTAR_TEST_CASE(test_sstable_bytes_on_disk_correctness) {
 }
 
 SEASTAR_TEST_CASE(test_sstable_bytes_on_s3_correctness) {
-    return test_sstable_bytes_correctness(get_name() + "_s3", test_env_config{ .storage = make_test_object_storage_options() });
+    return test_sstable_bytes_correctness(get_name() + "_s3", test_env_config{ .storage = make_test_object_storage_options("S3") });
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_sstable_bytes_on_gs_correctness, gcs_fixture, *check_run_test_decorator("ENABLE_GCP_STORAGE_TEST", true)) {
+    return test_sstable_bytes_correctness(seastar::testing::seastar_test::get_name() + "_gs", test_env_config{ .storage = make_test_object_storage_options("GS") });
 }
 
 SEASTAR_TEST_CASE(test_sstable_set_predicate) {
