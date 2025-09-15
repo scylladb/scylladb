@@ -2719,6 +2719,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     node.guard = co_await exec_global_command(std::move(node.guard),raft_topology_cmd::command::barrier_and_drain, get_excluded_nodes(node), drop_guard_and_retake::yes);
                 } catch (term_changed_error&) {
                     throw;
+                } catch (raft::request_aborted&) {
+                    throw;
                 } catch(...) {
                     rtlogger.warn("failed to run barrier_and_drain during rollback of {} after {} failure: {}",
                             node.id, state, std::current_exception());
@@ -2797,6 +2799,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                     exclude_nodes);
                             }
                         } catch (term_changed_error&) {
+                            throw;
+                        } catch (raft::request_aborted&) {
                             throw;
                         } catch(...) {
                             wait_for_ip_error = std::current_exception();
