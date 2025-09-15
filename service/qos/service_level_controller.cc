@@ -407,6 +407,53 @@ future<> service_level_controller::update_cache(update_both_cache_levels update_
     }
 }
 
+static service_level_options get_driver_service_level_slo() {
+    service_level_options slo;
+    slo.shares = 200;
+    slo.workload = service_level_options::workload_type::batch;
+    return slo;
+}
+
+future<utils::chunked_vector<mutation>> service_level_controller::get_create_driver_service_level_mutations(db::system_keyspace& sys_ks, api::timestamp_type timestamp) {
+
+    utils::chunked_vector<mutation> mutations;
+
+    auto sl_mutations = co_await raft_service_level_distributed_data_accessor::set_service_level_mutations(sys_ks.query_processor(), service_level_controller::driver_service_level_name, get_driver_service_level_slo(), timestamp);
+    std::move(sl_mutations.begin(), sl_mutations.end(), std::back_inserter(mutations));
+
+    auto sys_ks_mutation = co_await sys_ks.make_service_level_driver_created_mutation(true, timestamp);
+    mutations.push_back(std::move(sys_ks_mutation));
+
+    co_return mutations;
+}
+
+future<std::optional<service::group0_guard>> service_level_controller::migrate_to_driver_service_level(service::group0_guard guard, db::system_keyspace& sys_ks) {
+    // Don't try creating driver service level too often if it already failed.
+    // We don't want to block the topology coordinator.
+    if (_last_unsuccessful_driver_sl_creation_attemp + 5min < seastar::lowres_clock::now()) {
+        sl_logger.info("migrate_to_driver_service_level: starting sl:{} creation", service_level_controller::driver_service_level_name);
+        try {
+            service::group0_batch mc{std::move(guard)};
+
+            constexpr bool if_not_exists = true;
+            co_await add_distributed_service_level(service_level_controller::driver_service_level_name, get_driver_service_level_slo(), if_not_exists, mc);
+
+            auto sys_ks_mutation = co_await sys_ks.make_service_level_driver_created_mutation(true, mc.write_timestamp());
+            mc.add_mutation(std::move(sys_ks_mutation), "set service_level_driver_created=true");
+
+            co_await commit_mutations(std::move(mc));
+            sl_logger.info("create_driver_service_level: sl:{} created", service_level_controller::driver_service_level_name);
+        } catch (service::group0_concurrent_modification&) {
+            throw; // Let caller handle `group0_concurrent_modification`
+        } catch (...) {
+            sl_logger.error("Failed to create service level for driver: {}. Removal of user service levels below the limit is necessary to allow sl:driver creation.", std::current_exception());
+            _last_unsuccessful_driver_sl_creation_attemp = seastar::lowres_clock::now();
+        }
+        co_return std::nullopt;
+    }
+    co_return std::move(guard); // return guard untouched
+}
+
 void service_level_controller::stop_legacy_update_from_distributed_data() {
     SCYLLA_ASSERT(this_shard_id() == global_controller);
 
