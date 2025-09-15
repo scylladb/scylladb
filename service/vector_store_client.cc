@@ -20,6 +20,7 @@
 #include <exception>
 #include <fmt/ranges.h>
 #include <regex>
+#include <seastar/core/sstring.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/http/client.hh>
@@ -271,15 +272,19 @@ public:
     }
 };
 
-bool should_vector_store_service_be_disabled(std::string_view const& uri) {
-    return uri.empty();
+bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
+    return uris.empty() || uris[0].empty();
 }
 
-auto get_host_port(std::string_view uri) -> std::optional<host_port> {
-    if (should_vector_store_service_be_disabled(uri)) {
-        vslogger.info("Vector Store service URI is empty, disabling Vector Store service");
+auto get_host_port(std::string_view uris_csv) -> std::optional<host_port> {
+    auto uris = utils::split_comma_separated_list(uris_csv);
+    if (should_vector_store_service_be_disabled(uris)) {
+        vslogger.info("Vector Store service URIs are empty, disabling Vector Store service");
         return std::nullopt;
     }
+
+    auto uri = uris[0];
+
     auto parsed = parse_service_uri(uri);
     if (!parsed) {
         throw configuration_exception(fmt::format("Invalid Vector Store service URI: {}", uri));
@@ -550,7 +555,7 @@ struct vector_store_client::impl {
 };
 
 vector_store_client::vector_store_client(config const& cfg)
-    : _impl(std::make_unique<impl>(cfg.vector_store_uri)) {
+    : _impl(std::make_unique<impl>(cfg.vector_store_primary_uri)) {
 }
 
 vector_store_client::~vector_store_client() = default;

@@ -484,7 +484,7 @@ public:
     named_value<uint32_t> alternator_max_items_in_batch_write;
     named_value<bool> alternator_allow_system_table_write;
 
-    named_value<sstring> vector_store_uri;
+    named_value<sstring> vector_store_primary_uri;
 
     named_value<bool> abort_on_ebadf;
 
