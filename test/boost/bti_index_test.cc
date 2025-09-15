@@ -609,7 +609,7 @@ struct reference_index {
         }
         for (uint64_t idx = curpar + 1; idx < _entries.size(); ++idx) {
             if (std::holds_alternative<partition_end_entry>(_entries[idx + 1])) {
-                return _data_file_offsets[idx];
+                return _data_file_offsets[idx] - _data_file_offsets[curpar];
             }
         }
         abort();

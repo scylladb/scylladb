@@ -165,7 +165,7 @@ public:
     // Returns data file positions corresponding to the bounds.
     // End position may be unset
     virtual data_file_positions_range data_file_positions() const = 0;
-    // Returns the offset in the data file of the first row in the last promoted index block
+    // Returns the offset (from partition start) of the first row in the last promoted index block
     // in the current partition or nullopt if there are no blocks in the current partition.
     //
     // Preconditions: partition_data_ready()
