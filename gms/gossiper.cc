@@ -717,11 +717,11 @@ future<> gossiper::apply_state_locally(std::map<inet_address, endpoint_state> ma
 }
 
 future<> gossiper::force_remove_endpoint(locator::host_id id, permit_id pid) {
-    return container().invoke_on(0, [this, pid, id] (auto& gossiper) mutable -> future<> {
+    return container().invoke_on(0, [pid, id] (auto& gossiper) mutable -> future<> {
         auto permit = co_await gossiper.lock_endpoint(id, pid);
         pid = permit.id();
         try {
-            if (id == my_host_id()) {
+            if (id == gossiper.my_host_id()) {
                 throw std::runtime_error(format("Can not force remove node {} itself", id));
             }
             if (!gossiper._endpoint_state_map.contains(id)) {
