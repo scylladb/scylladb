@@ -1673,6 +1673,59 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_empty_node) {
   }).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_no_conflicting_migrations_in_the_plan) {
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 1;
+        auto dc1 = topo.dc();
+        [[maybe_unused]] auto host1 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host2 = topo.add_node(node_state::normal, shard_count);
+        topo.start_new_rack();
+        [[maybe_unused]] auto host3 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host4 = topo.add_node(node_state::normal, shard_count);
+        auto dc2 = topo.start_new_dc().dc;
+        [[maybe_unused]] auto host5 = topo.add_node(node_state::normal, shard_count);
+        [[maybe_unused]] auto host6 = topo.add_node(node_state::normal, shard_count);
+
+        auto ks_name = add_keyspace(e, {{dc1, 2}, {dc2, 1}}, 2);
+        auto table1 = add_table(e, ks_name).get();
+
+        // Create imbalance in dc1::rack1, dc1::rack2, and dc2::rack1
+        mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+            tablet_map tmap(2);
+            auto tid = tmap.first_tablet();
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host3, 0},
+                    tablet_replica{host5, 0},
+                }
+            });
+            tid = *tmap.next_tablet(tid);
+            tmap.set_tablet(tid, tablet_info {
+                tablet_replica_set {
+                    tablet_replica{host1, 0},
+                    tablet_replica{host3, 0},
+                    tablet_replica{host5, 0},
+                }
+            });
+            tmeta.set_tablet_map(table1, std::move(tmap));
+            co_return;
+        });
+
+        auto& stm = e.shared_token_metadata().local();
+        auto plan = e.get_tablet_allocator().local().balance_tablets(stm.get(), topo.get_load_stats()).get();
+
+        BOOST_REQUIRE(!plan.empty());
+        std::set<global_tablet_id> tablets;
+        for (auto&& mig : plan.migrations()) {
+            BOOST_REQUIRE(!tablets.contains(mig.tablet));
+            tablets.insert(mig.tablet);
+        }
+    }).get();
+}
+
 // Throws if tablets have more than 1 replica in a given rack.
 // Run in seastar thread.
 void check_no_rack_overload(const token_metadata& tm) {
