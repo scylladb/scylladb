@@ -1305,7 +1305,11 @@ future<> sstable::read_statistics() {
 }
 
 future<> sstable::read_partitions_db_footer() {
-    if (_partitions_file) {
+    if (has_component(component_type::Partitions) && !_partitions_db_footer) {
+        if (!_partitions_file) {
+            _partitions_file = co_await open_file(component_type::Partitions, open_flags::ro);
+            _partitions_file_size = co_await _partitions_file.size();
+        }
         _partitions_db_footer = co_await trie::read_bti_partitions_db_footer(*_schema, _version, _partitions_file, _partitions_file_size);
     }
 }
@@ -1373,7 +1377,10 @@ future<> sstable::open_or_create_data(open_flags oflags, file_open_options optio
     utils::small_vector<future<>, 4> futures;
     futures.push_back(open_file(component_type::Index, oflags, options).then([this] (file f) { _index_file = std::move(f); }));
     futures.push_back(open_file(component_type::Data, oflags, options).then([this] (file f) { _data_file = std::move(f); }));
-    if (has_component(component_type::Partitions)) {
+    if (has_component(component_type::Partitions) && !_partitions_file) {
+        // FIXME: if _partitions_file is already opened, we are ignoring options and flags.
+        // (Although in practice the options are always default and flags are always `ro`).
+        // If we care about that, we should close _partition_file and reopen it here.
         futures.push_back(open_file(component_type::Partitions, oflags, options).then([this] (file f) { _partitions_file = std::move(f); }));
     }
     if (has_component(component_type::Rows)) {
@@ -1723,6 +1730,7 @@ future<> sstable::load(const dht::sharder& sharder, sstable_open_config cfg) noe
     validate_max_local_deletion_time();
     validate_partitioner();
     if (_shards.empty()) {
+        co_await read_partitions_db_footer();
         set_first_and_last_keys();
         _shards = cfg.current_shard_as_sstable_owner ?
                 std::vector<unsigned>{this_shard_id()} : compute_shards_for_this_sstable(sharder);
@@ -1801,6 +1809,7 @@ sstable::load_owner_shards(const dht::sharder& sharder) {
     if (!has_valid_sharding_metadata) {
         sstlog.warn("Sharding metadata not available for {}, so Summary will be read to allow Scylla to compute shards owning the SSTable.", get_filename());
         co_await read_summary();
+        co_await read_partitions_db_footer();
         set_first_and_last_keys();
     }
 
