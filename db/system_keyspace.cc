@@ -361,6 +361,7 @@ schema_ptr system_keyspace::raft() {
 
             .set_comment("Persisted RAFT log, votes and snapshot info")
             .with_hash_version()
+            .set_caching_options(caching_options::get_disabled_caching_options())
             .build();
     }();
     return schema;
