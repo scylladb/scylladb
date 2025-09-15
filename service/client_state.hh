@@ -105,6 +105,7 @@ private:
     std::optional<sstring> _driver_name, _driver_version;
 
     auth_state _auth_state = auth_state::UNINITIALIZED;
+    bool _control_connection = false;
 
     // isInternal is used to mark ClientState as used by some internal component
     // that should have an ability to modify system keyspace.
@@ -140,6 +141,14 @@ public:
 
     void set_auth_state(auth_state new_state) noexcept {
         _auth_state = new_state;
+    }
+
+    bool is_control_connection() const noexcept {
+        return _control_connection;
+    }
+
+    bool set_control_connection() noexcept {
+        return _control_connection = true;
     }
 
     std::optional<sstring> get_driver_name() const {
