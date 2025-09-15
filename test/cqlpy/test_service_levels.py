@@ -147,7 +147,7 @@ def test_list_effective_service_level_without_attached(scylla_only, cql):
         with pytest.raises(InvalidRequest, match=f"Role {role} doesn't have assigned any service level"):
             cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {role}")
 
-# Scylla Enterprise limits the number of service levels to a small number (8 including 1 default service level).
+# ScyllaDB limits the number of service levels to a small number (9 including 1 default and 1 driver service level).
 # This test verifies that attempting to create more service levels than that results in an InvalidRequest error
 # and doesn't silently succeed. 
 # The test also has a regression check if a user can create exactly 7 service levels.

@@ -1365,6 +1365,11 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
 
     insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_auth_version_mutation(write_timestamp, db::system_keyspace::auth_version_t::v2));
 
+    auto sl_driver_mutations = co_await qos::service_level_controller::get_create_driver_service_level_mutations(_sys_ks.local(), write_timestamp);
+    for (auto& m : sl_driver_mutations) {
+        insert_join_request_mutations.emplace_back(m);
+    }
+
     if (!utils::get_local_injector().is_enabled("skip_vb_v2_version_mut")) {
         insert_join_request_mutations.emplace_back(
                 co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
