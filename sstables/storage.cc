@@ -36,8 +36,8 @@
 #include "utils/s3/client.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
-
 #include "utils/checked-file-impl.hh"
+#include "utils/io-wrappers.hh"
 
 namespace sstables {
 
@@ -671,12 +671,12 @@ static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type
     co_return sink;
 }
 
-static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source_creator_fn source_creator, uint64_t offset, uint64_t len) {
+static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source src, uint64_t offset, uint64_t len) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto* ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
             std::exception_ptr p;
             try {
-                co_return co_await ext->wrap_source(sst, type, std::move(source_creator), offset, len);
+                src = co_await ext->wrap_source(sst, type, std::move(src));
             } catch (...) {
                 p = std::current_exception();
             }
@@ -685,7 +685,7 @@ static future<data_source> maybe_wrap_source(const sstable& sst, component_type 
             }
         }
     }
-    co_return source_creator(offset, len);
+    co_return create_ranged_source(std::move(src), offset, len);
 }
 
 future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
@@ -704,9 +704,7 @@ s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f,
         co_return co_await maybe_wrap_source(
             sst,
             type,
-            [this, object_name = make_s3_object_name(sst, type)](uint64_t, uint64_t) {
-                return _client->make_chunked_download_source(object_name, s3::full_range, _as);
-            },
+            _client->make_chunked_download_source(make_s3_object_name(sst, type), s3::full_range, _as),
             offset,
             len);
     }
