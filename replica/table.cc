@@ -14,6 +14,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/try_future.hh>
 #include <seastar/util/closeable.hh>
 #include <seastar/util/defer.hh>
 
@@ -3949,7 +3950,7 @@ table::query(schema_ptr query_schema,
 
         std::exception_ptr ex;
       try {
-        co_await q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state);
+        co_await coroutine::try_future(q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state));
       } catch (...) {
         ex = std::current_exception();
       }
