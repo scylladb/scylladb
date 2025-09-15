@@ -1839,8 +1839,21 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     if (!gh) {
         co_return compaction_stats_opt{};
     }
-    // All sstables must be included, even the ones being compacted, such that everything in table is validated.
-    auto all_sstables = get_all_sstables(t);
+
+    // Collect and register all sstables as compacting while compaction is disabled, to avoid a race condition where
+    // regular compaction runs in between and picks the same files.
+    std::vector<sstables::shared_sstable> all_sstables;
+    compacting_sstable_registration compacting(*this, get_compaction_state(&t));
+    co_await run_with_compaction_disabled(t, [&all_sstables, &compacting, &t] () -> future<> {
+        // All sstables must be included.
+        all_sstables = get_all_sstables(t);
+        compacting.register_compacting(all_sstables);
+        return make_ready_future<>();
+    });
+    if (all_sstables.empty()) {
+        co_return compaction_stats_opt{};
+    }
+
     co_return co_await perform_compaction<validate_sstables_compaction_task_executor>(throw_if_stopping::no, info, &t, info.id, std::move(all_sstables), quarantine_sstables);
 }
 
