@@ -326,3 +326,49 @@ seastar::file create_file_for_seekable_source(seekable_data_source src, seekable
     };
     return file{seastar::make_shared<seekable_data_source_file_impl>(std::move(src), std::move(src_func))};
 }
+
+seastar::data_source create_ranged_source(data_source src, uint64_t offset, std::optional<uint64_t> len) {
+    class ranged_data_source : public data_source_impl {
+        data_source _src;
+        uint64_t _offset;
+        uint64_t _len;
+        uint64_t _read;
+    public:
+        ranged_data_source(data_source src, uint64_t offset, std::optional<uint64_t> len)
+            : _src(std::move(src))
+            , _offset(offset)
+            , _len(len.value_or(std::numeric_limits<uint64_t>::max()))
+            , _read(0)
+        {}
+
+        temporary_buffer<char> trim(temporary_buffer<char> buf) {
+            auto max = _len - _read;
+            if (buf.size() > max) {
+                buf.trim(max);
+            }
+            _read += buf.size();
+            return buf;
+        }
+        future<temporary_buffer<char>> skip(uint64_t n) override {
+            if (_read == _len) {
+                co_return temporary_buffer<char>{};
+            }
+            if (auto skip = std::exchange(_offset, 0); (skip + n) > 0) {
+                co_return trim(co_await _src.skip(skip + n));
+            }
+            co_return trim(co_await _src.get());
+        }
+        future<temporary_buffer<char>> get() override {
+            return skip(0);
+        }
+        future<> close() override {
+            return _src.close();
+        }
+    };
+
+    if (offset == 0 && !len.has_value()) {
+        return src;
+    }
+    return data_source(std::make_unique<ranged_data_source>(std::move(src), offset, len));
+}
+
