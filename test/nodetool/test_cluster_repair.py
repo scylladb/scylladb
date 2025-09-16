@@ -146,6 +146,61 @@ Starting repair with task_id={id2} keyspace=ks table=table2
 Repair with task_id={id2} finished
 """
 
+def test_repair_keyspace_tablets_with_colocated_table(nodetool):
+    # repair an entire keyspace that contains a colocated table.
+    # if we get an error that the colocated table cannot be repaired, it should be ignored, and all
+    # others tables in the keyspace should be repaired.
+    id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
+    id2 = "ef1b7a61-66c8-494c-bb03-6f65724e6eef"
+    res = nodetool("cluster", "repair", "ks", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspaces", params={"replication": "tablets"}, response=["ks"]),
+        expected_request("GET", "/column_family", response=[{"ks": "ks", "cf": "table1"}, {"ks": "ks", "cf": "mv"}, {"ks": "ks", "cf": "table2"}]),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks",
+                "table": "table1",
+                "tokens": "all"},
+            response={"tablet_task_id": id1}),
+         expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id1}",
+            response={"state": "done"}),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks",
+                "table": "mv",
+                "tokens": "all"},
+            response={"message": """
+Cannot set repair request on table ac77e950-9303-11f0-a718-c65bb2c481c4 because it is colocated with the
+base table a6044cd0-9303-11f0-a718-c65bb2c481c4. Repair requests can be made only on the base table.
+Repairing the base table will also repair all tables colocated with it."""
+                      , "code": 400}, response_status=400),
+        expected_request(
+            "POST",
+            "/storage_service/tablets/repair",
+            params={
+                "ks": "ks",
+                "table": "table2",
+                "tokens": "all"},
+            response={"tablet_task_id": id2}),
+         expected_request(
+            "GET",
+            f"/task_manager/wait_task/{id2}",
+            response={"state": "done"}),
+        ])
+
+    assert _remove_log_timestamp(res.stdout) == f"""\
+Starting repair with task_id={id1} keyspace=ks table=table1
+Repair with task_id={id1} finished
+Starting repair with task_id={id2} keyspace=ks table=table2
+Repair with task_id={id2} finished
+"""
+
 def test_repair_one_table_tablets(nodetool):
     id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
     res = nodetool("cluster", "repair", "ks", "table1", expected_requests=[
