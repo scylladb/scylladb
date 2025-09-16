@@ -284,8 +284,8 @@ Parameters:
 Request Body:
 ```json
 {
-  "embedding": [0.1, 0.2, 0.3, ...],  // The vector to search for.
-  "limit": 10                         // The number of nearest neighbors to return.
+  "vector": [0.1, 0.2, 0.3, ...],  // The vector to search for.
+  "limit": 10                      // The number of nearest neighbors to return.
 }
 ```
 

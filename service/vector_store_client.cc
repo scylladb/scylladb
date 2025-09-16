@@ -36,7 +36,7 @@ using namespace std::chrono_literals;
 using ann_error = service::vector_store_client::ann_error;
 using configuration_exception = exceptions::configuration_exception;
 using duration = lowres_clock::duration;
-using embedding = service::vector_store_client::embedding;
+using vs_vector = service::vector_store_client::vs_vector;
 using limit = service::vector_store_client::limit;
 using host_name = service::vector_store_client::host_name;
 using http_path = sstring;
@@ -172,8 +172,8 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
-auto write_ann_json(embedding embedding, limit limit) -> json_content {
-    return seastar::format(R"({{"embedding":[{}],"limit":{}}})", fmt::join(embedding, ","), limit);
+auto write_ann_json(vs_vector vs_vector, limit limit) -> json_content {
+    return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(vs_vector, ","), limit);
 }
 
 auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
@@ -579,7 +579,7 @@ auto vector_store_client::port() const -> std::expected<port_number, disabled> {
     return _impl->port();
 }
 
-auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
+auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, ann_error>> {
     if (is_disabled()) {
         vslogger.error("Disabled Vector Store while calling ann");
@@ -587,7 +587,7 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
     }
 
     auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-    auto content = write_ann_json(std::move(embedding), limit);
+    auto content = write_ann_json(std::move(vs_vector), limit);
 
     auto resp = co_await _impl->make_request(operation_type::POST, std::move(path), std::move(content), as);
     if (!resp) {
