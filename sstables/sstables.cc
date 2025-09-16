@@ -79,6 +79,7 @@
 #include "readers/reversing.hh"
 #include "readers/forwardable.hh"
 #include "sstables/trie/bti_index.hh"
+#include "partition_slice_builder.hh"
 
 #include "release.hh"
 #include "utils/build_id.hh"
@@ -3148,16 +3149,21 @@ future<bool> sstable::has_partition_key(const utils::hashed_key& hk, const dht::
     std::exception_ptr ex;
     auto sem = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "sstables::has_partition_key()",
             reader_concurrency_semaphore::register_metrics::no);
-    std::unique_ptr<sstables::index_reader> lh_index_ptr = nullptr;
+
+    auto slice = partition_slice_builder(*_schema).with_no_regular_columns().with_no_static_columns().build();
+    auto pr = dht::partition_range::make_singular(dk);
+    auto reader = make_reader(
+        _schema,
+        sem.make_tracking_only_permit(_schema, fmt::to_string(s->get_filename()), db::no_timeout, {}),
+        pr,
+        slice);
     try {
-        lh_index_ptr = std::make_unique<sstables::index_reader>(s, sem.make_tracking_only_permit(_schema, fmt::to_string(s->get_filename()), db::no_timeout, {}));
-        present = co_await lh_index_ptr->advance_lower_and_check_if_present(dk);
+        reader.set_max_buffer_size(1);
+        present = bool(co_await reader.peek());
     } catch (...) {
         ex = std::current_exception();
     }
-    if (auto lhi_ptr = std::move(lh_index_ptr)) {
-        co_await lhi_ptr->close();
-    }
+    co_await reader.close();
     co_await sem.stop();
     if (ex) {
         co_return coroutine::exception(std::move(ex));
