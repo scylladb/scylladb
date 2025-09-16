@@ -1491,7 +1491,7 @@ void sstable::maybe_rebuild_filter_from_index(uint64_t num_partitions) {
     //    - to prevent resizing for small sstables where the savings are minimal.
     // 2. Do not resize if the current filter is larger than the optimal one but still under 16K.
     //    - to avoid downsizing when the savings are minimal.
-    //    - the fp rate is also already atleast at the configured value, so no gain there.
+    //    - the fp rate is also already at least at the configured value, so no gain there.
     // 3. Do not resize filters of garbage_collected sstables.
     const auto optimal_filter_size = utils::i_filter::get_filter_size(num_partitions, _schema->bloom_filter_fp_chance());
     const auto filter_size_diff = std::abs<int64_t>(optimal_filter_size - curr_bitset_size);
