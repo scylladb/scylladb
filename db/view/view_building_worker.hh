@@ -64,7 +64,9 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
      *
      * When `work` future is finished, it means all tasks in `tasks_ids` are done.
      *
-     * The batch lives on shard 0 but it might execute its work on a different shard.
+     * The batch lives on shard 0 exclusively.
+     * When the batch starts to execute its tasks, it firstly copies all necessary data
+     * to the designated shard, then the work is done on the local copy of the data only.
      */
 
     enum class batch_state {
@@ -93,8 +95,6 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
         view_building_worker& _vbw;
 
         future<> do_work();
-        future<> do_build_range(view_building_worker& local_vbw);
-        future<> do_process_staging(view_building_worker& local_vbw);
     };
 
     friend class batch;
@@ -174,6 +174,8 @@ private:
     bool is_shard_free(shard_id shard);
 
     dht::token_range get_tablet_token_range(table_id table_id, dht::token last_token);
+    future<> do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as);
+    future<> do_process_staging(table_id base_id, dht::token last_token);
 
     future<> run_staging_sstables_registrator();
     // Caller must hold units from `_staging_sstables_mutex`
