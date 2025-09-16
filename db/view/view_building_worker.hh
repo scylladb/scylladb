@@ -158,8 +158,8 @@ public:
             view_building_state_machine& vbsm);
     void start_backgroud_fibers();
 
-    future<> register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, lw_shared_ptr<replica::table> table);
-    
+    future<> register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, table_id table_id);
+
     future<> drain();
     future<> stop();
 

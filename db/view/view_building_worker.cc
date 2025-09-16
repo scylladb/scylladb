@@ -169,17 +169,16 @@ void view_building_worker::on_drop_view(const sstring& ks_name, const sstring& v
     });
 }
 
-future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, lw_shared_ptr<replica::table> table) {
-    co_await container().invoke_on(0, [ssts = std::move(ssts), table = std::move(table)] (view_building_worker& local_vbw) -> future<> {
+future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, table_id table_id) {
+    co_await container().invoke_on(0, [ssts = std::move(ssts), table_id] (view_building_worker& local_vbw) -> future<> {
         try {
             auto lock = co_await get_units(local_vbw._staging_sstables_mutex, 1, local_vbw._as);
-            auto table_id = table->schema()->id();
             vbw_logger.debug("Saving {} sstables for table {} to create view building tasks", ssts.size(), table_id);
             auto& sstables_queue = local_vbw._sstables_to_register[table_id];
             sstables_queue.insert(sstables_queue.end(), std::make_move_iterator(ssts.begin()), std::make_move_iterator(ssts.end()));
             local_vbw._sstables_to_register_event.broadcast();
         } catch (semaphore_aborted&) {
-            vbw_logger.warn("Semaphore was aborted while waiting to register {} sstables for table {}", ssts.size(), table->schema()->id());
+            vbw_logger.warn("Semaphore was aborted while waiting to register {} sstables for table {}", ssts.size(), table_id);
         }
     });
 }
