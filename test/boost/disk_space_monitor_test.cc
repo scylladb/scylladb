@@ -99,7 +99,6 @@ SEASTAR_THREAD_TEST_CASE(test_subscription_options) {
 
     utils::disk_space_monitor dsm(as, data_dir_path, dsm_cfg);
     auto stop_dsm = defer([&dsm] { dsm.stop().get(); });
-    dsm.start().get();
 
     float disk_utilization = 0.1;
     auto registration = dsm.set_space_source([&] {
@@ -110,6 +109,8 @@ SEASTAR_THREAD_TEST_CASE(test_subscription_options) {
         };
         return make_ready_future<std::filesystem::space_info>(space);
     });
+
+    dsm.start().get();
 
     struct stats {
         size_t constant_updates = 0;
