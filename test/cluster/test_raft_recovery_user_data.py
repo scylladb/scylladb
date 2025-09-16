@@ -92,6 +92,14 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     logging.info(f'Restarting {live_servers}')
     await manager.rolling_restart(live_servers)
 
+    # We reconnect the driver before calling delete_discovery_state_and_group0_id below due to
+    # https://github.com/scylladb/python-driver/issues/295. We must pause the write workload for reconnection.
+    await finish_writes()
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(live_servers)
+    finish_writes = await start_writes(cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
+                                       ks_name=ks_name, node_shutdowns=True)
+
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     for h in hosts:
         await delete_discovery_state_and_group0_id(cql, h)
