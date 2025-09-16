@@ -14,6 +14,7 @@
 
 import pytest
 import time
+import itertools
 from botocore.exceptions import ClientError
 from .util import create_test_table, random_string, random_bytes, full_scan, full_query, multiset, list_tables, new_test_table, wait_for_gsi, unique_table_name
 
@@ -1171,6 +1172,84 @@ def test_gsi_2_describe_table_schema(test_table_gsi_2):
     assert gsis[0]['KeySchema'] == expected_gsi_keyschema
     # The list of attribute definitions may be arbitrarily reordered
     assert multiset(got['AttributeDefinitions']) == multiset(expected_all_attribute_definitions)
+
+# This test is a comprehensive regression test for issue #5320, testing that
+# DescribeTable shows the correct user-requested GSI key even when Alternator
+# had to add to the underlying materialized view an "extra" clustering key
+# (because Scylla's MV requires each base key column to also be a key column
+# in the view). See also its LSI version in test_lsi.py.
+# In test_gsi_2_describe_table_schema above we made an educated guess which
+# combination of base-table and GSI keys might cause DescribeTable to return
+# wrong results. In contrast, this tests rigorously checks *all* the possible
+# combinations of what the base key and GSI key might be:
+#     * The base table's key can have one or two components (just a hash key, or
+#       a hash key and a range key).
+#     * The GSI key can also have one or two components, and each of those can
+#       be picked from one of the base's key columns or from a regular column.
+# The test covers a grand total of 15 different cases, creating just two tables
+# (for one or two base key components) - one has 5 GSIs and the second 10 GSIs.
+def test_gsi_describe_table_schema_all(dynamodb):
+    # We have two options for the base table: it can have either have just a
+    # hash key (['a']) or both a hash key and a range key (['a', 'b'])
+    for base_keys in [ ['a'], ['a', 'b'] ]:
+        # The GSI key can have either one component (just hash) or two (hash
+        # and range). We build in gsi_keys_options a list of all the options
+        # for the GSI key - it's a list of vectors, each of length one or two.
+        gsi_keys_options=[]
+        # First add to gsi_keys_options all options for GSI keys with just one
+        # key component. It can be one of the base_keys, or some unrelated
+        # regular column (which we'll take as 'x')
+        for bk in base_keys:
+            gsi_keys_options.append([bk])
+        gsi_keys_options.append(['x'])
+        # Now add to gsi_keys_options GSI keys with two key component. We need
+        # all the ordered pairs of two different items taken from base_keys
+        # or two other regular columns x and y.
+        for pair in itertools.permutations(base_keys + ['x', 'y'], 2):
+            # If the key has just y, not x, it's a redundant option and we
+            # can drop it - the same key with just x represents the same thing.
+            if 'y' in pair and 'x' not in pair:
+                continue
+            # Similarly, the pair y,x is redundant - it's the same as x,y
+            # (note that when the base key columns are involved, the order
+            # does matter! a,x is not the same as x,a and we should try both)
+            if pair == ('y', 'x'):
+                continue
+            gsi_keys_options.append(pair)
+        print(f'{len(gsi_keys_options)} options for {base_keys}: {gsi_keys_options}')
+        # Finally, create a base table with base_keys and a bunch of GSIs with
+        # all the different GSI key options we collected in gsi_keys_options
+        if len(base_keys) == 1:
+            key_schema=[ { 'AttributeName': base_keys[0], 'KeyType': 'HASH' } ]
+        else:
+            key_schema=[ { 'AttributeName': base_keys[0], 'KeyType': 'HASH' },
+                         { 'AttributeName': base_keys[1], 'KeyType': 'RANGE' } ]
+        attribute_definitions = [ {'AttributeName': attr, 'AttributeType': 'S' } for attr in (base_keys + ['x', 'y']) ]
+        gsis = []
+        for i, gsi_keys in enumerate(gsi_keys_options):
+            if len(gsi_keys) == 1:
+                gsi_key_schema=[ { 'AttributeName': gsi_keys[0], 'KeyType': 'HASH' } ]
+            else:
+                gsi_key_schema=[ { 'AttributeName': gsi_keys[0], 'KeyType': 'HASH' },
+                                 { 'AttributeName': gsi_keys[1], 'KeyType': 'RANGE' } ]
+            gsis.append({ 'IndexName': f'index{i}',
+                          'KeySchema': gsi_key_schema,
+                          'Projection': { 'ProjectionType': 'ALL' } })
+        with new_test_table(dynamodb,
+            KeySchema=key_schema,
+            AttributeDefinitions=attribute_definitions,
+            GlobalSecondaryIndexes=gsis) as table:
+            # Check that DescribeTable shows the table and all its GSIs correctly
+            got = table.meta.client.describe_table(TableName=table.name)['Table']
+            assert got['KeySchema'] == key_schema
+            got_gsis = got['GlobalSecondaryIndexes']
+            # We want to compare got_gsis to the original gsis, but got_gsis
+            # may have extra attributes that DescribeTable added beyond what
+            # was present in the origin table creation. So let's leave in
+            # got_gsis only the columns that were present in gsis[0].
+            got_gsis = [ {k: v for k, v in got_gsi.items() if k in gsis[0]} for got_gsi in got_gsis ]
+            # Use multiset to compare ignoring order
+            assert multiset(got_gsis) == multiset(gsis)
 
 # All tests above involved "ProjectionType: ALL". This test checks how
 # "ProjectionType:: KEYS_ONLY" works. We note that it projects both
