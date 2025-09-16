@@ -6,6 +6,7 @@
 
 # - New items should be added to the end of the list
 # - Items in the following list should not be rearranged or deleted
+# - Items that are no longer needed should be marked as REMOVED_
 ERROR_INJECTIONS = (
     "stop_after_init_of_system_ks",
     "stop_after_init_of_schema_commitlog",
