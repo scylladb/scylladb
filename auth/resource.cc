@@ -101,7 +101,9 @@ static permission_set applicable_permissions(const functions_resource_view& fv) 
             permission::EXECUTE>();
 }
 
-resource::resource(resource_kind kind) : _kind(kind) {
+resource::resource(resource_kind kind, bool is_vector_indexed)
+    : _kind(kind)
+    , _is_vector_indexed_table(is_vector_indexed) {
     _parts.emplace_back(roots.at(kind));
 }
 
@@ -114,6 +116,12 @@ resource::resource(data_resource_t, std::string_view keyspace) : resource(resour
 }
 
 resource::resource(data_resource_t, std::string_view keyspace, std::string_view table) : resource(resource_kind::data) {
+    _parts.emplace_back(keyspace);
+    _parts.emplace_back(table);
+}
+
+resource::resource(data_resource_t, std::string_view keyspace, std::string_view table, bool is_vector_indexed)
+    : resource(resource_kind::data, is_vector_indexed) {
     _parts.emplace_back(keyspace);
     _parts.emplace_back(table);
 }
