@@ -55,7 +55,7 @@ async def test_lwt(manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
     quorum = len(hosts) // 2 + 1
 
-    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     # We use capital letters to check that the proper quotes are used in paxos store queries.
     ks = unique_name() + '_Test'
@@ -130,7 +130,7 @@ async def test_lwt_during_migration(manager: ManagerClient):
     host_ids = await asyncio.gather(*[manager.get_host_id(s.server_id) for s in servers])
 
     logger.info("Disable tablet balancing")
-    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2} AND tablets = {'initial': 1}") as ks:
         logger.info("Create a table")
@@ -244,7 +244,7 @@ async def test_lwt_state_is_preserved_on_tablet_migration(manager: ManagerClient
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logger.info("Disable tablet balancing")
-    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     logger.info("Create a keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
@@ -353,7 +353,7 @@ async def test_lwt_state_is_preserved_on_tablet_rebuild(manager: ManagerClient):
     hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
 
     logger.info("Disable tablet balancing")
-    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     logger.info("Create a keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
@@ -649,7 +649,7 @@ async def test_lwt_coordinator_shard(manager: ManagerClient):
     cql = manager.get_cql()
 
     logger.info("Disable tablet balancing")
-    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     logger.info("Create a keyspace")
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:

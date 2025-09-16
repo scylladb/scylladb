@@ -161,6 +161,9 @@ struct stats : public write_stats {
 
     uint64_t replica_cross_shard_ops = 0;
 
+    // number of requests that resulted in a stale_topology_exception
+    uint64_t replica_fenced_out_requests = 0;
+
     utils::timed_rate_moving_average_summary_and_histogram read;
     utils::timed_rate_moving_average_summary_and_histogram range;
 

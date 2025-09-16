@@ -676,6 +676,10 @@ future<> storage_service::topology_state_load(state_change_hint hint) {
     running = true;
 #endif
 
+    co_await utils::get_local_injector().inject("topology_state_load_error", [] {
+        return std::make_exception_ptr(std::runtime_error("topology_state_load_error"));
+    });
+
     rtlogger.debug("reload raft topology state");
     std::unordered_set<raft::server_id> prev_normal = _topology_state_machine._topology.normal_nodes | std::views::keys | std::ranges::to<std::unordered_set>();
 
@@ -5877,6 +5881,9 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
             }
             break;
             case raft_topology_cmd::command::barrier_and_drain: {
+                utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail_before", [] {
+                    throw std::runtime_error("raft_topology_barrier_and_drain_fail_before injected exception");
+                });
                 co_await utils::get_local_injector().inject("pause_before_barrier_and_drain", utils::wait_for_message(std::chrono::minutes(5)));
                 if (_topology_state_machine._topology.tstate == topology::transition_state::write_both_read_old) {
                     for (auto& n : _topology_state_machine._topology.transition_nodes) {

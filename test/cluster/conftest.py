@@ -21,7 +21,7 @@ from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name
 from test.pylib.manager_client import ManagerClient
 from test.pylib.async_cql import run_async
-from test.pylib.scylla_cluster import ScyllaClusterManager
+from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
 from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_cql_connection_options
 import logging
@@ -36,6 +36,7 @@ from cassandra.policies import TokenAwarePolicy                          # type:
 from cassandra.policies import WhiteListRoundRobinPolicy                 # type: ignore
 from cassandra.connection import DRIVER_NAME       # type: ignore # pylint: disable=no-name-in-module
 from cassandra.connection import DRIVER_VERSION    # type: ignore # pylint: disable=no-name-in-module
+from collections.abc import AsyncIterator
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -327,3 +328,14 @@ async def prepare_3_nodes_cluster(request, manager):
 async def prepare_3_racks_cluster(request, manager):
     if request.node.get_closest_marker("prepare_3_racks_cluster"):
         await manager.servers_add(3, auto_rack_dc="dc1")
+
+
+@pytest.fixture(scope="function")
+def internet_dependency_enabled(request) -> None:
+    if request.config.getoption('skip_internet_dependent_tests'):
+        pytest.skip(reason="skip_internet_dependent_tests is set")
+
+
+@pytest.fixture(scope="function")
+async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
+    yield await get_scylla_2025_1_description(build_mode)
