@@ -2869,6 +2869,16 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
 class delete_item_operation : public rmw_operation {
 private:
     put_or_delete_item _mutation_builder;
+protected:
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const override {
+        // Strict compatibility always does read-before-write, so the item
+        // doesn't exist.
+        // TODO: detect if rbw was performed, i.e. for preimage.
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && !previous_item) {
+            return desired_fixup::skip_cdc;
+        }
+        return desired_fixup::ignore_fixup;
+    }
 public:
     parsed::condition_expression _condition_expression;
     delete_item_operation(service::storage_proxy& proxy, rjson::value&& request)
@@ -2916,6 +2926,7 @@ public:
             // efficient than throwing an exception.
             return {};
         }
+        maybe_update_options(previous_item, cdc_opts);
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
         } else {
