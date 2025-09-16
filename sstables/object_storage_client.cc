@@ -133,7 +133,7 @@ public:
         , _shard_client([cf = std::move(cf), endpoint = ep.key()] {
             auto lc = cf(endpoint);
             if (!lc) {
-                throw std::runtime_error(fmt::format("Could not retrive shard client for {}", endpoint));
+                throw std::runtime_error(fmt::format("Could not retrieve shard client for {}", endpoint));
             }
             return dynamic_pointer_cast<gs_client_wrapper>(lc)->_client;
         })
