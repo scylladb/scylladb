@@ -36,11 +36,11 @@ future<> sts_assume_role_credentials_provider::update_credentials() {
     auto req = http::request::make("POST", sts_host, "/");
     // Just set this version
     // https://github.com/aws/aws-sdk-cpp/blob/8d68be52dcad85095753e069a4355e241f1edb1c/generated/src/aws-cpp-sdk-sts/source/model/AssumeRoleRequest.cpp#L143
-    req.query_parameters["Version"] = "2011-06-15";
-    req.query_parameters["DurationSeconds"] = format("{}", session_duration);
-    req.query_parameters["Action"] = "AssumeRole";
-    req.query_parameters["RoleSessionName"] = format("{}", utils::make_random_uuid());
-    req.query_parameters["RoleArn"] = role_arn;
+    req.set_query_param("Version", "2011-06-15");
+    req.set_query_param("DurationSeconds", format("{}", session_duration));
+    req.set_query_param("Action", "AssumeRole");
+    req.set_query_param("RoleSessionName", format("{}", utils::make_random_uuid()));
+    req.set_query_param("RoleArn", role_arn);
     auto factory = std::make_unique<utils::http::dns_connection_factory>(sts_host, port, is_secured, sts_logger);
     retryable_http_client http_client(std::move(factory), 1, retryable_http_client::ignore_exception, http::experimental::client::retry_requests::yes, retry_strategy);
     co_await http_client.make_request(

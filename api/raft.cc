@@ -71,7 +71,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         co_return json_void{};
     });
     r::get_leader_host.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
-        if (!req->query_parameters.contains("group_id")) {
+        if (req->get_query_param("group_id").empty()) {
             const auto leader_id = co_await raft_gr.invoke_on(0, [] (service::raft_group_registry& raft_gr) {
                 auto& srv = raft_gr.group0();
                 return srv.current_leader();
@@ -100,7 +100,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
     r::read_barrier.set(r, [&raft_gr] (std::unique_ptr<http::request> req) -> future<json_return_type> {
         auto timeout = get_request_timeout(*req);
 
-        if (!req->query_parameters.contains("group_id")) {
+        if (req->get_query_param("group_id").empty()) {
             // Read barrier on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout] (service::raft_group_registry& raft_gr) -> future<> {
                 co_await raft_gr.group0_with_timeouts().read_barrier(nullptr, timeout);
@@ -131,7 +131,7 @@ void set_raft(http_context&, httpd::routes& r, sharded<service::raft_group_regis
         const auto stepdown_timeout_ticks = dur / service::raft_tick_interval;
         auto timeout_dur = raft::logical_clock::duration(stepdown_timeout_ticks);
 
-        if (!req->query_parameters.contains("group_id")) {
+        if (req->get_query_param("group_id").empty()) {
             // Stepdown on group 0 by default
             co_await raft_gr.invoke_on(0, [timeout_dur] (service::raft_group_registry& raft_gr) {
                 apilog.info("Triggering stepdown for group0");
