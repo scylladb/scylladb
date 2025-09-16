@@ -399,7 +399,8 @@ future<rjson::value> azure_host::impl::send_request(const sstring& host, unsigne
     client.target(path);
     client.method(httpd::operation_type::POST);
     client.add_header("Authorization", fmt::format("Bearer {}", token.token));
-    client.content("application/json", std::move(rjson::print(body)));
+    client.add_header("Content-Type", "application/json");
+    client.content(std::move(rjson::print(body)));
 
     azlog.trace("Sending request: {}", rest::redacted_request_type{ client.request(), filter });
 

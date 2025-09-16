@@ -808,7 +808,7 @@ future<encryption::kms_host::impl::result_type> encryption::kms_host::impl::post
 
     client.add_header(AWS_AUTHORIZATION_HEADER, awsAuthString);
     client.target("/");
-    client.content(query.content_type, query.content);
+    client.content(query.content);
     client.method(httpclient::method_type::POST);
 
     kms_log.trace("Request: {}", client.request());

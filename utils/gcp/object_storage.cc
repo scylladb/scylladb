@@ -294,9 +294,13 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
             req.add_header(k, v);
         }
 
+        if (!content_type.empty()) {
+            req.add_header(httpclient::CONTENT_TYPE_HEADER, content_type);
+        }
+
         std::visit(overloaded_functor {
-            [&](const std::string& s) { req.content(content_type, s); },
-            [&](const writer_and_size& ws) { req.content(content_type, ws.first, ws.second); }
+            [&](const std::string& s) { req.content(s); },
+            [&](const writer_and_size& ws) { req.content(ws.first, ws.second); }
         }, body);
 
         // GCP storage requires this even if content is empty
