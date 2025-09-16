@@ -174,9 +174,7 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_con
 
 std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context& ctx, const http::request& req, sstring cf_param_name) {
     auto keyspace = validate_keyspace(ctx, req);
-    const auto& query_params = req.query_parameters;
-    auto it = query_params.find(cf_param_name);
-    auto tis = parse_table_infos(keyspace, ctx, it != query_params.end() ? it->second : "");
+    auto tis = parse_table_infos(keyspace, ctx, req.get_query_param(cf_param_name));
     return std::make_pair(std::move(keyspace), std::move(tis));
 }
 
@@ -331,7 +329,7 @@ void set_repair(http_context& ctx, routes& r, sharded<repair_service>& repair, s
         // Nodetool still sends those unsupported options. Ignore them to avoid failing nodetool repair.
         static std::unordered_set<sstring> legacy_options_to_ignore = {"pullRepair", "ignoreUnreplicatedKeyspaces"};
 
-        for (auto& x : req->query_parameters) {
+        for (auto& x : req->get_query_params()) {
             if (legacy_options_to_ignore.contains(x.first)) {
                 continue;
             }
@@ -574,9 +572,8 @@ rest_toppartitions_generic(http_context& ctx, std::unique_ptr<http::request> req
         bool filters_provided = false;
 
         std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> table_filters {};
-        if (req->query_parameters.contains("table_filters")) {
+        if (auto filters = req->get_query_param("table_filters"); !filters.empty()) {
             filters_provided = true;
-            auto filters = req->get_query_param("table_filters");
             std::stringstream ss { filters };
             std::string filter;
             while (!filters.empty() && ss.good()) {
@@ -586,9 +583,8 @@ rest_toppartitions_generic(http_context& ctx, std::unique_ptr<http::request> req
         }
 
         std::unordered_set<sstring> keyspace_filters {};
-        if (req->query_parameters.contains("keyspace_filters")) {
+        if (auto filters = req->get_query_param("keyspace_filters"); !filters.empty()) {
             filters_provided = true;
-            auto filters = req->get_query_param("keyspace_filters");
             std::stringstream ss { filters };
             std::string filter;
             while (!filters.empty() && ss.good()) {
@@ -1676,8 +1672,7 @@ rest_drop_quarantined_sstables(http_context& ctx, sharded<service::storage_servi
     try {
         if (!keyspace.empty()) {
             keyspace = validate_keyspace(ctx, keyspace);
-            auto it = req->query_parameters.find("tables");
-            auto table_infos = parse_table_infos(keyspace, ctx, it != req->query_parameters.end() ? it->second : "");
+            auto table_infos = parse_table_infos(keyspace, ctx, req->get_query_param("tables"));
 
             co_await ctx.db.invoke_on_all([&table_infos](replica::database& db) -> future<> {
                 return parallel_for_each(table_infos, [&db](const auto& table) -> future<> {
@@ -1933,7 +1928,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::take_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        apilog.info("take_snapshot: {}", req->query_parameters);
+        apilog.info("take_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
         auto column_families = split(req->get_query_param("cf"), ",");
         auto sfopt = req->get_query_param("sf");
@@ -1960,7 +1955,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
     });
 
     ss::del_snapshot.set(r, [&snap_ctl](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        apilog.info("del_snapshot: {}", req->query_parameters);
+        apilog.info("del_snapshot: {}", req->get_query_params());
         auto tag = req->get_query_param("tag");
         auto column_family = req->get_query_param("cf");
 
