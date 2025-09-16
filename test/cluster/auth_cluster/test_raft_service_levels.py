@@ -13,6 +13,7 @@ from test.pylib.manager_client import ManagerClient
 from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, wait_for_token_ring_and_group0_consistency
 from test.cluster.conftest import skip_mode
+from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
 from cassandra.protocol import InvalidRequest
@@ -433,9 +434,8 @@ async def test_service_levels_over_limit(manager: ManagerClient):
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 
-    SL_LIMIT = 8
     sls = []
-    for i in range(SL_LIMIT + 1):
+    for i in range(MAX_USER_SERVICE_LEVELS + 1):
         sl = f"sl_{i}_{unique_name()}"
         sls.append(sl)
         await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
