@@ -62,6 +62,10 @@ enum class operation : int8_t {
 };
 
 struct per_request_options {
+    // The value of the base row before current operation, queried by higher
+    // layers than CDC. We assume that CDC could have seen the row in this
+    // state, i.e. the value isn't 'stale'/'too recent'.
+    lw_shared_ptr<cql3::untyped_result_set> preimage;
     // Don't generate log rows for this mutation.
     bool skip_cdc = false;
 };
