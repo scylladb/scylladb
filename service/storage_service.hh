@@ -308,7 +308,7 @@ private:
     future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
 
     // Prepares token metadata change without making it visible. Combined with commit function
-    // and appropiate lock it does exactly the same as mutate_token_metadata.
+    // and appropriate lock it does exactly the same as mutate_token_metadata.
     // Note: prepare_token_metadata_change must be called on shard 0.
     future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
             const schema_getter& loader);

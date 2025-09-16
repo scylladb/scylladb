@@ -716,7 +716,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     auto p11_modules_str = p11_modules.string<char>();
     ::p11_kit_override_system_files(NULL, NULL, p11_modules_str.c_str(), NULL, NULL);
 
-sharded<locator::shared_token_metadata> token_metadata;
+    sharded<locator::shared_token_metadata> token_metadata;
     sharded<locator::effective_replication_map_factory> erm_factory;
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
