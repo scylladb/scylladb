@@ -15,6 +15,7 @@ from contextlib import contextmanager, ExitStack
 from .util import new_type, unique_name, new_test_table, new_test_keyspace, new_function, new_aggregate, \
     new_cql, keyspace_has_tablets, unique_name_prefix, new_session, new_user, new_materialized_view, \
     new_secondary_index
+from .test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra.protocol import InvalidRequest, Unauthorized
 from collections.abc import Iterable
 from typing import Any
@@ -2890,6 +2891,87 @@ def test_desc_auth_attach_service_levels(cql, scylla_only):
         desc_iter = extract_create_statements(desc_iter)
 
         assert set(sl_stmts) == set(desc_iter)
+
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_driver_service_level(cql, scylla_only):
+    """
+    Driver service level is a special service level that is created automatically by
+    the system. Therefore, it requires special handling in DESC SCHEMA WITH INTERNALS -
+    if `sl:driver` exists, instead of just emiting `CREATE SERVICE LEVEL ...` we emit two
+    lines:
+      1. CREATE SERVICE LEVEL IF NOT EXISTS driver ...
+      2. ALTER SERVICE LEVEL driver ...
+
+    The reasons for this are:
+     1. We need to ensure CREATE SERVICE LEVEL doesn't fail if the service level already exists
+        (i.e. IF NOT EXISTS in CREATE) when restoring a backup from `DESC SCHEMA WITH INTERNALS`.
+     2. `ALTER SERVICE...` is needed to fully restore the configuration of `sl:driver`
+    """
+
+    with AuthSLContext(cql):
+        cql.execute(f"ALTER SERVICE LEVEL driver WITH SHARES=123")
+        cql.execute(f"ALTER SERVICE LEVEL driver WITH TIMEOUT=321s")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+
+        [create, alter] = list(desc_iter)
+
+        assert create.keyspace_name == None
+        assert create.type == "service_level"
+        assert create.name == "driver"
+        assert create.create_statement == "CREATE SERVICE LEVEL IF NOT EXISTS driver WITH TIMEOUT = 321000ms AND WORKLOAD_TYPE = 'batch' AND SHARES = 123;"
+
+        assert alter.keyspace_name == None
+        assert alter.type == "service_level"
+        assert alter.name == "driver"
+        assert alter.create_statement == "ALTER SERVICE LEVEL driver WITH TIMEOUT = 321000ms AND WORKLOAD_TYPE = 'batch' AND SHARES = 123;"
+
+# Marked as `scylla_only` because we verify that the output of `DESCRIBE SCHEMA`
+# contains information about service levels. That's not the case in Cassandra.
+def test_desc_removed_driver_service_level(cql, scylla_only):
+    """
+    Driver service level is a special service level that is created automatically by
+    the system. Therefore, it requires special handling in DESC SCHEMA WITH INTERNALS -
+    if `sl:driver` doesn't exist we emit `DROP SERVICE LEVEL IF EXISTS ...` because that means
+    someone intentionally removed it.
+    """
+    with AuthSLContext(cql):
+        cql.execute("DROP SERVICE LEVEL driver")
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+
+        [drop] = list(desc_iter)
+
+        assert drop.keyspace_name == None
+        assert drop.type == "service_level"
+        assert drop.name == "driver"
+        assert drop.create_statement == "DROP SERVICE LEVEL IF EXISTS driver;"
+
+        # We need to ensure `DESC SCHEMA WITH INTERNALS` emits the `DROP ... driver` before
+        # any other service level is listed. Otherwise, restoring service level from the output
+        # of `DESC SCHEMA WITH INTERNALS` can fail, if there aren't sufficient slots to create
+        # all service levels. We test it with the following steps:
+        # 1. Create the maximal number of user scheduling groups + one to use the slot after `sl:driver`
+        # 2. Call `DESC SCHEMA WITH INTERNALS`, rembember the output
+        # 3. Drop all service levels
+        # 4. Execute statements from `DESC SCHEMA ...` output
+        for i in range(MAX_USER_SERVICE_LEVELS + 1): # sl:driver removed, so we can use an additional slot
+            # "a_sl" name to make sure "driver" service level will be listed in DESC SCHEMA even
+            # before service levels with lexicographically smaller name
+            cql.execute(f"CREATE SERVICE LEVEL a_sl{i}")
+
+        desc_iter = cql.execute("DESC SCHEMA WITH INTERNALS")
+        desc_iter = filter_service_levels(desc_iter, filter_driver=False)
+
+        service_levels_iter = cql.execute("LIST ALL SERVICE LEVELS")
+        service_levels = [record.service_level for record in service_levels_iter]
+        for sl in service_levels:
+            cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
+        cql.execute("CREATE SERVICE LEVEL driver WITH shares=200 AND workload_type='batch'")
+        for recreate_statement in desc_iter:
+            cql.execute(recreate_statement.create_statement)
 
 def test_desc_restore(cql):
     """
