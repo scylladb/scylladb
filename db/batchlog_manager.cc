@@ -18,6 +18,7 @@
 #include <seastar/core/sleep.hh>
 
 #include "batchlog_manager.hh"
+#include "data_dictionary/data_dictionary.hh"
 #include "mutation/canonical_mutation.hh"
 #include "service/storage_proxy.hh"
 #include "system_keyspace.hh"
@@ -258,6 +259,8 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 batch_result.get();
             } catch (data_dictionary::no_such_keyspace& ex) {
                 // should probably ignore and drop the batch
+            } catch (const data_dictionary::no_such_column_family&) {
+                // As above -- we should drop the batch if the table doesn't exist anymore.
             } catch (...) {
                 blogger.warn("Replay failed (will retry): {}", std::current_exception());
                 // timeout, overload etc.
