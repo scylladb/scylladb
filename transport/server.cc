@@ -983,6 +983,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_st
             res = make_autheticate(stream, a.qualified_java_name(), trace_state);
         }
     } else {
+        update_scheduling_group();
         _ready = true;
         on_connection_ready();
         res = make_ready(stream, trace_state);
