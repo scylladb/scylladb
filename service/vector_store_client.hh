@@ -37,7 +37,7 @@ class vector_store_client final {
 
 public:
     using config = db::config;
-    using embedding = std::vector<float>;
+    using vs_vector = std::vector<float>;
     using host_name = sstring;
     using index_name = sstring;
     using keyspace_name = sstring;
@@ -110,7 +110,7 @@ public:
     [[nodiscard]] auto port() const -> std::expected<port_number, disabled>;
 
     /// Request the vector store service for the primary keys of the nearest neighbors
-    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, embedding embedding, limit limit, abort_source& as)
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, ann_error>>;
 
 private:
