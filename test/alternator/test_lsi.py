@@ -864,3 +864,55 @@ def test_lsi_delete_modifies_index(test_table_lsi_1):
     # Validate that the item is no longer in the index.
     assert_index_query(test_table_lsi_1, 'hello', [],
         KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'}})
+
+# This test verifies that DescribeTable shows the correct user-requested LSI
+# key even when Alternator had to add to the underlying materialized view an
+# "extra" clustering key (because Scylla's MV requires each base key column
+# to also be a key column in the view). It serves as a regression test for
+# issue #5320.
+# This is the LSI version of test_gsi.py::test_gsi_describe_table_schema_all
+# but the LSI test has far fewer options than the GSI test because:
+#     * We know the base table must have both hash and sort key (in the test
+#       test_lsi_wrong_no_sort_key() we verified that we can't add an LSI
+#       to a base table which has just a hash key).
+#     * The LSI must have the same hash key as the base table.
+# These constraints leave us just *two* options: The LSI either has the same
+# sort key as the base (not a very interesting case, but valid), or the LSI's
+# sort key is a non-key attribute in the base. So this test just needs to
+# create one base table with two LSIs to cover all options.
+def test_lsi_describe_table_schema_all(dynamodb):
+    # If we are to use an LSI the base table must have both hash key and sort
+    # key. Let's call them 'a', 'b':
+    base_keys = ['a', 'b']
+    # The LSI key must have the same hash key as the base ('a'), must
+    # have a range key, and that range key can either be 'b' or not-'b'
+    # (for which we take 'x'). So we only have these two options for what
+    # the LSI key might be:
+    lsi_keys_options = [['a', 'b'], ['a', 'x']]
+    # Create a base table with base_keys and the two LSIs with the
+    # LSI key options we collected in lsi_keys_options
+    key_schema=[ { 'AttributeName': base_keys[0], 'KeyType': 'HASH' },
+                 { 'AttributeName': base_keys[1], 'KeyType': 'RANGE' } ]
+    attribute_definitions = [ {'AttributeName': attr, 'AttributeType': 'S' } for attr in (base_keys + ['x']) ]
+    lsis = []
+    for i, lsi_keys in enumerate(lsi_keys_options):
+        lsi_key_schema=[ { 'AttributeName': lsi_keys[0], 'KeyType': 'HASH' },
+                         { 'AttributeName': lsi_keys[1], 'KeyType': 'RANGE' } ]
+        lsis.append({ 'IndexName': f'index{i}',
+                      'KeySchema': lsi_key_schema,
+                      'Projection': { 'ProjectionType': 'ALL' } })
+    with new_test_table(dynamodb,
+        KeySchema=key_schema,
+        AttributeDefinitions=attribute_definitions,
+        LocalSecondaryIndexes=lsis) as table:
+        # Check that DescribeTable shows the table and its LSIs correctly:
+        got = table.meta.client.describe_table(TableName=table.name)['Table']
+        assert got['KeySchema'] == key_schema
+        got_lsis = got['LocalSecondaryIndexes']
+        # We want to compare got_lsis to the original lsis, but got_lsis may
+        # have extra attributes that DescribeTable added beyond what was
+        # present in the origin table creation. So let's leave in got_lsis
+        # only the columns that were present in lsis[0].
+        got_lsis = [ {k: v for k, v in got_lsi.items() if k in lsis[0]} for got_lsi in got_lsis ]
+        # Use multiset to compare ignoring order
+        assert multiset(got_lsis) == multiset(lsis)
