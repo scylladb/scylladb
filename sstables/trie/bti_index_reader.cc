@@ -264,11 +264,11 @@ enum class set_result {
 // An index cursor, which is effectively a pair of trie cursors -- one into Partitions.db, one into Rows.db.
 class index_cursor {
     // A cursor into Partitions.db.
-    // Starts unintialized, gets initialized by set_before_partition/set_after_partition.
+    // Starts uninitialized, gets initialized by set_before_partition/set_after_partition.
     trie_cursor _partition_cursor;
     // A cursor into Rows.db.
-    // Starts unintialized, gets initialized by set_before_row/set_after_row,
-    // becomes unitialized again after partition cursor is moved.
+    // Starts uninitialized, gets initialized by set_before_row/set_after_row,
+    // becomes uninitialized again after partition cursor is moved.
     trie_cursor _row_cursor;
     // Holds the row index header for the current partition, iff the current partition has a row index.
     // This is kept in sync with the partition cursor.
