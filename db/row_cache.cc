@@ -1244,6 +1244,11 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                                         _tracker.on_partition_erase();
                                         p->evict(_tracker);
                                     });
+                              } else {
+                                _tracker.clear_continuity(*it);
+                                ++it;
+                              }
+
                                 // it != end is necessary for correctness. We cannot set _prev_snapshot_pos to end->position()
                                 // because after resuming something may be inserted before "end" which falls into the next range.
                                 if (need_preempt() && it != end) {
@@ -1252,10 +1257,6 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                                     });
                                     break;
                                 }
-                              } else {
-                                _tracker.clear_continuity(*it);
-                                ++it;
-                              }
                             }
                             SCYLLA_ASSERT(it != _partitions.end());
                             _tracker.clear_continuity(*it);
