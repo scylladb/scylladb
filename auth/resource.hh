@@ -100,6 +100,11 @@ class resource final {
 
     utils::small_vector<sstring, 3> _parts;
 
+    // True if this is a data resource and the table has a vector index.
+    // Unfortunately we need to store this extra information because
+    // the behavior of permission checking is different for vector indexed tables.
+    bool is_vector_indexed_table = false;
+
 public:
     ///
     /// A root resource of a particular kind.
@@ -107,6 +112,7 @@ public:
     explicit resource(resource_kind);
     resource(data_resource_t, std::string_view keyspace);
     resource(data_resource_t, std::string_view keyspace, std::string_view table);
+    resource(data_resource_t, std::string_view keyspace, std::string_view table, bool is_vector_indexed);
     resource(role_resource_t, std::string_view role);
     resource(service_level_resource_t);
     explicit resource(functions_resource_t);
@@ -127,6 +133,10 @@ public:
     std::optional<resource> parent() const;
 
     permission_set applicable_permissions() const;
+
+    bool is_vector_indexed() const noexcept {
+        return is_vector_indexed_table;
+    }
 
 private:
     resource(resource_kind, utils::small_vector<sstring, 3> parts);
@@ -230,6 +240,9 @@ inline resource make_data_resource(std::string_view keyspace) {
 }
 inline resource make_data_resource(std::string_view keyspace, std::string_view table) {
     return resource(data_resource_t{}, keyspace, table);
+}
+inline resource make_data_resource(std::string_view keyspace, std::string_view table, bool is_vector_indexed) {
+    return resource(data_resource_t{}, keyspace, table, is_vector_indexed);
 }
 
 const resource& root_role_resource();

@@ -119,6 +119,12 @@ resource::resource(data_resource_t, std::string_view keyspace, std::string_view 
     _parts.emplace_back(table);
 }
 
+resource::resource(data_resource_t, std::string_view keyspace, std::string_view table, bool is_vector_indexed) : resource(resource_kind::data) {
+    _parts.emplace_back(keyspace);
+    _parts.emplace_back(table);
+    is_vector_indexed_table = is_vector_indexed;
+}
+
 resource::resource(role_resource_t, std::string_view role) : resource(resource_kind::role) {
     _parts.emplace_back(role);
 }

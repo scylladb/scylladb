@@ -93,8 +93,8 @@ future<> service::client_state::has_function_access(const sstring& ks, const sst
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
-                const sstring& cf, auth::permission p, auth::command_desc::type t) const {
-    auto r = auth::make_data_resource(ks, cf);
+                const sstring& cf, auth::permission p, auth::command_desc::type t, bool is_vector_indexed) const {
+    auto r = auth::make_data_resource(ks, cf, is_vector_indexed);
     co_return co_await has_access(ks, {p, r, t});
 }
 
@@ -222,6 +222,13 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
             && !co_await _auth_service->underlying_role_manager().is_superuser(*_user->name)) [[unlikely]] {
         throw exceptions::unauthorized_exception(
                 ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
+    }
+
+    if (cmd.resource.kind() == auth::resource_kind::data
+            && cmd.permission == auth::permission::SELECT
+            && cmd.resource.is_vector_indexed()
+            && co_await check_has_permission({auth::permission::VECTOR_SEARCH_INDEXING, cmd.resource, cmd.type_})) {
+            co_return;
     }
 
     co_return co_await ensure_has_permission(cmd);

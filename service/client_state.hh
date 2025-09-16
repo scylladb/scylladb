@@ -341,7 +341,7 @@ public:
     future<> has_all_keyspaces_access(auth::permission) const;
     future<> has_keyspace_access(const sstring&, auth::permission) const;
     future<> has_column_family_access(const sstring&, const sstring&, auth::permission,
-                                      auth::command_desc::type = auth::command_desc::type::OTHER) const;
+                                      auth::command_desc::type = auth::command_desc::type::OTHER, bool is_vector_indexed = false) const;
     future<> has_schema_access(const schema& s, auth::permission p) const;
     future<> has_schema_access(const sstring&, const sstring&, auth::permission p) const;
 
