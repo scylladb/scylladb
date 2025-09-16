@@ -704,8 +704,8 @@ future<> view_building_worker::batch::do_work() {
         auto maybe_views_ids = tasks | std::views::values | std::views::transform(&view_building_task::view_id) | std::ranges::to<std::vector>();
         auto& sharded_abort_sources = abort_sources;
 
-        co_await _vbw.container().invoke_on(task.replica.shard, [type, base_id, last_token, maybe_views_ids = std::move(maybe_views_ids), &sharded_abort_sources, &eptr] (view_building_worker& vbw) -> future<> {
-            try {
+        try {
+            co_await _vbw.container().invoke_on(task.replica.shard, [type, base_id, last_token, maybe_views_ids = std::move(maybe_views_ids), &sharded_abort_sources] (view_building_worker& vbw) -> future<> {
                 std::vector<table_id> views_ids;
                 switch (type) {
                 case view_building_task::task_type::build_range:
@@ -716,12 +716,12 @@ future<> view_building_worker::batch::do_work() {
                     co_await vbw.do_process_staging(base_id, last_token);
                     break;
                 }
-            } catch (seastar::abort_requested_exception&) {
-                vbw_logger.debug("Batch aborted");
-            } catch (...) {
-                eptr = std::current_exception();
-            }
-        });
+            });
+        } catch (seastar::abort_requested_exception&) {
+            vbw_logger.debug("Batch aborted");
+        } catch (...) {
+            eptr = std::current_exception();
+        }
 
         if (eptr) {
             vbw_logger.warn("Batch with tasks {} failed with error: {}", tasks | std::views::keys, eptr);
