@@ -868,7 +868,7 @@ createKeyspaceStatement returns [std::unique_ptr<cql3::statements::create_keyspa
         bool if_not_exists = false;
     }
     : K_CREATE K_KEYSPACE (K_IF K_NOT K_EXISTS { if_not_exists = true; } )? ks=keyspaceName
-      K_WITH properties[*attrs] { $expr = std::make_unique<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
+      ( K_WITH properties[*attrs] )? { $expr = std::make_unique<cql3::statements::create_keyspace_statement>(ks, attrs, if_not_exists); }
     ;
 
 /**
