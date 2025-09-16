@@ -17,6 +17,7 @@
 #include "auth/service.hh"
 #include "db/config.hh"
 #include "mutation/tombstone.hh"
+#include "seastar/core/sstring.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -2500,6 +2501,7 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
         }
         if (previous_item) {
             if (cdc_opts->fill_preimage) {
+                elogger.trace("siema preimage fill previous_item={}", *previous_item);
                 cdc_opts->preimage = make_lw_shared<cql3::untyped_result_set>(*_schema, std::move(qr), *selection, slice);
             }
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts, cdc_opts);
@@ -2509,11 +2511,17 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
 }
 
 inline void rmw_operation::maybe_update_options(const std::unique_ptr<rjson::value>& previous_item, cdc::per_request_options* cdc_opts) const {
+    if (previous_item)
+        elogger.trace("siema maybe update {}", *previous_item);
+    else
+        elogger.trace("siema maybe update none");
     if (cdc_opts) {
         fixup_t fixup = get_cdc_operation_fixup(previous_item);
         if (std::holds_alternative<cdc::operation>(fixup)) {
+            elogger.trace("siema maybe fixup={}", std::to_underlying(std::get<cdc::operation>(fixup)));
             cdc_opts->log_operation_type_fixup.emplace(std::get<cdc::operation>(fixup));
         } else if (std::get<desired_fixup>(fixup) == desired_fixup::skip_cdc) {
+            elogger.trace("siema desired=skip");
             cdc_opts->skip_cdc = true;
         }
     }
@@ -2649,6 +2657,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         global_stats.reads_before_write++;
         per_table_stats.reads_before_write++;
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
+            elogger.trace("siema write isolation unsafe");
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
             return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
@@ -2663,6 +2672,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
             });
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
+                elogger.trace("siema write isolation != lwt always");
         std::optional<mutation> m = apply(nullptr, api::new_timestamp(), &cdc_opts);
         SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
         return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
@@ -2672,6 +2682,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
     }
+    elogger.trace("siema write isolation lwt");
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
@@ -2810,6 +2821,10 @@ public:
                _returnvalues == returnvalues::ALL_OLD;
     }
     virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options* cdc_opts) const override {
+        if (!previous_item)
+            elogger.trace("siema apply put_item previous_item=none");
+        else
+            elogger.trace("siema apply put_item previous_item={}", *previous_item);
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
             if (previous_item && _returnvalues_on_condition_check_failure ==

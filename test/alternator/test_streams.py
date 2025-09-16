@@ -664,6 +664,18 @@ def fetch_more(dynamodbstreams, iterators, output):
 # Note that the order of events is only guaranteed (and therefore compared)
 # inside a single partition.
 def compare_events(expected_events, output, mode, expected_region):
+    print('expected_events')
+    for e in expected_events:
+        print('   ', e)
+    print('output:')
+    import copy
+    for eo in output:
+        e = copy.deepcopy(eo)
+        del e['eventID']
+        del e['dynamodb']['ApproximateCreationDateTime']
+        del e['eventSource']
+        del e['dynamodb']['SequenceNumber']
+        print('   ', e)
     # The order of expected_events is only meaningful inside a partition, so
     # let's convert it into a map indexed by partition key.
     expected_events_map = {}

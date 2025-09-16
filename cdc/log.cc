@@ -69,6 +69,8 @@ shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy
 
 } // anonymous namespace
 
+extern logging::logger elogger;
+
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, const replica::database&, const keyspace_metadata&,
         std::optional<table_id> = {}, schema_ptr = nullptr);
@@ -1888,6 +1890,7 @@ transform_mutations(utils::chunked_vector<mutation>& muts, decltype(muts.size())
 
 future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
 cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl, per_request_options options) {
+    elogger.trace("siema a type_fixup={} skip_cdc={}", options.log_operation_type_fixup.has_value() ? std::to_underlying(*options.log_operation_type_fixup) : -1, options.skip_cdc);
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
@@ -1918,11 +1921,14 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
+                cdc_log.info("siema ktores preimage");
                 if (options.preimage && !options.preimage->empty()) {
+                    cdc_log.info("Using a prefetched image siema");
                     tracing::trace(tr_state, "CDC: Using a prefetched preimage");
                     // Preimage has been fetched by upper layers.
                     f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(std::move(options.preimage));
                 } else {
+                    cdc_log.info("siema 2 nie");
                     tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
                     f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
                         // TODO: separate stats for prefetched preimages
@@ -1950,6 +1956,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
                 const bool preimage = s->cdc_options().preimage();
                 const bool postimage = s->cdc_options().postimage();
+                elogger.trace("siema preimage={} postimage={} type_fixup={} skip_cdc={}", preimage, postimage, options.log_operation_type_fixup.has_value() ? std::to_underlying(*options.log_operation_type_fixup) : -1, options.skip_cdc);
                 details.had_preimage |= preimage;
                 details.had_postimage |= postimage;
                 tracing::trace(tr_state, "CDC: Generating log mutations for {}", m.decorated_key());
