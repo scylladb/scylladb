@@ -1100,9 +1100,10 @@ public:
         }
 
         auto tm = _db.local().get_token_metadata_ptr();
-        auto target_tablet_size = _db.local().get_config().target_tablet_size_in_bytes();
 
-        locator::load_sketch load(tm);
+        const uint64_t default_tablet_size = _db.local().get_config().target_tablet_size_in_bytes();
+
+        locator::load_sketch load(tm, stats, default_tablet_size);
         co_await load.populate();
 
         tm->get_topology().for_each_node([&] (const auto& node) {
@@ -1116,17 +1117,22 @@ public:
             if (auto ip = _gossiper.local().get_address_map().find(host)) {
                 set_cell(r.cells(), "ip", data_value(inet_address(*ip)));
             }
-            set_cell(r.cells(), "tablets_allocated", load.get_load(host));
-            set_cell(r.cells(), "tablets_allocated_per_shard", data_value(double(load.get_real_avg_shard_load(host))));
-            set_cell(r.cells(), "storage_allocated_load", data_value(int64_t(load.get_load(host) * target_tablet_size)));
+            set_cell(r.cells(), "tablets_allocated", int64_t(load.get_tablet_count(host)));
+            set_cell(r.cells(), "tablets_allocated_per_shard", data_value(double(load.get_real_avg_tablet_count(host))));
+            set_cell(r.cells(), "storage_allocated_load", data_value(int64_t(load.get_tablet_count(host) * default_tablet_size)));
 
             if (stats && stats->capacity.contains(host)) {
                 auto capacity = stats->capacity.at(host);
                 set_cell(r.cells(), "storage_capacity", data_value(int64_t(capacity)));
 
-                auto utilization = load.get_allocated_utilization(host, *stats, target_tablet_size);
-                if (utilization) {
+                if (auto utilization = load.get_allocated_utilization(host)) {
                     set_cell(r.cells(), "storage_allocated_utilization", data_value(double(*utilization)));
+                }
+                if (load.has_complete_data(host)) {
+                    if (auto utilization = load.get_storage_utilization(host)) {
+                        set_cell(r.cells(), "storage_utilization", data_value(double(*utilization)));
+                    }
+                    set_cell(r.cells(), "storage_load", data_value(int64_t(load.get_disk_used(host))));
                 }
             }
             mutation_sink(m);
@@ -1147,6 +1153,8 @@ private:
             .with_column("storage_capacity", long_type)
             .with_column("storage_allocated_load", long_type)
             .with_column("storage_allocated_utilization", double_type)
+            .with_column("storage_load", long_type)
+            .with_column("storage_utilization", double_type)
             .with_sharder(1, 0) // shard0-only
             .with_hash_version()
             .build();
