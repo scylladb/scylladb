@@ -74,7 +74,6 @@
 #include "audit/audit.hh"
 #include <seastar/core/prometheus.hh>
 #include "message/messaging_service.hh"
-#include "db/sstables-format-selector.hh"
 #include "db/snapshot-ctl.hh"
 #include "cql3/query_processor.hh"
 #include <seastar/net/dns.hh>
@@ -1389,13 +1388,6 @@ sharded<locator::shared_token_metadata> token_metadata;
             static sharded<db::view::view_building_worker> view_building_worker;
             static sharded<cdc::generation_service> cdc_generation_service;
 
-            db::sstables_format_selector sst_format_selector(db);
-
-            api::set_format_selector(ctx, sst_format_selector).get();
-            auto stop_format_seletor_api = defer_verbose_shutdown("sstables format selector API", [&ctx] {
-                api::unset_format_selector(ctx).get();
-            });
-
             checkpoint(stop_signal, "starting system keyspace");
             sys_ks.start(std::ref(qp), std::ref(db)).get();
             auto stop_sys_ks = defer_verbose_shutdown("system keyspace", [] {
@@ -1425,10 +1417,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             //   * features_service: we need to re-enable previously enabled features,
             //     this should be done before commitlog starts replaying
             //     since some features affect storage.
-            //   * sstables_format_selector: we need to choose the appropriate format,
-            //     since schema commitlog replay can write to sstables.
-            when_all_succeed(feature_service.local().on_system_tables_loaded(sys_ks.local()),
-                sst_format_selector.on_system_tables_loaded(sys_ks.local())).get();
+            when_all_succeed(feature_service.local().on_system_tables_loaded(sys_ks.local())).get();
 
             db.local().init_schema_commitlog();
 
@@ -1856,13 +1845,6 @@ sharded<locator::shared_token_metadata> token_metadata;
             // #293 - do not stop anything
             // engine().at_exit([&qp] { return qp.stop(); });
             sstables::init_metrics().get();
-
-            db::sstables_format_listener sst_format_listener(gossiper.local(), feature_service, sst_format_selector);
-
-            sst_format_listener.start().get();
-            auto stop_format_listener = defer_verbose_shutdown("sstables format listener", [&sst_format_listener] {
-                sst_format_listener.stop().get();
-            });
 
             checkpoint(stop_signal, "starting Raft Group Registry service");
             raft_gr.invoke_on_all(&service::raft_group_registry::start).get();

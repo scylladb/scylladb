@@ -1487,7 +1487,6 @@ struct database_config {
     seastar::scheduling_group commitlog_scheduling_group;
     seastar::scheduling_group schema_commitlog_scheduling_group;
     size_t available_memory;
-    std::optional<sstables::sstable_version_types> sstables_format;
 };
 
 struct string_pair_eq {
@@ -1967,9 +1966,6 @@ public:
     // Returns the list of ranges held by this endpoint
     // The returned list is sorted, and its elements are non overlapping and non wrap-around.
     future<dht::token_range_vector> get_keyspace_local_ranges(locator::static_effective_replication_map_ptr erm);
-
-    void set_format(sstables::sstable_version_types format) noexcept;
-    void set_format_by_config();
 
     future<> flush_all_memtables();
     future<> flush(const sstring& ks, const sstring& cf);

@@ -1368,11 +1368,7 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
             matched = sstable_re.match(stem)
             assert matched is not None, f"unmatched sstable component path: {fn}"
             sstable_version = matched["version"]
-            # "me" is specified by sstables_manager::_format, so new sstables
-            # created by a scylla instance are always persisted with "me" sstable
-            # format, unless the "sstable_format" setting persisted in
-            # "system.scylla_local" system tables has a different setting. but in a
-            # new installation of scylla, this setting does not exist.
+            # "me" is currently the default sstable format version.
             assert sstable_version == "me", f"unexpected sstable format: {sstable_version}"
 
 def test_create_local_key_file(scylla_path):
