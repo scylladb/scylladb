@@ -476,7 +476,7 @@ future<std::vector<view_task_result>> view_building_worker::work_on_tasks(std::v
         if (!is_shard_free(_state.tasks_map[id]->replica.shard)) {
             throw std::runtime_error(fmt::format("Tried to start view building tasks ({}) on shard {} but the shard is busy", _state.tasks_map[id]->tasks, _state.tasks_map[id]->replica.shard, _state.tasks_map[id]->tasks));
         }
-        co_await _state.tasks_map[id]->start();
+        _state.tasks_map[id]->start();
     }
 
     service::release_guard(std::move(guard));
@@ -649,12 +649,11 @@ view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unor
     , tasks(std::move(tasks))
     , _vbw(vbw) {}
 
-future<> view_building_worker::batch::start() {
+void view_building_worker::batch::start() {
     if (this_shard_id() != 0) {
         on_internal_error(vbw_logger, "view_building_worker::batch should be started on shard0");
     }
 
-    co_await abort_sources.start();
     state = batch_state::in_progress;
     work = smp::submit_to(replica.shard, [this] () -> future<> {
         return do_work();
@@ -672,17 +671,13 @@ future<> view_building_worker::batch::abort_task(utils::UUID id) {
 }
 
 future<> view_building_worker::batch::abort() {
-    if (abort_sources.local_is_initialized()) {
-        co_await abort_sources.invoke_on_all([] (abort_source& local_as) {
-            if (!local_as.abort_requested()) {
-                local_as.request_abort();
-            }
+        co_await smp::submit_to(replica.shard, [this] () {
+            as.request_abort();
         });
 
         if (work.valid()) {
             co_await work.get_future();
         }
-    }
 }
 
 future<> view_building_worker::batch::do_work() {
@@ -692,7 +687,6 @@ future<> view_building_worker::batch::do_work() {
 
     // At this point we assume all tasks are validated to be executed in the same batch
     vbw_logger.debug("Starting view building batch for tasks {}. Task type {}", tasks | std::views::keys, tasks.begin()->second.type);
-    auto& as = abort_sources.local();
 
     std::exception_ptr eptr;
     exponential_backoff_retry r(1s, 5min);
@@ -711,14 +705,13 @@ future<> view_building_worker::batch::do_work() {
         auto base_id = task.base_id;
         auto last_token = task.last_token;
         auto maybe_views_ids = tasks | std::views::values | std::views::transform(&view_building_task::view_id) | std::ranges::to<std::vector>();
-        auto& sharded_abort_sources = abort_sources;
 
         try {
                 std::vector<table_id> views_ids;
                 switch (type) {
                 case view_building_task::task_type::build_range:
                     views_ids = maybe_views_ids | std::views::transform([] (const auto& i) { return *i; }) | std::ranges::to<std::vector>();
-                    co_await _vbw.local().do_build_range(base_id, views_ids, last_token, sharded_abort_sources.local());
+                    co_await _vbw.local().do_build_range(base_id, views_ids, last_token, as);
                     break;
                 case view_building_task::task_type::process_staging:
                     co_await _vbw.local().do_process_staging(base_id, last_token);
@@ -738,7 +731,6 @@ future<> view_building_worker::batch::do_work() {
         }
     }
 
-    co_await abort_sources.stop();
     _vbw.local()._vb_state_machine.event.broadcast();
 }
 
