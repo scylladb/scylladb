@@ -5,7 +5,7 @@ Introduction
 -------------
 
 This tool allows you to examine the content of SStables by performing operations such as dumping the content of SStables,
-generating a histogram, validating the content of SStables, and more. See `Supported Operations`_ for the list of available operations.
+validating the content of SStables, and more. See `Supported Operations`_ for the list of available operations.
 
 Run ``scylla sstable --help`` for additional information about the tool and the operations.
 
