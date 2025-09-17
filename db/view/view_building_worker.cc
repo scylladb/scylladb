@@ -671,13 +671,13 @@ future<> view_building_worker::batch::abort_task(utils::UUID id) {
 }
 
 future<> view_building_worker::batch::abort() {
-        co_await smp::submit_to(replica.shard, [this] () {
-            as.request_abort();
-        });
+    co_await smp::submit_to(replica.shard, [this] () {
+        as.request_abort();
+    });
 
-        if (work.valid()) {
-            co_await work.get_future();
-        }
+    if (work.valid()) {
+        co_await work.get_future();
+    }
 }
 
 future<> view_building_worker::batch::do_work() {
@@ -707,16 +707,16 @@ future<> view_building_worker::batch::do_work() {
         auto maybe_views_ids = tasks | std::views::values | std::views::transform(&view_building_task::view_id) | std::ranges::to<std::vector>();
 
         try {
-                std::vector<table_id> views_ids;
-                switch (type) {
-                case view_building_task::task_type::build_range:
-                    views_ids = maybe_views_ids | std::views::transform([] (const auto& i) { return *i; }) | std::ranges::to<std::vector>();
-                    co_await _vbw.local().do_build_range(base_id, views_ids, last_token, as);
-                    break;
-                case view_building_task::task_type::process_staging:
-                    co_await _vbw.local().do_process_staging(base_id, last_token);
-                    break;
-                }
+            std::vector<table_id> views_ids;
+            switch (type) {
+            case view_building_task::task_type::build_range:
+                views_ids = maybe_views_ids | std::views::transform([] (const auto& i) { return *i; }) | std::ranges::to<std::vector>();
+                co_await _vbw.local().do_build_range(base_id, views_ids, last_token, as);
+                break;
+            case view_building_task::task_type::process_staging:
+                co_await _vbw.local().do_process_staging(base_id, last_token);
+                break;
+            }
         } catch (seastar::abort_requested_exception&) {
             vbw_logger.debug("Batch aborted");
         } catch (...) {
