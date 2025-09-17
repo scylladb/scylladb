@@ -372,6 +372,8 @@ Columns:
 * `storage_allocated_load` - Disk space allocated for tablets, assuming each tablet has a fixed size (target_tablet_size).
 * `storage_allocated_utilization` - Fraction of node's disk capacity taken for `storage_allocated_load`, where 1.0 means full utilization.
 * `storage_capacity` - Total disk capacity in bytes. Used to compute `storage_allocated_utilization`. By default equal to file system's capacity.
+* `storage_load` - Disk space allocated for tablets, computed with actual tablet sizes. Can be null if some of the tablet sizes are not known.
+* `storage_utilization` - Fraction of node's disk capacity taken for `storage_load` (with actual tablet sizes), where 1.0 means full utilization.
 * `tablets_allocated` - Number of tablet replicas on the node. Migrating tablets are accounted as if migration already finished.
 * `tablets_allocated_per_shard` - `tablets_allocated` divided by shard count on the node.
 
