@@ -256,7 +256,7 @@ class ScyllaRESTAPIClient:
         """
         return await self.client.get_json(f"/v2/error_injection/injection/{injection}", host=node_ip)
 
-    async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int, timeout: Optional[float] = None) -> None:
+    async def move_tablet(self, node_ip: str, ks: str, table: str, src_host: HostID, src_shard: int, dst_host: HostID, dst_shard: int, token: int, timeout: Optional[float] = None, force: bool = False) -> None:
         await self.client.post(f"/storage_service/tablets/move", host=node_ip, timeout=timeout, params={
             "ks": ks,
             "table": table,
@@ -264,7 +264,8 @@ class ScyllaRESTAPIClient:
             "src_shard": str(src_shard),
             "dst_host": str(dst_host),
             "dst_shard": str(dst_shard),
-            "token": str(token)
+            "token": str(token),
+            "force": str(force).lower()
         })
 
     async def quiesce_topology(self, node_ip: str) -> None:
