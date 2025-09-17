@@ -601,7 +601,7 @@ future<> view_building_worker::local_state::update(view_building_worker& vbw) {
         auto tasks = shard_tasks | std::views::transform([] (const view_building_task& t) {
             return std::make_pair(t.id, t);
         }) | std::ranges::to<std::unordered_map>();
-        auto batch = seastar::make_shared<view_building_worker::batch>(vbw, tasks, shard_tasks.front().base_id, shard_tasks.front().replica);
+        auto batch = seastar::make_shared<view_building_worker::batch>(vbw.container(), tasks, shard_tasks.front().base_id, shard_tasks.front().replica);
 
         for (auto& [id, _]: tasks) {
             tasks_map_copy.insert({id, batch});
@@ -643,7 +643,7 @@ future<> view_building_worker::local_state::clear_state() {
     vbw_logger.debug("View building worker state was cleared.");
 }
 
-view_building_worker::batch::batch(view_building_worker& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica)
+view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica)
     : base_id(base_id)
     , replica(replica)
     , tasks(std::move(tasks))
@@ -705,7 +705,7 @@ future<> view_building_worker::batch::do_work() {
         auto& sharded_abort_sources = abort_sources;
 
         try {
-            co_await _vbw.container().invoke_on(task.replica.shard, [type, base_id, last_token, maybe_views_ids = std::move(maybe_views_ids), &sharded_abort_sources] (view_building_worker& vbw) -> future<> {
+            co_await _vbw.invoke_on(task.replica.shard, [type, base_id, last_token, maybe_views_ids = std::move(maybe_views_ids), &sharded_abort_sources] (view_building_worker& vbw) -> future<> {
                 std::vector<table_id> views_ids;
                 switch (type) {
                 case view_building_task::task_type::build_range:
@@ -733,7 +733,7 @@ future<> view_building_worker::batch::do_work() {
 
     state = batch_state::finished;
     co_await abort_sources.stop();
-    _vbw._vb_state_machine.event.broadcast();
+    _vbw.local()._vb_state_machine.event.broadcast();
 }
 
 future<> view_building_worker::do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as) {
