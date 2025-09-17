@@ -3841,6 +3841,17 @@ static size_t estimate_value_size(const rjson::value& value) {
 }
 
 class update_item_operation  : public rmw_operation {
+protected:
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const override {
+        // Strict compatibility always does read-before-write, so the item
+        // doesn't exist.
+        // TODO: detect if rbw was performed, i.e. for preimage.
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && !previous_item) {
+            return cdc::operation::insert;
+        }
+        return desired_fixup::ignore_fixup;
+    }
+
 public:
     // Some information parsed during the constructor to check for input
     // errors, and cached to be used again during apply().
@@ -4199,6 +4210,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         // efficient than throwing an exception.
         return {};
     }
+
+    maybe_update_options(previous_item, cdc_opts);
 
     mutation m(_schema, _pk);
     auto& row = m.partition().clustered_row(*_schema, _ck);
