@@ -593,7 +593,7 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-        utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests, uint32_t listen_socket_backlog) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
     _max_concurrent_requests = std::move(max_concurrent_requests);
@@ -601,14 +601,18 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
                 " must be specified in order to init an alternator HTTP server instance"));
     }
-    return seastar::async([this, addr, port, https_port, creds] {
+    return seastar::async([this, addr, port, https_port, creds, listen_socket_backlog] {
         _executor.start().get();
 
+        listen_options socket_listen_opts {
+            .reuse_address = true, // to match behaviour when no listen_options param. is passed to _http_server.listen() and _https_server.listen()
+            .listen_backlog = listen_socket_backlog,
+        };
         if (port) {
             set_routes(_http_server._routes);
             _http_server.set_content_length_limit(server::content_length_limit);
             _http_server.set_content_streaming(true);
-            _http_server.listen(socket_address{addr, *port}).get();
+            _http_server.listen(socket_address{addr, *port}, socket_listen_opts).get();
             _enabled_servers.push_back(std::ref(_http_server));
         }
         if (https_port) {
@@ -632,7 +636,7 @@ future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std:
             } else {
                 _credentials = creds->build_server_credentials();
             }
-            _https_server.listen(socket_address{addr, *https_port}, _credentials).get();
+            _https_server.listen(socket_address{addr, *https_port}, socket_listen_opts, _credentials).get();
             _enabled_servers.push_back(std::ref(_https_server));
         }
     });

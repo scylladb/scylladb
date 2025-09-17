@@ -137,7 +137,9 @@ future<> controller::start_server() {
             return server.init(addr, alternator_port, alternator_https_port, creds,
                     _config.alternator_enforce_authorization,
                     &_memory_limiter.local().get_semaphore(),
-                    _config.max_concurrent_requests_per_shard);
+                    _config.max_concurrent_requests_per_shard,
+                    _config.alternator_listen_socket_backlog()
+                );
         }).handle_exception([this, addr, alternator_port, alternator_https_port] (std::exception_ptr ep) {
             logger.error("Failed to set up Alternator HTTP server on {} port {}, TLS port {}: {}",
                     addr, alternator_port ? std::to_string(*alternator_port) : "OFF", alternator_https_port ? std::to_string(*alternator_https_port) : "OFF", ep);
