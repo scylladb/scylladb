@@ -650,9 +650,18 @@ view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unor
     , _vbw(vbw) {}
 
 future<> view_building_worker::batch::start() {
+    if (this_shard_id() != 0) {
+        on_internal_error(vbw_logger, "view_building_worker::batch should be started on shard0");
+    }
+
     co_await abort_sources.start();
     state = batch_state::in_progress;
-    work = do_work();
+    work = smp::submit_to(replica.shard, [this] () -> future<> {
+        return do_work();
+    }).finally([this] () {
+        state = batch_state::finished;
+        _vbw.local()._vb_state_machine.event.broadcast();
+    });
 }
 
 future<> view_building_worker::batch::abort_task(utils::UUID id) {
@@ -677,8 +686,8 @@ future<> view_building_worker::batch::abort() {
 }
 
 future<> view_building_worker::batch::do_work() {
-    if (this_shard_id() != 0) {
-        on_internal_error(vbw_logger, "view_building_worker::batch should be executed on shard0");
+    if (this_shard_id() != replica.shard) {
+        on_internal_error(vbw_logger, fmt::format("view_building_worker::batch::do_work() should be executed on tasks shard "));
     }
 
     // At this point we assume all tasks are validated to be executed in the same batch
@@ -705,18 +714,16 @@ future<> view_building_worker::batch::do_work() {
         auto& sharded_abort_sources = abort_sources;
 
         try {
-            co_await _vbw.invoke_on(task.replica.shard, [type, base_id, last_token, maybe_views_ids = std::move(maybe_views_ids), &sharded_abort_sources] (view_building_worker& vbw) -> future<> {
                 std::vector<table_id> views_ids;
                 switch (type) {
                 case view_building_task::task_type::build_range:
                     views_ids = maybe_views_ids | std::views::transform([] (const auto& i) { return *i; }) | std::ranges::to<std::vector>();
-                    co_await vbw.do_build_range(base_id, views_ids, last_token, sharded_abort_sources.local());
+                    co_await _vbw.local().do_build_range(base_id, views_ids, last_token, sharded_abort_sources.local());
                     break;
                 case view_building_task::task_type::process_staging:
-                    co_await vbw.do_process_staging(base_id, last_token);
+                    co_await _vbw.local().do_process_staging(base_id, last_token);
                     break;
                 }
-            });
         } catch (seastar::abort_requested_exception&) {
             vbw_logger.debug("Batch aborted");
         } catch (...) {
@@ -731,7 +738,6 @@ future<> view_building_worker::batch::do_work() {
         }
     }
 
-    state = batch_state::finished;
     co_await abort_sources.stop();
     _vbw.local()._vb_state_machine.event.broadcast();
 }
