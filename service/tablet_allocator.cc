@@ -1776,10 +1776,10 @@ public:
         }
 
         return {
-            src_badness.shard_badness(),
-            src_badness.node_badness(),
-            dst_badness.shard_badness(),
-            dst_badness.node_badness()
+            src_badness.src_shard_badness,
+            src_badness.src_node_badness,
+            dst_badness.dst_shard_badness,
+            dst_badness.dst_node_badness
         };
     }
 
@@ -2353,10 +2353,10 @@ public:
 
             auto candidate = migration_candidate{
                     tablets, src, *min_dst,
-                    migration_badness{src_badness.shard_badness(),
-                                      src_badness.node_badness(),
-                                      min_dst_badness.shard_badness(),
-                                      min_dst_badness.node_badness()}
+                    migration_badness{src_badness.src_shard_badness,
+                                      src_badness.src_node_badness,
+                                      min_dst_badness.dst_shard_badness,
+                                      min_dst_badness.dst_node_badness}
             };
 
             lblogger.trace("candidate: {}", candidate);
