@@ -29,6 +29,10 @@ import shutil
 
 logger = logging.getLogger(__name__)
 
+# The glob below is designed to match the version-generation-format-component.extension format, e.g.
+# da-3gqu_1hke_4919c2kfgur9y2bm77-bti-Data.db
+# me-1-big-TOC.txt
+sstable_filename_glob = "??-*-???-*.*"
 
 @pytest.mark.asyncio
 async def test_tablet_replication_factor_enough_nodes(manager: ManagerClient):
@@ -724,7 +728,7 @@ async def test_tablet_streaming_with_staged_sstables(manager: ManagerClient):
         node_workdir = await manager.server_get_workdir(servers[0].server_id)
         dummy_table_dir = glob.glob(os.path.join(node_workdir, "data", ks, "dummy-*"))[0]
         test_table_upload_dir = glob.glob(os.path.join(node_workdir, "data", ks, "test-*", "upload"))[0]
-        for src_path in glob.glob(os.path.join(dummy_table_dir, "me-*")):
+        for src_path in glob.glob(os.path.join(dummy_table_dir, sstable_filename_glob)):
             dst_path = os.path.join(test_table_upload_dir, os.path.basename(src_path))
             os.rename(src_path, dst_path)
         await cql.run_async(f"DROP TABLE {ks}.dummy;")
@@ -809,7 +813,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
 
     logger.info("Stop node1 and copy the sstables from node2")
     await manager.server_stop(servers[0].server_id)
-    for src_path in glob.glob(os.path.join(node1_table_dir, "me-*")):
+    for src_path in glob.glob(os.path.join(node1_table_dir, sstable_filename_glob)):
         dst_path = os.path.join(node0_table_dir, os.path.basename(src_path))
         shutil.copy(src_path, dst_path)
 
