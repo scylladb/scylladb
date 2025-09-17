@@ -30,6 +30,7 @@
 #include "types/user.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/first_function.hh"
+#include "cql3/functions/vector_search_fcts.hh"
 #include "cql3/prepare_context.hh"
 
 namespace cql3 {
@@ -1640,6 +1641,24 @@ static cql3::raw_value do_evaluate(const usertype_constructor& user_val, const e
     return val_bytes;
 }
 
+static size_t find_matching_key_index(const evaluation_inputs& inputs, const std::vector<cql3::statements::primary_key>& keys) {
+    for (size_t i = 0; i < keys.size(); ++i) {
+        auto primary_key = keys[i];
+        auto partition_key = primary_key.partition.key().explode();
+        auto clustering_key = primary_key.clustering.explode();
+
+        // Check if partition key matches
+        if (partition_key.size() == inputs.partition_key.size() &&
+            std::equal(partition_key.begin(), partition_key.end(), inputs.partition_key.begin())) {
+            if (clustering_key.size() == inputs.clustering_key.size() &&
+                std::equal(clustering_key.begin(), clustering_key.end(), inputs.clustering_key.begin())) {
+                return i;
+            }
+        }
+    }
+    return keys.size(); // Not found
+}
+
 static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluation_inputs& inputs) {
     const shared_ptr<functions::function>* fun = std::get_if<shared_ptr<functions::function>>(&fun_call.func);
     if (fun == nullptr) {
@@ -1670,7 +1689,30 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         }
     }
 
-    bytes_opt result = scalar_fun->execute(arguments);
+    bytes_opt result;
+    if (dynamic_cast<functions::vector_similarity_fct*>(scalar_fun)) {
+        auto options = inputs.options->get_specific_options();
+        auto [keys, distances] = options.ann_result;
+
+        // It is not possible that the result here is empty when using ANN queries.
+        // If the ANN returns no result, we won't call this function at all as it's called once per every row selected.
+        // The rows are selected according to the ANN result - the same we use here.
+        // No ANN results = no rows selected = no execute() function calls.
+        if (keys.empty()) {
+            throw exceptions::invalid_request_exception("vector_similarity function can only be used with ANN queries");
+        }
+
+        size_t index = find_matching_key_index(inputs, keys);
+        if (index == keys.size()) {
+            throw std::runtime_error("No matching distance found for given primary key");
+        }
+
+        // Provide only the exact distance as a parameter
+        std::vector<bytes_opt> distance{float_type->decompose(distances[index])};
+        result = scalar_fun->execute(distance);
+    } else {
+        result = scalar_fun->execute(arguments);
+    }
 
     if (has_cache_id) {
         inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, result);

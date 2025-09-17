@@ -27,7 +27,11 @@ public:
     }
 
     bytes_opt execute(std::span<const bytes_opt> parameters) override {
-        return std::nullopt; // Unimplemented
+        SCYLLA_ASSERT(parameters.size() == 1);
+
+        // The first parameter is a distance provided by the ANN query.
+        // We just return it as is.
+        return parameters[0];
     }
 };
 
