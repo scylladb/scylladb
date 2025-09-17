@@ -13,12 +13,10 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
 #include <expected>
+#include "cql3/statements/primary_key.hh"
 
 class schema;
 
-namespace cql3::statements {
-class primary_key;
-}
 
 namespace db {
 class config;
