@@ -123,7 +123,7 @@ future<std::optional<double>> task_manager::task::impl::expected_total_workload(
 }
 
 future<task_manager::task::progress> task_manager::task::impl::get_progress() const {
-    if (is_done()) {
+    if (is_complete()) {
         co_return co_await _children.get_progress(_status.progress_units);
     }
 
