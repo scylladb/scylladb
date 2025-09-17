@@ -23,7 +23,7 @@ The following ScyllaDB drivers are available:
 * :doc:`Go Driver </using-scylla/drivers/cql-drivers/scylla-go-driver>`
 * :doc:`Go Extension </using-scylla/drivers/cql-drivers/scylla-gocqlx-driver>`
 * :doc:`C++ Driver </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
-* `CPP-over-Rust Driver <https://github.com/scylladb/cpp-rust-driver>`_
+* `CPP-over-Rust Driver <https://cpp-rust-driver.docs.scylladb.com/>`_
 * :doc:`Rust Driver </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
 * `C# Driver <https://csharp-driver.docs.scylladb.com/>`_
 
@@ -55,7 +55,7 @@ The following table specifies which ScyllaDB drivers include a library for
      - |x| 
    * - :doc:`C++ </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
      - |x| 
-   * - `CPP-over-Rust Driver <https://github.com/scylladb/cpp-rust-driver>`_
+   * - `CPP-over-Rust Driver <https://cpp-rust-driver.docs.scylladb.com/>`_
      - |x|
    * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
      - |v|
@@ -92,7 +92,7 @@ The following table specifies which ScyllaDB drivers support
    * - :doc:`C++ </using-scylla/drivers/cql-drivers/scylla-cpp-driver>`
      - |x| 
      - N/A
-   * - `CPP-over-Rust Driver <https://github.com/scylladb/cpp-rust-driver>`_
+   * - `CPP-over-Rust Driver <https://cpp-rust-driver.docs.scylladb.com/>`_
      - |v|
      - All versions
    * - :doc:`Rust </using-scylla/drivers/cql-drivers/scylla-rust-driver>`
