@@ -110,15 +110,13 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
         });
     });
 
-    cm::stop_keyspace_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+    cm::stop_keyspace_compaction.set(r, [&ctx, &cm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto [ks_name, tables] = parse_table_infos(ctx, *req, "tables");
         auto type = req->get_query_param("type");
-        co_await ctx.db.invoke_on_all([&] (replica::database& db) {
-            auto& cm = db.get_compaction_manager();
+        co_await cm.invoke_on_all([&] (compaction_manager& cm) {
             return parallel_for_each(tables, [&] (const table_info& ti) {
-                auto& t = db.find_column_family(ti.id);
-                return cm.stop_compaction(type, [&t] (const compaction::compaction_group_view* x) {
-                    return x->schema() == t.schema();
+                return cm.stop_compaction(type, [id = ti.id] (const compaction::compaction_group_view* x) {
+                    return x->schema()->id() == id;
                 });
             });
         });
