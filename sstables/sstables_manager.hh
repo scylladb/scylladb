@@ -104,13 +104,6 @@ private:
     db::corrupt_data_handler& _corrupt_data_handler;
     const db::config& _db_config;
     gms::feature_service& _features;
-    // _sstables_format is the format used for writing new sstables.
-    // Here we set its default value, but if we discover that all the nodes
-    // in the cluster support a newer format, _sstables_format will be set to
-    // that format. read_sstables_format() also overwrites _sstables_format
-    // if an sstable format was chosen earlier (and this choice was persisted
-    // in the system table).
-    sstable_version_types _format = sstable_version_types::me;
 
     // _active and _undergoing_close are used in scylla-gdb.py to fetch all sstables
     // on current shard using "scylla sstables" command. If those fields are renamed,
@@ -190,8 +183,27 @@ public:
     const db::config& config() const { return _db_config; }
     cache_tracker& get_cache_tracker() { return _cache_tracker; }
 
-    void set_format(sstable_version_types format) noexcept { _format = format; }
-    sstables::sstable::version_types get_highest_supported_format() const noexcept { return _format; }
+    // Get the highest supported sstable version, according to cluster features.
+    sstables::sstable::version_types get_highest_supported_format() const noexcept;
+    // Get the preferred sstable version for writing new sstables,
+    // according to cluster features and database config.
+    //
+    // 1. The choice must be new enough to support existing data.
+    //    (For example, range tombstones with infinite endpoints were added in version "mc",
+    //     so if the enabled cluster features permit such tombstones to exist, we must
+    //     pick at least "mc").
+    // 2. The choice must be old enough to be supported by cluster features.
+    // 3. The choice should respect the config, as long as it doesn't contradict (1) and (2).
+    //    The user might wish to use an older format, and we should respect that if possible.
+    sstables::sstable::version_types get_preferred_sstable_version() const;
+    // Like get_sstable_version_for_write(), but additionally assume that
+    // all features implied by `existing_version` are enabled. 
+    //
+    // This is used when rewriting (reshaping or resharding) system sstables
+    // during startup. At this point cluster features aren't known to `feature_service` yet.
+    // But we must still pick some format compatible with the existing data.
+    // So use existing sstables to infer the set of enabled features.
+    sstables::sstable::version_types get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const;
 
     locator::host_id get_local_host_id() const;
 

@@ -192,7 +192,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
             auto& gen = global_table->get_sstable_generation_generator();
             auto generation = gen();
             return sstm.make_sstable(global_table->schema(), global_table->get_storage_options(),
-                                     generation, sstables::sstable_state::upload, sstm.get_highest_supported_format(),
+                                     generation, sstables::sstable_state::upload, sstm.get_preferred_sstable_version(),
                                      sstables::sstable_format_types::big, db_clock::now(), &error_handler_gen_for_upload_dir);
         };
         // Pass owned_ranges_ptr to reshard to piggy-back cleanup on the resharding compaction.
@@ -283,7 +283,7 @@ class table_populator {
     sstring _cf;
     global_table_ptr& _global_table;
     std::vector<lw_shared_ptr<sharded<sstables::sstable_directory>>> _sstable_directories;
-    sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
+    sstables::sstable_version_types _version_for_reshaping = sstables::oldest_writable_sstable_format;
 
 public:
     table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf)
@@ -383,10 +383,8 @@ future<> table_populator::process_subdir(sharded<sstables::sstable_directory>& d
     // in the system tables. In that case we'll rely on what we find on disk: we'll
     // at least not downgrade any files. If we already know that we support a higher
     // format than the one we see then we use that.
-    auto sys_format = _global_table->get_sstables_manager().get_highest_supported_format();
-    auto sst_version = co_await highest_version_seen(directory, sys_format);
-
-    _highest_version = std::max(sst_version, _highest_version);
+    auto sst_version = co_await highest_version_seen(directory, sstables::oldest_writable_sstable_format);
+    _version_for_reshaping = _global_table->get_sstables_manager().get_safe_sstable_version_for_rewrites(sst_version);
 }
 
 sstables::shared_sstable make_sstable(replica::table& table, sstables::sstable_state state, sstables::generation_type generation, sstables::sstable_version_types v) {
@@ -402,7 +400,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
             return _global_table->calculate_generation_for_new_table();
         }).get();
 
-        return make_sstable(*_global_table, state, gen, _highest_version);
+        return make_sstable(*_global_table, state, gen, _version_for_reshaping);
     });
 
     // The node is offline at this point so we are very lenient with what we consider
@@ -419,7 +417,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
 
     co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, state](shard_id shard) {
         auto gen = _global_table->calculate_generation_for_new_table();
-        return make_sstable(*_global_table, state, gen, _highest_version);
+        return make_sstable(*_global_table, state, gen, _version_for_reshaping);
     }, eligible_for_reshape_on_boot);
 
     auto do_allow_offstrategy_compaction = allow_offstrategy_compaction(state == sstables::sstable_state::normal);

@@ -154,6 +154,18 @@ storage_manager::config_updater::config_updater(const db::config& cfg, storage_m
     , observer(cfg.object_storage_endpoints.observe(action.make_observer()))
 {}
 
+sstables::sstable::version_types sstables_manager::get_highest_supported_format() const noexcept {
+    return sstable_version_types::me;
+}
+
+sstables::sstable::version_types sstables_manager::get_preferred_sstable_version() const {
+    return sstable_version_types::me;
+}
+
+sstables::sstable::version_types sstables_manager::get_safe_sstable_version_for_rewrites(sstable_version_types existing_version) const {
+    return sstable_version_types::me;
+}
+
 locator::host_id sstables_manager::get_local_host_id() const {
     return _resolve_host_id();
 }

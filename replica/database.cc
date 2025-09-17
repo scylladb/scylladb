@@ -455,9 +455,6 @@ database::database(const db::config& cfg, database_config dbcfg, service::migrat
     _row_cache_tracker.set_compaction_scheduling_group(dbcfg.memory_compaction_scheduling_group);
 
     setup_scylla_memory_diagnostics_producer();
-    if (_dbcfg.sstables_format) {
-        set_format(*_dbcfg.sstables_format);
-    }
 }
 
 const db::extensions& database::extensions() const {
@@ -705,11 +702,6 @@ database::setup_metrics() {
                         sm::description("The number of times the schema changed"))(basic_level),
         });
     }
-}
-
-void database::set_format(sstables::sstable_version_types format) noexcept {
-    get_user_sstables_manager().set_format(format);
-    get_system_sstables_manager().set_format(format);
 }
 
 database::~database() {

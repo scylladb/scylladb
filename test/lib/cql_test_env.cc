@@ -58,7 +58,6 @@
 #include "service/qos/service_level_controller.hh"
 #include "db/system_keyspace.hh"
 #include "db/system_distributed_keyspace.hh"
-#include "db/sstables-format-selector.hh"
 #include "repair/row_level.hh"
 #include "utils/assert.hh"
 #include "utils/only_on_shard0.hh"
@@ -614,7 +613,6 @@ private:
             dbcfg.memtable_scheduling_group = scheduling_groups.memtable_scheduling_group;
             dbcfg.memtable_to_cache_scheduling_group = scheduling_groups.memtable_to_cache_scheduling_group;
             dbcfg.gossip_scheduling_group = scheduling_groups.gossip_scheduling_group;
-            dbcfg.sstables_format = sstables::version_from_string(cfg->sstable_format());
 
             auto get_tm_cfg = sharded_parameter([&] {
                 return tasks::task_manager::config {
