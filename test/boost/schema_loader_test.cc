@@ -20,6 +20,7 @@
 #include "sstables/sstable_writer.hh"
 #include "readers/from_mutations.hh"
 #include "tools/schema_loader.hh"
+#include "types/list.hh"
 #include "view_info.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_empty) {
@@ -329,18 +330,8 @@ void check_sstable_schema(sstables::test_env& env, std::filesystem::path sst_pat
     rd.produces_end_of_stream();
 }
 
-SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
+future<> do_test_load_schema_from_sstable(schema_ptr schema, const utils::chunked_vector<mutation>& mutations) {
     return sstables::test_env::do_with_async([&] (sstables::test_env& env) {
-        auto random_spec = tests::make_random_schema_specification(
-                get_name(),
-                std::uniform_int_distribution<size_t>(1, 4), // partition-key
-                std::uniform_int_distribution<size_t>(0, 4), // clustering-key
-                std::uniform_int_distribution<size_t>(0, 8), // static
-                std::uniform_int_distribution<size_t>(0, 8)); // regular
-        auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
-        auto schema = random_schema.schema();
-
-        const auto mutations = tests::generate_random_mutations(random_schema, 10).get();
 
         for (const auto& version : sstables::writable_sstable_versions) {
             auto sst = env.make_sstable(schema, version);
@@ -389,4 +380,42 @@ SEASTAR_TEST_CASE(test_load_schema_from_sstable) {
 
         }
     });
+}
+
+SEASTAR_TEST_CASE(test_load_schema_from_sstable_random_schema) {
+    auto random_spec = tests::make_random_schema_specification(
+            get_name(),
+            std::uniform_int_distribution<size_t>(1, 4), // partition-key
+            std::uniform_int_distribution<size_t>(0, 4), // clustering-key
+            std::uniform_int_distribution<size_t>(0, 8), // static
+            std::uniform_int_distribution<size_t>(0, 8)); // regular
+    auto random_schema = tests::random_schema{tests::random::get_int<uint32_t>(), *random_spec};
+    auto schema = random_schema.schema();
+
+    const auto mutations = co_await tests::generate_random_mutations(random_schema, 10);
+
+    co_await do_test_load_schema_from_sstable(std::move(schema), std::move(mutations));
+}
+
+SEASTAR_TEST_CASE(test_load_schema_from_sstable_interesting_schema) {
+    const sstring ks = get_name();
+
+    const auto string_list = list_type_impl::get_instance(utf8_type, true);
+    const auto frozen_string_list = list_type_impl::get_instance(utf8_type, false);
+    const auto udt_type = user_type_impl::get_instance(ks, "udt", {"f1", "f2"}, {int32_type, frozen_string_list}, true);
+    const auto frozen_udt_type = user_type_impl::get_instance(ks, "frozen_udt", {"f1", "f2"}, {int32_type, frozen_string_list}, false);
+
+    auto schema = schema_builder(ks, "interesting_table")
+        .with_column("pk", int32_type, column_kind::partition_key)
+        .with_column("ck", reversed_type_impl::get_instance(int32_type), column_kind::clustering_key)
+        .with_column("list", string_list, column_kind::regular_column)
+        .with_column("frozen_list", frozen_string_list, column_kind::regular_column)
+        .with_column("udt", udt_type, column_kind::regular_column)
+        .with_column("frozen_udt", frozen_udt_type, column_kind::regular_column)
+        .build();
+
+    tests::random_schema random_schema{schema};
+    const auto mutations = co_await tests::generate_random_mutations(random_schema, 10);
+
+    co_await do_test_load_schema_from_sstable(std::move(schema), std::move(mutations));
 }
