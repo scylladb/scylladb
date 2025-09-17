@@ -1779,3 +1779,44 @@ def test_scylla_sstable_query_data_from_snapshot(cql, test_keyspace, scylla_path
         assert out
         print(f"out: {out.decode('utf-8')}")
         assert json.loads(out)
+
+
+def test_scylla_sstable_upgrade(cql, test_keyspace, scylla_path, scylla_data_dir):
+    with scylla_sstable(simple_no_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        def invoke(tmp_dir, args):
+            base_args = [scylla_path, "sstable", "upgrade", "--schema-file", schema_file, "--output-dir", tmp_dir, "--logger-log-level", "scylla-sstable=debug"]
+            out = subprocess.check_output(base_args + args + sstables, text=True)
+            return out.strip().split('\n')
+
+        # Nothing to upgrade
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lines = invoke(tmp_dir, [])
+            assert len(lines) == len(sstables)
+            for line, sst in zip(lines, sstables):
+                assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lines = invoke(tmp_dir, ["--all"])
+            assert len(lines) == len(sstables)
+            for line, sst in zip(lines, sstables):
+                assert line.startswith(f"Upgraded sstable {sst} to")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            lines = invoke(tmp_dir, ["--sstable-version", "md"]) # downgrade to "md" format
+            assert len(lines) == len(sstables)
+            for line, sst in zip(lines, sstables):
+                assert not sst.startswith("md-")
+                assert re.match(f"^Upgraded sstable {sst} to /.*/md-.*\\.$", line)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with open(os.path.join(tmp_dir, "dummy.txt"), "w") as f:
+                f.write("dummy")
+                f.flush()
+
+            with pytest.raises(subprocess.CalledProcessError):
+                lines = invoke(tmp_dir, [])
+
+            lines = invoke(tmp_dir, ["--unsafe-accept-nonempty-output-dir"])
+            assert len(lines) == len(sstables)
+            for line, sst in zip(lines, sstables):
+                assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")
