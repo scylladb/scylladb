@@ -1238,12 +1238,17 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                         auto end = _partitions.lower_bound(dht::ring_position_view::for_range_end(range), cmp);
                         return with_allocator(_tracker.allocator(), [&] {
                             while (it != end) {
-                              if (filter(it->key())) {
-                                it = it.erase_and_dispose(dht::raw_token_less_comparator{},
-                                    [&] (cache_entry* p) mutable noexcept {
-                                        _tracker.on_partition_erase();
-                                        p->evict(_tracker);
-                                    });
+                                if (filter(it->key())) {
+                                    it = it.erase_and_dispose(dht::raw_token_less_comparator{},
+                                        [&] (cache_entry* p) mutable noexcept {
+                                            _tracker.on_partition_erase();
+                                            p->evict(_tracker);
+                                        });
+                                } else {
+                                    _tracker.clear_continuity(*it);
+                                    ++it;
+                                }
+
                                 // it != end is necessary for correctness. We cannot set _prev_snapshot_pos to end->position()
                                 // because after resuming something may be inserted before "end" which falls into the next range.
                                 if (need_preempt() && it != end) {
@@ -1252,10 +1257,6 @@ future<> row_cache::invalidate(external_updater eu, dht::partition_range_vector&
                                     });
                                     break;
                                 }
-                              } else {
-                                _tracker.clear_continuity(*it);
-                                ++it;
-                              }
                             }
                             SCYLLA_ASSERT(it != _partitions.end());
                             _tracker.clear_continuity(*it);
