@@ -2609,6 +2609,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         db::nop_large_data_handler large_data_handler;
         db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
 
+        feature_service.ms_sstable.enable();
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,
