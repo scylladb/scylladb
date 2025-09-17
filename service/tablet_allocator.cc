@@ -2327,13 +2327,13 @@ public:
 
     static void unload(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
         for (auto _ : tablet_set.tablets()) {
-            sketch.unload(host, shard);
+            sketch.unload(host, shard, 1, service::default_target_tablet_size);
         }
     }
 
     static void pick(locator::load_sketch& sketch, host_id host, shard_id shard, const migration_tablet_set& tablet_set) {
         for (auto _ : tablet_set.tablets()) {
-            sketch.pick(host, shard);
+            sketch.pick(host, shard, 1, service::default_target_tablet_size);
         }
     }
 
@@ -2452,8 +2452,8 @@ public:
             erase_candidates(nodes, tmap, tablets);
 
             update_node_load_on_migration(node_load, host, src, dst, tablets);
-            sketch.pick(host, dst);
-            sketch.unload(host, src);
+            sketch.pick(host, dst, 1, service::default_target_tablet_size);
+            sketch.unload(host, src, 1, service::default_target_tablet_size);
         }
 
         co_return plan;

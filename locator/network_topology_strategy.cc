@@ -403,7 +403,7 @@ tablet_replica_set network_topology_strategy::drop_tablets_in_racks(schema_ptr s
         if (node.dc_rack().dc == dc && is_rack_to_drop(node.dc_rack().rack)) {
             tablet_logger.debug("drop_tablets_in_rack {}.{} tablet_id={} dc={} rack={} removing replica: {}",
                             s->ks_name(), s->cf_name(), tb, node.dc_rack().dc, node.dc_rack().rack, tr);
-            load.unload(tr.host, tr.shard);
+            load.unload(tr.host, tr.shard, 1, service::default_target_tablet_size);
         } else {
             filtered.emplace_back(tr);
         }
@@ -433,7 +433,7 @@ tablet_replica_set network_topology_strategy::add_tablets_in_racks(schema_ptr s,
             // Assume that if there was a diff to add a rack, we don't already have a replica
             // in the target rack so all nodes in the rack are eligible.
             // FIXME: pick based on storage utilization: https://github.com/scylladb/scylladb/issues/26366
-            auto node_load = load.get_real_avg_shard_load(node.get().host_id());
+            auto node_load = load.get_real_avg_tablet_count(node.get().host_id());
             if (node_load < min_load) {
                 min_load = node_load;
                 min_node = node.get().host_id();
@@ -445,7 +445,7 @@ tablet_replica_set network_topology_strategy::add_tablets_in_racks(schema_ptr s,
                     fmt::format("No candidate node in rack {}.{} to allocate tablet replica", dc, rack));
         }
 
-        auto new_replica = tablet_replica{min_node, load.next_shard(min_node)};
+        auto new_replica = tablet_replica{min_node, load.next_shard(min_node, 1, service::default_target_tablet_size)};
         new_replicas.push_back(new_replica);
 
         tablet_logger.trace("add_tablet_in_rack {}.{} tablet_id={} dc={} rack={} load={} new_replica={}",
@@ -502,7 +502,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             const auto& host_id = node.get().host_id();
             if (!existing.contains(host_id)) {
                 // FIXME: https://github.com/scylladb/scylladb/issues/26366
-                candidate.nodes.emplace_back(host_id, load.get_avg_shard_load(host_id));
+                candidate.nodes.emplace_back(host_id, load.get_avg_tablet_count(host_id));
             }
         }
         if (candidate.nodes.empty()) {
@@ -552,7 +552,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
                             s->ks_name(), s->cf_name(), tb.id, rack, dc, dc_node_count, dc_rf));
         }
         auto host_id = nodes.back().host;
-        auto replica = tablet_replica{host_id, load.next_shard(host_id)};
+        auto replica = tablet_replica{host_id, load.next_shard(host_id, 1, service::default_target_tablet_size)};
         const auto& node = tm->get_topology().get_node(host_id);
         auto inserted = replicas_per_rack[node.dc_rack().rack].insert(host_id).second;
         // Sanity check that a node is not used more than once
@@ -614,7 +614,7 @@ tablet_replica_set network_topology_strategy::drop_tablets_in_dc(schema_ptr s, c
         if (topo.get_node(tr.host).dc_rack().dc != dc || ++nodes_in_dc <= dc_rf) {
             filtered.emplace_back(tr);
         } else {
-            load.unload(tr.host, tr.shard);
+            load.unload(tr.host, tr.shard, 1, service::default_target_tablet_size);
         }
     }
     return filtered;
