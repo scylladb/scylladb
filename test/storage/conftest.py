@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 import pytest
+import os
 import pathlib
 import shutil
 import subprocess
@@ -12,20 +13,24 @@ import uuid
 
 from typing import Callable
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 
 from test.pylib.manager_client import ManagerClient
 from test.cluster.conftest import *
+from test.pylib.util import gather_safely
 
 
-# Mounting volumes outside of the toolchain environment, requires root privileges. To overcome it,
-# `unshare` is used to launch tests in a separate namespace. This is a temporary solution as it
-# works with test.py but breaks the execution of the tests with pytest without test.py.
-# FIXME: Find a more robust solution to ditch unshare.
 @pytest.fixture(scope="function")
 def volumes_factory(pytestconfig, build_mode, request):
     hash = str(uuid.uuid4())
     base = pathlib.Path(f"{pytestconfig.getoption("tmpdir")}/{build_mode}/volumes/{hash}")
     volumes = []
+
+    @dataclass
+    class VolumeInfo:
+        img: pathlib.Path
+        mount: pathlib.Path
+        log: pathlib.Path
 
     @contextmanager
     def wrapper(sizes: list[str]):
@@ -34,29 +39,33 @@ def volumes_factory(pytestconfig, build_mode, request):
                 path = base / f"scylla-{id}"
                 path.mkdir(parents=True)
 
-                subprocess.run(["sudo", "mount", "-o", f"size={size}", "-t", "tmpfs", "tmpfs", path], check=True)
-                volumes.append(path)
+                volume = VolumeInfo(path.with_name(f"{path.name}.img"), path, path.with_name(f"{path.name}.log"))
+
+                subprocess.run(["truncate", "-s", size, volume.img], check=True)
+                subprocess.run(["mkfs.ext4", volume.img], check=True, stdout=subprocess.DEVNULL)
+                # -o uid=... and -o gid=... to avoid root:root ownership of mounted files
+                # -o fakeroot to avoid permission denied errors on creating files inside docker
+                subprocess.run(["fuse2fs", "-o", f"uid={os.getuid()}", "-o", f"gid={os.getgid()}", "-o", "fakeroot", volume.img, volume.mount], check=True)
+                volumes.append(volume)
             yield volumes
         finally:
             pass
     yield wrapper
 
-    # The test in the storage module use unshare -mr as the launcher to be able to mount volumes.
-    # This means that the entire content of the mount is only visible inside the namespace. To keep
-    # the files on a test failure, we need to copy them out of the namespace.
-    #
-    # Copying cannot be done in the finally clause of the wrapper above as at that point test is not
-    # yet marked as failed. So the copy has to be done here.
-    #
-    # Note that since volumes are created within unshare, they will be automatically unmounted and
-    # files will be deleted so no additional cleanup is needed.
+    # Unmount volumes and optionally preserve data. Copying cannot be done in the finally
+    # clause of the wrapper above as at that point test is not yet marked as failed. So the
+    # copy and consequently volumes cleanup have to be done here.
     report = request.node.stash[PHASE_REPORT_KEY]
     test_failed = report.when == "call" and report.failed
     preserve_data = test_failed or request.config.getoption("save_log_on_success")
 
-    if preserve_data:
-        for id, path in enumerate(volumes):
-            shutil.copytree(path, base.parent.parent / f"scylla-{hash}-{id}", ignore=shutil.ignore_patterns('commitlog*'))
+    for id, volume in enumerate(volumes):
+        if preserve_data:
+            shutil.copytree(volume.mount, base.parent.parent / f"scylla-{hash}-{id}", ignore=shutil.ignore_patterns('commitlog*', 'lost+found*'))
+            shutil.copyfile(volume.log, base.parent.parent / f"scylla-{hash}-{id}.log")
+
+        subprocess.run(["fusermount3", "-u", volume.mount], check=True)
+        os.unlink(volume.img)
 
 
 @asynccontextmanager
@@ -65,9 +74,10 @@ async def space_limited_servers(manager: ManagerClient, volumes_factory: Callabl
     cmdline = server_args.pop("cmdline", [])
     with volumes_factory(sizes) as volumes:
         try:
-            servers = [await manager.server_add(cmdline = [*cmdline, '--workdir', str(path)],
+            servers = [await manager.server_add(cmdline = [*cmdline, '--workdir', str(volume.mount)],
                                                 property_file={"dc": "dc1", "rack": f"r{id}"},
-                                                **server_args) for id, path in enumerate(volumes)]
+                                                **server_args) for id, volume in enumerate(volumes)]
             yield servers
         finally:
-            pass
+            # Stop servers to be able to unmount volumes
+            await gather_safely(*(manager.server_stop(server.server_id) for server in servers))
