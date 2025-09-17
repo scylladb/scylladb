@@ -36,7 +36,7 @@ namespace view {
 // Called in the context of a seastar::thread.
 class view_building_worker::consumer : public view_consumer {
     replica::database& _db;
-    view_building_worker::batch& _batch;
+    const std::vector<table_id> _views_ids;
     lw_shared_ptr<replica::table> _base;
     dht::decorated_key _current_key;
 
@@ -45,10 +45,10 @@ class view_building_worker::consumer : public view_consumer {
 
 protected:
     virtual void load_views_to_build() override {
-        _views_to_build = _batch.tasks | std::views::filter([this] (const auto& task_entry) {
-            return _db.column_family_exists(*task_entry.second.view_id);
-        }) | std::views::transform([this] (const auto& task_entry) {
-            return view_ptr(_db.find_schema(*task_entry.second.view_id));
+        _views_to_build = _views_ids | std::views::filter([this] (const auto& id) {
+            return _db.column_family_exists(id);
+        }) | std::views::transform([this] (const auto& id) {
+            return view_ptr(_db.find_schema(id));
         }) | std::views::filter([this] (const view_ptr& view) {
             return partition_key_matches(_db.as_data_dictionary(), *_reader.schema(), *view->view_info(), _current_key);
         }) | std::ranges::to<std::vector>();
@@ -77,10 +77,10 @@ protected:
     }
 
 public:
-    consumer(replica::database& db, view_building_worker::batch& batch, lw_shared_ptr<replica::table> base, mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, abort_source& as) 
+    consumer(replica::database& db, std::vector<table_id> views_ids, lw_shared_ptr<replica::table> base, mutation_reader& reader, reader_permit permit, shared_ptr<view_update_generator> gen, gc_clock::time_point now, abort_source& as)
             : view_consumer(std::move(gen), now, as)
             , _db(db)
-            , _batch(batch)
+            , _views_ids(std::move(views_ids))
             , _base(base)
             , _current_key(dht::minimum_token(), partition_key::make_empty())
             , _reader(reader)
@@ -677,6 +677,10 @@ future<> view_building_worker::batch::abort() {
 }
 
 future<> view_building_worker::batch::do_work() {
+    if (this_shard_id() != 0) {
+        on_internal_error(vbw_logger, "view_building_worker::batch should be executed on shard0");
+    }
+
     // At this point we assume all tasks are validated to be executed in the same batch
     vbw_logger.debug("Starting view building batch for tasks {}. Task type {}", tasks | std::views::keys, tasks.begin()->second.type);
     auto& as = abort_sources.local();
@@ -694,22 +698,30 @@ future<> view_building_worker::batch::do_work() {
         }
 
         auto task = tasks.begin()->second;
-        co_await _vbw.container().invoke_on(task.replica.shard, [this, &task, &eptr] (view_building_worker& vbw) -> future<> {
-            try {
-                switch (task.type) {
+        auto type = task.type;
+        auto base_id = task.base_id;
+        auto last_token = task.last_token;
+        auto maybe_views_ids = tasks | std::views::values | std::views::transform(&view_building_task::view_id) | std::ranges::to<std::vector>();
+        auto& sharded_abort_sources = abort_sources;
+
+        try {
+            co_await _vbw.container().invoke_on(task.replica.shard, [type, base_id, last_token, maybe_views_ids = std::move(maybe_views_ids), &sharded_abort_sources] (view_building_worker& vbw) -> future<> {
+                std::vector<table_id> views_ids;
+                switch (type) {
                 case view_building_task::task_type::build_range:
-                    co_await do_build_range(vbw);
+                    views_ids = maybe_views_ids | std::views::transform([] (const auto& i) { return *i; }) | std::ranges::to<std::vector>();
+                    co_await vbw.do_build_range(base_id, views_ids, last_token, sharded_abort_sources.local());
                     break;
                 case view_building_task::task_type::process_staging:
-                    co_await do_process_staging(vbw);
+                    co_await vbw.do_process_staging(base_id, last_token);
                     break;
                 }
-            } catch (seastar::abort_requested_exception&) {
-                vbw_logger.debug("Batch aborted");
-            } catch (...) {
-                eptr = std::current_exception();
-            }
-        });
+            });
+        } catch (seastar::abort_requested_exception&) {
+            vbw_logger.debug("Batch aborted");
+        } catch (...) {
+            eptr = std::current_exception();
+        }
 
         if (eptr) {
             vbw_logger.warn("Batch with tasks {} failed with error: {}", tasks | std::views::keys, eptr);
@@ -724,27 +736,20 @@ future<> view_building_worker::batch::do_work() {
     _vbw._vb_state_machine.event.broadcast();
 }
 
-future<> view_building_worker::batch::do_build_range(view_building_worker& local_vbw) {
+future<> view_building_worker::do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as) {
     utils::get_local_injector().inject("do_build_range_fail",
             [] { throw std::runtime_error("do_build_range failed due to error injection"); });
 
     // Run the view building in the streaming scheduling group
     // so that it doesn't impact other tasks with higher priority.
     seastar::thread_attributes attr;
-    attr.sched_group = local_vbw._db.get_streaming_scheduling_group();
-    return seastar::async(std::move(attr), [this, &local_vbw] {
-        auto& as = abort_sources.local();
-        auto get_views_ids = [this] {
-            return tasks | std::views::values | std::views::transform([] (const view_building_task& t) {
-                return t.view_id;
-            });
-        };
-        auto task = tasks.begin()->second;
-        auto base_cf = local_vbw._db.find_column_family(task.base_id).shared_from_this();
+    attr.sched_group = _db.get_streaming_scheduling_group();
+    return seastar::async(std::move(attr), [this, base_id, views_ids = std::move(views_ids), last_token, &as] {
         gc_clock::time_point now = gc_clock::now();
-        reader_permit permit = local_vbw._db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "build_views_range", db::no_timeout, {});
+        auto base_cf = _db.find_column_family(base_id).shared_from_this();
+        reader_permit permit = _db.get_reader_concurrency_semaphore().make_tracking_only_permit(nullptr, "build_views_range", db::no_timeout, {});
         auto slice = make_partition_slice(*base_cf->schema());
-        auto range = local_vbw.get_tablet_token_range(task.base_id, task.last_token);
+        auto range = get_tablet_token_range(base_id, last_token);
         auto prange = dht::to_partition_range(range);
 
         auto reader = base_cf->get_sstable_set().make_local_shard_sstable_reader(
@@ -762,21 +767,21 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
                 query::max_rows,
                 query::max_partitions);
         auto consumer = compact_for_query<view_building_worker::consumer>(compaction_state, view_building_worker::consumer(
-                local_vbw._db,
-                *this,
+                _db,
+                views_ids,
                 base_cf,
                 reader,
                 permit,
-                local_vbw._vug.shared_from_this(),
+                _vug.shared_from_this(),
                 now,
                 as));
 
         as.check();
-        for (auto& task: tasks | std::views::values) {
-            if (!local_vbw._views_in_progress.contains(*task.view_id)) {
-                auto view = local_vbw._db.find_schema(*task.view_id);
-                local_vbw._sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), dht::minimum_token()).get();
-                local_vbw._views_in_progress.insert(*task.view_id);
+        for (auto& vid: views_ids) {
+            if (!_views_in_progress.contains(vid)) {
+                auto view = _db.find_schema(vid);
+                _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), dht::minimum_token()).get();
+                _views_in_progress.insert(vid);
             }
         }
 
@@ -797,16 +802,16 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
                 }
             }).get();
             utils::get_local_injector().inject("view_building_worker_pause_before_consume", 5min, as).get();
-            
+
             vbw_logger.info("Starting range {} building for base table: {}.{}", range, base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
             auto end_token = reader.consume_in_thread(std::move(consumer));
             vbw_logger.info("Built range {} for base table: {}.{}", dht::token_range(range.start(), end_token), base_cf->schema()->ks_name(), base_cf->schema()->cf_name());
         } catch (seastar::abort_requested_exception&) {
             eptr = std::current_exception();
-            vbw_logger.info("Building range {} for base table {} and views {} was aborted.", range, task.base_id, get_views_ids());
+            vbw_logger.info("Building range {} for base table {} and views {} was aborted.", range, base_id, views_ids);
         } catch (...) {
             eptr = std::current_exception();
-            vbw_logger.warn("Error during processing range {} for base table {} and views {}: ", range, task.base_id, get_views_ids(), eptr);
+            vbw_logger.warn("Error during processing range {} for base table {} and views {}: ", range, base_id, views_ids, eptr);
         }
         reader.close().get();
 
@@ -816,17 +821,14 @@ future<> view_building_worker::batch::do_build_range(view_building_worker& local
     });
 }
 
-future<> view_building_worker::batch::do_process_staging(view_building_worker& local_vbw) {
-    auto table_id = tasks.begin()->second.base_id;
-    auto last_token = tasks.begin()->second.last_token;
-
-    if (local_vbw._staging_sstables[table_id][last_token].empty()) {
+future<> view_building_worker::do_process_staging(table_id table_id, dht::token last_token) {
+    if (_staging_sstables[table_id][last_token].empty()) {
         co_return;
     }
 
-    auto table = local_vbw._db.get_tables_metadata().get_table(table_id).shared_from_this();
-    auto sstables = std::exchange(local_vbw._staging_sstables[table_id][last_token], {});
-    co_await local_vbw._vug.process_staging_sstables(std::move(table), std::move(sstables));
+    auto table = _db.get_tables_metadata().get_table(table_id).shared_from_this();
+    auto sstables = std::exchange(_staging_sstables[table_id][last_token], {});
+    co_await _vug.process_staging_sstables(std::move(table), std::move(sstables));
 }
 
 }
