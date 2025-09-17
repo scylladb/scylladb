@@ -178,6 +178,12 @@ public:
     /// make sure to honor this guarantee.
     random_schema(uint32_t seed, random_schema_specification& spec);
 
+    /// Create random schema object from an existing schema.
+    ///
+    /// Allows using random data generation facilities on an existing schema.
+    random_schema(schema_ptr schema) : _schema(std::move(schema)) {
+    }
+
     schema_ptr schema() const {
         return _schema;
     }
