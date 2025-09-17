@@ -14,7 +14,7 @@ import pytest
 from boto3.dynamodb.types import TypeDeserializer
 from botocore.exceptions import ClientError
 
-from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region
+from test.alternator.util import scylla_config_temporary, unique_table_name, create_test_table, new_test_table, random_string, full_scan, freeze, list_tables, get_region
 
 # All tests in this file are expected to fail with tablets due to #16317.
 # To ensure that Alternator Streams is still being tested, instead of
@@ -1406,7 +1406,8 @@ def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams)
 
 @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
 def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
-    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
+    with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
+        do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
 
 # A fixture which creates a test table with a stream enabled, and returns a
 # bunch of interesting information collected from the CreateTable response.
