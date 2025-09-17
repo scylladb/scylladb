@@ -77,8 +77,8 @@ verb [[cancellable]] tablet_stream_data (raft::server_id dst_id, locator::global
 verb [[cancellable]] tablet_cleanup (raft::server_id dst_id, locator::global_tablet_id);
 verb [[cancellable]] table_load_stats_v1 (raft::server_id dst_id) -> locator::load_stats_v1;
 verb [[cancellable]] table_load_stats (raft::server_id dst_id) -> locator::load_stats;
-verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id) -> service::tablet_operation_repair_result;
-verb [[cancellable]] tablet_repair_colocated(raft::server_id dst_id, locator::global_tablet_id, std::vector<locator::global_tablet_id>) -> service::tablet_operation_repair_result;
+verb [[cancellable]] tablet_repair(raft::server_id dst_id, locator::global_tablet_id, service::session_id session [[version 2025.4]]) -> service::tablet_operation_repair_result;
+verb [[cancellable]] tablet_repair_colocated(raft::server_id dst_id, locator::global_tablet_id, std::vector<locator::global_tablet_id>, service::session_id session [[version 2025.4]]) -> service::tablet_operation_repair_result;
 verb [[]] estimate_sstable_volume(table_id table) -> uint64_t;
 verb [[]] sample_sstables(table_id table, uint64_t chunk_size, uint64_t n_chunks) -> utils::chunked_vector<temporary_buffer<char>>;
 
