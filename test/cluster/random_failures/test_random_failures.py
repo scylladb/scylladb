@@ -55,9 +55,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     # Deselect unsupported combinations.  Do it after the shuffle to have the stable order.
     tests = [
-        (inj, event) for inj, event in tests if inj not in getattr(event, "deselected_random_failures", {})
-        # issue #23418: skip the "stop_before_becoming_raft_voter" tests for now
-        | {"stop_before_becoming_raft_voter": "issue #23418"}
+        (inj, event) for inj, event in tests if not inj.startswith("REMOVED_") and inj not in getattr(event, "deselected_random_failures", {})
     ]
 
     metafunc.parametrize(["error_injection", "cluster_event"], tests[:TESTS_COUNT])
