@@ -2001,6 +2001,44 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
     }, {});
 }
 
+void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
+    if (sstables.empty()) {
+        throw std::invalid_argument("no sstables specified on the command line");
+    }
+
+    const auto all = vm.count("all");
+
+    const auto output_dir = vm["output-dir"].as<std::string>();
+    validate_output_dir(output_dir, vm.count("unsafe-accept-nonempty-output-dir"));
+
+    const auto local = data_dictionary::make_local_options(output_dir);
+
+    const auto new_format = sstables::sstable_format_types::big;
+    const auto new_version = sstables::version_from_string(vm["sstable-version"].as<std::string>());
+
+    for (const auto& sst : sstables) {
+        if (sst->get_version() == new_version && !all) {
+            fmt::print(std::cout, "Nothing to do for sstable {}, skipping (use --all to force upgrade all sstables).\n", sst->get_filename());
+            continue;
+        }
+
+        const auto new_generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
+
+        auto writer_cfg = sst_man.configure_writer("scylla-sstable");
+        auto new_sst = sst_man.make_sstable(schema, local, new_generation, sstables::sstable_state::normal, new_version, new_format);
+
+        new_sst->write_components(
+                sst->make_full_scan_reader(schema, permit),
+                sst->get_estimated_key_count(),
+                schema,
+                writer_cfg,
+                sst->get_encoding_stats_for_compaction()).get();
+
+        fmt::print(std::cout, "Upgraded sstable {} to {}.\n", sst->get_filename(), new_sst->get_filename());
+    }
+}
+
 const std::vector<operation_option> global_options {
     typed_option<sstring>("schema-file", "schema.cql", "use the file containing the schema description as the schema source"),
     typed_option<sstring>("keyspace", "keyspace name"),
@@ -2270,6 +2308,36 @@ for more information on this operation, including usage examples.
                 typed_option<std::string>("output-format", "text", "the output-format, one of (text, json)"),
             }},
             query_operation},
+/* upgrade */
+    {{"upgrade",
+            "Upgrade sstable(s) to the highest supported version and apply the latest schema",
+R"(
+This command is an offline version of nodetool upgradesstables.
+Applies the latest sstable version and the latest schema to the sstables.
+
+To apply the latest schema, it is advised to use the system schema tables as the
+schema source.
+It is possible to apply an altered schema to the sstable, by providing the altered
+schema via the schema-file option. Do this with care as incompatible changes to
+columns, can cause crashes or data-loss. Also, not all schema options can be
+directly expressed in CQL. Editing schema options (the part after WITH) is safe.
+
+The sstable version can be selected manually with the --sstable-version option,
+by default the latest supported version is used. Valid options are sstable
+versions which are supported for writing: mc, md and me.
+
+Mapping of input sstables to output sstables is printed to stdout.
+
+See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#upgrade
+for more information on this operation, including usage examples.
+)",
+            {
+                typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
+                typed_option<std::string>("sstable-version", fmt::to_string(sstables::get_highest_sstable_version()), "sstable version to use, defaults to the latest supported version"),
+                typed_option<>("all", "upgrade all sstables, even if they are already at the requested version"),
+                typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
+            }},
+            upgrade_operation},
 };
 
 } // anonymous namespace
