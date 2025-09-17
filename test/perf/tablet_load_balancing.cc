@@ -141,7 +141,7 @@ struct rebalance_stats {
 };
 
 static
-rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_stats = {}, std::unordered_set<host_id> skiplist = {}) {
+rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats& load_stats, std::unordered_set<host_id> skiplist = {}) {
     rebalance_stats stats;
     abort_source as;
 
@@ -155,9 +155,10 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
 
     for (size_t i = 0; i < max_iterations; ++i) {
         auto prev_lb_stats = talloc.stats().for_dc(dc);
+        auto load_stats_p = make_lw_shared<locator::load_stats>(load_stats);
         auto start_time = std::chrono::steady_clock::now();
 
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), load_stats_p, skiplist).get();
 
         auto end_time = std::chrono::steady_clock::now();
         auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;
@@ -303,10 +304,6 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             testlog.info("Added new node: {} / {}:{}", host, dc_rack.dc, dc_rack.rack);
         };
 
-        auto make_stats = [&] {
-            return make_lw_shared<locator::load_stats>(stats);
-        };
-
         for (size_t i = 0; i < n_hosts; ++i) {
             add_host(racks[i % rack_count]);
         }
@@ -315,7 +312,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         auto bootstrap = [&] (endpoint_dc_rack dc_rack) {
             add_host(std::move(dc_rack));
-            global_res.stats += rebalance_tablets(e, make_stats());
+            global_res.stats += rebalance_tablets(e, stats);
         };
 
         auto decommission = [&] (host_id host) {
@@ -326,7 +323,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 throw std::runtime_error(format("No such host: {}", host));
             }
             topo.set_node_state(host, service::node_state::decommissioning);
-            global_res.stats += rebalance_tablets(e, make_stats());
+            global_res.stats += rebalance_tablets(e, stats);
             if (stm.get()->tablets().has_replica_on(host)) {
                 throw std::runtime_error(format("Host {} still has replicas!", host));
             }
@@ -404,7 +401,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         check_balance();
 
-        rebalance_tablets(e, make_stats());
+        rebalance_tablets(e, stats);
 
         global_res.init = global_res.worst = check_balance();
 
@@ -436,10 +433,6 @@ void test_parallel_scaleout(const bpo::variables_map& opts) {
         topology_builder topo(e);
         locator::load_stats stats;
 
-        auto make_stats = [&] {
-            return make_lw_shared<locator::load_stats>(stats);
-        };
-
         std::vector<endpoint_dc_rack> racks;
         racks.push_back(topo.rack());
         for (int i = 1; i < nr_racks; ++i) {
@@ -467,11 +460,11 @@ void test_parallel_scaleout(const bpo::variables_map& opts) {
         }).get();
 
         testlog.info("Initial rebalancing");
-        rebalance_tablets(e, make_stats());
+        rebalance_tablets(e, stats);
 
         testlog.info("Scaleout");
         add_hosts(extra_nodes);
-        global_res.stats += rebalance_tablets(e, make_stats());
+        global_res.stats += rebalance_tablets(e, stats);
     }, cfg).get();
 }
 
