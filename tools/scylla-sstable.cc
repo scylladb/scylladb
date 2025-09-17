@@ -1726,7 +1726,31 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 }
 
+} // anonymous namespace
+
+namespace tools {
+
+/// Parse a stream of JSON encoded mutation fragments, using the format produced
+/// by scylla-sstable write.
+/// The parsing is streamed, at most a single mutation fragment is kept in memory.
+/// Not all data types are supported: collections, tuples, UDTs and counters are not supported.
+/// See docs/operating-scylla/admin-tools/scylla-sstable.rst for the format documentation.
 class json_mutation_stream_parser {
+    class impl;
+    std::unique_ptr<impl> _impl;
+
+public:
+    explicit json_mutation_stream_parser(schema_ptr schema, reader_permit permit, input_stream<char> istream, logger& logger);
+    json_mutation_stream_parser(json_mutation_stream_parser&&) noexcept;
+    ~json_mutation_stream_parser();
+    future<mutation_fragment_v2_opt> operator()();
+};
+
+} // namespace tools
+
+namespace tools {
+namespace {
+
     using reader = rapidjson::GenericReader<rjson::encoding, rjson::encoding, rjson::allocator>;
     class stream {
     public:
@@ -1832,6 +1856,7 @@ class json_mutation_stream_parser {
         schema_ptr _schema;
         reader_permit _permit;
         queue<mutation_fragment_v2_opt>& _queue;
+        logger& _logger;
         circular_buffer<state> _state_stack;
         std::string _key; // last seen key
         bool _partition_start_emited = false;
@@ -1886,13 +1911,13 @@ class json_mutation_stream_parser {
         template<typename... Args>
         bool error(fmt::format_string<Args...> fmt, Args&&... args) {
             auto parse_error = fmt::format(fmt, std::forward<Args>(args)...);
-            sst_log.trace("{}", parse_error);
+            _logger.trace("{}", parse_error);
             _queue.abort(std::make_exception_ptr(std::runtime_error(parse_error)));
             return false;
         }
 
         bool emit(mutation_fragment_v2 mf) {
-            sst_log.trace("emit({})", mf.mutation_fragment_kind());
+            _logger.trace("emit({})", mf.mutation_fragment_kind());
             _queue.push_eventually(std::move(mf)).get();
             return true;
         }
@@ -2106,7 +2131,7 @@ class json_mutation_stream_parser {
             std::optional<state> next_state;
         };
         retire_state_result handle_retire_state() {
-            sst_log.trace("handle_retire_state(): stack={}", stack_to_string());
+            _logger.trace("handle_retire_state(): stack={}", stack_to_string());
             retire_state_result ret;
             switch (top()) {
                 case state::before_partition:
@@ -2247,13 +2272,13 @@ class json_mutation_stream_parser {
             return _state_stack[i];
         }
         bool push(state s) {
-            sst_log.trace("push({})", to_string(s));
+            _logger.trace("push({})", to_string(s));
             _state_stack.push_front(s);
             return true;
         }
         bool pop() {
             auto res = handle_retire_state();
-            sst_log.trace("pop({})", res.ok ? res.pop_states : 0);
+            _logger.trace("pop({})", res.ok ? res.pop_states : 0);
             if (!res.ok) {
                 return false;
             }
@@ -2272,16 +2297,17 @@ class json_mutation_stream_parser {
             return error("unexpected json event {}({}) in state {}", sl.function_name(), key, stack_to_string());
         }
     public:
-        explicit handler(schema_ptr schema, reader_permit permit, queue<mutation_fragment_v2_opt>& queue)
+        explicit handler(schema_ptr schema, reader_permit permit, queue<mutation_fragment_v2_opt>& queue, logger& logger)
             : _schema(std::move(schema))
             , _permit(std::move(permit))
             , _queue(queue)
+            , _logger(logger)
         {
             push(state::start);
         }
         handler(handler&&) = default;
         bool Null() {
-            sst_log.trace("Null()");
+            _logger.trace("Null()");
             switch (top()) {
                 case state::before_ignored_value:
                     return pop();
@@ -2291,7 +2317,7 @@ class json_mutation_stream_parser {
             return true;
         }
         bool Bool(bool b) {
-            sst_log.trace("Bool({})", b);
+            _logger.trace("Bool({})", b);
             switch (top()) {
                 case state::before_bool:
                     _bool.emplace(b);
@@ -2302,7 +2328,7 @@ class json_mutation_stream_parser {
             return true;
         }
         bool Int(int i) {
-            sst_log.trace("Int({})", i);
+            _logger.trace("Int({})", i);
             switch (top()) {
                 case state::before_ignored_value:
                     return pop();
@@ -2315,7 +2341,7 @@ class json_mutation_stream_parser {
             return true;
         }
         bool Uint(unsigned i) {
-            sst_log.trace("Uint({})", i);
+            _logger.trace("Uint({})", i);
             switch (top()) {
                 case state::before_ignored_value:
                     return pop();
@@ -2328,7 +2354,7 @@ class json_mutation_stream_parser {
             return true;
         }
         bool Int64(int64_t i) {
-            sst_log.trace("Int64({})", i);
+            _logger.trace("Int64({})", i);
             switch (top()) {
                 case state::before_ignored_value:
                     return pop();
@@ -2341,7 +2367,7 @@ class json_mutation_stream_parser {
             return true;
         }
         bool Uint64(uint64_t i) {
-            sst_log.trace("Uint64({})", i);
+            _logger.trace("Uint64({})", i);
             switch (top()) {
                 case state::before_ignored_value:
                     return pop();
@@ -2354,7 +2380,7 @@ class json_mutation_stream_parser {
             return true;
         }
         bool Double(double d) {
-            sst_log.trace("Double({})", d);
+            _logger.trace("Double({})", d);
             switch (top()) {
                 case state::before_ignored_value:
                     return pop();
@@ -2364,11 +2390,11 @@ class json_mutation_stream_parser {
             return true;
         }
         bool RawNumber(const Ch* str, rapidjson::SizeType length, bool copy) {
-            sst_log.trace("RawNumber({})", std::string_view(str, length));
+            _logger.trace("RawNumber({})", std::string_view(str, length));
             return unexpected();
         }
         bool String(const Ch* str, rapidjson::SizeType length, bool copy) {
-            sst_log.trace("String({})", std::string_view(str, length));
+            _logger.trace("String({})", std::string_view(str, length));
             switch (top()) {
                 case state::before_ignored_value:
                     return pop();
@@ -2381,7 +2407,7 @@ class json_mutation_stream_parser {
             return true;
         }
         bool StartObject() {
-            sst_log.trace("StartObject()");
+            _logger.trace("StartObject()");
             switch (top()) {
                 case state::before_partition:
                     return push(state::in_partition);
@@ -2408,7 +2434,7 @@ class json_mutation_stream_parser {
         }
         bool Key(const Ch* str, rapidjson::SizeType length, bool copy) {
             _key = std::string(str, length);
-            sst_log.trace("Key({})", _key);
+            _logger.trace("Key({})", _key);
             switch (top()) {
                 case state::in_partition:
                     if (_key == "key") {
@@ -2517,7 +2543,7 @@ class json_mutation_stream_parser {
             }
         }
         bool EndObject(rapidjson::SizeType memberCount) {
-            sst_log.trace("EndObject()");
+            _logger.trace("EndObject()");
             switch (top()) {
                 case state::in_partition:
                 case state::in_key:
@@ -2533,7 +2559,7 @@ class json_mutation_stream_parser {
             }
         }
         bool StartArray() {
-            sst_log.trace("StartArray()");
+            _logger.trace("StartArray()");
             switch (top()) {
                 case state::start:
                     return push(state::before_partition);
@@ -2544,7 +2570,7 @@ class json_mutation_stream_parser {
             }
         }
         bool EndArray(rapidjson::SizeType elementCount) {
-            sst_log.trace("EndArray({})", elementCount);
+            _logger.trace("EndArray({})", elementCount);
             switch (top()) {
                 case state::before_clustering_element:
                 case state::before_partition:
@@ -2555,20 +2581,24 @@ class json_mutation_stream_parser {
         }
     };
 
-private:
     struct parsing_aborted : public std::exception { };
-    class impl {
+
+} // anonymous namespace
+
+    class json_mutation_stream_parser::impl {
         queue<mutation_fragment_v2_opt> _queue;
         stream _stream;
+        logger& _logger;
         handler _handler;
         reader _reader;
         thread _thread;
 
     public:
-        impl(schema_ptr schema, reader_permit permit, input_stream<char> istream)
+        impl(schema_ptr schema, reader_permit permit, input_stream<char> istream, logger& logger)
             : _queue(1)
             , _stream(std::move(istream))
-            , _handler(std::move(schema), std::move(permit), _queue)
+            , _logger(logger)
+            , _handler(std::move(schema), std::move(permit), _queue, _logger)
             , _thread([this] { _reader.Parse(_stream, _handler); })
         { }
         ~impl() {
@@ -2576,7 +2606,7 @@ private:
             try {
                 _thread.join().get();
             } catch (...) {
-                sst_log.warn("json_mutation_stream_parser: parser thread exited with exception: {}", std::current_exception());
+                _logger.warn("json_mutation_stream_parser: parser thread exited with exception: {}", std::current_exception());
             }
         }
         future<mutation_fragment_v2_opt> operator()() {
@@ -2586,14 +2616,20 @@ private:
             });
         }
     };
-    std::unique_ptr<impl> _impl;
 
-public:
-    explicit json_mutation_stream_parser(schema_ptr schema, reader_permit permit, input_stream<char> istream)
-        : _impl(std::make_unique<impl>(std::move(schema), std::move(permit), std::move(istream)))
-    { }
-    future<mutation_fragment_v2_opt> operator()() { return (*_impl)(); }
-};
+json_mutation_stream_parser::json_mutation_stream_parser(schema_ptr schema, reader_permit permit, input_stream<char> istream, logger& logger)
+    : _impl(std::make_unique<impl>(std::move(schema), std::move(permit), std::move(istream), logger))
+{ }
+
+json_mutation_stream_parser::json_mutation_stream_parser(json_mutation_stream_parser&&) noexcept = default;
+
+json_mutation_stream_parser::~json_mutation_stream_parser() = default;
+
+future<mutation_fragment_v2_opt> json_mutation_stream_parser::operator()() { return (*_impl)(); }
+
+} // namespace tools
+
+namespace {
 
 void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& manager, const bpo::variables_map& vm) {
@@ -2636,7 +2672,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     auto ifile = open_file_dma(input_file, open_flags::ro).get();
     auto istream = make_file_input_stream(std::move(ifile));
-    auto parser = json_mutation_stream_parser{schema, permit, std::move(istream)};
+    auto parser = tools::json_mutation_stream_parser{schema, permit, std::move(istream), sst_log};
     auto reader = make_generating_reader(schema, permit, std::move(parser));
     auto writer_cfg = manager.configure_writer("scylla-sstable");
     writer_cfg.validation_level = validation_level;
