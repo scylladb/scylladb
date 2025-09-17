@@ -1358,7 +1358,7 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
     #
     # an sstable component filename looks like:
     #  me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    sstable_re = re.compile(r"""(?P<version>la|m[cde])- # the sstable version
+    sstable_re = re.compile(r"""(?P<version>la|m[cdes])- # the sstable version
                                 (?P<id>[^-]+)-          # sstable identifier
                                 (?P<format>\w+)-        # format: 'big'
                                 (?P<component>.*)       # component: e.g., 'Data'""", re.X)
