@@ -369,7 +369,7 @@ CREATE TABLE system.load_per_node (
 Columns:
 * `dc` - The name of the data center to which the node belongs.
 * `rack` - The name of the rack to which the node belongs.
-* `storage_allocated_load` - Disk space allocated for tablets, assuming each tablet has a fixed size (target_tablet_size).
+* `storage_allocated_load` - Disk space allocated for tablets.
 * `storage_allocated_utilization` - Fraction of node's disk capacity taken for `storage_allocated_load`, where 1.0 means full utilization.
 * `storage_capacity` - Total disk capacity in bytes. Used to compute `storage_allocated_utilization`. By default equal to file system's capacity.
 * `tablets_allocated` - Number of tablet replicas on the node. Migrating tablets are accounted as if migration already finished.
