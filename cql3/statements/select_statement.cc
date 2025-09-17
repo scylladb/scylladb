@@ -1172,8 +1172,21 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     return paging_state_copy;
 }
 
+future<shared_ptr<cql_transport::messages::result_message>> indexed_table_select_statement::do_execute(
+        query_processor& qp, service::query_state& state, const query_options& options) const {
+        
+        auto start_time = lowres_system_clock::now();
+        auto result = co_await actually_do_execute(qp, state, options);
+        auto duration = lowres_system_clock::now() - start_time;
+        auto stats = _schema->table().get_index_manager().get_index_stats(_index.metadata().name());
+        if (stats) {
+            stats->add_latency(duration);
+        }
+        co_return result;
+}
+
 future<shared_ptr<cql_transport::messages::result_message>>
-indexed_table_select_statement::do_execute(query_processor& qp,
+indexed_table_select_statement::actually_do_execute(query_processor& qp,
                              service::query_state& state,
                              const query_options& options) const
 {

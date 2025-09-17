@@ -15,7 +15,7 @@ from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, C
 from cassandra.query import SimpleStatement
 from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
 
-from .util import new_test_table, unique_name, unique_key_int, is_scylla
+from .util import new_test_table, unique_name, unique_key_int, is_scylla, ScyllaMetrics
 
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there
@@ -2100,3 +2100,17 @@ def test_limit_partition_slice(cql, test_keyspace):
         rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 3')
         assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
         assert rs.has_more_pages == False
+
+def test_index_metrics(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+        wait_for_index(cql, test_keyspace, index_name)
+        initial_metrics = ScyllaMetrics.query(cql)
+        initial_count = initial_metrics.get(f'scylla_index_query_latencies_count', {"idx": index_name, "ks": test_keyspace})
+        if initial_count is None:
+            initial_count = 0
+        cql.execute(f"SELECT * FROM {table} WHERE v=1")
+        current_metrics = ScyllaMetrics.query(cql)
+        current_count = current_metrics.get(f'scylla_index_query_latencies_count', {"idx": index_name, "ks": test_keyspace})
+        assert current_count - initial_count == 1
