@@ -111,16 +111,16 @@ auto wait_for_timeout(duration timeout, abort_source& as) -> future<bool> {
 }
 
 /// Wait for a condition variable to be signaled or timeout.
-auto wait_for_signal(condition_variable& cv, time_point timeout) -> future<bool> {
+auto wait_for_signal(condition_variable& cv, time_point timeout) -> future<void> {
     auto result = co_await coroutine::as_future(cv.wait(timeout));
     if (result.failed()) {
         auto err = result.get_exception();
         if (try_catch<condition_variable_timed_out>(err) != nullptr) {
-            co_return false;
+            co_return;
         }
         co_await coroutine::return_exception_ptr(std::move(err));
     }
-    co_return true;
+    co_return;
 }
 
 auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
@@ -308,6 +308,7 @@ struct vector_store_client::impl {
     std::optional<host_port> _host_port;
     time_point last_dns_refresh;
     gate tasks_gate;
+    gate client_producer_gate;
     condition_variable refresh_cv;
     condition_variable refresh_client_cv;
     abort_source abort_refresh;
@@ -339,10 +340,12 @@ struct vector_store_client::impl {
             }
             co_return co_await std::move(addr);
         })
-        , client_producer([&]() -> future<lw_shared_ptr<http_client>> {
-            trigger_dns_refresh();
-            co_await wait_for_signal(refresh_client_cv, lowres_clock::now() + wait_for_client_timeout);
-            co_return current_client;
+        , client_producer([this]() -> future<lw_shared_ptr<http_client>> {
+            return try_with_gate(client_producer_gate, [this] -> future<lw_shared_ptr<http_client>> {
+                trigger_dns_refresh();
+                co_await wait_for_signal(refresh_client_cv, lowres_clock::now() + wait_for_client_timeout);
+                co_return current_client;
+            });
         }) {
     }
 
@@ -564,7 +567,9 @@ void vector_store_client::start_background_tasks() {
 auto vector_store_client::stop() -> future<> {
     _impl->abort_refresh.request_abort();
     _impl->refresh_cv.signal();
+    _impl->refresh_client_cv.signal();
     co_await _impl->tasks_gate.close();
+    co_await _impl->client_producer_gate.close();
 }
 
 auto vector_store_client::is_disabled() const -> bool {
