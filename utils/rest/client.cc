@@ -131,6 +131,9 @@ seastar::future<> rest::simple_send(seastar::http::experimental::client& client,
     if (req._url.empty()) {
         req._url = "/";
     }
+    if (req._version.empty()) {
+        req._version = "1.1";
+    }
     if (!req._headers.count(httpclient::CONTENT_TYPE_HEADER)) {
         req._headers[httpclient::CONTENT_TYPE_HEADER] = "application/x-www-form-urlencoded";
     }
