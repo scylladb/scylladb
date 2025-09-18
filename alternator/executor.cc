@@ -2203,6 +2203,7 @@ public:
     bool is_put_item() noexcept {
         return _cells.has_value();
     }
+    friend class put_item_operation;
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
@@ -2484,7 +2485,8 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
 }
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
-    : _request(std::move(request))
+    : _proxy(proxy)
+    , _request(std::move(request))
     , _schema(get_table_for_write(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
@@ -2907,6 +2909,18 @@ public:
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
             return {};
+        }
+        // Strict compatibility guarantees that single-item operations will
+        // read the item and store it in previous_item. If it is empty, we may
+        // skip CDC. This is safe as long as the assumptions of this
+        // operation's write isolation are not violated.
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && cdc_opts && !previous_item) {
+            cdc_opts->skip_cdc = true;
+        } else {
+            // This case exists because CAS may call apply multiple times. It
+            // may happen that the if condition was met in the previous call,
+            // but now it isn't (e.g. the item was deleted).
+            cdc_opts->skip_cdc = false;
         }
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
