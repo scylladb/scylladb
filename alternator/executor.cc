@@ -2198,6 +2198,7 @@ public:
     bool is_put_item() noexcept {
         return _cells.has_value();
     }
+    friend class put_item_operation;
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
@@ -2479,7 +2480,8 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
 }
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
-    : _request(std::move(request))
+    : _proxy(proxy)
+    , _request(std::move(request))
     , _schema(get_table_for_write(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
@@ -2755,6 +2757,39 @@ static void verify_all_are_used(const rjson::value* field,
 class put_item_operation : public rmw_operation {
 private:
     put_or_delete_item _mutation_builder;
+protected:
+    bool is_previous_identical(const std::unique_ptr<rjson::value>& previous_item) const {
+        if (!previous_item) {
+            return _mutation_builder._cells->size() == 0;
+        }
+        size_t previous_item_cnt = previous_item->MemberCount() - _schema->primary_key_columns().size();
+        if (_mutation_builder._cells->size() == previous_item_cnt) {
+            std::unordered_map<sstring, bytes> attributes;
+            std::unordered_set<sstring> keys;
+            for (const auto& [attr_name, v] : *_mutation_builder._cells) {
+                sstring attr(to_string_view(attr_name));
+                attributes[attr] = v;
+            }
+            for (const auto& cdef : _schema->primary_key_columns()) {
+                keys.insert(cdef.name_as_text());
+            }
+
+            bool identical = true;
+            for (auto it = previous_item->MemberBegin(); it != previous_item->MemberEnd(); ++it) {
+                const auto attr_name = it->name.GetString();
+                if (keys.contains(attr_name)) {
+                    continue;
+                }
+                auto attr = attributes.find(to_sstring(attr_name));
+                if (attr == attributes.end() || serialize_item(it->value) != attr->second) {
+                    identical = false;
+                    break;
+                }
+            }
+            return identical;
+        }
+        return false;
+    }
 public:
     parsed::condition_expression _condition_expression;
     put_item_operation(service::storage_proxy& proxy, rjson::value&& request)
@@ -2803,6 +2838,10 @@ public:
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
             return {};
+        }
+        // Skip CDC if the pre-existing item is identical to the new item.
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && cdc_opts) {
+            cdc_opts->skip_cdc = is_previous_identical(previous_item);
         }
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
@@ -2902,6 +2941,11 @@ public:
             // condition, return an empty optional mutation, which is more
             // efficient than throwing an exception.
             return {};
+        }
+        // If strict compatibility is enabled and the preimage is empty, then
+        // the item doesn't exist, so don't add a log row for the delete.
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && cdc_opts && !previous_item) {
+            cdc_opts->skip_cdc = true;
         }
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
