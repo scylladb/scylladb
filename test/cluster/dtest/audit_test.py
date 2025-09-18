@@ -262,7 +262,10 @@ class AuditBackendSyslog(AuditBackend):
         regexp = ", ".join(f"{field}=\"(?P<{field}>.*)\"" for field in fields)
         match = re.match(regexp, data)
 
-        date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        # Arbitrary date because we don't really check the field. We just need to fill it with something
+        # and make sure it doesn't change during the test (e.g. when the test is running at 23:59:59)
+        date = datetime.datetime(2000, 1, 1, 0, 0)
+
         node = match.group("node").split(":")[0]
         statement = match.group("query").replace("\\", "") 
         source = match.group("client_ip").split(":")[0]
