@@ -138,7 +138,7 @@ async def test_rebuild_node(manager: ManagerClient, random_tables: RandomTables)
     await check_token_ring_and_group0_consistency(manager)
 
 @pytest.mark.asyncio
-async def test_concurrent_removenode(manager: ManagerClient):
+async def test_concurrent_removenode_two_initiators_one_dead_node(manager: ManagerClient):
     servers = await manager.running_servers()
     assert len(servers) >= 3
 
@@ -151,4 +151,43 @@ async def test_concurrent_removenode(manager: ManagerClient):
         logger.info(f"exception raised due to concurrent remove node requests: {e}")
     else:
         raise Exception("concurrent removenode request should result in a failure, but unexpectedly succeeded")
+
+@pytest.mark.asyncio
+async def test_concurrent_removenode_one_initiator_two_dead_nodes(manager: ManagerClient):
+    """
+    Tests the execution flow in case of performing remove node
+    operations concurrently for two distinct dead nodes.
+
+    """
+    servers = await manager.running_servers()
+    await manager.servers_add(2, property_file=servers[0].property_file())
+    servers = await manager.running_servers()
+    assert len(servers) >= 5
+
+    await asyncio.gather(*[manager.server_stop_gracefully(servers[2].server_id),
+            manager.server_stop_gracefully(servers[1].server_id)])
+
+    ignore_nodes = [await manager.get_host_id(servers[1].server_id), await manager.get_host_id(servers[2].server_id)]
+    await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id, ignore_dead=ignore_nodes),
+            manager.remove_node(servers[0].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
+
+@pytest.mark.asyncio
+async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: ManagerClient):
+    """
+    Tests the execution flow in case of performing remove node
+    operations concurrently for two distinct dead nodes while
+    requests originating from separate intitiating nodes.
+
+    """
+    servers = await manager.running_servers()
+    await manager.servers_add(2, property_file=servers[0].property_file())
+    servers = await manager.running_servers()
+    assert len(servers) >= 5
+
+    await asyncio.gather(*[manager.server_stop_gracefully(servers[2].server_id),
+            manager.server_stop_gracefully(servers[1].server_id)])
+
+    ignore_nodes = [await manager.get_host_id(servers[1].server_id), await manager.get_host_id(servers[2].server_id)]
+    await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id, ignore_dead=ignore_nodes),
+            manager.remove_node(servers[3].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 

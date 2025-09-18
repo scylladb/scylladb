@@ -1221,7 +1221,7 @@ std::unordered_set<raft::server_id> storage_service::find_raft_nodes_from_hoeps(
             }
             id = raft::server_id{hid->uuid()};
         }
-        if (!_topology_state_machine._topology.find(*id)) {
+        if (!_topology_state_machine._topology.contains(*id)) {
             throw std::runtime_error(::format("Node {} is not found in the cluster", *id));
         }
         ids.insert(*id);
@@ -4166,14 +4166,6 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
         }
 
         auto ignored_ids = find_raft_nodes_from_hoeps(ignore_nodes_params);
-        if (!ignored_ids.empty()) {
-            auto bad_id = std::find_if_not(ignored_ids.begin(), ignored_ids.end(), [&] (auto n) {
-                return _topology_state_machine._topology.normal_nodes.contains(n);
-            });
-            if (bad_id != ignored_ids.end()) {
-                throw std::runtime_error(::format("removenode: there is no node with id {} in normal state. Cannot ignore it.", *bad_id));
-            }
-        }
         // insert node that should be removed to ignore list so that other topology operations
         // can ignore it
         ignored_ids.insert(id);
@@ -4221,7 +4213,7 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
 }
 
 future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
-    return run_with_api_lock_conditionally(sstring("removenode"), !raft_topology_change_enabled(), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
+    return run_with_api_lock_in_gossiper_mode_only(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
             ss.check_ability_to_perform_topology_operation("removenode");
             if (ss.raft_topology_change_enabled()) {
