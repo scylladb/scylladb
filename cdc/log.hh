@@ -51,6 +51,15 @@ class database;
 
 namespace cdc {
 
+// cdc log table operation
+enum class operation : int8_t {
+    // note: these values will eventually be read by a third party, probably not privvy to this
+    // enum decl, so don't change the constant values (or the datatype).
+    pre_image = 0, update = 1, insert = 2, row_delete = 3, partition_delete = 4,
+    range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
+    post_image = 9,
+};
+
 struct operation_result_tracker;
 class db_context;
 class metadata;
@@ -91,15 +100,6 @@ struct db_context final {
     cdc::metadata& _cdc_metadata;
     db_context(service::storage_proxy& proxy, cdc::metadata& cdc_meta, service::migration_notifier& notifier) noexcept
         : _proxy(proxy), _migration_notifier(notifier), _cdc_metadata(cdc_meta) {}
-};
-
-// cdc log table operation
-enum class operation : int8_t {
-    // note: these values will eventually be read by a third party, probably not privvy to this
-    // enum decl, so don't change the constant values (or the datatype).
-    pre_image = 0, update = 1, insert = 2, row_delete = 3, partition_delete = 4,
-    range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
-    post_image = 9,
 };
 
 bool is_log_for_some_table(const replica::database& db, const sstring& ks_name, const std::string_view& table_name);
