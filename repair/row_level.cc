@@ -2591,11 +2591,27 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                             flush_time = now;
                         }
                     }
+                    std::optional<db::batchlog_manager::batchlog_replay_stats> batchlog_flush_stats;
                     if (issue_flush) {
-                        co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
+                        batchlog_flush_stats = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
                         utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "issue_flush", fmt::to_string(flush_time));
                     }
-                    rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={}", req.repair_uuid, from, issue_flush);
+                    sstring flush_stats_str;
+                    if (batchlog_flush_stats) {
+                        flush_stats_str = format("\n    batchlog replay stats: total: {}, skipped {}, replayed {}, dropped {}, deleted {}, rate_limiter_engaged {} times, total rate_limiter_delay {}; replay time {}, cleanup time {}",
+                            batchlog_flush_stats->skipped_batches + batchlog_flush_stats->replayed_batches,
+                            batchlog_flush_stats->skipped_batches,
+                            batchlog_flush_stats->replayed_batches,
+                            batchlog_flush_stats->dropped_batches,
+                            batchlog_flush_stats->deleted_batches,
+                            batchlog_flush_stats->rate_limiter_engaged,
+                            batchlog_flush_stats->rate_limiter_total_delay,
+                            batchlog_flush_stats->replay_duration,
+                            batchlog_flush_stats->cleanup_duration);
+                    } else {
+                        flush_stats_str = " (reused earlier replay time)";
+                    }
+                    rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={}{}", req.repair_uuid, from, issue_flush, flush_stats_str);
                 }
             );
         } catch (...) {
