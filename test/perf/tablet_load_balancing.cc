@@ -290,10 +290,6 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         const sstring dc1 = topo.dc();
         populate_racks(rf1);
 
-        topo.start_new_dc();
-        const sstring dc2 = topo.dc();
-        populate_racks(rf2);
-
         const size_t rack_count = racks.size();
 
         auto add_host = [&] (endpoint_dc_rack dc_rack) {
@@ -335,8 +331,8 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             hosts.erase(it);
         };
 
-        auto ks1 = add_keyspace(e, {{dc1, rf1}, {dc2, 0}}, p.tablets1.value_or(1));
-        auto ks2 = add_keyspace(e, {{dc1, 0}, {dc2, rf2}}, p.tablets2.value_or(1));
+        auto ks1 = add_keyspace(e, {{dc1, rf1}}, p.tablets1.value_or(1));
+        auto ks2 = add_keyspace(e, {{dc1, rf2}}, p.tablets2.value_or(1));
         auto id1 = add_table(e, ks1).get();
         auto id2 = add_table(e, ks2).get();
         schema_ptr s1 = e.local_db().find_schema(id1);
@@ -464,7 +460,9 @@ future<> run_simulations(const boost::program_options::variables_map& app_cfg) {
 
         auto shards = 1 << tests::random::get_int(0, 8);
         auto rf1 = tests::random::get_int(MIN_RF, MAX_RF);
-        auto rf2 = tests::random::get_int(MIN_RF, MAX_RF);
+        // FIXME: Once we allow for RF <= #racks (and not just RF == #racks), we can randomize this RF too.
+        // For now, the values must be equal.
+        auto rf2 = rf1;
         auto scale1 = 1 << tests::random::get_int(0, 5);
         auto scale2 = 1 << tests::random::get_int(0, 5);
         auto nodes = tests::random::get_int(rf1 + rf2, 2 *  MAX_RF);
