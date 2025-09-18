@@ -285,6 +285,7 @@ struct compaction_metadata : public metadata_base<compaction_metadata> {
         case sstable_version_types::mc:
         case sstable_version_types::md:
         case sstable_version_types::me:
+        case sstable_version_types::ms:
             return f(
                 cardinality
             );
@@ -330,6 +331,7 @@ struct stats_metadata : public metadata_base<stats_metadata> {
     template <typename Describer>
     auto describe_type(sstable_version_types v, Describer f) {
         switch (v) {
+        case sstable_version_types::ms:
         case sstable_version_types::me:
             return f(
                 estimated_partition_size,
@@ -428,6 +430,7 @@ struct serialization_header : public metadata_base<serialization_header> {
         case sstable_version_types::mc:
         case sstable_version_types::md:
         case sstable_version_types::me:
+        case sstable_version_types::ms:
             return f(
                 min_timestamp_base,
                 min_local_deletion_time_base,
