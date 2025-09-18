@@ -2210,6 +2210,13 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
     // delete from ks.test where pk = 1 and ck = 2;
     return test_env::do_with_async([] (test_env& env) {
       for (const auto version : all_sstable_versions) {
+        if (!has_summary_and_index(version)) {
+            // This is an old test for some workaround for
+            // incorrectly-generated promoted indexes.
+            // It doesn't make sense to port this test to
+            // newer sstable formats.
+            continue;
+        }
         auto s = schema_builder("ks", "test")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck", int32_type, column_kind::clustering_key)
