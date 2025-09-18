@@ -23,6 +23,7 @@
 #include <seastar/net/api.hh>
 #include <seastar/net/tls.hh>
 #include <seastar/core/semaphore.hh>
+#include <seastar/core/scheduling.hh>
 
 namespace generic_server {
 
@@ -152,6 +153,7 @@ public:
 
 protected:
     virtual seastar::shared_ptr<connection> make_connection(socket_address server_addr, connected_socket&& fd, socket_address addr, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) = 0;
+    virtual scheduling_group get_scheduling_group_for_new_connection() const = 0;
 
     future<> for_each_gently(noncopyable_function<void(connection&)>);
 };
