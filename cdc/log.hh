@@ -61,6 +61,12 @@ enum class operation : int8_t {
 };
 
 struct per_request_options {
+    // If a value is present, CDC won't split the log rows of the accompanying
+    // mutation. Preimage and postimage will still be logged separately. The
+    // combined row will have the operation set to log_operation_type_fixup.
+    std::optional<cdc::operation> log_operation_type_fixup;
+    // Don't generate rows in the log table for this mutation.
+    bool skip_cdc;
 };
 
 struct operation_result_tracker;
