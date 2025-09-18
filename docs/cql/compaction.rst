@@ -304,6 +304,8 @@ TWCS options
 ``compaction_window_size`` (default: 1)
   The number of units which will make up a window.
 
+ .. include:: /rst_include/warning-windowsize-twcs.rst
+
 =====
 
 ``expired_sstable_check_frequency_seconds`` (default: 600)
