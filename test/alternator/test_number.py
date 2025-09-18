@@ -71,6 +71,51 @@ def test_number_magnitude_not_allowed(test_table_s):
                 UpdateExpression='SET a = :val',
                 ExpressionAttributeValues={':val': num})
 
+# Zero can be written as 0e126. Should this be allowed - since the number
+# is zero, which is allowed - or forbidden because nominally the exponent
+# is 126? In my opinion the former interpretation is the correct one,
+# since the nominal exponent in the scientific notation input isn't what
+# matters, but rather the actual magnitude: E.g., consider 0.1e126 is allowed
+# despite having a nominal exponent 126 - because its actual magnitude is 126.
+# At first glance, it appears that DynamoDB seems to follow the latter
+# interpretation, and forbids 0e126 (and similar). Which sounds like a
+# legitimate decision - except it is NOT followed consistently - while
+# DynamoDB forbids 0e126, it allows 0.0e126! That is inconsistent, and I
+# consider it a DynamoDB bug, so Alternator follows the first interpretation
+# (both 0e126 and 0.0e126 are allowed), and I'm marking this test as a
+# dynamodb_bug.
+def test_number_magnitude_not_allowed_zero(test_table_s, dynamodb_bug):
+    p = random_string()
+    # 0e125 is allowed, obviously
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': Decimal("0e125")})
+    # To cement our understanding of nominal exponent vs. actual magnitude,
+    # confirm that 0.1e126 is allowed - it's actual magnitude is 125,
+    # which is allowed.
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': Decimal("0.1e126")})
+    # 0.0e126 is still just zero and has actual magnitude 0, despite the
+    # nominal exponent 126, so is also allowed
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': Decimal("0.0e126")})
+    # If 0.0e126 is allowed, obviously 0e126 should also be allowed, and
+    # Alternator allows it as this test confirms - but DynamoDB doesn't and
+    # this test fails here on DynamoDB. I consider this a DynamoDB bug,
+    # hence the "dynamodb_bug" tag on this test.
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': Decimal("0e126")})
+    # Verify that the 0e126 that we wrote above is really just a regular zero
+    assert 0 == test_table_s.get_item(Key={'p': p}, ConsistentRead=True)['Item']['a']
+    # Similarly, 0e-131 should be allowed (it's, again, just zero), and
+    # DynamoDB has a bug causing it to be forbidden.
+    test_table_s.update_item(Key={'p': p},
+        UpdateExpression='SET a = :val',
+        ExpressionAttributeValues={':val': Decimal("0e-131")})
+
 # DynamoDB limits the magnitude of the numbers (the exponent can be between
 # -130 and 125). If we neglect to limit the magnitude, it can allow a user
 # to request an addition operation between two numbers of wildly different
@@ -247,7 +292,7 @@ def test_invalid_numbers(test_table_s):
                     UpdateExpression='SET a = :val',
                     ExpressionAttributeValues={':val': {'N': s}})
         # As a sanity check, check that *allowed* numbers are fine:
-        for s in ['3', '-7.1234', '-17e5', '-17.4E37', '+3', '.123', '0001.23', '1e+5', '0e1000']:
+        for s in ['3', '-7.1234', '-17e5', '-17.4E37', '+3', '.123', '0001.23', '1e+5']:
             client.update_item(TableName=test_table_s.name,
                 Key={'p': {'S': p}},
                 UpdateExpression='SET a = :val',
