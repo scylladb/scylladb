@@ -70,6 +70,9 @@ struct per_request_options {
     // layers than CDC. We assume that CDC could have seen the row in this
     // state, i.e. the value isn't 'stale'/'too new'.
     lw_shared_ptr<cql3::untyped_result_set> preimage;
+    // CAS may optionally read the db before it commits an operation. This
+    // option controls if preimage should be filled by CAS.
+    bool fill_preimage;
 };
 
 struct operation_result_tracker;
