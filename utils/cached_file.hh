@@ -175,6 +175,9 @@ public:
     future<page_read_result> get_shared_page(size_t global_pos, tracing::trace_state_ptr trace_state) {
         return get_page_ptr(global_pos / page_size, 1, trace_state);
     }
+    future<page_read_result> get_shared_page(size_t global_pos, reader_permit permit, tracing::trace_state_ptr trace_state) {
+        return get_page_ptr(global_pos / page_size, 1, trace_state, permit);
+    }
 private:
     future<page_read_result> get_page_ptr(page_idx_type idx,
             page_count_type read_ahead,

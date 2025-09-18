@@ -414,7 +414,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_range_query) {
                         end_inclusive ? ']' : ')',
                         pr
                     );
-                    reader = assert_that(sstables::mx::make_reader_with_index_reader(
+                    reader = assert_that(sstables::mx::make_reader(
                         sst,
                         table.schema(),
                         permit,
@@ -499,7 +499,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_singular_query) {
             auto pr = dht::partition_range::make_singular(all_dks[1]);
 
             testlog.debug("Create for pr={}", pr);
-            mutation_reader_assertions reader = assert_that(sstables::mx::make_reader_with_index_reader(
+            mutation_reader_assertions reader = assert_that(sstables::mx::make_reader(
                 sst,
                 table.schema(),
                 permit,

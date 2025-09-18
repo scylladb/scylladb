@@ -609,7 +609,7 @@ struct reference_index {
         }
         for (uint64_t idx = curpar + 1; idx < _entries.size(); ++idx) {
             if (std::holds_alternative<partition_end_entry>(_entries[idx + 1])) {
-                return _data_file_offsets[idx];
+                return _data_file_offsets[idx] - _data_file_offsets[curpar];
             }
         }
         abort();
@@ -989,7 +989,7 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
                 },
             }, entry);
         }
-        std::move(partition_index_writer).finish(sst_ver, {}, {});
+        std::move(partition_index_writer).finish(sst_ver, sstables::key::from_bytes({}), sstables::key::from_bytes({}));
     }
 
     // Step 3: create the reader (or, more precisely, a factory of readers) over the index files.
@@ -1005,23 +1005,26 @@ SEASTAR_THREAD_TEST_CASE(test_exhaustive) {
         auto region = logalloc::region();
         auto partitions_db_size = partitions_db.size().get();
         auto rows_db_size = rows_db.size().get();
-        auto partitions_db_cached = cached_file(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
-        auto rows_db_cached = cached_file(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
+        auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
+        auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
 
-        auto p = partitions_db_cached.get_file().dma_read_exactly<char>(partitions_db_size - 24, 24).get();
-        auto partitions_db_root_pos = read_be<uint64_t>(p.get() + 16);
+        auto partitions_db_footer = sstables::trie::read_bti_partitions_db_footer(*the_schema, sst_ver, partitions_db, partitions_db_size).get();
+        auto partitions_db_root_pos = partitions_db_footer.trie_root_position;
 
         auto semaphore = tests::reader_concurrency_semaphore_wrapper();
+        auto trace_state = tracing::trace_state_ptr();
 
         // Step 4: run the reader test on the opened readers.
         test_index(dataset, [&] {
             return sstables::trie::make_bti_index_reader(
-            partitions_db_cached,
-            rows_db_cached,
-            partitions_db_root_pos,
-            std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
-            the_schema,
-            semaphore.make_permit());
+                partitions_db_cached,
+                rows_db_cached,
+                partitions_db_root_pos,
+                std::get<eof_index_entry>(dataset.entries.back()).data_file_offset,
+                the_schema,
+                semaphore.make_permit(),
+                trace_state
+            );
         }, max_ops);
     }
 }

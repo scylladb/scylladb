@@ -359,13 +359,15 @@ struct bti_row_index_writer::impl
     impl(impl&&) = delete;
 };
 
-bti_row_index_writer::bti_row_index_writer() = default;
+bti_row_index_writer::bti_row_index_writer() noexcept = default;
 
-bti_row_index_writer::~bti_row_index_writer() = default;
+bti_row_index_writer::~bti_row_index_writer() noexcept = default;
 
 bti_row_index_writer::bti_row_index_writer(sstables::file_writer& fw)
     : _impl(std::make_unique<impl>(fw))
 {}
+bti_row_index_writer::bti_row_index_writer(bti_row_index_writer&&) noexcept = default;
+bti_row_index_writer& bti_row_index_writer::operator=(bti_row_index_writer&&) noexcept = default;
 
 int64_t bti_row_index_writer::finish(
     sstable_version_types version,

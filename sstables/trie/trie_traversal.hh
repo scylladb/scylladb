@@ -159,15 +159,17 @@ inline void traverse_single_page(
 inline seastar::future<traversal_state> traverse(
     node_reader auto& input,
     comparable_bytes_iterator auto&& key_it,
-    int64_t root_pos
+    int64_t root_pos,
+    const reader_permit& permit,
+    const tracing::trace_state_ptr& trace_state
 ) {
     traversal_state state = {.next_pos = root_pos};
     while (state.next_pos >= 0 && key_it != std::default_sentinel) {
-        co_await input.load(state.next_pos);
+        co_await input.load(state.next_pos, permit, trace_state);
         traverse_single_page(input, key_it, state);
     }
     if (state.next_pos >= 0) {
-        co_await input.load(state.next_pos);
+        co_await input.load(state.next_pos, permit, trace_state);
         load_final_node_result final_node = input.read_node(state.next_pos);
         state.trail.push_back(trail_entry{
                 .pos = state.next_pos,
@@ -175,7 +177,7 @@ inline seastar::future<traversal_state> traverse(
                 .child_idx = -1,
                 .payload_bits = final_node.payload_bits});
     }
-    co_await input.load(state.trail.back().pos);
+    co_await input.load(state.trail.back().pos, permit, trace_state);
     co_return std::move(state);
 }
 
@@ -213,10 +215,12 @@ inline void descend_leftmost_single_page(
 inline seastar::future<> descend_leftmost(
     node_reader auto& input,
     ancestor_trail& trail,
-    int64_t next_pos
+    int64_t next_pos,
+    const reader_permit& permit,
+    const tracing::trace_state_ptr& trace_state
 ) {
     while (next_pos >= 0) {
-        co_await input.load(next_pos);
+        co_await input.load(next_pos, permit, trace_state);
         // Note: next_pos passed by reference.
         descend_leftmost_single_page(input, trail, next_pos);
     }
@@ -246,17 +250,19 @@ inline bool ascend_to_right_edge(ancestor_trail& trail) {
 // (I.e. visits the root of the trail and sets its child idx past the end).
 inline seastar::future<> step(
     node_reader auto& input,
-    ancestor_trail& trail
+    ancestor_trail& trail,
+    const reader_permit& permit,
+    const tracing::trace_state_ptr& trace_state
 ) {
     if (ascend_to_right_edge(trail)) {
-        co_await input.load(trail.back().pos);
+        co_await input.load(trail.back().pos, permit, trace_state);
         get_child_result child = input.get_child(trail.back().pos, trail.back().child_idx, true);
 
         trail.back().child_idx = child.idx;
         int64_t next_pos = trail.back().pos - child.offset;
-        co_await descend_leftmost(input, trail, next_pos);
+        co_await descend_leftmost(input, trail, next_pos, permit, trace_state);
     }
-    co_await input.load(trail.back().pos);
+    co_await input.load(trail.back().pos, permit, trace_state);
 }
 
 // The synchronous part of descend_rightmost.
@@ -291,10 +297,12 @@ inline void descend_rightmost_single_page(
 inline seastar::future<> descend_rightmost(
     node_reader auto& input,
     ancestor_trail& trail,
-    int64_t next_pos
+    int64_t next_pos,
+    const reader_permit& permit,
+    const tracing::trace_state_ptr& trace_state
 ) {
     while (next_pos >= 0) {
-        co_await input.load(next_pos);
+        co_await input.load(next_pos, permit, trace_state);
         // Note: next_pos passed by reference.
         descend_rightmost_single_page(input, trail, next_pos);
     }
@@ -325,22 +333,24 @@ inline bool ascend_to_left_edge(ancestor_trail& trail) {
 // Otherwise visits EOF. (I.e. visits the root of the trail and sets its child idx past the end).
 inline seastar::future<> step_back(
     node_reader auto& input,
-    ancestor_trail& trail
+    ancestor_trail& trail,
+    const reader_permit& permit,
+    const tracing::trace_state_ptr& trace_state
 ) {
     bool didnt_go_past_start = ascend_to_left_edge(trail);
     if (trail.back().child_idx >= 0 && trail.back().child_idx < trail.back().n_children) {
-        co_await input.load(trail.back().pos);
+        co_await input.load(trail.back().pos, permit, trace_state);
         get_child_result child = input.get_child(trail.back().pos, trail.back().child_idx, false);
 
         trail.back().child_idx = child.idx;
         int64_t next_pos = trail.back().pos - child.offset;
         if (didnt_go_past_start) {
-            co_await descend_rightmost(input, trail, next_pos);
+            co_await descend_rightmost(input, trail, next_pos, permit, trace_state);
         } else {
-            co_await descend_leftmost(input, trail, next_pos);
+            co_await descend_leftmost(input, trail, next_pos, permit, trace_state);
         }
     }
-    co_await input.load(trail.back().pos);
+    co_await input.load(trail.back().pos, permit, trace_state);
 }
 
 } // namespace sstables::trie

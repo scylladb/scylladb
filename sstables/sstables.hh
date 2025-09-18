@@ -342,8 +342,6 @@ public:
 
     uint64_t estimated_keys_for_range(const dht::token_range& range);
 
-    std::vector<dht::decorated_key> get_key_samples(const schema& s, const dht::token_range& range);
-
     // mark_for_deletion() specifies that a sstable isn't relevant to the
     // current shard, and thus can be deleted by the deletion manager, if
     // all shards sharing it agree. In case the sstable is unshared, it's
@@ -770,7 +768,6 @@ public:
 private:
     future<summary_entry&> read_summary_entry(size_t i);
 
-    // FIXME: pending on Bloom filter implementation
     bool filter_has_key(const schema& s, const dht::decorated_key& dk) { return filter_has_key(key::from_partition_key(s, dk._key)); }
 
     std::optional<std::pair<uint64_t, uint64_t>> get_sample_indexes_for_range(const dht::token_range& range);

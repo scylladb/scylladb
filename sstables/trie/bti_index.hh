@@ -46,6 +46,13 @@ namespace sstables::trie {
 // until a cluster feature guarding the new page size is set.
 constexpr static uint64_t BTI_PAGE_SIZE = 4096;
 
+struct bti_partitions_db_footer {
+    sstables::key first_key;
+    sstables::key last_key;
+    uint64_t partition_count;
+    uint64_t trie_root_position;
+};
+
 // Transforms a stream of (partition key, offset in Data.db, hash bits) tuples
 // into a stream of trie nodes fed into bti_trie_sink.
 // Used to populate the Partitions.db file of the BTI format
@@ -55,7 +62,7 @@ class bti_partition_index_writer {
     std::unique_ptr<impl> _impl;
 private:
     friend class optimized_optional<bti_partition_index_writer>;
-    bti_partition_index_writer();
+    bti_partition_index_writer() noexcept;
 public:
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
@@ -63,20 +70,16 @@ public:
     // because `finish()` writes a footer which is used by the reader
     // to find the root of the trie.
     explicit bti_partition_index_writer(sstables::file_writer&);
-    ~bti_partition_index_writer();
+    bti_partition_index_writer(bti_partition_index_writer&&) noexcept;
+    bti_partition_index_writer& operator=(bti_partition_index_writer&&) noexcept;
+    ~bti_partition_index_writer() noexcept;
+    explicit operator bool() const noexcept { return bool(_impl); }
     // Add a new partition key to the index.
     void add(const schema&, dht::decorated_key, int64_t data_or_rowsdb_file_pos);
     // Flushes all remaining contents, and returns the position of the root node in the output stream.
     // If add() was never called, returns -1.
     // The writer mustn't be used again after this.
-    void finish(sstable_version_types ver, disk_string_view<uint16_t> first_key, disk_string_view<uint16_t> last_key) &&;
-};
-
-struct bti_partitions_db_footer {
-    sstables::key first_key;
-    sstables::key last_key;
-    uint64_t partition_count;
-    uint64_t trie_root_position;
+    std::optional<bti_partitions_db_footer> finish(sstable_version_types ver, const sstables::key& first_key, const sstables::key& last_key) &&;
 };
 
 future<bti_partitions_db_footer> read_bti_partitions_db_footer(const schema& s, sstable_version_types v, const seastar::file& f, uint64_t file_size);
@@ -90,13 +93,16 @@ class bti_row_index_writer {
     std::unique_ptr<impl> _impl;
 private:
     friend class optimized_optional<bti_row_index_writer>;
-    bti_row_index_writer();
+    bti_row_index_writer() noexcept;
 public:
-    ~bti_row_index_writer();
+    ~bti_row_index_writer() noexcept;
     // The trie will be written to the given file writer.
     // Note: the file doesn't have to be empty,
     // and it can be extended later.
     explicit bti_row_index_writer(sstables::file_writer&);
+    bti_row_index_writer(bti_row_index_writer&&) noexcept;
+    bti_row_index_writer& operator=(bti_row_index_writer&&) noexcept;
+    explicit operator bool() const noexcept { return bool(_impl); }
     // Add a new row index entry.
     // Must be called in ascending order.
     // (`first_ck` must be strictly greater than the previous `last_ck`).
@@ -133,11 +139,12 @@ public:
 // `partitions_db_root_pos` should have been read from the Partitions.db footer beforehand.
 // (As we don't want to repeat that for every query).
 std::unique_ptr<sstables::abstract_index_reader> make_bti_index_reader(
-    cached_file& partitions_db,
-    cached_file& rows_db,
+    seastar::shared_ptr<cached_file> partitions_db,
+    seastar::shared_ptr<cached_file> rows_db,
     uint64_t partitions_db_root_pos,
     uint64_t total_data_db_file_size,
     schema_ptr,
-    reader_permit);
+    reader_permit,
+    tracing::trace_state_ptr);
 
 } // namespace sstables::trie

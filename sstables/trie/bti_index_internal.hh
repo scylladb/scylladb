@@ -36,7 +36,13 @@ struct row_index_header {
     uint64_t number_of_blocks = 0;
 };
 
-future<row_index_header> read_row_index_header(input_stream<char>&& input, uint64_t start, uint64_t maxlen, reader_permit rp);
+future<row_index_header> read_row_index_header(
+    input_stream<char>&& input,
+    uint64_t start,
+    uint64_t maxlen,
+    reader_permit rp
+);
+
 void write_row_index_header(
     sstable_version_types sst_ver,
     sstables::file_writer& fw,

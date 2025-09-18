@@ -685,14 +685,6 @@ public:
     inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace,
             const sstring& cf, const sstring& key) const;
 
-    /**
-     * @return Vector of Token ranges (_not_ keys!) together with estimated key count,
-     *      breaking up the data this node is responsible for into pieces of roughly keys_per_split
-     */
-    std::vector<std::pair<dht::token_range, uint64_t>> get_splits(const sstring& ks_name,
-            const sstring& cf_name,
-            wrapping_interval<dht::token> range,
-            uint32_t keys_per_split);
 public:
     future<> decommission();
 

@@ -190,7 +190,7 @@ BOOST_AUTO_TEST_CASE(test_bigint) {
     byte_comparable_test(generate_integer_test_data<int64_t>());
 }
 
-BOOST_AUTO_TEST_CASE(test_date) {
+BOOST_AUTO_TEST_CASE(test_simple_date) {
     byte_comparable_test(generate_integer_test_data<uint32_t>([] (uint32_t days) {
         return data_value(simple_date_native_type{days});
     }));
@@ -209,6 +209,12 @@ BOOST_AUTO_TEST_CASE(test_time) {
 BOOST_AUTO_TEST_CASE(test_timestamp) {
     byte_comparable_test(generate_integer_test_data<db_clock::rep>([] (db_clock::rep milliseconds) {
         return data_value(db_clock::time_point(db_clock::duration(milliseconds)));
+    }));
+}
+
+BOOST_AUTO_TEST_CASE(test_date) {
+    byte_comparable_test(generate_integer_test_data<db_clock::rep>([] (db_clock::rep milliseconds) {
+        return data_value(date_type_native_type{db_clock::time_point{db_clock::duration(milliseconds)}});
     }));
 }
 

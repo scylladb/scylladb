@@ -242,22 +242,25 @@ void test_index_files(
     auto region = logalloc::region();
     auto partitions_db_size = partitions_db.size().get();
     auto rows_db_size = rows_db.size().get();
-    auto partitions_db_cached = cached_file(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
-    auto rows_db_cached = cached_file(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
+    auto partitions_db_cached = seastar::make_shared<cached_file>(partitions_db, stats, cached_file_lru, region, partitions_db_size, "Partitions.db");
+    auto rows_db_cached = seastar::make_shared<cached_file>(rows_db, stats, cached_file_lru, region, rows_db_size, "Rows.db");
 
     // Read the Partitions.db footer, check the metadata contained there.
-    auto footer = sstables::trie::read_bti_partitions_db_footer(*s, sstable::version_types::me, partitions_db_cached.get_file(), partitions_db_size).get();
+    auto footer = sstables::trie::read_bti_partitions_db_footer(*s, sstable::version_types::me, partitions_db_cached->get_file(), partitions_db_size).get();
     SCYLLA_ASSERT(footer.partition_count == pm.partition_count);
     SCYLLA_ASSERT(sstables::key_view(footer.first_key) == sstables::key::from_partition_key(*s, pm.first_key.key()));
     SCYLLA_ASSERT(sstables::key_view(footer.last_key) == sstables::key::from_partition_key(*s, pm.last_key.key()));
 
+    auto trace_state = tracing::trace_state_ptr();
     auto ir = sstables::trie::make_bti_index_reader(
         partitions_db_cached,
         rows_db_cached,
         footer.trie_root_position,
         data_db_size,
         s,
-        env.make_reader_permit());
+        env.make_reader_permit(),
+        trace_state
+    );
 
     // We validate the index by iterating over fragments and checking that
     // the index gives the right results when it's forwarded to the position of each fragment. 
@@ -570,8 +573,8 @@ void do_test(const test_config& cfg) {
             }
             std::move(bti_partition_index_writer).finish(
                 sst->get_version(),
-                disk_string_view<uint16_t>(sstables::key::from_partition_key(*adjusted_schema, mutations.front().key()).get_bytes()),
-                disk_string_view<uint16_t>(sstables::key::from_partition_key(*adjusted_schema, mutations.back().key()).get_bytes())
+                sstables::key::from_partition_key(*adjusted_schema, mutations.front().key()),
+                sstables::key::from_partition_key(*adjusted_schema, mutations.back().key())
             );
             testlog.info("Finished BTI index writing");
         }

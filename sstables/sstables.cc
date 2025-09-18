@@ -2353,8 +2353,12 @@ sstable::make_reader(
         read_monitor& mon,
         integrity_check integrity) {
     const auto reversed = slice.is_reversed();
+
+    auto index_caching = use_caching(global_cache_index_pages && !slice.options.contains(query::partition_slice::option::bypass_cache));
+    auto index_reader = make_index_reader(permit, trace_state, index_caching, range.is_singular());
+
     if (_version >= version_types::mc && (!reversed || range.is_singular())) {
-        return mx::make_reader(shared_from_this(), std::move(query_schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon, integrity);
+        return mx::make_reader(shared_from_this(), std::move(query_schema), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr, mon, integrity, std::move(index_reader));
     }
 
     // Multi-partition reversed queries are not yet supported natively in the mx reader.
@@ -2365,7 +2369,7 @@ sstable::make_reader(
     if (_version >= version_types::mc) {
         // The only mx case falling through here is reversed multi-partition reader
         auto rd = make_reversing_reader(mx::make_reader(shared_from_this(), query_schema->make_reversed(), std::move(permit),
-                range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon, integrity),
+                range, reverse_slice(*query_schema, slice), std::move(trace_state), streamed_mutation::forwarding::no, fwd_mr, mon, integrity, std::move(index_reader)),
             max_result_size);
         if (fwd) {
             rd = make_forwardable(std::move(rd));
@@ -3006,18 +3010,6 @@ std::optional<std::pair<uint64_t, uint64_t>> sstable::get_index_pages_for_range(
         return std::optional<std::pair<uint64_t, uint64_t>>(std::in_place_t(), left, right);
     }
     return std::nullopt;
-}
-
-std::vector<dht::decorated_key> sstable::get_key_samples(const schema& s, const dht::token_range& range) {
-    auto index_range = get_sample_indexes_for_range(range);
-    std::vector<dht::decorated_key> res;
-    if (index_range) {
-        for (auto idx = index_range->first; idx < index_range->second; ++idx) {
-            auto pkey = _components->summary.entries[idx].get_key().to_partition_key(s);
-            res.push_back(dht::decorate_key(s, std::move(pkey)));
-        }
-    }
-    return res;
 }
 
 uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
