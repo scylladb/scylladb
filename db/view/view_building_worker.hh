@@ -129,6 +129,15 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
         future<> flush_table(view_building_worker& vbw, table_id table_id);
     };
 
+    // Wrapper which represents information needed to create
+    // `process_staging` view building task.
+    struct staging_sstable_task_info {
+        table_id table_id;
+        shard_id shard;
+        dht::token last_token;
+        foreign_ptr<sstables::shared_sstable> sst_foreign_ptr;
+    };
+
     class consumer;
 
 private:
@@ -148,7 +157,7 @@ private:
 
     condition_variable _sstables_to_register_event;
     semaphore _staging_sstables_mutex = semaphore(1);
-    std::unordered_map<table_id, std::vector<sstables::shared_sstable>> _sstables_to_register;
+    std::unordered_map<table_id, std::vector<staging_sstable_task_info>> _sstables_to_register;
     std::unordered_map<table_id, std::unordered_map<dht::token, std::vector<sstables::shared_sstable>>> _staging_sstables;
     future<> _staging_sstables_registrator = make_ready_future<>();
 
@@ -181,7 +190,7 @@ private:
     // Caller must hold units from `_staging_sstables_mutex`
     future<> create_staging_sstable_tasks();
     future<> discover_existing_staging_sstables();
-    std::unordered_map<table_id, std::vector<sstables::shared_sstable>> discover_local_staging_sstables(building_tasks building_tasks);
+    std::unordered_map<table_id, std::vector<staging_sstable_task_info>> discover_local_staging_sstables(building_tasks building_tasks);
 
     void init_messaging_service();
     future<> uninit_messaging_service();
