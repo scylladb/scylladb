@@ -60,6 +60,9 @@ enum class operation : int8_t {
     post_image = 9,
 };
 
+struct per_request_options {
+};
+
 struct operation_result_tracker;
 class db_context;
 class metadata;
@@ -89,9 +92,10 @@ public:
         lowres_clock::time_point timeout,
         utils::chunked_vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state,
-        db::consistency_level write_cl
-        );
-    bool needs_cdc_augmentation(const utils::chunked_vector<mutation>&) const;
+        db::consistency_level write_cl,
+        per_request_options&& options = {}
+    );
+    bool needs_cdc_augmentation(const utils::chunked_vector<mutation>&, const per_request_options&) const;
 };
 
 struct db_context final {
