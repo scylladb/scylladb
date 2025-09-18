@@ -2304,7 +2304,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    if (timeout <= db::timeout_clock::now()) {
+    if (timeout <= db::timeout_clock::now() || utils::get_local_injector().is_enabled("database_apply_force_timeout")) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
     }

@@ -171,3 +171,25 @@ async def test_replica_writes_do_apply_counter_update_timeout(manager: ManagerCl
         db=db,
         injection=injection
     )
+
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_replica_database_apply_timeout(manager: ManagerClient):
+    measurement = (m := Measurement())._replace(
+        cpp_exception_threshold = 20 + m.run_count * 10,
+        metric_name = "scylla_database_total_writes_timedout",
+        metric_error_threshold = m.run_count * 0.9
+    )
+    db = DB(
+        stmt_gen = lambda tbl, i: f"INSERT INTO {tbl} (p, c) VALUES ({i}, {2*i})"
+    )
+    injection = Injection(
+        name = "database_apply_force_timeout"
+    )
+
+    await _test_impl(
+        manager=manager,
+        config={},
+        measurement=measurement,
+        db=db,
+        injection=injection
+    )
