@@ -2205,6 +2205,7 @@ public:
     bool is_put_item() noexcept {
         return _cells.has_value();
     }
+    friend class put_item_operation;
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
@@ -2486,7 +2487,8 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
 }
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
-    : _request(std::move(request))
+    : _proxy(proxy)
+    , _request(std::move(request))
     , _schema(get_table_for_write(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
