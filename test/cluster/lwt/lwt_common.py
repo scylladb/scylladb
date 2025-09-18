@@ -11,6 +11,7 @@ import logging
 import random
 import re
 import time
+from collections import defaultdict
 from functools import cached_property
 from functools import wraps
 from typing import List, Dict, Callable
@@ -189,7 +190,7 @@ class BaseLWTTester:
         self.pk_to_token: Dict[int, int] = {}
         self.migrations = 0
         self.phase = "warmup"  # "warmup" -> "migrating" -> "post"
-        self.phase_ops = {"warmup": 0, "migrating": 0, "post": 0}
+        self.phase_ops = defaultdict(int)
 
     def _get_lower_bound(self, pk: int, col_idx: int) -> int:
         return self.lb_counts[pk][col_idx]
