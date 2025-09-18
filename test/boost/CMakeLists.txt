@@ -336,6 +336,7 @@ add_scylla_test(combined_tests
     sessions_test.cc
     sstable_compaction_test.cc
     sstable_compressor_factory_test.cc
+    sstable_compression_config_test.cc
     sstable_directory_test.cc
     sstable_set_test.cc
     statement_restrictions_test.cc
