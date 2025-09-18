@@ -213,7 +213,8 @@ trace_keyspace_helper::trace_keyspace_helper(tracing& tr)
 future<> trace_keyspace_helper::start(cql3::query_processor& qp, service::migration_manager& mm) {
     _qp_anchor = &qp;
     _mm_anchor = &mm;
-    return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state, { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx });
+    return table_helper::setup_keyspace(qp, mm, KEYSPACE_NAME, "org.apache.cassandra.locator.SimpleStrategy", "2", _dummy_query_state,
+            { &_sessions, &_sessions_time_idx, &_events, &_slow_query_log, &_slow_query_log_time_idx }, std::nullopt);
 }
 
 gms::inet_address trace_keyspace_helper::my_address() const noexcept {
