@@ -126,7 +126,7 @@ def test_invalid_column_name_with_ann(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int, c int, v int, PRIMARY KEY (k, c))") as table:
         assert_invalid_message(
             cql, table,
-            f"Undefined column name",
+            f"Undefined column name bad_col",
             "SELECT k FROM %s ORDER BY bad_col ANN OF [1.0] LIMIT 1"
         )
 

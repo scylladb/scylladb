@@ -2499,7 +2499,7 @@ select_statement::prepared_ann_ordering_type select_statement::prepare_ann_order
     const column_definition* def = schema.get_column_definition(column->name());
     if (!def) {
         throw exceptions::invalid_request_exception(
-                fmt::format("Undefined column name {}", column->name()));
+                fmt::format("Undefined column name {}", column->text()));
     }
 
     if (!def->type->is_vector() || static_cast<const vector_type_impl*>(def->type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
