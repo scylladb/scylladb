@@ -62,6 +62,7 @@ public:
     static void set_default_write_isolation(std::string_view mode);
 
 protected:
+    service::storage_proxy& _proxy;
     // The full request JSON
     rjson::value _request;
     // All RMW operations involve a single item with a specific partition
