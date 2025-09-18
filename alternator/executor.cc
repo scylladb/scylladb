@@ -2195,6 +2195,7 @@ public:
     bool is_put_item() noexcept {
         return _cells.has_value();
     }
+    friend class put_item_operation;
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
@@ -2476,7 +2477,8 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
 }
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
-    : _request(std::move(request))
+    : _proxy(proxy)
+    , _request(std::move(request))
     , _schema(get_table_for_write(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
@@ -2501,6 +2503,17 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
         }
     }
     return apply(std::unique_ptr<rjson::value>(), ts, cdc_opts);
+}
+
+inline void rmw_operation::maybe_update_options(const std::unique_ptr<rjson::value>& previous_item, cdc::per_request_options* cdc_opts) const {
+    if (cdc_opts) {
+        fixup_t fixup = get_cdc_operation_fixup(previous_item);
+        if (std::holds_alternative<cdc::operation>(fixup)) {
+            cdc_opts->log_operation_type_fixup.emplace(std::get<cdc::operation>(fixup));
+        } else if (std::get<desired_fixup>(fixup) == desired_fixup::skip_cdc) {
+            cdc_opts->skip_cdc = true;
+        }
+    }
 }
 
 rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
@@ -2717,6 +2730,43 @@ static void verify_all_are_used(const rjson::value* field,
 class put_item_operation : public rmw_operation {
 private:
     put_or_delete_item _mutation_builder;
+protected:
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const override {
+        // Maybe new item
+        if (!previous_item) {
+            return desired_fixup::ignore_fixup;
+        }
+        // Identical item
+        size_t previous_item_cnt = previous_item->MemberCount() - _schema->primary_key_columns().size();
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && _mutation_builder._cells->size() == previous_item_cnt) {
+            std::unordered_map<sstring, bytes> attributes;
+            std::unordered_set<sstring> keys;
+            for (const auto& [attr_name, v] : *_mutation_builder._cells) {
+                sstring attr(to_string_view(attr_name));
+                attributes[attr] = v;
+            }
+            for (const auto& cdef : _schema->primary_key_columns()) {
+                keys.insert(cdef.name_as_text());
+            }
+            bool id = true;
+            for (auto it = previous_item->MemberBegin(); it != previous_item->MemberEnd(); ++it) {
+                const auto attr_name = it->name.GetString();
+                if (keys.contains(attr_name)) {
+                    continue;
+                }
+                auto attr = attributes.find(to_sstring(attr_name));
+                if (attr == attributes.end() || serialize_item(it->value) != attr->second) {
+                    id = false;
+                    break;
+                }
+            }
+            if (id) {
+                return desired_fixup::skip_cdc;
+            }
+        }
+        // Updated item
+        return cdc::operation::update;
+    }
 public:
     parsed::condition_expression _condition_expression;
     put_item_operation(service::storage_proxy& proxy, rjson::value&& request)
@@ -2766,6 +2816,7 @@ public:
             // efficient than throwing an exception.
             return {};
         }
+        maybe_update_options(previous_item, cdc_opts);
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
         } else {

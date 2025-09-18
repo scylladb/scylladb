@@ -22,6 +22,11 @@ namespace alternator {
 
 class consumed_capacity;
 
+enum class desired_fixup : int8_t {
+    ignore_fixup, skip_cdc
+};
+using fixup_t = std::variant<cdc::operation, desired_fixup>;
+
 // An rmw_operation encapsulates the common logic of all the item update
 // operations which may involve a read of the item before the write
 // (so-called Read-Modify-Write operations). These operations include PutItem,
@@ -61,6 +66,7 @@ public:
     static void set_default_write_isolation(std::string_view mode);
 
 protected:
+    service::storage_proxy& _proxy;
     // The full request JSON
     rjson::value _request;
     // All RMW operations involve a single item with a specific partition
@@ -91,6 +97,12 @@ protected:
     // Additionally when _returnvalues_on_condition_check_failure is ALL_OLD
     // then condition check failure will also result in storing values here.
     mutable rjson::value _return_attributes;
+
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const {
+        // Keep the operation as is by default.
+        return desired_fixup::ignore_fixup;
+    }
+    void maybe_update_options(const std::unique_ptr<rjson::value>& previous_item, cdc::per_request_options* cdc_opts = nullptr) const;
 public:
     // The constructor of a rmw_operation subclass should parse the request
     // and try to discover as many input errors as it can before really
