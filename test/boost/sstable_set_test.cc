@@ -195,7 +195,7 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_copy_ctor) {
         auto& sgm = column_family_test::get_storage_group_manager(cf);
         sgm->split_all_storage_groups(tasks::task_info{}).get();
 
-        auto tablet_sstable_set = replica::make_tablet_sstable_set(cf.schema(), *sgm.get(), locator::tablet_map(8));
+        auto tablet_sstable_set = replica::make_tablet_sstable_set(cf.schema(), *sgm.get(), locator::shared_tablet_map(8));
         auto tablet_sstable_set_copy = *tablet_sstable_set.get();
         BOOST_REQUIRE(*tablet_sstable_set->all() == *tablet_sstable_set_copy.all());
         BOOST_REQUIRE_EQUAL(tablet_sstable_set->size(), tablet_sstable_set_copy.size());
@@ -320,7 +320,7 @@ SEASTAR_TEST_CASE(test_tablet_sstable_set_fast_forward_across_tablet_ranges) {
             std::ranges::sort(keys, cmp);
         }
 
-        auto set = replica::make_tablet_sstable_set(s, *sgm.get(), tmap);
+        auto set = replica::make_tablet_sstable_set(s, *sgm.get(), *tmap.shared);
 
         utils::get_local_injector().enable("enable_read_debug_log");
         testlog.info("first tablet range: {}", tmap.get_token_range(locator::tablet_id(0)));
