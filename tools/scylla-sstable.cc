@@ -2372,7 +2372,7 @@ directly expressed in CQL. Editing schema options (the part after WITH) is safe.
 
 The sstable version can be selected manually with the --sstable-version option,
 by default the latest supported version is used. Valid options are sstable
-versions which are supported for writing: mc, md and me.
+versions which are supported for writing: mc, md, me, ms.
 
 Mapping of input sstables to output sstables is printed to stdout.
 

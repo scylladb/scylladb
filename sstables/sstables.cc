@@ -197,6 +197,7 @@ const std::unordered_map<sstable_version_types, sstring, enum_hash<sstable_versi
     { sstable_version_types::mc , "mc" },
     { sstable_version_types::md , "md" },
     { sstable_version_types::me , "me" },
+    { sstable_version_types::ms , "ms" },
 };
 
 const std::unordered_map<sstable_format_types, sstring, enum_hash<sstable_format_types>> format_string = {
@@ -2447,6 +2448,7 @@ sstring sstable::component_basename(const sstring& ks, const sstring& cf, versio
     case sstable::version_types::mc:
     case sstable::version_types::md:
     case sstable::version_types::me:
+    case sstable::version_types::ms:
         return v + "-" + g + "-" + f + "-" + component;
     }
     on_internal_error(sstlog, seastar::format("invalid version {} for sstable: table={}.{}, generation={}, format={}, component={}",
@@ -2586,7 +2588,7 @@ static std::tuple<entry_descriptor, sstring, sstring> make_entry_descriptor(cons
     //   la-42-big-Data.db
     //   ka-42-big-Data.db
     //   me-3g8w_00qf_4pbog2i7h2c7am0uoe-big-Data.db
-    static boost::regex la_mx("(la|m[cde])-([^-]+)-(\\w+)-(.*)");
+    static boost::regex la_mx("(la|m[cdes])-([^-]+)-(\\w+)-(.*)");
     static boost::regex ka("(\\w+)-(\\w+)-ka-(\\d+)-(.*)");
 
     // Use non-greedy match so that a snapshot tag that ressembles a name-<uuid> wouldn't match
@@ -2668,6 +2670,10 @@ sstable_format_types format_from_string(std::string_view s) {
     } catch (std::out_of_range&) {
         throw std::out_of_range(seastar::format("Unknown sstable format: {}", s));
     }
+}
+
+bool has_summary_and_index(sstable_version_types v) {
+    return v != sstable_version_types::ms;
 }
 
 component_type sstable::component_from_sstring(version_types v, const sstring &s) {

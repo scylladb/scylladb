@@ -61,7 +61,7 @@ sub-directories as documented below.
 SSTables are comprised of multiple component files.
 The component file names are self-identifying and denote the component type, as well as per-sstable-format metadata.
 
-Here are the different component types and their naming convention:
+Here are the different component types:
 
 * Data (`Data.db`)  
   The SSTable data file, containing a part of the actual data stored in the database.
@@ -107,13 +107,29 @@ Here are the different component types and their naming convention:
 * Scylla (`Scylla.db`)  
   A file holding scylla-specific metadata about the SSTable, such as sharding information, extended features support, and sstabe-run identifier.
 
+
+* Partition Key Index (`Partitions.db`)  
+  Trie-based index of partition keys with pointers to their positions in the data file, or to a intra-partition index in Rows.db.
+
+
+* Clustering Key Index (`Rows.db`)  
+  Trie-based index of clustering keys within partitions. Used in conjunction with `Partitions.db`
+  as a replacement for `Index.db` and `Summary.db` in newest sstable formats.
+  (`da` in Cassandra, `ms` in Scylla).
+
+
+* Temporary partition key hashes (`TemporaryHashes.db`)  
+  A temporary file used for storing intermediate ingredients for the bloom filter.
+  This file appears only during write, and is deleted before the sstable is sealed.
+
 ### SSTable Format Version
 
 SSTable's on-disk format has changed over time.
-Three versions are currently supported by Scylla: `ka`, `la`, and `mc`.
+The versions currently supported by Scylla are: `ka`, `la`, `mc`, `md`, `me`, `ms`.
 Cassandra's convention is that the first letter determines
 the major format version, in ascending order, and the second letter -
 the minor version, starting from `a` onward.
+(`ms` is a Scylla-specific extension of `me`, so it breaks away from the `mc`-`me` series).
 
 The SSTable file names identify the SSTable format version.
 In addition, they provide the SSTable generation number and other metadata.
@@ -129,8 +145,10 @@ and it is version specific, as follows:
 
 where:
 * `<generation>` is the SSTable generation - a unique positive number identifying the SSTable.
-* `<big>` is an archaic attribute that identifies the SSTable sub-format.  
-  (Only `big` sub-format is supported by Scylla (and Cassandra) at this time.)
+* `<big>` is an attribute that identifies the SSTable sub-format.
+  (Only `big` sub-format is supported by Scylla at this time.
+  Cassandra 5.0 introduced `bti` (which stands for `BIG, trie-indexed`).
+  Version `ms` is a hybrid between `big` and `bti`).
 * `<component>` is the file's component type, as described above.
 
 ### Table Sub-directories
