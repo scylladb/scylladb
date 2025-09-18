@@ -462,7 +462,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // missing primary_keys in the reply - service should return format error
                 ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
-                            R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
+                        R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
                 auto const now = lowres_clock::now();
                 for (;;) {
                     as.reset();
@@ -505,16 +505,16 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of pk2 key in the reply - service should return format error
-                ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
-                        R"({"primary_keys":{"pk1":[5,6],"pk2":[78],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
+                ann_replies->emplace(std::make_tuple(
+                        R"({"vector":[0.1,0.2,0.3],"limit":2})", R"({"primary_keys":{"pk1":[5,6],"pk2":[78],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
                 as.reset();
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of ck2 key in the reply - service should return format error
-                ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
-                        R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[23]},"distances":[0.1,0.2]})"));
+                ann_replies->emplace(std::make_tuple(
+                        R"({"vector":[0.1,0.2,0.3],"limit":2})", R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[23]},"distances":[0.1,0.2]})"));
                 as.reset();
                 keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
                 BOOST_REQUIRE(!keys);
