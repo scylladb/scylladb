@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 """Conftest for Scylla GDB tests"""
 import os
-import subprocess
 
+import pexpect
 import pytest
 
 from test.cqlpy import run
@@ -40,23 +40,18 @@ def gdb_config(scylla_pid, request):
     Imports scylla-gdb.py to the GDB
     """
     scylla_gdb_py = os.path.join(request.fspath.dirname, '..', '..', 'scylla-gdb.py')
-    args = [
-        "gdb",
-        "-batch",
-        "-n",
-        "-se",
-        run.scylla,
-        "-p",
-        str(scylla_pid),
-        "-ex",
-        "set auto-load safe-path /",
-        "-ex",
-        "set python print-stack full",
-        "-x",
-        scylla_gdb_py,
-    ]
-
-    return args
+    cmd = f"gdb -q -se {run.scylla} -p {str(scylla_pid)} -ex set python print-stack full -x {scylla_gdb_py}"
+    # cmd = (
+    #     f"gdb -se {run.scylla} "
+    #     '-ex "set python print-stack full" '
+    #     '-ex "set pagination off" '
+    #     "-ex \"python import gdb as gdb_library; import importlib; save_sys_path = sys.path; sys.path.insert(1, '/home/jsmolar/ScyllaDB/scylladb/'); importlib.import_module('scylla-gdb'); sys.path = save_sys_path\" "
+    #     f"-ex \"python gdb_library.execute('attach {scylla_pid}')\""
+    # )
+    child = pexpect.spawn(cmd, maxread=10, searchwindowsize=10)
+    child.sendline("y")     # confirms debug symbols used by scylla
+    child.expect_exact("(gdb)")
+    return child
 
 
 @pytest.fixture(scope="package")
@@ -65,31 +60,27 @@ def gdb_execute(gdb_config):
     Executes GDB commands in the context of the configured Scylla process.
     """
 
-    def _execute(command: str = None, args: str = None, assert_response: bool = True):
+    def _execute(command: str = None, full_command: str = None, skip_lines = 0):
         """
         Args:
             command (str, optional): A GDB command to execute.
             args (list, optional): Additional GDB arguments.
             assert_response (bool, optional): Assert GDB response returncode and stderr/
         """
-        if args is None:
-            args = []
-        if command is None:
-            command = []
-        else:
-            command = ["-ex", f'python print(gdb.execute("scylla {command}"))']
+        command = f"python gdb.execute('scylla {command}')"
+        if full_command:
+            command = full_command
 
-        args = gdb_config + args + command
-        result = subprocess.run(args, capture_output=True, text=True)
+        gdb_config.sendline(command)
+        try:
+            gdb_config.expect_exact("(gdb)", timeout=120)
+        except pexpect.exceptions.TIMEOUT:
+            gdb_config.sendcontrol("c")
+            gdb_config.expect_exact("(gdb)", timeout=0.1)
+            pytest.fail("GDB command did not complete within the timeout period")
+        result = gdb_config.before.decode('utf-8')
 
-        if assert_response:
-            assert (
-                result.stderr == ""
-            ), f"GDB command produced unexpected error output: {result.stderr}"
-            assert (
-                result.returncode == 0
-            ), f"GDB command failed with return code {result.returncode}"
-
+        assert "Error" not in result
         return result
 
     return _execute

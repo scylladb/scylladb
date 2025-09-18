@@ -10,12 +10,14 @@ import pytest
 import re
 
 
-a = """python
-db = sharded(gdb.parse_and_eval('::debug::the_database')).local()
-table = next(for_each_table(db))
-ptr = seastar_lw_shared_ptr(table['_schema']).get()
-print('schema=', ptr)  # Cast added since GDB string shows only address, not type
-"""
+schema_config = (
+    "python\n"
+    "db = sharded(gdb.parse_and_eval('::debug::the_database')).local()\n"
+    "table = next(for_each_table(db))\n"
+    "ptr = seastar_lw_shared_ptr(table['_schema']).get()\n"
+    "print('schema=', ptr)\n"
+    "end"
+)
 
 
 @pytest.fixture(scope="module")
@@ -24,10 +26,9 @@ def schema(gdb_execute):
     Returns pointer to schema of the first table it finds
     Even without any user tables, we will always have system tables.
     """
-    args = ["-ex", a]
-    result = gdb_execute(args=args)
-    match = re.search(r"schema=\s*(.*)", result.stdout)
-    assert match, "Failed to find schema pointer in response"
+    result = gdb_execute(full_command=schema_config)
+    match = re.search(r"schema=\s*(0x[0-9a-fA-F]+)", result)
+    assert match, f"Failed to find schema pointer in response: {result}"
     schema_pointer = match.group(1) if match else None
 
     return schema_pointer
