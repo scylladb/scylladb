@@ -2040,7 +2040,7 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
 }
 
 future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
-    if (timeout <= db::timeout_clock::now()) {
+    if (timeout <= db::timeout_clock::now() || utils::get_local_injector().is_enabled("database_apply_counter_update_force_timeout")) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
