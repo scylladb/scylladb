@@ -42,10 +42,11 @@ async def test_streaming_deadlock_removenode(request, manager: ManagerClient):
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.test "
                             "WHERE c IS NOT NULL and pk IS NOT NULL PRIMARY KEY (c, pk)")
 
-        keys = range(10240)
+        keys = range(1024)
         val = random_string(10240)
         stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c, v) VALUES (?, ?, '{val}')")
-        await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
+        for _ in range(10):
+            await asyncio.gather(*[cql.run_async(stmt, [k, k]) for k in keys])
 
         await manager.server_stop_gracefully(servers[0].server_id)
         await manager.remove_node(servers[1].server_id, servers[0].server_id)
