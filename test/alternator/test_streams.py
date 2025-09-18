@@ -1404,7 +1404,7 @@ def test_streams_1_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams)
 def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams):
     do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates_1, 'OLD_IMAGE')
 
-@pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
+# @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
 def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
         do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
