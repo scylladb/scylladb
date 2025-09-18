@@ -13,7 +13,7 @@ def test_system_uptime_ms(rest_api):
 def test_system_highest_sstable_format(rest_api):
     resp = rest_api.send('GET', "system/highest_supported_sstable_version")
     resp.raise_for_status()
-    assert resp.json() == "me"
+    assert resp.json() == "ms"
 
 @pytest.mark.parametrize("params", [
     ("storage_service/compaction_throughput", "value"),
