@@ -25,6 +25,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
+#include "gms/feature_service.hh"
 #include "schema/schema.hh"
 #include "schema/schema_builder.hh"
 #include "service/migration_listener.hh"
@@ -171,21 +172,40 @@ public:
         });
     }
 
-    void on_before_create_column_family(const keyspace_metadata& ksm, const schema& schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
-        if (schema.cdc_options().enabled()) {
+    virtual void on_before_allocate_tablet_map(const locator::tablet_map& map, const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) override {
+        if (!is_log_schema(s)) {
+            return;
+        }
+
+        auto stream_ts = db_clock::now() - duration_cast<std::chrono::milliseconds>(get_generation_leeway());
+        auto mut = create_table_streams_mutation(s.id(), stream_ts, map, ts).get();
+        muts.emplace_back(std::move(mut));
+    }
+
+    void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) override {
+        std::vector<schema_ptr> new_cfms;
+
+        for (auto sp : cfms) {
+            const auto& schema = *sp;
+
+            if (!schema.cdc_options().enabled()) {
+                continue;
+            }
+
             auto& db = _ctxt._proxy.get_db().local();
             auto logname = log_name(schema.cf_name());
             check_that_cdc_log_table_does_not_exist(db, schema, logname);
             ensure_that_table_has_no_counter_columns(schema);
-            ensure_that_table_uses_vnodes(ksm, schema);
+            if (!db.features().cdc_with_tablets) {
+                ensure_that_table_uses_vnodes(ksm, schema);
+            }
 
             // in seastar thread
             auto log_schema = create_log_schema(schema, db, ksm);
-
-            auto log_mut = db::schema_tables::make_create_table_mutations(log_schema, timestamp);
-
-            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            new_cfms.push_back(std::move(log_schema));
         }
+
+        cfms.insert(cfms.end(), std::make_move_iterator(new_cfms.begin()), std::make_move_iterator(new_cfms.end()));
     }
 
     void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) override {
@@ -215,7 +235,7 @@ public:
                 // make sure the apparent log table really is a cdc log (not user table)
                 // we just check the partitioner - since user tables should _not_ be able
                 // set/use this.
-                if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
+                if (!is_log_schema(*log_schema)) {
                     // will throw
                     check_that_cdc_log_table_does_not_exist(db, old_schema, logname);
                 }
@@ -223,7 +243,9 @@ public:
 
             check_for_attempt_to_create_nested_cdc_log(db, new_schema);
             ensure_that_table_has_no_counter_columns(new_schema);
-            ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
+            if (!db.features().cdc_with_tablets) {
+                ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
+            }
 
             std::optional<table_id> maybe_id = log_schema ? std::make_optional(log_schema->id()) : std::nullopt;
             auto new_log_schema = create_log_schema(new_schema, db, *keyspace.metadata(), std::move(maybe_id), log_schema);
@@ -234,6 +256,10 @@ public:
                 ;
 
             mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+
+            if (!log_schema) {
+                db.get_notifier().before_create_column_family(*keyspace.metadata(), *new_log_schema, mutations, timestamp);
+            }
         }
     }
 
@@ -243,12 +269,41 @@ public:
         auto has_cdc_log = db.has_schema(schema.ks_name(), logname);
         if (has_cdc_log) {
             auto log_schema = db.find_schema(schema.ks_name(), logname);
-            if (log_schema->get_partitioner().name() != cdc::cdc_partitioner::classname) {
-                return;
+            if (is_log_schema(*log_schema)) {
+                auto& keyspace = db.find_keyspace(schema.ks_name());
+                auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
+                mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+
+                db.get_notifier().before_drop_column_family(*log_schema, mutations, timestamp);
             }
+        }
+
+        if (is_log_schema(schema)) {
             auto& keyspace = db.find_keyspace(schema.ks_name());
-            auto log_mut = db::schema_tables::make_drop_table_mutations(keyspace.metadata(), log_schema, timestamp);
-            mutations.insert(mutations.end(), std::make_move_iterator(log_mut.begin()), std::make_move_iterator(log_mut.end()));
+            if (keyspace.uses_tablets()) {
+                // drop cdc streams of this table
+                auto drop_stream_mut = make_drop_table_streams_mutations(schema.id(), timestamp);
+                mutations.insert(mutations.end(), std::make_move_iterator(drop_stream_mut.begin()), std::make_move_iterator(drop_stream_mut.end()));
+            }
+        }
+    }
+
+    void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) override {
+        auto& db = _ctxt._proxy.get_db().local();
+        auto& ks = db.find_keyspace(keyspace_name);
+
+        if (ks.uses_tablets()) {
+            // drop cdc streams for all CDC tables in this keyspace
+            for (auto&& [name, s] : ks.metadata()->cf_meta_data()) {
+                seastar::thread::maybe_yield();
+
+                if (!is_log_schema(*s)) {
+                    continue;
+                }
+
+                auto drop_stream_mut = make_drop_table_streams_mutations(s->id(), ts);
+                mutations.insert(mutations.end(), std::make_move_iterator(drop_stream_mut.begin()), std::make_move_iterator(drop_stream_mut.end()));
+            }
         }
     }
 
@@ -293,7 +348,7 @@ private:
     static void ensure_that_table_uses_vnodes(const keyspace_metadata& ksm, const schema& schema) {
         auto rs = generate_replication_strategy(ksm);
         if (rs->uses_tablets()) {
-            throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because keyspace uses tablets. See issue #16317.",
+            throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because the keyspace uses tablets, and not all nodes support the CDC with tablets feature.",
                 schema.ks_name(), schema.cf_name()));
         }
     }
@@ -445,6 +500,10 @@ bool cdc_enabled(const schema& s) {
 
 bool is_log_name(const std::string_view& table_name) {
     return table_name.ends_with(cdc_log_suffix);
+}
+
+bool is_log_schema(const schema& s) {
+    return s.get_partitioner().name() == cdc::cdc_partitioner::classname;
 }
 
 bool is_cdc_metacolumn_name(const sstring& name) {
@@ -1506,6 +1565,8 @@ private:
     row_states_map _clustering_row_states;
     cell_map _static_row_state;
 
+    const bool _uses_tablets;
+
     utils::chunked_vector<mutation> _result_mutations;
     std::optional<log_mutation_builder> _builder;
 
@@ -1521,12 +1582,13 @@ public:
         , _dk(std::move(dk))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
+        , _uses_tablets(ctx._proxy.get_db().local().find_keyspace(_schema->ks_name()).uses_tablets())
     {
     }
 
     // DON'T move the transformer after this
     void begin_timestamp(api::timestamp_type ts, bool is_last) override {
-        const auto stream_id = _ctx._cdc_metadata.get_stream(ts, _dk.token());
+        const auto stream_id = _uses_tablets ? _ctx._cdc_metadata.get_tablet_stream(_log_schema->id(), ts, _dk.token()) : _ctx._cdc_metadata.get_vnode_stream(ts, _dk.token());
         _result_mutations.emplace_back(_log_schema, stream_id.to_partition_key(*_log_schema));
         _builder.emplace(_result_mutations.back(), ts, _dk.key(), *_schema);
         _enable_updating_state = _schema->cdc_options().postimage() || (!is_last && _schema->cdc_options().preimage());

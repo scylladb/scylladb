@@ -25,10 +25,10 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
         Reproduces #24952
     """
 
-    servers = await manager.servers_add(3)
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
     cql = manager.get_cql()
 
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true}}")
 
         # sleep before CDC augmentation, because we want to have a write that starts with some base schema, and then

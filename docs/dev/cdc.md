@@ -27,7 +27,7 @@ The `index` bits indicate the vnode index the id belongs to, i.e. the vnode owni
 The random bits exist to help ensure ids are sufficiently unique across
 generations.
 
-### Generations
+### Generations (vnodes)
 A __CDC generation__ is a structure consisting of:
 1. a __generation timestamp__, describing the time point from which this generation "starts operating" (more on that later),
 2. a set of stream IDs,
@@ -220,7 +220,7 @@ Note that writing only to the previous generation might not be enough. With the 
 
 We allow writes only to the recent past to reduce the number of generations that must be stored in memory.
 
-### Streams description tables
+### Streams description tables for vnodes
 
 The `cdc_streams_descriptions_v2` table in the `system_distributed` keyspace allows CDC clients to learn about available sets of streams and the time intervals they are operating at. It's definition is as follows (db/system_distributed_keyspace.cc):
 ```
@@ -324,3 +324,48 @@ In order to prevent new nodes to do the rewriting (we only want upgrading nodes 
 
 #### TODO: expired generations
 The `expired` column in `cdc_generation_timestamps` means that this generation was superseded by some new generation and will soon be removed (its table entry will be gone). This functionality is yet to be implemented.
+
+### Streams description tables for tablets
+
+For tablet-based keyspaces, CDC stream metadata is managed using several internal tables in the `system` keyspace, and this information is also exposed to users via virtual tables in a more convenient interface.
+
+#### Internal tables
+
+These tables are used internally by ScyllaDB to manage the lifecycle and state of CDC streams for tablet-based keyspaces.
+
+- **`system.cdc_streams_state`**:
+  Holds the oldest (initial) timestamp and the set of CDC streams for each table. This represents the starting point for CDC streams in the table.
+
+- **`system.cdc_streams_history`**:
+  Whenever the set of streams for a table changes, a new timestamp and the difference from the previous state (opened and closed streams) are appended to this table. Each entry records which streams were opened or closed at a given timestamp, allowing reconstruction of the stream set at any point in time.
+
+#### Virtual tables
+
+These virtual tables present the CDC stream information in a user-friendly format, allowing CDC consumers to efficiently discover available streams and their validity intervals.
+
+- **`system.cdc_timestamps`**:
+  Lists all timestamps at which CDC stream sets were created for each table. Each row represents a point in time when the set of CDC streams for a table changed.
+
+- **`system.cdc_streams`**:
+  Exposes the actual CDC streams for each table and timestamp, including the stream state (opened, closed, current) and stream identifier.
+
+##### The `stream_state` column
+
+The `stream_state` column is used to indicate the state of each CDC stream in a given timestamp. It uses the following enum values:
+```cpp
+enum class stream_state : int8_t {
+    current = 0,
+    closed = 1,
+    opened = 2,
+};
+```
+- **current (0):** The stream is currently active for the table at the given timestamp.
+- **closed (1):** The stream was closed at this timestamp (i.e., it was present in the previous timestamp, but is no longer active).
+- **opened (2):** The stream was opened at this timestamp (i.e., it became active starting from this timestamp).
+
+In the `cdc_streams_history` table, only `opened` and `closed` states are recorded to represent the difference in streams between timestamps.
+In the `cdc_streams` virtual table, the `stream_state` column is used to display:
+- the current streams for each table and timestamp (`current`),
+- the streams that were opened or closed at this timestamp compared to the previous one (`opened`, `closed`).
+
+This allows CDC consumers to track the lifecycle of streams and reconstruct the set of active streams at any point in time.

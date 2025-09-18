@@ -113,8 +113,8 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
         if (rs->uses_tablets()) {
             warnings.push_back(
                 "Tables in this keyspace will be replicated using Tablets "
-                "and will not support Materialized Views, Secondary Indexes, CDC and counters features. "
-                "To use Materialized Views, Secondary Indexes, CDC or counters, drop this keyspace and re-create it "
+                "and will not support Materialized Views, Secondary Indexes and counters features. "
+                "To use Materialized Views, Secondary Indexes or counters, drop this keyspace and re-create it "
                 "without tablets by adding AND TABLETS = {'enabled': false} to the CREATE KEYSPACE statement.");
             if (ksm->initial_tablets().value()) {
                 warnings.push_back("Keyspace `initial` tablets option is deprecated.  Use per-table tablet options instead.");

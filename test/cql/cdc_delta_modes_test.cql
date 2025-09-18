@@ -1,7 +1,5 @@
--- CDC and tablets are not working together yet, turn them off.
 CREATE KEYSPACE ks
-    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
-    tablets = {'enabled': false};
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 USE ks;
 
 create table tb2 (pk int, ck int, i1 int, PRIMARY KEY (pk, ck)) with cdc = {'enabled': true, 'preimage': true, 'postimage': true, 'delta': 'keys'};

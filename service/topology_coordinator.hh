@@ -46,6 +46,10 @@ namespace raft {
 class server;
 }
 
+namespace cdc {
+class generation_service;
+}
+
 namespace service {
 
 class raft_group0;
@@ -87,6 +91,7 @@ future<> run_topology_coordinator(
         service::topology_state_machine& topo_sm, db::view::view_building_state_machine& vb_sm, seastar::abort_source& as, raft::server& raft,
         raft_topology_cmd_handler_type raft_topology_cmd_handler,
         tablet_allocator& tablet_allocator,
+        cdc::generation_service& cdc_gens,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
         gms::feature_service& feature_service,

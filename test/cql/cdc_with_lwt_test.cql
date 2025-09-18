@@ -1,8 +1,6 @@
 -- Error messages contain a keyspace name. Make the output stable.
--- CDC and tablets are not working together yet, turn them off.
 CREATE KEYSPACE ks
-    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND
-    tablets = {'enabled': false};
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 
 CREATE TABLE ks.tbl_cdc_lwt (pk int, ck int, val int, PRIMARY KEY(pk, ck)) WITH cdc = {'enabled':true, 'preimage':true};
 

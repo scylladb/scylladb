@@ -25,6 +25,7 @@
 #include "sstables/sstables_registry.hh"
 #include <seastar/core/distributed.hh>
 #include "cdc/generation_id.hh"
+#include "cdc/generation.hh"
 #include "locator/host_id.hh"
 #include "virtual_tables.hh"
 #include "types/types.hh"
@@ -190,6 +191,8 @@ public:
     static constexpr auto TOPOLOGY_REQUESTS = "topology_requests";
     static constexpr auto SSTABLES_REGISTRY = "sstables";
     static constexpr auto CDC_GENERATIONS_V3 = "cdc_generations_v3";
+    static constexpr auto CDC_STREAMS_STATE = "cdc_streams_state";
+    static constexpr auto CDC_STREAMS_HISTORY = "cdc_streams_history";
     static constexpr auto TABLETS = "tablets";
     static constexpr auto SERVICE_LEVELS_V2 = "service_levels_v2";
     static constexpr auto VIEW_BUILD_STATUS_V2 = "view_build_status_v2";
@@ -286,6 +289,8 @@ public:
     static schema_ptr topology_requests();
     static schema_ptr sstables_registry();
     static schema_ptr cdc_generations_v3();
+    static schema_ptr cdc_streams_state();
+    static schema_ptr cdc_streams_history();
     static schema_ptr tablets();
     static schema_ptr service_levels_v2();
     static schema_ptr view_build_status_v2();
@@ -594,6 +599,9 @@ public:
 
     future<bool> cdc_is_rewritten();
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
+
+    future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f);
+    future<> read_cdc_streams_history(table_id table, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
 
     // Load Raft Group 0 id from scylla.local
     future<utils::UUID> get_raft_group0_id();

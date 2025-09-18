@@ -959,6 +959,10 @@ future<> storage_service::compression_dictionary_updated_callback(std::string_vi
     return _compression_dictionary_updated_callback(name);
 }
 
+future<> storage_service::load_cdc_streams(std::optional<std::unordered_set<table_id>> changed_tables) {
+    co_await _cdc_gens.local().load_cdc_tablet_streams(std::move(changed_tables));
+}
+
 // Moves the coroutine lambda onto the heap and extends its
 // lifetime until the resulting future is completed.
 // This allows to use captures in coroutine lambda after co_await-s.
@@ -1189,6 +1193,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     _sys_ks.local(), _db.local(), *_group0, _topology_state_machine, _view_building_state_machine, *as, raft,
                     std::bind_front(&storage_service::raft_topology_cmd_handler, this),
                     _tablet_allocator.local(),
+                    _cdc_gens.local(),
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service,
@@ -7499,6 +7504,10 @@ void storage_service::init_messaging_service() {
                 if (ss._feature_service.view_building_coordinator) {
                     additional_tables.push_back(db::system_keyspace::view_building_tasks()->id());
                 }
+                if (ss._feature_service.cdc_with_tablets) {
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
+                    additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
@@ -8062,6 +8071,18 @@ future<> storage_service::register_protocol_server(protocol_server& server, bool
     if (start_instantly) {
         co_await server.start_server();
     }
+}
+
+std::vector<table_id> storage_service::get_tables_with_cdc_tablet_streams() const {
+    return _cdc_gens.local().get_cdc_metadata().get_tables_with_cdc_tablet_streams();
+}
+
+future<> storage_service::query_cdc_timestamps(table_id table, bool ascending, noncopyable_function<future<>(db_clock::time_point)> f) {
+    return _cdc_gens.local().query_cdc_timestamps(table, ascending, std::move(f));
+}
+
+future<> storage_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
+    return _cdc_gens.local().query_cdc_streams(table, std::move(f));
 }
 
 } // namespace service

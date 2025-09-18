@@ -176,3 +176,6 @@
 
 # Fixed typo in the file name
 /stable/operating-scylla/nodetool-commands/enbleautocompaction.html: /stable/operating-scylla/nodetool-commands/enableautocompaction.html
+
+# Rename the CDC Stream Generations page
+/stable/features/cdc/cdc-stream-generations.html: /stable/features/cdc/cdc-stream-changes.html
