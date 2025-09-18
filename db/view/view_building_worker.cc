@@ -104,7 +104,7 @@ view_building_worker::view_building_worker(replica::database& db, db::system_key
     init_messaging_service();
 }
 
-void view_building_worker::start_backgroud_fibers() {
+void view_building_worker::start_background_fibers() {
     SCYLLA_ASSERT(this_shard_id() == 0);
     _staging_sstables_registrator = run_staging_sstables_registrator();
     _view_building_state_observer = run_view_building_state_observer();

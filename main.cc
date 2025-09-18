@@ -2430,7 +2430,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "starting view building worker's background fibers");
             with_scheduling_group(maintenance_scheduling_group, [&] {
-                view_building_worker.local().start_backgroud_fibers();
+                view_building_worker.local().start_background_fibers();
             }).get();
             auto drain_view_buiding_worker = defer_verbose_shutdown("draining view building worker", [&] {
                 view_building_worker.invoke_on_all(&db::view::view_building_worker::drain).get();
