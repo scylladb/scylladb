@@ -5202,14 +5202,16 @@ SEASTAR_TEST_CASE(test_user_based_sla_queries) {
         e.execute_cql("ALTER SERVICE_LEVEL sl_1 WITH SHARES = 111;").get();
         msg = e.execute_cql("LIST ALL SERVICE_LEVELS;").get();
         assert_that(msg).is_rows().with_rows({
-            {utf8_type->decompose("sl_1"), {}, {}, int32_type->decompose(111), utf8_type->decompose("35.69%")},
-            {utf8_type->decompose("sl_2"), {}, {}, int32_type->decompose(200), utf8_type->decompose("64.31%")},
+            {utf8_type->decompose("driver"), {}, {utf8_type->decompose("batch")}, int32_type->decompose(200), utf8_type->decompose("39.14%")},
+            {utf8_type->decompose("sl_1"), {}, {}, int32_type->decompose(111), utf8_type->decompose("21.72%")},
+            {utf8_type->decompose("sl_2"), {}, {}, int32_type->decompose(200), utf8_type->decompose("39.14%")},
         });
         //drop service levels
         e.execute_cql("DROP SERVICE_LEVEL sl_1;").get();
         msg = e.execute_cql("LIST ALL SERVICE_LEVELS;").get();
         assert_that(msg).is_rows().with_rows({
-            {utf8_type->decompose("sl_2"), {}, {}, int32_type->decompose(200), utf8_type->decompose("100.00%")},
+            {utf8_type->decompose("driver"), {}, {utf8_type->decompose("batch")}, int32_type->decompose(200), utf8_type->decompose("50.00%")},
+            {utf8_type->decompose("sl_2"), {}, {}, int32_type->decompose(200), utf8_type->decompose("50.00%")},
         });
 
         // validate exceptions (illegal requests)

@@ -1197,6 +1197,7 @@ future<> storage_service::raft_state_monitor_fiber(raft::server& raft, gate::hol
                     get_ring_delay(),
                     _lifecycle_notifier,
                     _feature_service,
+                    _sl_controller.local(),
                     _topology_cmd_rpc_tracker);
         }
     } catch (...) {
@@ -1368,6 +1369,11 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
     insert_join_request_mutations.emplace_back(std::move(sl_status_mutation));
 
     insert_join_request_mutations.emplace_back(co_await _sys_ks.local().make_auth_version_mutation(write_timestamp, db::system_keyspace::auth_version_t::v2));
+
+    auto sl_driver_mutations = co_await qos::service_level_controller::get_create_driver_service_level_mutations(_sys_ks.local(), write_timestamp);
+    for (auto& m : sl_driver_mutations) {
+        insert_join_request_mutations.emplace_back(m);
+    }
 
     if (!utils::get_local_injector().is_enabled("skip_vb_v2_version_mut")) {
         insert_join_request_mutations.emplace_back(
@@ -7529,6 +7535,11 @@ void storage_service::init_messaging_service() {
 
                 mutations.reserve(mutations.size() + muts.size());
                 std::move(muts.begin(), muts.end(), std::back_inserter(mutations));
+            }
+
+            auto sl_driver_created_mut = co_await ss._sys_ks.local().get_service_level_driver_created_mutation();
+            if (sl_driver_created_mut) {
+                mutations.push_back(canonical_mutation(*sl_driver_created_mut));
             }
 
             auto sl_version_mut = co_await ss._sys_ks.local().get_service_levels_version_mutation();

@@ -691,8 +691,11 @@ public:
     future<topology_requests_entries> get_node_ops_request_entries(db_clock::time_point end_time_limit);
 
 public:
+    future<std::optional<bool>> get_service_level_driver_created();
+    future<mutation> make_service_level_driver_created_mutation(bool is_created, api::timestamp_type timestamp);
+    future<std::optional<mutation>> get_service_level_driver_created_mutation();
+
     future<std::optional<int8_t>> get_service_levels_version();
-    
     future<mutation> make_service_levels_version_mutation(int8_t version, api::timestamp_type timestamp);
     future<std::optional<mutation>> get_service_levels_version_mutation();
 
