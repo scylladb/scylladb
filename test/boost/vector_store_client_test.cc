@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "service/vector_store_client.hh"
+#include "vector_search/vector_store_client.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/select_statement.hh"
@@ -33,8 +33,8 @@ namespace {
 
 using namespace seastar;
 
-using vector_store_client = service::vector_store_client;
-using vector_store_client_tester = service::vector_store_client_tester;
+using vector_store_client = vector_search::vector_store_client;
+using vector_store_client_tester = vector_search::vector_store_client_tester;
 using config = vector_store_client::config;
 using configuration_exception = exceptions::configuration_exception;
 using inet_address = seastar::net::inet_address;
@@ -132,10 +132,10 @@ auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) 
 }
 
 class configure {
-    std::reference_wrapper<service::vector_store_client> vs_ref;
+    std::reference_wrapper<vector_search::vector_store_client> vs_ref;
 
 public:
-    explicit configure(service::vector_store_client& vs)
+    explicit configure(vector_search::vector_store_client& vs)
         : vs_ref(vs) {
         with_dns_refresh_interval(seconds(2));
         with_wait_for_client_timeout(milliseconds(100));

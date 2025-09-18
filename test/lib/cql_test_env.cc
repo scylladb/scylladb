@@ -176,7 +176,7 @@ private:
     sharded<gms::gossip_address_map> _gossip_address_map;
     sharded<service::direct_fd_pinger> _fd_pinger;
     sharded<cdc::cdc_service> _cdc;
-    sharded<service::vector_store_client> _vector_store_client;
+    sharded<vector_search::vector_store_client> _vector_store_client;
     db::config* _db_config;
 
     service::raft_group0_client* _group0_client;

@@ -34,21 +34,21 @@ namespace {
 
 using namespace std::chrono_literals;
 
-using ann_error = service::vector_store_client::ann_error;
+using ann_error = vector_search::vector_store_client::ann_error;
 using configuration_exception = exceptions::configuration_exception;
 using duration = lowres_clock::duration;
-using vs_vector = service::vector_store_client::vs_vector;
-using limit = service::vector_store_client::limit;
-using host_name = service::vector_store_client::host_name;
+using vs_vector = vector_search::vector_store_client::vs_vector;
+using limit = vector_search::vector_store_client::limit;
+using host_name = vector_search::vector_store_client::host_name;
 using http_path = sstring;
 using inet_address = seastar::net::inet_address;
 using json_content = sstring;
 using milliseconds = std::chrono::milliseconds;
 using operation_type = httpd::operation_type;
-using port_number = service::vector_store_client::port_number;
-using primary_key = service::vector_store_client::primary_key;
-using primary_keys = service::vector_store_client::primary_keys;
-using service_reply_format_error = service::vector_store_client::service_reply_format_error;
+using port_number = vector_search::vector_store_client::port_number;
+using primary_key = vector_search::vector_store_client::primary_key;
+using primary_keys = vector_search::vector_store_client::primary_keys;
+using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
 using tcp_keepalive_params = net::tcp_keepalive_params;
 using time_point = lowres_clock::time_point;
 
@@ -303,7 +303,7 @@ sstring response_content_to_sstring(const std::vector<temporary_buffer<char>>& b
 
 } // namespace
 
-namespace service {
+namespace vector_search {
 
 struct vector_store_client::impl {
 
@@ -650,4 +650,4 @@ auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abor
     co_return client.value()->addr();
 }
 
-} // namespace service
+} // namespace vector_search
