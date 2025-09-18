@@ -1624,7 +1624,9 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto output_dir = vm["output-dir"].as<std::string>();
     auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
     auto format = sstables::sstable_format_types::big;
-    auto version = manager.get_preferred_sstable_version();
+    auto version = vm.contains("sstable-version")
+        ? version_from_string(vm["sstable-version"].as<std::string>())
+        : manager.get_preferred_sstable_version();
 
     {
         auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
@@ -2291,6 +2293,7 @@ for more information on this operation, including the schema of the JSON input.
                     typed_option<std::string>("input-file", "the file containing the input"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
+                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"ms\")"),
             }},
             write_operation},
 /* script */
