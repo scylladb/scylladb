@@ -184,3 +184,28 @@ async def test_replica_writes_do_apply_counter_update_timeout(manager: ManagerCl
         injection_one_shot=False,
         injection_params=injection_params
     )
+
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_replica_database_apply_timeout(manager: ManagerClient):
+    run_count = 1000
+    # There should only be a handful of exceptions thrown, not almost 10 per timed out request.
+    # Temporarily set a high threshold while we investigate.
+    cpp_exception_threshold = 20 + run_count * 10
+    metric_error_threshold = run_count * 0.9
+
+    await _test_impl(
+        manager=manager,
+        config={},
+        run_count=run_count,
+        cpp_exception_threshold=cpp_exception_threshold,
+        metric_name="scylla_database_total_writes_timedout",
+        metric_error_threshold=metric_error_threshold,
+        ks_opts="WITH REPLICATION = { 'replication_factor' : '1' } AND TABLETS = { 'enabled': false }",
+        tbl_schema="p int, c int, PRIMARY KEY (p)",
+        tbl_opts="",
+        prep_stmt_gen=None,
+        stmt_gen=lambda tbl, i: f"INSERT INTO {tbl} (p, c) VALUES ({i}, {2*i})",
+        injection_name="database_apply_force_timeout",
+        injection_one_shot=False,
+        injection_params={}
+    )
