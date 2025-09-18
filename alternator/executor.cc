@@ -2507,6 +2507,9 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
             _consumed_capacity._total_bytes = item_length;
         }
         if (previous_item) {
+            if (cdc_opts && cdc_opts->fill_preimage) {
+                cdc_opts->preimage = make_lw_shared<cql3::untyped_result_set>(*_schema, std::move(qr), *selection, slice);
+            }
             return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts, cdc_opts);
         }
     }
@@ -2633,7 +2636,9 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         stats& global_stats,
         stats& per_table_stats,
         uint64_t& wcu_total) {
-    std::optional cdc_opts = cdc::per_request_options{};
+    std::optional cdc_opts = cdc::per_request_options{
+        .fill_preimage = schema()->cdc_options().enabled(),
+    };
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
             throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
