@@ -170,7 +170,7 @@ azure_host::impl::impl(encryption_context* ctxt, const std::string& name, const 
                 options.authority, options.truststore, options.priority_string, _log_prefix);
         return;
     }
-    azlog.debug("[{}] No credentials configured. Falling back to default credentials.", _log_prefix);
+    azlog.info("[{}] No credentials configured. Falling back to default credentials.", _log_prefix);
     _credentials = std::make_unique<azure::default_credentials>(
             azure::default_credentials::all_sources, _options.imds_endpoint,
             _options.truststore, _options.priority_string, _log_prefix);
