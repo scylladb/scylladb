@@ -793,6 +793,7 @@ future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_posi
 
 future<bool> bti_index_reader::advance_lower_and_check_if_present(dht::ring_position_view key, const utils::hashed_key& hash) {
     trie_logger.debug("bti_index_reader::advance_lower_and_check_if_present: this={} key={}", fmt::ptr(this), key);
+    utils::get_local_injector().inject("advance_lower_and_check_if_present", [] { throw std::runtime_error("advance_lower_and_check_if_present"); });
     auto k = lazy_comparable_bytes_from_ring_position(*_s, key);
     std::byte expected_hash = std::byte(hash.hash()[1]);
     auto res = co_await _lower.set_to_partition(k, expected_hash);
