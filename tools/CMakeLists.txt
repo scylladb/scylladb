@@ -9,7 +9,8 @@ target_sources(tools
     scylla-nodetool.cc
     schema_loader.cc
     utils.cc
-    lua_sstable_consumer.cc)
+    lua_sstable_consumer.cc
+    json_mutation_stream_parser.cc)
 target_include_directories(tools
   PUBLIC
     ${CMAKE_SOURCE_DIR}
