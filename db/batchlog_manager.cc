@@ -174,24 +174,24 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         auto timeout = get_batch_log_timeout();
         if (db_clock::now() < written_at + timeout) {
             blogger.debug("Skipping replay of {}, too fresh", id);
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+            co_return stop_iteration::no;
         }
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+            co_return stop_iteration::no;
         }
 
         // check version of serialization format
         if (!row.has("version")) {
             blogger.warn("Skipping logged batch because of unknown version");
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+            co_return stop_iteration::no;
         }
 
         auto version = row.get_as<int32_t>("version");
         if (version != netw::messaging_service::current_version) {
             blogger.warn("Skipping logged batch because of incorrect version");
-            return make_ready_future<stop_iteration>(stop_iteration::no);
+            co_return stop_iteration::no;
         }
 
         auto data = row.get_blob("data");
@@ -206,7 +206,8 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
 
         auto size = data.size();
 
-        return map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
+      try {
+        auto mutations = co_await map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
             const auto& cf = _qp.proxy().local_db().find_column_family(fm.column_family_id());
             return make_ready_future<canonical_mutation*>(written_at > cf.get_truncation_time() ? &fm : nullptr);
         },
@@ -217,10 +218,9 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 mutations.emplace_back(fm->to_mutation(s));
             }
             return mutations;
-        }).then([this, limiter, written_at, size, fms] (std::vector<mutation> mutations) {
-            if (mutations.empty()) {
-                return make_ready_future<>();
-            }
+        });
+
+          if (!mutations.empty()) {
             const auto ttl = [written_at]() -> clock_type {
                 /*
                  * Calculate ttl for the mutations' hints (and reduce ttl by the time the mutations spent in the batchlog).
@@ -236,21 +236,17 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 return unadjusted_ttl - std::chrono::duration_cast<gc_clock::duration>(db_clock::now() - written_at).count();
             }();
 
-            if (ttl <= 0) {
-                return make_ready_future<>();
-            }
+           if (ttl > 0) {
             // Origin does the send manually, however I can't see a super great reason to do so.
             // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
             // in both cases.
             // FIXME: verify that the above is reasonably true.
-            return limiter->reserve(size).then([this, mutations = std::move(mutations)] {
+            co_await limiter->reserve(size);
                 _stats.write_attempts += mutations.size();
                 auto timeout = db::timeout_clock::now() + write_timeout;
-                return _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
-            });
-        }).then_wrapped([this, id](future<> batch_result) {
-            try {
-                batch_result.get();
+                co_await _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
+           }
+          }
             } catch (data_dictionary::no_such_keyspace& ex) {
                 // should probably ignore and drop the batch
             } catch (const data_dictionary::no_such_column_family&) {
@@ -261,7 +257,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 // Do _not_ remove the batch, assuning we got a node write error.
                 // Since we don't have hints (which origin is satisfied with),
                 // we have to resort to keeping this batch to next lap.
-                return make_ready_future<>();
+                co_return stop_iteration::no;
             }
             // delete batch
             auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
@@ -269,8 +265,8 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             mutation m(schema, key);
             auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
             m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
-            return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
-        }).then([] { return make_ready_future<stop_iteration>(stop_iteration::no); });
+            co_await _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+            co_return stop_iteration::no;
     };
 
     co_await with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
