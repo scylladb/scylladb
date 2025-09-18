@@ -202,3 +202,92 @@ async def test_batchlog_replay_includes_cdc(manager: ManagerClient) -> None:
 
         result2 = await cql.run_async(f"SELECT * FROM {cdc_table_name} WHERE key = 40 ALLOW FILTERING")
         assert len(result2) == 1, f"Expected 1 CDC mutation for key 40, got {len(result2)}"
+
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
+    """
+    This test is an adjusted version of `test_batchlog_replay_while_a_node_is_down`.
+    We want to verify that batchlog replay is aborted when the corresponding table has been dropped.
+
+    This test reproduces scylladb/scylladb#24806.
+
+    1. Create a cluster with 2 nodes, a keyspace, and a table.
+    2. Enable error injections. We need to ensure that:
+       - The mutations are not removed from the batchlog.
+       - The mutations are not replayed from the batchlog before we drop the table.
+    3. Write a batch. Because of step 2, the mutations will stay in the batchlog.
+    4. Drop the table.
+    5. Resume batchlog replay.
+    6. Wait for the replay to finish. Verify that the batchlog is empty.
+
+    Note: This test will most likely work even with a 1-node cluster, but let's
+          use 2 nodes to make sure we're dealing with a realistic scenario.
+    """
+
+    cmdline=["--logger-log-level", "batchlog_manager=trace"]
+    config = {"error_injections_at_startup": ["short_batchlog_manager_replay_interval"],
+              "write_request_timeout_in_ms": 2000}
+
+    servers = await manager.servers_add(2, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    s1, _ = servers
+
+    cql, hosts = await manager.get_ready_cql(servers)
+    host1, _ = hosts
+
+    async def get_batchlog_row_count():
+        rows = await cql.run_async("SELECT COUNT(*) FROM system.batchlog", host=host1)
+        row = rows[0]
+        assert hasattr(row, "count")
+
+        result = row.count
+        logger.debug(f"Batchlow row count={result}")
+
+        return result
+
+    async def enable_injection(injection: str) -> None:
+        await asyncio.gather(*[manager.api.enable_injection(s.ip_addr, injection, one_shot=False) for s in servers])
+
+    async def disable_injection(injection: str) -> None:
+        await asyncio.gather(*[manager.api.disable_injection(s.ip_addr, injection) for s in servers])
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.my_table (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+
+        # Make sure the mutations stay in the batchlog.
+        await enable_injection("storage_proxy_fail_remove_from_batchlog")
+        # Make sure the mutations are not replayed too early (i.e. before dropping the table).
+        await enable_injection("skip_batch_replay")
+
+        s1_log = await manager.server_open_log(s1.server_id)
+
+        try:
+            await cql.run_async(f"BEGIN BATCH INSERT INTO {ks}.my_table (pk, ck, v) VALUES (0,0,0);"
+                                f"INSERT INTO {ks}.my_table (pk, ck, v) VALUES (1,1,1); APPLY BATCH")
+        except Exception as e:
+            # Injected error is expected.
+            logger.error(f"Error executing batch: {e}")
+
+        # Once the mutations are in the batchlog, waiting to be replayed, we can disable this.
+        await disable_injection("storage_proxy_fail_remove_from_batchlog")
+
+        batchlog_row_count = await get_batchlog_row_count()
+        assert batchlog_row_count > 0
+
+        await cql.run_async(f"DROP TABLE {ks}.my_table")
+
+        s1_mark = await s1_log.mark()
+        # Once the table is dropped, we can resume the replay. The bug can
+        # be triggered from now on (if it's present).
+        await disable_injection("skip_batch_replay")
+
+        # We don't need these, but let's keep them just so we know the replay
+        # is really going on and the mutations don't just disappear.
+        await s1_log.wait_for("Replaying batch", timeout=60, from_mark=s1_mark)
+        await s1_log.wait_for("Finished replayAllFailedBatches", timeout=60, from_mark=s1_mark)
+
+        async def batchlog_empty() -> bool:
+            batchlog_row_count = await get_batchlog_row_count()
+            return True if batchlog_row_count == 0 else None
+
+        await wait_for(batchlog_empty, time.time() + 60)
