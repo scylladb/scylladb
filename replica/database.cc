@@ -920,7 +920,7 @@ future<database::keyspace_change_per_shard> database::prepare_update_keyspace_on
     keyspace_change_per_shard changes(smp::count);
     co_await modify_keyspace_on_all_shards(sharded_db, [&] (replica::database& db) -> future<> {
         auto& ks = db.find_keyspace(ksm.name());
-        auto new_ksm = ::make_lw_shared<keyspace_metadata>(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.durable_writes(),
+        auto new_ksm = ::make_lw_shared<keyspace_metadata>(ksm.name(), ksm.strategy_name(), ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option(), ksm.durable_writes(),
                 ks.metadata()->cf_meta_data() | std::views::values | std::ranges::to<std::vector>(), ks.metadata()->user_types(), ksm.get_storage_options());
 
         auto change = co_await db.prepare_update_keyspace(ks, new_ksm);
@@ -1030,6 +1030,7 @@ future<> database::create_local_system_table(
         auto ksm = make_lw_shared<keyspace_metadata>(ks_name,
                 "org.apache.cassandra.locator.LocalStrategy",
                 std::map<sstring, sstring>{},
+                std::nullopt,
                 std::nullopt,
                 durable
                 );
@@ -1421,7 +1422,7 @@ bool database::column_family_exists(const table_id& uuid) const {
 locator::replication_strategy_ptr
 keyspace::create_replication_strategy(lw_shared_ptr<keyspace_metadata> metadata) {
     using namespace locator;
-    replication_strategy_params params(metadata->strategy_options(), metadata->initial_tablets());
+    replication_strategy_params params(metadata->strategy_options(), metadata->initial_tablets(), metadata->consistency_option());
     rslogger.debug("replication strategy for keyspace {} is {}, opts={}",
             metadata->name(), metadata->strategy_name(), metadata->strategy_options());
     return abstract_replication_strategy::create_replication_strategy(metadata->strategy_name(), params);
