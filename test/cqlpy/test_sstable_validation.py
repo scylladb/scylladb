@@ -72,14 +72,15 @@ def sstable_cache(scylla_path):
         def dir(self):
             return self._store_dir
 
-        def get_generation(self, sst, schema_file):
+        def get_generation(self, sst, schema_file, version):
             json_str = json.dumps(sst)
             generation = self._cache.get(json_str)
             if not generation is None:
                 return generation
             with open(self._in_json, "w") as f:
                 f.write(json_str)
-            generation = subprocess.check_output([self._scylla_path, "sstable", "write", "--schema-file", schema_file, "--output-dir", self._store_dir, "--input-file", self._in_json], text=True)
+            version_arg = ["--sstable-version", version] if version is not None else []
+            generation = subprocess.check_output([self._scylla_path, "sstable", "write", *version_arg, "--schema-file", schema_file, "--output-dir", self._store_dir, "--input-file", self._in_json], text=True)
             self._cache[json_str] = generation
             return generation
 
@@ -91,13 +92,13 @@ def sstable_cache(scylla_path):
         yield cache(scylla_path, workdir)
 
 
-def validate_mixed_sstable_pair(ssta, sstb, scylla_path, sst_cache, sst_work_dir, schema_file, error_message):
+def validate_mixed_sstable_pair(ssta, sstb, scylla_path, sst_cache, sst_work_dir, schema_file, version, error_message):
     """Validate an sstable, created by mixing the index and data from two different sstables.
 
     Check that the validation has the expected result (`error_message`).
     """
-    generation_a = sst_cache.get_generation(ssta, schema_file)
-    generation_b = sst_cache.get_generation(sstb, schema_file)
+    generation_a = sst_cache.get_generation(ssta, schema_file, version)
+    generation_b = sst_cache.get_generation(sstb, schema_file, version)
     shutil.rmtree(sst_work_dir)
     os.mkdir(sst_work_dir)
     sst_cache.copy_sstable_to(generation_a, sst_work_dir)
@@ -136,8 +137,12 @@ def make_large_partition(pk, rows, with_static_row = False):
     else:
         return { "key": { "raw": pks[pk] }, "clustering_elements": rows }
 
+big_versions = ["me"]
+bti_versions = ["ms"]
+versions = big_versions + bti_versions + [None]
 
-def test_scylla_sstable_validate_ok1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache):
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_ok1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, version):
     validate_mixed_sstable_pair(
             [make_partition(0, 0, 'v')],
             [make_partition(0, 0, 'v')],
@@ -145,10 +150,11 @@ def test_scylla_sstable_validate_ok1(cql, scylla_path, temp_workdir, schema1_fil
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "")
 
-
-def test_scylla_sstable_validate_ok2(cql, scylla_path, temp_workdir, schema1_file, sstable_cache):
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_ok2(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, version):
     validate_mixed_sstable_pair(
             [make_partition(0, 0, 'v'), make_partition(1, 0, 'v'), make_partition(2, 0, 'v')],
             [make_partition(0, 0, 'v'), make_partition(1, 0, 'v'), make_partition(2, 0, 'v')],
@@ -156,10 +162,11 @@ def test_scylla_sstable_validate_ok2(cql, scylla_path, temp_workdir, schema1_fil
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "")
 
-
-def test_scylla_sstable_validate_mismatching_partition(cql, scylla_path, temp_workdir, schema1_file, sstable_cache):
+@pytest.mark.parametrize("version", big_versions)
+def test_scylla_sstable_validate_mismatching_partition(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, version):
     validate_mixed_sstable_pair(
             [make_partition(0, 0, 'v')],
             [make_partition(1, 0, 'v')],
@@ -167,10 +174,23 @@ def test_scylla_sstable_validate_mismatching_partition(cql, scylla_path, temp_wo
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: partition mismatch")
 
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_mismatching_partition_large(cql, scylla_path, temp_workdir, schema1_file, large_rows, sstable_cache, version):
+    validate_mixed_sstable_pair(
+            [make_large_partition(0, large_rows)],
+            [make_large_partition(1, large_rows)],
+            scylla_path,
+            sstable_cache,
+            temp_workdir,
+            schema_file = schema1_file,
+            version = version,
+            error_message = "mismatching index/data: partition mismatch")
 
-def test_scylla_sstable_validate_mismatching_position(cql, scylla_path, temp_workdir, schema1_file, sstable_cache):
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_mismatching_position(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, version):
     validate_mixed_sstable_pair(
             [make_partition(0, 0, 'v'), make_partition(2, 0, 'v')],
             [make_partition(0, 0, 'vv'), make_partition(2, 0, 'v')],
@@ -178,10 +198,11 @@ def test_scylla_sstable_validate_mismatching_position(cql, scylla_path, temp_wor
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: position mismatch")
 
-
-def test_scylla_sstable_validate_index_ends_before_data(cql, scylla_path, temp_workdir, schema1_file, sstable_cache):
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_index_ends_before_data(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, version):
     validate_mixed_sstable_pair(
             [make_partition(0, 0, 'v'), make_partition(2, 0, 'v')],
             [make_partition(0, 0, 'v')],
@@ -189,11 +210,12 @@ def test_scylla_sstable_validate_index_ends_before_data(cql, scylla_path, temp_w
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: index is at EOF, but data file has more data")
 
-
+@pytest.mark.parametrize("version", versions)
 @pytest.mark.xfail(reason="index's EOF definition depends on data file size")
-def test_scylla_sstable_validate_index_ends_before_data1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache):
+def test_scylla_sstable_validate_index_ends_before_data1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, version):
     validate_mixed_sstable_pair(
             [make_partition(0, 0, 'v')],
             [make_partition(0, 0, 'vvvvvvvvvvvvvvvvvvvvvv'), make_partition(2, 0, 'v')],
@@ -201,11 +223,12 @@ def test_scylla_sstable_validate_index_ends_before_data1(cql, scylla_path, temp_
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: data is at EOF, but index has more data")
 
-
+@pytest.mark.parametrize("version", versions)
 @pytest.mark.xfail(reason="index's EOF definition depends on data file size")
-def test_scylla_sstable_validate_index_ends_before_data2(cql, scylla_path, temp_workdir, schema1_file, sstable_cache):
+def test_scylla_sstable_validate_index_ends_before_data2(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, version):
     validate_mixed_sstable_pair(
             [make_partition(0, 0, 'v')],
             [make_partition(0, 0, 'v'), make_partition(2, 0, 'v')],
@@ -213,9 +236,11 @@ def test_scylla_sstable_validate_index_ends_before_data2(cql, scylla_path, temp_
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: data is at EOF, but index has more data")
 
-def test_scylla_sstable_validate_large_rows_ok1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_large_rows_ok1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows, version):
     validate_mixed_sstable_pair(
             [make_large_partition(0, large_rows)],
             [make_large_partition(0, large_rows)],
@@ -223,9 +248,11 @@ def test_scylla_sstable_validate_large_rows_ok1(cql, scylla_path, temp_workdir, 
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "")
-
-def test_scylla_sstable_validate_large_rows_ok2(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows):
+    
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_large_rows_ok2(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows, version):
     validate_mixed_sstable_pair(
             [make_large_partition(0, large_rows)],
             [make_large_partition(0, large_rows)],
@@ -233,9 +260,11 @@ def test_scylla_sstable_validate_large_rows_ok2(cql, scylla_path, temp_workdir, 
             sstable_cache,
             temp_workdir,
             schema_file = schema2_file,
+            version = version,
             error_message = "")
 
-def test_scylla_sstable_validate_large_rows_ok3(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", versions)
+def test_scylla_sstable_validate_large_rows_ok3(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows, version):
     validate_mixed_sstable_pair(
             [make_large_partition(0, large_rows, True)],
             [make_large_partition(0, large_rows, True)],
@@ -243,10 +272,11 @@ def test_scylla_sstable_validate_large_rows_ok3(cql, scylla_path, temp_workdir, 
             sstable_cache,
             temp_workdir,
             schema_file = schema2_file,
+            version = version,
             error_message = "")
 
-
-def test_scylla_sstable_validate_large_rows_mismatching_position1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", big_versions)
+def test_scylla_sstable_validate_large_rows_mismatching_position1(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows, version):
     row_0x = { "type": "clustering-row", "key": { "raw": "000400000000" }, "columns": { "v": { "is_live": True, "type": "regular", "timestamp": 1680263186359882, "value": "v" } } }
     validate_mixed_sstable_pair(
             [make_large_partition(0, large_rows)],
@@ -255,10 +285,11 @@ def test_scylla_sstable_validate_large_rows_mismatching_position1(cql, scylla_pa
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: position mismatch: promoted index:")
 
-
-def test_scylla_sstable_validate_large_rows_mismatching_position2(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", big_versions)
+def test_scylla_sstable_validate_large_rows_mismatching_position2(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows, version):
     validate_mixed_sstable_pair(
             [make_large_partition(0, large_rows, True)],
             [make_large_partition(0, large_rows)],
@@ -266,10 +297,11 @@ def test_scylla_sstable_validate_large_rows_mismatching_position2(cql, scylla_pa
             sstable_cache,
             temp_workdir,
             schema_file = schema2_file,
+            version = version,
             error_message = "mismatching index/data: position mismatch: promoted index:")
 
-
-def test_scylla_sstable_validate_large_rows_mismatching_position3(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", big_versions)
+def test_scylla_sstable_validate_large_rows_mismatching_position3(cql, scylla_path, temp_workdir, schema2_file, sstable_cache, large_rows, version):
     validate_mixed_sstable_pair(
             [make_large_partition(0, large_rows)],
             [make_large_partition(0, large_rows, True)],
@@ -277,9 +309,11 @@ def test_scylla_sstable_validate_large_rows_mismatching_position3(cql, scylla_pa
             sstable_cache,
             temp_workdir,
             schema_file = schema2_file,
+            version = version,
             error_message = "mismatching index/data: position mismatch: promoted index:")
 
-def test_scylla_sstable_validate_large_rows_mismathing_row(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", big_versions)
+def test_scylla_sstable_validate_large_rows_mismatching_row(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows, version):
     validate_mixed_sstable_pair(
             [make_large_partition(0, [large_rows[1]] + large_rows[4:])],
             [make_large_partition(0, [large_rows[2]] + large_rows[4:])],
@@ -287,9 +321,11 @@ def test_scylla_sstable_validate_large_rows_mismathing_row(cql, scylla_path, tem
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: clustering element")
 
-def test_scylla_sstable_validate_large_rows_end_of_pi_not_end_of_rows(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", big_versions)
+def test_scylla_sstable_validate_large_rows_end_of_pi_not_end_of_rows(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows, version):
     row_0x = { "type": "clustering-row", "key": { "raw": "000400000000" }, "columns": { "v": { "is_live": True, "type": "regular", "timestamp": 1680263186359882, "value": "v" } } }
     validate_mixed_sstable_pair(
             [make_large_partition(0, [row_0x]), make_partition(2, 0, 'v')],
@@ -298,9 +334,11 @@ def test_scylla_sstable_validate_large_rows_end_of_pi_not_end_of_rows(cql, scyll
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: promoted index has more blocks, but it is end of partition")
 
-def test_scylla_sstable_validate_large_rows_end_of_rows_not_end_of_pi(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows):
+@pytest.mark.parametrize("version", big_versions)
+def test_scylla_sstable_validate_large_rows_end_of_rows_not_end_of_pi(cql, scylla_path, temp_workdir, schema1_file, sstable_cache, large_rows, version):
     validate_mixed_sstable_pair(
             [make_large_partition(0, large_rows), make_partition(2, 0, 'v')],
             [make_large_partition(0, large_rows[:96]), make_partition(2, 0, 'v')],
@@ -308,4 +346,5 @@ def test_scylla_sstable_validate_large_rows_end_of_rows_not_end_of_pi(cql, scyll
             sstable_cache,
             temp_workdir,
             schema_file = schema1_file,
+            version = version,
             error_message = "mismatching index/data: promoted index has no more blocks, but partition")
