@@ -84,15 +84,16 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
 
         shared_future<> work;
         condition_variable batch_done_cv;
-        sharded<abort_source> abort_sources;
+        // The abort has to be used only on `replica.shard`
+        abort_source as;
 
-        batch(view_building_worker& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica);
-        future<> start();
+        batch(sharded<view_building_worker>& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica);
+        void start();
         future<> abort_task(utils::UUID id);
         future<> abort();
 
     private:
-        view_building_worker& _vbw;
+        sharded<view_building_worker>& _vbw;
 
         future<> do_work();
     };

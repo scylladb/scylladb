@@ -476,7 +476,7 @@ future<std::vector<view_task_result>> view_building_worker::work_on_tasks(std::v
         if (!is_shard_free(_state.tasks_map[id]->replica.shard)) {
             throw std::runtime_error(fmt::format("Tried to start view building tasks ({}) on shard {} but the shard is busy", _state.tasks_map[id]->tasks, _state.tasks_map[id]->replica.shard, _state.tasks_map[id]->tasks));
         }
-        co_await _state.tasks_map[id]->start();
+        _state.tasks_map[id]->start();
     }
 
     service::release_guard(std::move(guard));
@@ -601,7 +601,7 @@ future<> view_building_worker::local_state::update(view_building_worker& vbw) {
         auto tasks = shard_tasks | std::views::transform([] (const view_building_task& t) {
             return std::make_pair(t.id, t);
         }) | std::ranges::to<std::unordered_map>();
-        auto batch = seastar::make_shared<view_building_worker::batch>(vbw, tasks, shard_tasks.front().base_id, shard_tasks.front().replica);
+        auto batch = seastar::make_shared<view_building_worker::batch>(vbw.container(), tasks, shard_tasks.front().base_id, shard_tasks.front().replica);
 
         for (auto& [id, _]: tasks) {
             tasks_map_copy.insert({id, batch});
@@ -643,16 +643,24 @@ future<> view_building_worker::local_state::clear_state() {
     vbw_logger.debug("View building worker state was cleared.");
 }
 
-view_building_worker::batch::batch(view_building_worker& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica)
+view_building_worker::batch::batch(sharded<view_building_worker>& vbw, std::unordered_map<utils::UUID, view_building_task> tasks, table_id base_id, locator::tablet_replica replica)
     : base_id(base_id)
     , replica(replica)
     , tasks(std::move(tasks))
     , _vbw(vbw) {}
 
-future<> view_building_worker::batch::start() {
-    co_await abort_sources.start();
+void view_building_worker::batch::start() {
+    if (this_shard_id() != 0) {
+        on_internal_error(vbw_logger, "view_building_worker::batch should be started on shard0");
+    }
+
     state = batch_state::in_progress;
-    work = do_work();
+    work = smp::submit_to(replica.shard, [this] () -> future<> {
+        return do_work();
+    }).finally([this] () {
+        state = batch_state::finished;
+        _vbw.local()._vb_state_machine.event.broadcast();
+    });
 }
 
 future<> view_building_worker::batch::abort_task(utils::UUID id) {
@@ -663,27 +671,22 @@ future<> view_building_worker::batch::abort_task(utils::UUID id) {
 }
 
 future<> view_building_worker::batch::abort() {
-    if (abort_sources.local_is_initialized()) {
-        co_await abort_sources.invoke_on_all([] (abort_source& local_as) {
-            if (!local_as.abort_requested()) {
-                local_as.request_abort();
-            }
-        });
+    co_await smp::submit_to(replica.shard, [this] () {
+        as.request_abort();
+    });
 
-        if (work.valid()) {
-            co_await work.get_future();
-        }
+    if (work.valid()) {
+        co_await work.get_future();
     }
 }
 
 future<> view_building_worker::batch::do_work() {
-    if (this_shard_id() != 0) {
-        on_internal_error(vbw_logger, "view_building_worker::batch should be executed on shard0");
+    if (this_shard_id() != replica.shard) {
+        on_internal_error(vbw_logger, fmt::format("view_building_worker::batch::do_work() should be executed on tasks shard "));
     }
 
     // At this point we assume all tasks are validated to be executed in the same batch
     vbw_logger.debug("Starting view building batch for tasks {}. Task type {}", tasks | std::views::keys, tasks.begin()->second.type);
-    auto& as = abort_sources.local();
 
     std::exception_ptr eptr;
     exponential_backoff_retry r(1s, 5min);
@@ -702,21 +705,18 @@ future<> view_building_worker::batch::do_work() {
         auto base_id = task.base_id;
         auto last_token = task.last_token;
         auto maybe_views_ids = tasks | std::views::values | std::views::transform(&view_building_task::view_id) | std::ranges::to<std::vector>();
-        auto& sharded_abort_sources = abort_sources;
 
         try {
-            co_await _vbw.container().invoke_on(task.replica.shard, [type, base_id, last_token, maybe_views_ids = std::move(maybe_views_ids), &sharded_abort_sources] (view_building_worker& vbw) -> future<> {
-                std::vector<table_id> views_ids;
-                switch (type) {
-                case view_building_task::task_type::build_range:
-                    views_ids = maybe_views_ids | std::views::transform([] (const auto& i) { return *i; }) | std::ranges::to<std::vector>();
-                    co_await vbw.do_build_range(base_id, views_ids, last_token, sharded_abort_sources.local());
-                    break;
-                case view_building_task::task_type::process_staging:
-                    co_await vbw.do_process_staging(base_id, last_token);
-                    break;
-                }
-            });
+            std::vector<table_id> views_ids;
+            switch (type) {
+            case view_building_task::task_type::build_range:
+                views_ids = maybe_views_ids | std::views::transform([] (const auto& i) { return *i; }) | std::ranges::to<std::vector>();
+                co_await _vbw.local().do_build_range(base_id, views_ids, last_token, as);
+                break;
+            case view_building_task::task_type::process_staging:
+                co_await _vbw.local().do_process_staging(base_id, last_token);
+                break;
+            }
         } catch (seastar::abort_requested_exception&) {
             vbw_logger.debug("Batch aborted");
         } catch (...) {
@@ -731,9 +731,7 @@ future<> view_building_worker::batch::do_work() {
         }
     }
 
-    state = batch_state::finished;
-    co_await abort_sources.stop();
-    _vbw._vb_state_machine.event.broadcast();
+    _vbw.local()._vb_state_machine.event.broadcast();
 }
 
 future<> view_building_worker::do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as) {
