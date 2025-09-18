@@ -254,17 +254,17 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     }
 
     for (auto& [shard, sstables_per_table]: new_sstables_per_shard) {
-    co_await container().invoke_on(shard, [sstables_for_this_shard = std::move(sstables_per_table)] (view_building_worker& local_vbw) mutable {
-        for (auto& [tid, ssts_map]: sstables_for_this_shard) {
-            for (auto& [token, ssts]: ssts_map) {
-                auto unwrapped_ssts = ssts | std::views::as_rvalue | std::views::transform([] (auto&& fptr) {
-                    return fptr.unwrap_on_owner_shard();
-                }) | std::ranges::to<std::vector>();
-                auto& tid_ssts = local_vbw._staging_sstables[tid][token];
-                tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(unwrapped_ssts.begin()), std::make_move_iterator(unwrapped_ssts.end()));
+        co_await container().invoke_on(shard, [sstables_for_this_shard = std::move(sstables_per_table)] (view_building_worker& local_vbw) mutable {
+            for (auto& [tid, ssts_map]: sstables_for_this_shard) {
+                for (auto& [token, ssts]: ssts_map) {
+                    auto unwrapped_ssts = ssts | std::views::as_rvalue | std::views::transform([] (auto&& fptr) {
+                        return fptr.unwrap_on_owner_shard();
+                    }) | std::ranges::to<std::vector>();
+                    auto& tid_ssts = local_vbw._staging_sstables[tid][token];
+                    tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(unwrapped_ssts.begin()), std::make_move_iterator(unwrapped_ssts.end()));
+                }
             }
-        }
-    });
+        });
     }
     _sstables_to_register.clear();
 }
