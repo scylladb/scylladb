@@ -3430,7 +3430,7 @@
             "version":{
                "type":"string",
                "enum":[
-                  "ka", "la", "mc", "md", "me"
+                  "ka", "la", "mc", "md", "me", "ms"
                ],
                "description":"SSTable version"
             },
