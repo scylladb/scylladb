@@ -232,3 +232,62 @@ async def test_replica_writes_do_apply_counter_update_timeout(manager: ManagerCl
     cpp_exception_metrics_after = get_cpp_exceptions_metrics(host_ip)
     cpp_exception_metrics_diff = cpp_exception_metrics_after - cpp_exception_metrics_before
     assert cpp_exception_metrics_diff <= cpp_exception_threshold
+
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_replica_database_apply_timeout(manager: ManagerClient):
+    servers = await manager.servers_add(1)
+    hosts = await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 60)
+
+    host_ip = servers[0].ip_addr
+    host = hosts[0]
+    cql = cluster_con([host_ip]).connect()
+    await wait_for_cql(cql, host, time.time() + 60)
+
+    run_count = 100
+    # There should only be a handful of exceptions thrown, not almost 10 per timed out request.
+    # Temporarily set a high threshold while we investigate.
+    cpp_exception_threshold = 20 + run_count * 10
+    writes_timedout_exception_threshold = run_count * 0.9
+    batch_size = 10
+
+    writes_timedout_exception_before = get_database_timedout_error_metrics(host_ip)
+    cpp_exception_metrics_before = get_cpp_exceptions_metrics(host_ip)
+
+    async with new_test_keyspace(manager, "WITH REPLICATION = { 'replication_factor' : '1' } AND TABLETS = { 'enabled': false }", host) as keyspace:
+        ks = keyspace
+        tbl = "t"
+
+        try:
+            cql.execute(f"CREATE TABLE IF NOT EXISTS {ks}.{tbl} (p int, c int, PRIMARY KEY (p))")
+
+            await manager.api.enable_injection(host_ip, "database_apply_force_timeout", one_shot=False)
+
+            try:
+                futures = []
+                for i in range(run_count):
+                    try:
+                        f = (cql.execute_async(f"INSERT INTO {ks}.{tbl} (p, c) VALUES ({i}, {2*i})"))
+                        futures.append(f)
+                    except Exception:
+                        pass
+
+                    if len(futures) >= batch_size or i == run_count - 1:
+                        for f in futures:
+                            try:
+                                f.result()
+                            except Exception:
+                                pass
+                        futures = []
+            finally:
+                await manager.api.disable_injection(host_ip, "database_apply_force_timeout")
+
+        finally:
+            cql.execute(f"DROP TABLE IF EXISTS {ks}.{tbl}")
+
+    writes_timedout_exception_after = get_database_timedout_error_metrics(host_ip)
+    writes_timedout_exception_diff = writes_timedout_exception_after - writes_timedout_exception_before
+    assert writes_timedout_exception_diff >= writes_timedout_exception_threshold
+
+    cpp_exception_metrics_after = get_cpp_exceptions_metrics(host_ip)
+    cpp_exception_metrics_diff = cpp_exception_metrics_after - cpp_exception_metrics_before
+    assert cpp_exception_metrics_diff <= cpp_exception_threshold
