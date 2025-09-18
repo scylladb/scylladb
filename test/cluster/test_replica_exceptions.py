@@ -31,8 +31,12 @@ async def new_test_injection(manager: ManagerClient, host_ip: str, name: str, on
     finally:
         await manager.api.disable_injection(host_ip, name)
 
+def cpp_exception_count(metrics: list[ScyllaMetrics]) -> int:
+    return sum([m.get("scylla_reactor_cpp_exceptions") for m in metrics])
+
 async def _test_impl(
         manager: ManagerClient,
+        config: dict[str, Any],
         run_count: int,
         cpp_exception_threshold: int,
         metric_name: str,
@@ -45,7 +49,7 @@ async def _test_impl(
         injection_name: str,
         injection_one_shot: bool,
         injection_params: dict):
-    servers = await manager.servers_add(1)
+    servers = await manager.servers_add(1, config=config if config is not None else {})
     cql, hosts = await manager.get_ready_cql(servers)
 
     host_ip = servers[0].ip_addr
@@ -90,6 +94,7 @@ async def test_replica_do_apply_rate_limit_no_cpp_exceptions(manager: ManagerCli
 
     await _test_impl(
         manager=manager,
+        config={},
         run_count=run_count,
         cpp_exception_threshold=cpp_exception_threshold,
         metric_name="scylla_database_total_writes_rate_limited",
@@ -112,6 +117,7 @@ async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ManagerClient
 
     await _test_impl(
         manager=manager,
+        config={},
         run_count=run_count,
         cpp_exception_threshold=cpp_exception_threshold,
         metric_name="scylla_database_total_reads_rate_limited",
@@ -124,4 +130,57 @@ async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ManagerClient
         injection_name="rate_limit_force_defer",
         injection_one_shot=False,
         injection_params={}
+    )
+
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_replica_writes_apply_counter_update_timeout(manager: ManagerClient):
+    run_count = 1000
+    # There should only be a handful of exceptions thrown, not almost 10 per timed out request.
+    # Temporarily set a high threshold while we investigate.
+    cpp_exception_threshold = 20 + run_count * 10
+    metric_error_threshold = run_count
+
+    await _test_impl(
+        manager=manager,
+        config={},
+        run_count=run_count,
+        cpp_exception_threshold=cpp_exception_threshold,
+        metric_name="scylla_database_total_writes_timedout",
+        metric_error_threshold=metric_error_threshold,
+        ks_opts="WITH REPLICATION = { 'replication_factor' : '1' } AND TABLETS = { 'enabled': false }",
+        tbl_schema="p int, c counter, PRIMARY KEY (p)",
+        tbl_opts="",
+        prep_stmt_gen=None,
+        stmt_gen=lambda tbl, _: f"UPDATE {tbl} SET c = c + 1 WHERE p = 1",
+        injection_name="database_apply_counter_update_force_timeout",
+        injection_one_shot=False,
+        injection_params={}
+    )
+
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_replica_writes_do_apply_counter_update_timeout(manager: ManagerClient):
+    config = { "counter_write_request_timeout_in_ms": 100 }
+
+    run_count = 1000
+    # There should only be a handful of exceptions thrown, not almost 10 per timed out request.
+    # Temporarily set a high threshold while we investigate.
+    cpp_exception_threshold = 20 + run_count * 10
+    metric_error_threshold = run_count * 0.9
+    injection_params = { "value": "200" }
+
+    await _test_impl(
+        manager=manager,
+        config=config,
+        run_count=run_count,
+        cpp_exception_threshold=cpp_exception_threshold,
+        metric_name="scylla_database_total_writes_timedout",
+        metric_error_threshold=metric_error_threshold,
+        ks_opts="WITH REPLICATION = { 'replication_factor' : '1' } AND TABLETS = { 'enabled': false }",
+        tbl_schema="p int, c counter, PRIMARY KEY (p)",
+        tbl_opts="",
+        prep_stmt_gen=None,
+        stmt_gen=lambda tbl, _: f"UPDATE {tbl} SET c = c + 1 WHERE p = 1",
+        injection_name="apply_counter_update_delay_ms",
+        injection_one_shot=False,
+        injection_params=injection_params
     )
