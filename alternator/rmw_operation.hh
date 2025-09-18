@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "cdc/log.hh"
 #include "seastarx.hh"
 #include "service/paxos/cas_request.hh"
 #include "service/cas_shard.hh"
@@ -107,9 +108,9 @@ public:
     // violating this). We mark apply() "const" to let the compiler validate
     // this for us. The output-only field _return_attributes is marked
     // "mutable" above so that apply() can still write to it.
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const = 0;
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options& cdc_opts) const = 0;
     // Convert the above apply() into the signature needed by cas_request:
-    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override;
+    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options& cdc_opts) override;
     virtual ~rmw_operation() = default;
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }

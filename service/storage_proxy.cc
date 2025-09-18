@@ -6546,7 +6546,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     struct read_cas_request : public cas_request {
         foreign_ptr<lw_shared_ptr<query::result>> res;
         std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
-            const query::partition_slice& slice, api::timestamp_type ts) {
+            const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options&) {
             res = std::move(qr);
             return std::nullopt;
         }
@@ -6723,7 +6723,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
                 qr = std::move(cqr.query_result);
             }
 
-            auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+            auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot), cdc_opts);
             condition_met = true;
             if (!mutation) {
                 if (write) {

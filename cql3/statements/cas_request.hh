@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 #pragma once
+#include "cdc/log.hh"
 #include "utils/assert.hh"
 #include "service/paxos/cas_request.hh"
 #include "cql3/statements/modification_statement.hh"
@@ -67,7 +68,7 @@ public:
         modification_statement::json_cache_opt json_cache_arg, const query_options& options_arg);
 
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
-            const query::partition_slice& slice, api::timestamp_type ts) override;
+            const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options&) override;
 
     /// Build a result set with prefetched rows, but return only
     /// the columns required by CAS.
