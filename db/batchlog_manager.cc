@@ -167,7 +167,16 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
     auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
-    auto batch = [this, limiter](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+    auto delete_batch = [this, schema = std::move(schema)] (utils::UUID id) {
+        auto key = partition_key::from_singular(*schema, id);
+        mutation m(schema, key);
+        auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
+        m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
+        return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+    };
+
+    auto batch = [this, limiter, delete_batch = std::move(delete_batch)](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
@@ -185,12 +194,14 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         // check version of serialization format
         if (!row.has("version")) {
             blogger.warn("Skipping logged batch because of unknown version");
+            co_await delete_batch(id);
             co_return stop_iteration::no;
         }
 
         auto version = row.get_as<int32_t>("version");
         if (version != netw::messaging_service::current_version) {
-            blogger.warn("Skipping logged batch because of incorrect version");
+            blogger.warn("Skipping logged batch because of incorrect version {}; current version = {}", version, netw::messaging_service::current_version);
+            co_await delete_batch(id);
             co_return stop_iteration::no;
         }
 
@@ -260,12 +271,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 co_return stop_iteration::no;
             }
             // delete batch
-            auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
-            auto key = partition_key::from_singular(*schema, id);
-            mutation m(schema, key);
-            auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
-            m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
-            co_await _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+            co_await delete_batch(id);
             co_return stop_iteration::no;
     };
 
