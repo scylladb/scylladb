@@ -61,6 +61,10 @@ enum class operation : int8_t {
 };
 
 struct per_request_options {
+    // Supports only insert and update for now.
+    std::optional<cdc::operation> log_operation_type_fixup;
+    // Don't generate rows in the log table for this mutation.
+    bool skip_cdc;
 };
 
 struct operation_result_tracker;
