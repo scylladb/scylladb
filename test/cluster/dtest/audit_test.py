@@ -241,7 +241,10 @@ class AuditBackendSyslog(AuditBackend):
         metadata, data = line.split(": ", 1)
         elems = list(map(lambda x: x[1:], data.split('", ')))
         elems[-1] = elems[-1][:-1]
-        date = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Arbitrary date because we don't really check the field. We just need to fill it with something
+        # and make sure it doesn't change during the test (e.g. when the test is running at 23:59:59)
+        date = datetime.datetime(2000, 1, 1, 0, 0)
 
         node = elems[0].split(":")[0]
         source = elems[6].split(":")[0]
