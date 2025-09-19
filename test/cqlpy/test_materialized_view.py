@@ -1665,3 +1665,16 @@ def test_mv_select_key_columns(cql, test_keyspace, cassandra_bug):
             # hurt to make sure.
             cql.execute(f'insert into {table} (p, c, v1, v2, v3) values (1, 2, 3, 4, 5)')
             assert [(3,1,2,4)] == list(cql.execute(f'select * from {mv} where v1=3'))
+
+def test_mv_200_concurrent_updates(cql, test_keyspace):
+    with new_test_table(cql, test_keyspace, 'p int, c int, v int, primary key (p, c)') as table:
+        mv_name = unique_name()
+        try:
+            for i in range(200):
+                cql.execute(f"CREATE MATERIALIZED VIEW {test_keyspace}.{mv_name}{i} AS SELECT * FROM {table} WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c,p)")
+            cql.execute(f"INSERT INTO {table} (c, p, v) VALUES (1, 2, 3) USING TIMEOUT 10s")
+            for i in range(200):
+                assert [(1,2,3)] == list(cql.execute(f"SELECT * FROM {test_keyspace}.{mv_name}{i} WHERE c=1"))
+        finally:
+            for i in range(200):
+                cql.execute(f"DROP MATERIALIZED VIEW {test_keyspace}.{mv_name}{i}")
