@@ -306,6 +306,10 @@ void cdc::metadata::load_tablet_streams_map(table_id tid, table_streams new_tabl
     _tablet_streams[tid] = make_lw_shared(std::move(new_table_map));
 }
 
+void cdc::metadata::append_tablet_streams_map(table_id tid, table_streams new_table_map) {
+    _tablet_streams[tid]->insert(std::make_move_iterator(new_table_map.begin()), std::make_move_iterator(new_table_map.end()));
+}
+
 void cdc::metadata::remove_tablet_streams_map(table_id tid) {
     _tablet_streams.erase(tid);
 }

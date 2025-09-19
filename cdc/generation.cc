@@ -1274,10 +1274,28 @@ future<> generation_service::load_cdc_tablet_streams(std::optional<std::unordere
             new_table_map[ts] = committed_stream_set {stream_tp, std::move(stream_set)};
         };
 
-        append_stream(base_ts, std::move(base_stream_set));
+        // if we already have a loaded streams map, and the base timestamp is unchanged, then read
+        // the history entries starting from the latest one we have and append it to the existing map.
+        // we can do it because we only append new rows with higher timestamps to the history table.
+        std::optional<std::reference_wrapper<const committed_stream_set>> from_streams;
+        std::optional<db_clock::time_point> from_ts;
+        const auto& all_streams = _cdc_metadata.get_all_tablet_streams();
+        if (auto it = all_streams.find(table); it != all_streams.end()) {
+            const auto& current_map = *it->second;
+            if (current_map.cbegin()->second.ts == base_ts) {
+                const auto& latest_entry = current_map.crbegin()->second;
+                from_streams = std::cref(latest_entry);
+                from_ts = latest_entry.ts;
+            }
+        }
 
-        co_await _sys_ks.local().read_cdc_streams_history(table, [&] (table_id tid, db_clock::time_point ts, cdc_stream_diff diff) -> future<> {
-            const auto& prev_stream_set = std::crbegin(new_table_map)->second.streams;
+        if (!from_ts) {
+            append_stream(base_ts, std::move(base_stream_set));
+        }
+
+        co_await _sys_ks.local().read_cdc_streams_history(table, from_ts, [&] (table_id tid, db_clock::time_point ts, cdc_stream_diff diff) -> future<> {
+            const auto& prev_stream_set = new_table_map.empty() ?
+                    from_streams->get().streams : std::crbegin(new_table_map)->second.streams;
 
             append_stream(ts, co_await cdc::metadata::construct_next_stream_set(
                     prev_stream_set, std::move(diff.opened_streams), diff.closed_streams));
@@ -1289,7 +1307,11 @@ future<> generation_service::load_cdc_tablet_streams(std::optional<std::unordere
                 new_table_map_copy[ts] = entry;
                 co_await coroutine::maybe_yield();
             }
-            svc._cdc_metadata.load_tablet_streams_map(table, std::move(new_table_map_copy));
+            if (!from_ts) {
+                svc._cdc_metadata.load_tablet_streams_map(table, std::move(new_table_map_copy));
+            } else {
+                svc._cdc_metadata.append_tablet_streams_map(table, std::move(new_table_map_copy));
+            }
         }));
 
         tables_to_process.erase(table);
