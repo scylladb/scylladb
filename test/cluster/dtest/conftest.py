@@ -110,6 +110,9 @@ def fixture_dtest_setup(request: FixtureRequest,
     except Exception as e:  # noqa: BLE001
         logger.error("Error stopping cluster: %s", str(e))
 
+    manager.ignore_log_patterns.extend(dtest_setup.ignore_log_patterns)
+    manager.ignore_cores_log_patterns.extend(dtest_setup.ignore_cores_log_patterns)
+
     try:
         if not dtest_setup.allow_log_errors:
             exclude_errors = []

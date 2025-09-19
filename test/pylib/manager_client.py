@@ -8,7 +8,9 @@
    Provides helper methods to test cases.
    Manages driver refresh when cluster is cycled.
 """
+from collections import defaultdict
 import pathlib
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -64,6 +66,8 @@ class ManagerClient:
         self.metrics = ScyllaMetricsClient()
         self.thread_pool = ThreadPoolExecutor()
         self.test_finished_event = asyncio.Event()
+        self.ignore_log_patterns = []  # patterns to ignore in server logs when checking for errors
+        self.ignore_cores_log_patterns = []  # patterns to ignore in server logs when checking for core files
 
     @property
     def client(self):
@@ -179,6 +183,82 @@ class ManagerClient:
         logger.info("Cluster after test %s: %s", test_case_name, cluster_status)
 
         return cluster_status
+    
+    async def check_all_errors(self, check_all_errors=False) -> dict[ServerInfo, dict[str, Union[list[str], list[str], Path, list[str]]]]:
+        
+        errors = defaultdict(dict)
+        # find errors in logs
+        for server in await self.all_servers():
+            log_file = await self.server_open_log(server_id=server.server_id)
+            # check if we should ignore cores on this server
+            ignore_cores = []
+            if self.ignore_cores_log_patterns:
+                if matches := log_file.grep("|".join(f"({p})" for p in set(self.ignore_cores_log_patterns))):
+                    logger.debug(f"Will ignore cores on {server}. Found the following log messages: {matches}")
+                    ignore_cores.append(server)
+            critical_error_pattern = r"Assertion.*failed|AddressSanitizer"
+            if server not in ignore_cores:
+                critical_error_pattern += "|Aborting on shard"
+            if found_critical := await log_file.grep(critical_error_pattern):
+                errors[server]["critical"] = [e[0] for e in found_critical]
+                # Find the backtraces for the critical errors
+                if found_backtraces := await log_file.find_backtraces():
+                    errors[server]["backtraces"] = found_backtraces
+            if check_all_errors:
+                if found_errors := await log_file.grep_for_errors(distinct_errors=True):
+                    if filtered_errors := await self.filter_errors(found_errors):
+                        errors[server]["error"] = filtered_errors
+        # find core files
+        for server, cores in (await self.find_cores()).items():
+            errors[server]["cores"] = cores
+        # add log file path to the report for servers that had errors or cores
+        for server in await self.all_servers():
+            log_file = await self.server_open_log(server_id=server.server_id)
+            if server in errors:
+                errors[server]["log"] = log_file.file.name
+
+        return errors
+    
+    async def filter_errors(self, errors: list[str]):
+        exclude_errors_pattern = re.compile("|".join(f"{p}" for p in {
+            *self.ignore_log_patterns,
+            *self.ignore_cores_log_patterns,
+
+            r"Compaction for .* deliberately stopped",
+            r"update compaction history failed:.*ignored",
+
+            # We may stop nodes that have not finished starting yet.
+            r"(Startup|start) failed:.*(seastar::sleep_aborted|raft::request_aborted)",
+            r"Timer callback failed: seastar::gate_closed_exception",
+
+            # Ignore expected RPC errors when nodes are stopped.
+            r"rpc - client .*(connection dropped|fail to connect)",
+
+            # We see benign RPC errors when nodes start/stop.
+            # If they cause system malfunction, it should be detected using higher-level tests.
+            r"rpc::unknown_verb_error",
+            r"raft_rpc - Failed to send",
+            r"raft_topology.*(seastar::broken_promise|rpc::closed_error)",
+
+            # Expected tablet migration stream failure where a node is stopped.
+            # Refs: https://github.com/scylladb/scylladb/issues/19640
+            r"Failed to handle STREAM_MUTATION_FRAGMENTS.*rpc::stream_closed",
+
+            # Expected Raft errors on decommission-abort or node restart with MV.
+            r"raft_topology - raft_topology_cmd.*failed with: raft::request_aborted",
+        }))
+        return [e for e in errors if not exclude_errors_pattern.search(e)]
+
+    async def find_cores(self) -> dict[ServerInfo, list[str]]:
+        """Find core files on all servers"""
+        # find *.core files in current dir
+        cores = [str(core_file.absolute()) for core_file in pathlib.Path('.').glob('*.core')]
+        server_cores = dict()
+        # match core files to servers by pid
+        for server in await self.all_servers():
+            if found_cores := [core for core in cores if f".{server.pid}." in core]:
+                server_cores[server] = found_cores
+        return server_cores
 
     async def gather_related_logs(self, failed_test_path_dir: Path, logs: Dict[str, Path]) -> None:
         for server in await self.all_servers():
@@ -273,6 +353,9 @@ class ManagerClient:
         Replace CLI options and environment variables with `cmdline_options_override` and `append_env_override`
         if provided.
         """
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+
         logger.debug("ManagerClient starting %s", server_id)
         data = {
             "expected_error": expected_error,
@@ -409,6 +492,9 @@ class ManagerClient:
                          expected_server_up_state: Optional[ServerUpState] = None,
                          connect_driver: bool = True) -> ServerInfo:
         """Add a new server"""
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+
         try:
             data = self._create_server_add_data(
                 replace_cfg,
@@ -466,6 +552,9 @@ class ManagerClient:
         assert servers_num > 0, f"servers_add: cannot add {servers_num} servers, servers_num must be positive"
         assert not (property_file and auto_rack_dc), f"Either property_file or auto_rack_dc can be provided, but not both"
 
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+
         if auto_rack_dc:
             property_file = [{"dc":auto_rack_dc, "rack":f"rack{i+1}"} for i in range(servers_num)]
 
@@ -501,6 +590,9 @@ class ManagerClient:
                           wait_removed_dead: bool = True,
                           timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
 
         # If we remove a node, we should wait until other nodes see it as dead
@@ -521,6 +613,9 @@ class ManagerClient:
                                 expected_error: str | None = None,
                                 timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Tell a node to decommission with Scylla REST API"""
+        if expected_error is not None:
+            self.ignore_log_patterns.append(re.escape(expected_error))
+
         logger.debug("ManagerClient decommission %s", server_id)
         data = {"expected_error": expected_error}
         await self.client.put_json(f"/cluster/decommission-node/{server_id}", data,
