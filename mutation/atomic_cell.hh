@@ -12,7 +12,7 @@
 
 #include "timestamp.hh"
 #include "mutation/tombstone.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "utils/assert.hh"
 #include "utils/managed_bytes.hh"
 #include <seastar/util/bool_class.hh>

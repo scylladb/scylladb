@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "query/query-result.hh"
 
 namespace locator {

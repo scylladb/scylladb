@@ -16,7 +16,7 @@
 #include <seastar/core/sharded.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "utils/log.hh"
 #include "locator/host_id.hh"
 #include "schema/schema_fwd.hh"

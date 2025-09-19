@@ -22,7 +22,7 @@
 #include <seastar/core/sstring.hh>
 #include "types/types.hh"
 #include "keys/compound.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "sstables/compressor.hh"
 #include "compaction/compaction_strategy_type.hh"
 #include "caching_options.hh"

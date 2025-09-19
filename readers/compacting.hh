@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "readers/mutation_reader_fwd.hh"
 #include "compaction/compaction_garbage_collector.hh"
 

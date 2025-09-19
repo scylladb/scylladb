@@ -11,7 +11,7 @@
 #include <seastar/util/optimized_optional.hh>
 #include "seastarx.hh"
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "schema/schema_fwd.hh"
 #include "tracing/trace_state.hh"
 

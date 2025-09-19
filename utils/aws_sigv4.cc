@@ -10,7 +10,7 @@
 #include "utils/aws_sigv4.hh"
 #include "utils/hashers.hh"
 #include "bytes.hh"
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 
 using namespace std::chrono_literals;
 
