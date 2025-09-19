@@ -24,6 +24,7 @@
 #include "sstables/sstable_compressor_factory.hh"
 #include "compress.hh"
 #include "exceptions/exceptions.hh"
+#include "utils/config_file_impl.hh"
 #include "utils/class_registrator.hh"
 #include "gms/feature_service.hh"
 
@@ -593,6 +594,13 @@ std::map<sstring, sstring> compression_parameters::get_options() const {
         opts.emplace(sstring(CRC_CHECK_CHANCE), std::to_string(_crc_check_chance.value()));
     }
     return opts;
+}
+
+std::istream& operator>>(std::istream& is, compression_parameters& cp) {
+    std::unordered_map<sstring, sstring> options_map;
+    is >> options_map;
+    cp = compression_parameters(options_map | std::ranges::to<std::map>());
+    return is;
 }
 
 lz4_processor::lz4_processor(cdict_ptr cdict, ddict_ptr ddict)

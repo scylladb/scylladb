@@ -124,3 +124,13 @@ private:
     static void validate_options(const std::map<sstring, sstring>&);
     static algorithm name_to_algorithm(std::string_view name);
 };
+
+// Stream operator for boost::program_options support
+std::istream& operator>>(std::istream& is, compression_parameters& cp);
+
+template <>
+struct fmt::formatter<compression_parameters> : fmt::formatter<std::string_view> {
+    auto format(const compression_parameters& cp, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "{}", cp.get_options());
+    }
+};
