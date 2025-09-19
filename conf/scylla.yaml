@@ -855,7 +855,7 @@ maintenance_socket: ignore
 # enable_create_table_with_compact_storage: false
 
 # Control tablets for new keyspaces.
-# Can be set to: disabled|enabled
+# Can be set to: disabled|enabled|enforced
 #
 # When enabled, newly created keyspaces will have tablets enabled by default.
 # That can be explicitly disabled in the CREATE KEYSPACE query
