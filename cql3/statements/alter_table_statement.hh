@@ -16,7 +16,7 @@
 #include "cql3/cql3_type.hh"
 #include "cql3/column_identifier.hh"
 #include "data_dictionary/data_dictionary.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 namespace cql3 {
 

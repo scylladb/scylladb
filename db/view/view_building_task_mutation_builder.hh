@@ -10,7 +10,7 @@
 
 #include "mutation/mutation.hh"
 #include "db/system_keyspace.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 namespace db {
 

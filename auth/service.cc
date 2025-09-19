@@ -40,7 +40,7 @@
 #include <variant>
 #include "service/migration_manager.hh"
 #include "service/raft/raft_group0_client.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/class_registrator.hh"
 #include "locator/abstract_replication_strategy.hh"

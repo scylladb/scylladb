@@ -15,7 +15,7 @@
 
 #include "mutation/canonical_mutation.hh"
 #include "schema/schema_fwd.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "utils/assert.hh"
 #include "utils/exponential_backoff_retry.hh"
 #include "cql3/query_processor.hh"

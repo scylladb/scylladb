@@ -12,7 +12,7 @@
 
 #include "sstables/types.hh"
 #include "sstables/component_type.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "utils/extremum_tracking.hh"
 #include "utils/murmur_hash.hh"
 #include "hyperloglog.hh"

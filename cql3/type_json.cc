@@ -8,7 +8,7 @@
 
 #include "cql3/type_json.hh"
 #include "types/concrete_types.hh"
-#include "counters.hh"
+#include "mutation/counters.hh"
 #include "types/vector.hh"
 #include "utils/rjson.hh"
 #include "types/list.hh"

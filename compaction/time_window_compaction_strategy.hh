@@ -12,7 +12,7 @@
 
 #include "compaction_strategy_impl.hh"
 #include "size_tiered_compaction_strategy.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "sstables/shared_sstable.hh"
 
 namespace sstables {

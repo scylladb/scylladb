@@ -12,7 +12,7 @@
 
 #include <concepts>
 #include <initializer_list>
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "bytes.hh"
 #include "db/consistency_level_type.hh"
 #include "service/query_state.hh"

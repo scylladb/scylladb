@@ -52,7 +52,7 @@
 #include "readers/compacting.hh"
 #include "tombstone_gc.hh"
 #include "replica/database.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 
 can_gc_fn always_gc = [] (tombstone, is_shadowable) { return true; };

@@ -9,7 +9,7 @@
 #pragma once
 
 #include "gc_clock.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "utils/extremum_tracking.hh"
 
 // Stores statistics on all the updates done to a memtable

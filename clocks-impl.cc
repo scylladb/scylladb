@@ -8,7 +8,7 @@
 
 #include <fmt/chrono.h>
 
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 #include "clocks-impl.hh"
 

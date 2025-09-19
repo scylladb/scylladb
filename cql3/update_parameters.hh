@@ -11,7 +11,7 @@
 #pragma once
 
 #include "gc_clock.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "schema/schema_fwd.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/tombstone.hh"

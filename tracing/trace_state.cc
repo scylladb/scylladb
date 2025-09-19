@@ -10,7 +10,7 @@
 #include <chrono>
 #include "cql3/statements/prepared_statement.hh"
 #include "tracing/trace_state.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 
 #include "cql3/values.hh"
 #include "cql3/query_options.hh"

@@ -170,9 +170,6 @@ target_sources(scylla-main
     bytes.cc
     client_data.cc
     clocks-impl.cc
-    collection_mutation.cc
-    converting_mutation_partition_applier.cc
-    counters.cc
     sstable_dict_autotrainer.cc
     exceptions/exceptions.cc
     generic_server.cc

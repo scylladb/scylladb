@@ -10,7 +10,7 @@
 
 #include "cql3/cql_statement.hh"
 #include "raw/batch_statement.hh"
-#include "timestamp.hh"
+#include "mutation/timestamp.hh"
 #include "utils/log.hh"
 #include "service_permit.hh"
 #include "exceptions/coordinator_result.hh"
