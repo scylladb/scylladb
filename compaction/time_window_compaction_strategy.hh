@@ -96,9 +96,8 @@ private:
             return api::timestamp_type(timestamp_from_sstable);
         case time_window_compaction_strategy_options::timestamp_resolutions::millisecond:
             return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::milliseconds(timestamp_from_sstable)).count();
-        default:
-            throw std::runtime_error("Timestamp resolution invalid for TWCS");
         };
+        on_internal_error(clogger, std::format("Timestamp resolution invalid for TWCS : {}", static_cast<int>(resolution)));
     }
 
     // Returns true if bucket is the last, most active one.
