@@ -183,11 +183,8 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
+        auto now = db_clock::now();
         auto timeout = get_batch_log_timeout();
-        if (db_clock::now() < written_at + timeout) {
-            blogger.debug("Skipping replay of {}, too fresh", id);
-            co_return stop_iteration::no;
-        }
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");
@@ -212,15 +209,22 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
         blogger.debug("Replaying batch {}", id);
 
+      try {
         auto fms = make_lw_shared<std::deque<canonical_mutation>>();
         auto in = ser::as_input_stream(data);
         while (in.size()) {
             fms->emplace_back(ser::deserialize(in, std::type_identity<canonical_mutation>()));
+            schema_ptr s = _qp.db().find_schema(fms->back().column_family_id());
+            timeout = std::min(timeout, std::chrono::duration_cast<db_clock::duration>(s->tombstone_gc_options().propagation_delay_in_seconds()));
+        }
+
+        if (now < written_at + timeout) {
+            blogger.debug("Skipping replay of {}, too fresh", id);
+            co_return stop_iteration::no;
         }
 
         auto size = data.size();
 
-      try {
         auto mutations = co_await map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
             const auto& cf = _qp.proxy().local_db().find_column_family(fm.column_family_id());
             return make_ready_future<canonical_mutation*>(written_at > cf.get_truncation_time() ? &fm : nullptr);
