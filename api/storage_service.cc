@@ -771,18 +771,6 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
 static
 future<json::json_return_type>
-rest_perform_keyspace_offstrategy_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
-        bool res = false;
-        auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, table_infos, &res);
-        co_await task->done();
-        co_return json::json_return_type(res);
-}
-
-static
-future<json::json_return_type>
 rest_upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
@@ -1779,7 +1767,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
     ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
-    ss::perform_keyspace_offstrategy_compaction.set(r, rest_bind(rest_perform_keyspace_offstrategy_compaction, ctx));
     ss::upgrade_sstables.set(r, rest_bind(rest_upgrade_sstables, ctx));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
@@ -1859,7 +1846,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::cdc_streams_check_and_repair.unset(r);
     ss::force_compaction.unset(r);
     ss::cleanup_all.unset(r);
-    ss::perform_keyspace_offstrategy_compaction.unset(r);
     ss::upgrade_sstables.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);

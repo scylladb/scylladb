@@ -119,6 +119,15 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
         co_return json::json_return_type(task->get_status().id.to_sstring());
     }));
 
+    ss::perform_keyspace_offstrategy_compaction.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
+        apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
+        bool res = false;
+        auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, table_infos, &res);
+        co_await task->done();
+        co_return json::json_return_type(res);
+    }));
+
     t::upgrade_sstables_async.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         auto& db = ctx.db;
         bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
@@ -152,6 +161,7 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     t::force_keyspace_cleanup_async.unset(r);
     ss::force_keyspace_cleanup.unset(r);
     t::perform_keyspace_offstrategy_compaction_async.unset(r);
+    ss::perform_keyspace_offstrategy_compaction.unset(r);
     t::upgrade_sstables_async.unset(r);
     t::scrub_async.unset(r);
 }
