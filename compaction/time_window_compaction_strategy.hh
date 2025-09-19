@@ -15,7 +15,7 @@
 #include "timestamp.hh"
 #include "sstables/shared_sstable.hh"
 
-namespace sstables {
+namespace compaction {
 
 extern logging::logger clogger;
 
@@ -77,13 +77,13 @@ public:
     static constexpr uint64_t max_data_segregation_window_count = 100;
     static constexpr float reshape_target_space_overhead = 0.1f;
 
-    using bucket_t = std::vector<shared_sstable>;
+    using bucket_t = std::vector<sstables::shared_sstable>;
     enum class bucket_compaction_mode { none, size_tiered, major };
 public:
     time_window_compaction_strategy(const std::map<sstring, sstring>& options);
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const override;
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const override;
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 private:
@@ -110,10 +110,10 @@ private:
     bucket_compaction_mode
     compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
 
-    std::vector<shared_sstable>
-    get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control, std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
+    std::vector<sstables::shared_sstable>
+    get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
 
-    std::vector<shared_sstable> get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables);
+    std::vector<sstables::shared_sstable> get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidate_sstables);
 public:
     // Find the lowest timestamp for window of given size
     static api::timestamp_type
@@ -122,15 +122,15 @@ public:
     // Group files with similar max timestamp into buckets.
     // @return A pair, where the left element is the bucket representation (map of timestamp to sstablereader),
     // and the right is the highest timestamp seen
-    static std::pair<std::map<api::timestamp_type, std::vector<shared_sstable>>, api::timestamp_type>
-    get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options);
+    static std::pair<std::map<api::timestamp_type, std::vector<sstables::shared_sstable>>, api::timestamp_type>
+    get_buckets(std::vector<sstables::shared_sstable> files, const time_window_compaction_strategy_options& options);
 
-    std::vector<shared_sstable>
-    newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<api::timestamp_type, std::vector<shared_sstable>> buckets,
+    std::vector<sstables::shared_sstable>
+    newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<api::timestamp_type, std::vector<sstables::shared_sstable>> buckets,
         int min_threshold, int max_threshold, api::timestamp_type now);
 
-    static std::vector<shared_sstable>
-    trim_to_threshold(std::vector<shared_sstable> bucket, int max_threshold);
+    static std::vector<sstables::shared_sstable>
+    trim_to_threshold(std::vector<sstables::shared_sstable> bucket, int max_threshold);
 
     static int64_t
     get_window_for(const time_window_compaction_strategy_options& options, api::timestamp_type ts) {
@@ -150,7 +150,7 @@ public:
         return compaction_strategy_type::time_window;
     }
 
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const override;
+    virtual std::unique_ptr<sstables::sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const override;
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
@@ -162,7 +162,7 @@ public:
         return true;
     }
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
 };
 
 }

@@ -13,7 +13,7 @@
 #include "incremental_backlog_tracker.hh"
 #include <ranges>
 
-namespace sstables {
+namespace compaction {
 
 extern logging::logger clogger;
 
@@ -330,18 +330,18 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
     }
     // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
     if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to
     // increase overall efficiency.
     if (control.has_ongoing_compaction(t)) {
-        co_return sstables::compaction_descriptor();
+        co_return compaction_descriptor();
     }
 
     auto desc = find_garbage_collection_job(t, buckets);
@@ -351,7 +351,7 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (_space_amplification_goal) {
         if (buckets.size() < 2) {
-            co_return sstables::compaction_descriptor();
+            co_return compaction_descriptor();
         }
         // Let S0 be the size of largest tier
         // Let S1 be the size of second-largest tier,
@@ -383,12 +383,12 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
             cross_tier_input.reserve(cross_tier_input.size() + s1.size());
             std::move(s1.begin(), s1.end(), std::back_inserter(cross_tier_input));
 
-            co_return sstables::compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
+            co_return compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
                                                    0, _fragment_size);
         }
     }
 
-    co_return sstables::compaction_descriptor();
+    co_return compaction_descriptor();
 }
 
 compaction_descriptor

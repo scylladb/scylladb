@@ -137,7 +137,7 @@ int scylla_sstable_main(int argc, char** argv) {
                 cfg.num_columns = app.configuration()["num_columns"].as<unsigned>();
                 cfg.column_size = app.configuration()["column_size"].as<unsigned>();
             }
-            cfg.compaction_strategy = sstables::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
+            cfg.compaction_strategy = compaction::compaction_strategy::type(app.configuration()["compaction-strategy"].as<sstring>());
             cfg.timestamp_range = app.configuration()["timestamp-range"].as<api::timestamp_type>();
             auto scf = make_sstable_compressor_factory_for_tests_in_thread();
             test.start(std::move(cfg), std::ref(*scf)).get();

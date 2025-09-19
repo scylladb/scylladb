@@ -9,6 +9,8 @@
 
 #pragma once
 
+namespace compaction {
+
 class compaction_manager;
 
 class compaction_weight_registration {
@@ -31,3 +33,5 @@ public:
 
     int weight() const;
 };
+
+}

@@ -234,23 +234,23 @@ scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::re
     info.keyspace = std::move(keyspace);
     info.column_families = table_infos | std::views::transform(&table_info::name) | std::ranges::to<std::vector>();
     auto scrub_mode_str = req->get_query_param("scrub_mode");
-    auto scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
+    auto scrub_mode = compaction::compaction_type_options::scrub::mode::abort;
 
     if (scrub_mode_str.empty()) {
         const auto skip_corrupted = validate_bool_x(req->get_query_param("skip_corrupted"), false);
 
         if (skip_corrupted) {
-            scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
+            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
         }
     } else {
         if (scrub_mode_str == "ABORT") {
-            scrub_mode = sstables::compaction_type_options::scrub::mode::abort;
+            scrub_mode = compaction::compaction_type_options::scrub::mode::abort;
         } else if (scrub_mode_str == "SKIP") {
-            scrub_mode = sstables::compaction_type_options::scrub::mode::skip;
+            scrub_mode = compaction::compaction_type_options::scrub::mode::skip;
         } else if (scrub_mode_str == "SEGREGATE") {
-            scrub_mode = sstables::compaction_type_options::scrub::mode::segregate;
+            scrub_mode = compaction::compaction_type_options::scrub::mode::segregate;
         } else if (scrub_mode_str == "VALIDATE") {
-            scrub_mode = sstables::compaction_type_options::scrub::mode::validate;
+            scrub_mode = compaction::compaction_type_options::scrub::mode::validate;
         } else {
             throw httpd::bad_param_exception(fmt::format("Unknown argument for 'scrub_mode' parameter: {}", scrub_mode_str));
         }
@@ -265,11 +265,11 @@ scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::re
     };
     const sstring quarantine_mode_str = req_param<sstring>(*req, "quarantine_mode", "INCLUDE");
     if (quarantine_mode_str == "INCLUDE") {
-        info.opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::include;
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::include;
     } else if (quarantine_mode_str == "EXCLUDE") {
-        info.opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::exclude;
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::exclude;
     } else if (quarantine_mode_str == "ONLY") {
-        info.opts.quarantine_operation_mode = sstables::compaction_type_options::scrub::quarantine_mode::only;
+        info.opts.quarantine_operation_mode = compaction::compaction_type_options::scrub::quarantine_mode::only;
     } else {
         throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
     }
@@ -1988,7 +1988,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             co_await snap_ctl.local().take_column_family_snapshot(info.keyspace, info.column_families, info.snapshot_tag, db::snapshot_ctl::skip_flush::no);
         }
 
-        sstables::compaction_stats stats;
+        compaction::compaction_stats stats;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<scrub_sstables_compaction_task_impl>({}, info.keyspace, db, info.column_families, info.opts, &stats);
         try {

@@ -13,6 +13,8 @@
 
 using namespace sstables;
 
+namespace compaction {
+
 // The only difference to size tiered backlog tracker is that it will calculate
 // backlog contribution using total bytes of each sstable run instead of total
 // bytes of an individual sstable object.
@@ -59,3 +61,5 @@ public:
         return _total_bytes;
     }
 };
+
+}

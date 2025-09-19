@@ -97,7 +97,7 @@ public:
         unsigned sstables;
         size_t buffer_size;
         sstring dir;
-        sstables::compaction_strategy_type compaction_strategy;
+        compaction::compaction_strategy_type compaction_strategy;
         api::timestamp_type timestamp_range;
     };
 
@@ -129,7 +129,7 @@ private:
     lw_shared_ptr<replica::memtable> _mt;
     std::vector<shared_sstable> _sst;
 
-    schema_ptr create_schema(sstables::compaction_strategy_type type) {
+    schema_ptr create_schema(compaction::compaction_strategy_type type) {
         schema_builder builder("ks", "perf-test", generate_legacy_id("ks", "perf-test"));
         builder.with_column("name", utf8_type, column_kind::partition_key);
         for (unsigned i = 0; i < _cfg.num_columns; ++i) {
@@ -275,24 +275,24 @@ public:
                 cache_tracker tracker;
                 cell_locker_stats cl_stats;
                 tasks::task_manager tm;
-                auto cm = make_lw_shared<compaction_manager>(tm, compaction_manager::for_testing_tag{});
+                auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
                 auto cf = make_lw_shared<replica::column_family>(s, env.make_table_config(), make_lw_shared<replica::storage_options>(), *cm, env.manager(), cl_stats, tracker, nullptr);
 
                 auto start = perf_sstable_test_env::now();
 
-                auto descriptor = sstables::compaction_descriptor(std::move(ssts));
+                auto descriptor = compaction::compaction_descriptor(std::move(ssts));
                 descriptor.enable_garbage_collection(cf->get_sstable_set());
                 descriptor.creator = [sst_gen = std::move(sst_gen)] (unsigned dummy) mutable {
                     return sst_gen();
                 };
                 descriptor.replacer = sstables::replacer_fn_no_op();
-                auto cdata = compaction_manager::create_compaction_data();
+                auto cdata = compaction::compaction_manager::create_compaction_data();
                 compaction_progress_monitor progress_monitor;
-                auto ret = sstables::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
+                auto ret = compaction::compact_sstables(std::move(descriptor), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
                 auto end = perf_sstable_test_env::now();
 
                 auto partitions_per_sstable = _cfg.partitions / _cfg.sstables;
-                if (_cfg.compaction_strategy != sstables::compaction_strategy_type::time_window) {
+                if (_cfg.compaction_strategy != compaction::compaction_strategy_type::time_window) {
                     SCYLLA_ASSERT(ret.new_sstables.size() == 1);
                 }
                 auto total_keys_written = std::accumulate(ret.new_sstables.begin(), ret.new_sstables.end(), uint64_t(0), [] (uint64_t n, const sstables::shared_sstable& sst) {

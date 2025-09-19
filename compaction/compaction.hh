@@ -22,7 +22,7 @@
 
 using namespace compaction;
 
-namespace sstables {
+namespace compaction {
 
 bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept;
 
@@ -57,8 +57,8 @@ struct compaction_data {
     utils::UUID compaction_uuid;
     unsigned compaction_fan_in = 0;
     struct replacement {
-        const std::vector<shared_sstable> removed;
-        const std::vector<shared_sstable> added;
+        const std::vector<sstables::shared_sstable> removed;
+        const std::vector<sstables::shared_sstable> added;
     };
     std::vector<replacement> pending_replacements;
 
@@ -111,19 +111,17 @@ struct compaction_result {
     compaction_stats stats;
 };
 
-class read_monitor_generator;
-
 class compaction_progress_monitor {
-    std::unique_ptr<read_monitor_generator> _generator = nullptr;
+    std::unique_ptr<sstables::read_monitor_generator> _generator = nullptr;
     uint64_t _progress = 0;
 public:
-    void set_generator(std::unique_ptr<read_monitor_generator> generator);
+    void set_generator(std::unique_ptr<sstables::read_monitor_generator> generator);
     void reset_generator();
     // Returns number of bytes processed with _generator.
     uint64_t get_progress() const;
 
     friend class compaction;
-    friend future<compaction_result> scrub_sstables_validate_mode(sstables::compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&);
+    friend future<compaction_result> scrub_sstables_validate_mode(compaction_descriptor, compaction_data&, compaction_group_view&, compaction_progress_monitor&);
 };
 
 // Compact a list of N sstables into M sstables.
@@ -131,7 +129,7 @@ public:
 //
 // compaction_descriptor is responsible for specifying the type of compaction, and influencing
 // compaction behavior through its available member fields.
-future<compaction_result> compact_sstables(sstables::compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor);
+future<compaction_result> compact_sstables(compaction_descriptor descriptor, compaction_data& cdata, compaction_group_view& table_s, compaction_progress_monitor& progress_monitor);
 
 // Return list of expired sstables for column family cf.
 // A sstable is fully expired *iff* its max_local_deletion_time precedes gc_before and its

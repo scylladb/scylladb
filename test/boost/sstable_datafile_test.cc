@@ -1826,7 +1826,7 @@ SEASTAR_TEST_CASE(test_unknown_component) {
 SEASTAR_TEST_CASE(sstable_set_incremental_selector) {
   return test_env::do_with_async([] (test_env& env) {
     auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
-    auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+    auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::leveled, s->compaction_strategy_options());
     const auto decorated_keys = tests::generate_partition_keys(8, s);
 
     auto new_sstable = [&] (sstable_set& set, size_t k0, size_t k1, uint32_t level) {
@@ -1903,7 +1903,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
 
     // check that sstable_set::erase is capable of working properly when a non-existing element is given.
     {
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::leveled, s->compaction_strategy_options());
         sstable_set set = env.make_sstable_set(cs, s);
 
         auto sst = sstable_for_overlapping_test(env, s, key, key, 0);
@@ -1919,7 +1919,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
     }
 
     {
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::leveled, s->compaction_strategy_options());
         sstable_set set = env.make_sstable_set(cs, s);
 
         // triggers use-after-free, described in #4572, by operating on interval that relies on info of a destroyed sstable object.
@@ -1937,7 +1937,7 @@ SEASTAR_TEST_CASE(sstable_set_erase) {
     }
 
     {
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
         sstable_set set = env.make_sstable_set(cs, s);
 
         auto sst = sstable_for_overlapping_test(env, s, key, key, 0);
@@ -2690,7 +2690,7 @@ SEASTAR_TEST_CASE(test_sstable_origin) {
 SEASTAR_TEST_CASE(compound_sstable_set_basic_test) {
     return test_env::do_with_async([] (test_env& env) {
         auto s = schema_builder(some_keyspace, some_column_family).with_column("p1", utf8_type, column_kind::partition_key).build();
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::size_tiered, s->compaction_strategy_options());
 
         lw_shared_ptr<sstables::sstable_set> set1 = make_lw_shared(env.make_sstable_set(cs, s));
         lw_shared_ptr<sstables::sstable_set> set2 = make_lw_shared(env.make_sstable_set(cs, s));
@@ -3188,7 +3188,7 @@ SEASTAR_TEST_CASE(test_sstable_set_predicate) {
 
         auto sst = make_sstable_containing(env.make_sstable(s), muts);
 
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::leveled, s->compaction_strategy_options());
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::leveled, s->compaction_strategy_options());
         sstable_set set = env.make_sstable_set(cs, s);
         set.insert(sst);
 

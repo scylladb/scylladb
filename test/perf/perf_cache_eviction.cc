@@ -83,7 +83,7 @@ int main(int argc, char** argv) {
             replica::database& db = env.local_db();
             auto s = db.find_schema("ks", "cf");
             replica::column_family& cf = db.find_column_family(s->id());
-            cf.set_compaction_strategy(sstables::compaction_strategy_type::null);
+            cf.set_compaction_strategy(compaction::compaction_strategy_type::null);
 
             uint64_t mutations = 0;
             uint64_t reads = 0;

@@ -20,12 +20,12 @@ namespace sstables {
 
 // Not suitable for production, its sole purpose is testing.
 
-class sstable_run_based_compaction_strategy_for_tests : public compaction_strategy_impl {
+class sstable_run_based_compaction_strategy_for_tests : public compaction::compaction_strategy_impl {
     static constexpr size_t static_fragment_size_for_run = 1024*1024;
 public:
     sstable_run_based_compaction_strategy_for_tests();
 
-    virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
+    virtual future<compaction::compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
     virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
 

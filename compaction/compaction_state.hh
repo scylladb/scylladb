@@ -62,4 +62,4 @@ struct compaction_state {
     }
 };
 
-} // namespace compaction_manager
+} // namespace compaction

@@ -764,27 +764,43 @@ sstable_set_impl::selector_and_schema_t partitioned_sstable_set::make_incrementa
     return std::make_tuple(std::make_unique<incremental_selector>(_schema, _unleveled_sstables, _leveled_sstables, _leveled_sstables_change_cnt), std::cref(*_schema));
 }
 
-std::unique_ptr<sstable_set_impl> compaction_strategy_impl::make_sstable_set(const compaction_group_view& ts) const {
-    return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
-std::unique_ptr<sstable_set_impl> leveled_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
-    return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
+namespace compaction {
+
+std::unique_ptr<sstables::sstable_set_impl> compaction_strategy_impl::make_sstable_set(const compaction_group_view& ts) const {
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
-std::unique_ptr<sstable_set_impl> time_window_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
-    return std::make_unique<time_series_sstable_set>(ts.schema(), _options.enable_optimized_twcs_queries);
+std::unique_ptr<sstables::sstable_set_impl> leveled_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
+
+std::unique_ptr<sstables::sstable_set_impl> time_window_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
+    return std::make_unique<sstables::time_series_sstable_set>(ts.schema(), _options.enable_optimized_twcs_queries);
+}
+
+}
+
+namespace sstables {
 
 sstable_set make_partitioned_sstable_set(schema_ptr schema, dht::token_range token_range) {
     return sstable_set(std::make_unique<partitioned_sstable_set>(schema, std::move(token_range)));
 }
 
-sstable_set
-compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
-    return sstable_set(
+}
+
+namespace compaction {
+
+sstables::sstable_set
+compaction_strategy::make_sstable_set(const compaction::compaction_group_view& ts) const {
+    return sstables::sstable_set(
             _compaction_strategy_impl->make_sstable_set(ts));
 }
+
+}
+
+namespace sstables {
 
 using sstable_reader_factory_type = std::function<mutation_reader(shared_sstable&, const dht::partition_range& pr)>;
 

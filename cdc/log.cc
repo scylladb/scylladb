@@ -584,7 +584,7 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
 {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
     b.with_partitioner(cdc::cdc_partitioner::classname);
-    b.set_compaction_strategy(sstables::compaction_strategy_type::time_window);
+    b.set_compaction_strategy(compaction::compaction_strategy_type::time_window);
     b.set_comment(fmt::format("CDC log for {}.{}", s.ks_name(), s.cf_name()));
     auto ttl_seconds = s.cdc_options().ttl();
     if (ttl_seconds > 0) {

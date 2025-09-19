@@ -11,7 +11,7 @@
 #include "size_tiered_compaction_strategy.hh"
 #include "cql3/statements/property_definitions.hh"
 
-namespace sstables {
+namespace compaction {
 
 static long validate_sstable_size(const std::map<sstring, sstring>& options) {
     auto tmp_value = compaction_strategy_impl::get_value(options, size_tiered_compaction_strategy_options::MIN_SSTABLE_SIZE_KEY);
@@ -221,13 +221,13 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return sstables::compaction_descriptor(std::move(most_interesting));
+        co_return compaction_descriptor(std::move(most_interesting));
     }
 
     // If we are not enforcing min_threshold explicitly, try any pair of SStables in the same tier.
     if (!table_s.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::shared_sstable> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return sstables::compaction_descriptor(std::move(most_interesting));
+        co_return compaction_descriptor(std::move(most_interesting));
     }
 
     if (!table_s.tombstone_gc_enabled()) {
@@ -250,9 +250,9 @@ size_tiered_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         auto it = std::min_element(sstables.begin(), sstables.end(), [] (auto& i, auto& j) {
             return i->get_stats_metadata().min_timestamp < j->get_stats_metadata().min_timestamp;
         });
-        co_return sstables::compaction_descriptor({ *it });
+        co_return compaction_descriptor({ *it });
     }
-    co_return sstables::compaction_descriptor();
+    co_return compaction_descriptor();
 }
 
 int64_t size_tiered_compaction_strategy::estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
@@ -295,7 +295,7 @@ size_tiered_compaction_strategy::most_interesting_bucket(const std::vector<sstab
 }
 
 compaction_descriptor
-size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const
+size_tiered_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const
 {
     auto mode = cfg.mode;
     size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
@@ -306,7 +306,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
     }
 
     if (input.size() >= offstrategy_threshold && mode == reshape_mode::strict) {
-        std::sort(input.begin(), input.end(), [&schema] (const shared_sstable& a, const shared_sstable& b) {
+        std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
             return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
         });
         // All sstables can be reshaped at once if the amount of overlapping will not cause memory usage to be high,
@@ -338,7 +338,7 @@ size_tiered_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 std::vector<compaction_descriptor>
-size_tiered_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
+size_tiered_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     const auto& schema = table_s.schema();
     unsigned max_threshold = schema->max_compaction_threshold();
@@ -346,7 +346,7 @@ size_tiered_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_vi
     for (auto& bucket : get_buckets(candidates)) {
         if (bucket.size() > max_threshold) {
             // preserve token contiguity
-            std::ranges::sort(bucket, [&schema] (const shared_sstable& a, const shared_sstable& b) {
+            std::ranges::sort(bucket, [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
                 return a->get_first_decorated_key().tri_compare(*schema, b->get_first_decorated_key()) < 0;
             });
         }
@@ -354,7 +354,7 @@ size_tiered_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_vi
         while (it != bucket.end()) {
             unsigned remaining = std::distance(it, bucket.end());
             unsigned needed = std::min(remaining, max_threshold);
-            std::vector<shared_sstable> sstables;
+            std::vector<sstables::shared_sstable> sstables;
             std::move(it, it + needed, std::back_inserter(sstables));
             ret.push_back(compaction_descriptor(std::move(sstables)));
             std::advance(it, needed);

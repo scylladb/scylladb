@@ -18,7 +18,9 @@
 using request = http::request;
 using reply = http::reply;
 
+namespace compaction {
 class compaction_manager;
+}
 
 namespace service {
 
@@ -126,7 +128,7 @@ future<> set_server_stream_manager(http_context& ctx, sharded<streaming::stream_
 future<> unset_server_stream_manager(http_context& ctx);
 future<> set_hinted_handoff(http_context& ctx, sharded<service::storage_proxy>& p, sharded<gms::gossiper>& g);
 future<> unset_hinted_handoff(http_context& ctx);
-future<> set_server_compaction_manager(http_context& ctx, sharded<compaction_manager>& cm);
+future<> set_server_compaction_manager(http_context& ctx, sharded<compaction::compaction_manager>& cm);
 future<> unset_server_compaction_manager(http_context& ctx);
 future<> set_server_done(http_context& ctx);
 future<> set_server_task_manager(http_context& ctx, sharded<tasks::task_manager>& tm, lw_shared_ptr<db::config> cfg, sharded<gms::gossiper>& gossiper);

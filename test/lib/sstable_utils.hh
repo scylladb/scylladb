@@ -225,7 +225,7 @@ public:
 };
 
 inline auto replacer_fn_no_op() {
-    return [](sstables::compaction_completion_desc desc) -> void {};
+    return [](compaction::compaction_completion_desc desc) -> void {};
 }
 
 template<typename AsyncAction>
@@ -237,10 +237,10 @@ future<> for_each_sstable_version(AsyncAction action) {
 
 } // namespace sstables
 
-using can_purge_tombstones = compaction_manager::can_purge_tombstones;
-future<> run_compaction_task(test_env&, sstables::run_id output_run_id, compaction_group_view& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job);
-future<compaction_result> compact_sstables(test_env& env, sstables::compaction_descriptor descriptor, table_for_tests t,
-                 std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
+using can_purge_tombstones = compaction::compaction_manager::can_purge_tombstones;
+future<> run_compaction_task(test_env&, sstables::run_id output_run_id, compaction_group_view& table_s, noncopyable_function<future<> (compaction::compaction_data&)> job);
+future<compaction::compaction_result> compact_sstables(test_env& env, compaction::compaction_descriptor descriptor, table_for_tests t,
+                 std::function<shared_sstable()> creator, compaction::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
                  can_purge_tombstones can_purge = can_purge_tombstones::yes);
 
 shared_sstable make_sstable_easy(test_env& env, mutation_reader rd, sstable_writer_config cfg,

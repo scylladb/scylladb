@@ -32,12 +32,12 @@
 #include "incremental_compaction_strategy.hh"
 #include "sstables/sstable_set_impl.hh"
 
-logging::logger leveled_manifest::logger("LeveledManifest");
-logging::logger compaction_strategy_logger("CompactionStrategy");
-
 using namespace sstables;
 
-namespace sstables {
+namespace compaction {
+
+logging::logger leveled_manifest::logger("LeveledManifest");
+logging::logger compaction_strategy_logger("CompactionStrategy");
 
 using timestamp_type = api::timestamp_type;
 
@@ -51,7 +51,7 @@ std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compact
     // The compaction strategy relying on it should strive to implement its own method, to make cleanup bucket aware.
     return candidates | std::views::transform([] (const shared_sstable& sst) {
         return compaction_descriptor({ sst },
-            sst->get_sstable_level(), sstables::compaction_descriptor::default_max_sstable_bytes, sst->run_identifier());
+            sst->get_sstable_level(), compaction_descriptor::default_max_sstable_bytes, sst->run_identifier());
     }) | std::ranges::to<std::vector>();
 }
 
@@ -162,7 +162,7 @@ static bool validate_unchecked_tombstone_compaction(const std::map<sstring, sstr
     return unchecked_tombstone_compaction;
 }
 
-void compaction_strategy_impl::validate_options_for_strategy_type(const std::map<sstring, sstring>& options, sstables::compaction_strategy_type type) {
+void compaction_strategy_impl::validate_options_for_strategy_type(const std::map<sstring, sstring>& options, compaction_strategy_type type) {
     auto unchecked_options = options;
     compaction_strategy_impl::validate_options(options, unchecked_options);
     switch (type) {
@@ -212,8 +212,6 @@ compaction_strategy_impl::compaction_strategy_impl(const std::map<sstring, sstri
     _unchecked_tombstone_compaction = validate_unchecked_tombstone_compaction(options);
 }
 
-} // namespace sstables
-
 size_tiered_backlog_tracker::inflight_component
 size_tiered_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
     inflight_component in;
@@ -232,7 +230,7 @@ size_tiered_backlog_tracker::compacted_backlog(const compaction_backlog_tracker:
 }
 
 // Provides strong exception safety guarantees.
-size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_tracker::calculate_sstables_backlog_contribution(const std::vector<sstables::shared_sstable>& all, const sstables::size_tiered_compaction_strategy_options& stcs_options) {
+size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_tracker::calculate_sstables_backlog_contribution(const std::vector<sstables::shared_sstable>& all, const size_tiered_compaction_strategy_options& stcs_options) {
     sstables_backlog_contribution contrib;
     if (all.empty()) {
         return contrib;
@@ -318,8 +316,6 @@ void size_tiered_backlog_tracker::replace_sstables(const std::vector<sstables::s
         _contrib = std::move(tmp_contrib);
     });
 }
-
-namespace sstables {
 
 extern logging::logger clogger;
 
@@ -582,7 +578,7 @@ struct null_backlog_tracker final : public compaction_backlog_tracker::impl {
 class null_compaction_strategy : public compaction_strategy_impl {
 public:
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override {
-        return make_ready_future<sstables::compaction_descriptor>();
+        return make_ready_future<compaction_descriptor>();
     }
 
     virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override {
@@ -664,10 +660,6 @@ std::unique_ptr<compaction_backlog_tracker::impl> time_window_compaction_strateg
     return std::make_unique<time_window_backlog_tracker>(_options, _stcs_options);
 }
 
-} // namespace sstables
-
-namespace sstables {
-
 size_tiered_compaction_strategy::size_tiered_compaction_strategy(const std::map<sstring, sstring>& options)
     : compaction_strategy_impl(options)
     , _options(options)
@@ -732,7 +724,7 @@ compaction_backlog_tracker compaction_strategy::make_backlog_tracker() const {
     return compaction_backlog_tracker(_compaction_strategy_impl->make_backlog_tracker());
 }
 
-sstables::compaction_descriptor
+compaction_descriptor
 compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
     return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, cfg);
 }
@@ -783,7 +775,7 @@ compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, 
 }
 
 future<reshape_config> make_reshape_config(const sstables::storage& storage, reshape_mode mode) {
-    co_return sstables::reshape_config{
+    co_return reshape_config{
         .mode = mode,
         .free_storage_space = co_await storage.free_space() / smp::count,
     };

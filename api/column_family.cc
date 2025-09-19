@@ -1003,7 +1003,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         sstring strategy = req->get_query_param("class_name");
         apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
         return for_tables_on_all_shards(db, {std::move(ti)}, [strategy] (replica::table& cf) {
-            cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
+            cf.set_compaction_strategy(compaction::compaction_strategy::type(strategy));
             return make_ready_future<>();
         });
     });

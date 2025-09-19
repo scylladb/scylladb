@@ -15,20 +15,17 @@
 #include "compaction_descriptor.hh"
 
 class reader_permit;
-class compaction_backlog_tracker;
 
 namespace sstables {
 class sstable_set;
-class compaction_strategy;
 class sstables_manager;
 struct sstable_writer_config;
 }
 
 namespace compaction {
+class compaction_strategy;
 class compaction_strategy_state;
-}
-
-namespace compaction {
+class compaction_backlog_tracker;
 
 class compaction_group_view {
 public:
@@ -43,7 +40,7 @@ public:
     virtual lw_shared_ptr<const sstables::sstable_set> sstable_set_for_tombstone_gc() const = 0;
     virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const = 0;
     virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept = 0;
-    virtual sstables::compaction_strategy& get_compaction_strategy() const noexcept = 0;
+    virtual compaction_strategy& get_compaction_strategy() const noexcept = 0;
     virtual compaction_strategy_state& get_compaction_strategy_state() noexcept = 0;
     virtual reader_permit make_compaction_reader_permit() const = 0;
     virtual sstables::sstables_manager& get_sstables_manager() noexcept = 0;
@@ -53,7 +50,7 @@ public:
     virtual api::timestamp_type min_memtable_live_timestamp() const = 0;
     virtual api::timestamp_type min_memtable_live_row_marker_timestamp() const = 0;
     virtual bool memtable_has_key(const dht::decorated_key& key) const = 0;
-    virtual future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
+    virtual future<> on_compaction_completion(compaction_completion_desc desc, sstables::offstrategy offstrategy) = 0;
     virtual bool is_auto_compaction_disabled_by_user() const noexcept = 0;
     virtual bool tombstone_gc_enabled() const noexcept = 0;
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept = 0;
