@@ -731,68 +731,6 @@ rest_cdc_streams_check_and_repair(sharded<service::storage_service>& ss, std::un
 
 static
 future<json::json_return_type>
-rest_force_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
-        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
-        apilog.info("force_compaction: flush={} consider_only_existing_data={}", flush, consider_only_existing_data);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
-        if (!flush && !consider_only_existing_data) {
-            fmopt = flush_mode::skip;
-        }
-        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt, consider_only_existing_data);
-        co_await task->done();
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
-rest_force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
-        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
-        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
-        apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
-        if (!flush && !consider_only_existing_data) {
-            fmopt = flush_mode::skip;
-        }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
-        co_await task->done();
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
-rest_force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
-        if (rs.is_local() || !rs.is_vnode_based()) {
-            auto reason = rs.is_local() ? "require" : "support";
-            apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
-            co_return json::json_return_type(0);
-        }
-        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
-        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
-            auto msg = "Can not perform cleanup operation when topology changes";
-            apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
-            co_await coroutine::return_exception(std::runtime_error(msg));
-        }
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
-            {}, std::move(keyspace), db, table_infos, flush_mode::all_tables, tasks::is_user_task::yes);
-        co_await task->done();
-        co_return json::json_return_type(0);
-}
-
-static
-future<json::json_return_type>
 rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("cleanup_all");
         auto done = co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
@@ -809,33 +747,6 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
         auto& db = ctx.db;
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<global_cleanup_compaction_task_impl>({}, db);
-        co_await task->done();
-        co_return json::json_return_type(0);
-}
-
-static
-future<json::json_return_type>
-rest_perform_keyspace_offstrategy_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
-        bool res = false;
-        auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<offstrategy_keyspace_compaction_task_impl>({}, std::move(keyspace), ctx.db, table_infos, &res);
-        co_await task->done();
-        co_return json::json_return_type(res);
-}
-
-static
-future<json::json_return_type>
-rest_upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
-
-        apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
         co_await task->done();
         co_return json::json_return_type(0);
 }
@@ -1821,12 +1732,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
     ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
-    ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
-    ss::force_keyspace_compaction.set(r, rest_bind(rest_force_keyspace_compaction, ctx));
-    ss::force_keyspace_cleanup.set(r, rest_bind(rest_force_keyspace_cleanup, ctx, ss));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
-    ss::perform_keyspace_offstrategy_compaction.set(r, rest_bind(rest_perform_keyspace_offstrategy_compaction, ctx));
-    ss::upgrade_sstables.set(r, rest_bind(rest_upgrade_sstables, ctx));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
     ss::decommission.set(r, rest_bind(rest_decommission, ss));
@@ -1903,12 +1809,7 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_current_generation_number.unset(r);
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
-    ss::force_compaction.unset(r);
-    ss::force_keyspace_compaction.unset(r);
-    ss::force_keyspace_cleanup.unset(r);
     ss::cleanup_all.unset(r);
-    ss::perform_keyspace_offstrategy_compaction.unset(r);
-    ss::upgrade_sstables.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);
     ss::decommission.unset(r);
