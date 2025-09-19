@@ -320,6 +320,8 @@ public:
     reader_permit make_permit();
 };
 
+std::tuple<int,char**> cut_arg(int ac, char** av, std::string name, int num_args = 2);
+
 } // namespace perf
 
 template <> struct fmt::formatter<scheduling_latency_measurer> : fmt::formatter<string_view> {
