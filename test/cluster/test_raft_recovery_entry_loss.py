@@ -100,6 +100,9 @@ async def test_raft_recovery_entry_lose(manager: ManagerClient):
     logging.info(f'Restarting {live_servers}')
     await manager.rolling_restart(live_servers)
 
+    await reconnect_driver(manager)
+    cql, _ = await manager.get_ready_cql(live_servers)
+
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     for h in hosts:
         await delete_discovery_state_and_group0_id(cql, h)
