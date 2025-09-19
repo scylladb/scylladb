@@ -23,7 +23,7 @@
 #include <seastar/coroutine/exception.hh>
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
-#include "service/vector_store_client.hh"
+#include "vector_search/vector_store_client.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -1223,9 +1223,8 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto as = abort_source();
         auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, as);
         if (!pkeys.has_value()) {
-            co_await coroutine::return_exception(exceptions::invalid_request_exception(
-                std::visit(service::vector_store_client::ann_error_visitor{}, pkeys.error())
-            ));
+            co_await coroutine::return_exception(
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
         }
 
         // If there are no clustering columns, we have to convert the partition keys to partition ranges.

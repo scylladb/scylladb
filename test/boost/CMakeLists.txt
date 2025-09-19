@@ -305,7 +305,7 @@ add_scylla_test(wrapping_interval_test
 add_scylla_test(address_map_test
   KIND SEASTAR)
 add_scylla_test(vector_store_client_test
-  KIND SEASTAR)
+  KIND SEASTAR LIBRARIES vector_search)
 
 add_scylla_test(combined_tests
   KIND SEASTAR
