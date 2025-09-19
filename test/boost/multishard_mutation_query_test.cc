@@ -165,7 +165,7 @@ static std::pair<schema_ptr, std::vector<dht::decorated_key>> create_test_table(
     return {std::move(res.schema), std::move(res.keys)};
 }
 
-static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db, uint64_t query::querier_cache::stats::*stat) {
+static uint64_t aggregate_querier_cache_stat(sharded<replica::database>& db, uint64_t query::querier_cache::stats::*stat) {
     return map_reduce(std::views::iota(0u, smp::count), [stat, &db] (unsigned shard) {
         return db.invoke_on(shard, [stat] (replica::database& local_db) {
             auto& stats = local_db.get_querier_cache_stats();
@@ -174,7 +174,7 @@ static uint64_t aggregate_querier_cache_stat(distributed<replica::database>& db,
     }, 0, std::plus<size_t>()).get();
 }
 
-static void check_cache_population(distributed<replica::database>& db, size_t queriers,
+static void check_cache_population(sharded<replica::database>& db, size_t queriers,
         seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
@@ -186,7 +186,7 @@ static void check_cache_population(distributed<replica::database>& db, size_t qu
     }).get();
 }
 
-static void require_eventually_empty_caches(distributed<replica::database>& db,
+static void require_eventually_empty_caches(sharded<replica::database>& db,
         seastar::compat::source_location sl = seastar::compat::source_location::current()) {
     testlog.info("{}() called from {}() {}:{:d}", __FUNCTION__, sl.function_name(), sl.file_name(), sl.line());
 
@@ -235,7 +235,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
 
 } // multishard_mutation_query_test namespace
 
-static utils::chunked_vector<mutation> read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
+static utils::chunked_vector<mutation> read_all_partitions_one_by_one(sharded<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
         const query::partition_slice& slice) {
     const auto& sharder = s->get_sharder();
     utils::chunked_vector<mutation> results;
@@ -259,7 +259,7 @@ static utils::chunked_vector<mutation> read_all_partitions_one_by_one(distribute
     return results;
 }
 
-static utils::chunked_vector<mutation> read_all_partitions_one_by_one(distributed<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
+static utils::chunked_vector<mutation> read_all_partitions_one_by_one(sharded<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys) {
     return read_all_partitions_one_by_one(db, s, pkeys, s->full_slice());
 }
 
@@ -267,7 +267,7 @@ using stateful_query = bool_class<class stateful>;
 
 template <typename ResultBuilder>
 static std::pair<typename ResultBuilder::end_result_type, size_t>
-read_partitions_with_generic_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+read_partitions_with_generic_paged_scan(sharded<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range_vector& original_ranges, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     const auto query_uuid = is_stateful ? query_id::create_random_id() : query_id::create_null_id();
     ResultBuilder res_builder(s, slice, page_size);
@@ -360,7 +360,7 @@ read_partitions_with_generic_paged_scan(distributed<replica::database>& db, sche
 
 template <typename ResultBuilder>
 static std::pair<typename ResultBuilder::end_result_type, size_t>
-read_partitions_with_generic_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+read_partitions_with_generic_paged_scan(sharded<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     dht::partition_range_vector ranges{range};
     return read_partitions_with_generic_paged_scan<ResultBuilder>(db, std::move(s), page_size, max_size, is_stateful, ranges, slice, page_hook);
@@ -389,7 +389,7 @@ private:
 
 public:
     static foreign_ptr<lw_shared_ptr<reconcilable_result>> query(
-            distributed<replica::database>& db,
+            sharded<replica::database>& db,
             schema_ptr s,
             const query::read_command& cmd,
             const dht::partition_range_vector& ranges,
@@ -474,7 +474,7 @@ private:
 
 public:
     static foreign_ptr<lw_shared_ptr<query::result>> query(
-            distributed<replica::database>& db,
+            sharded<replica::database>& db,
             schema_ptr s,
             const query::read_command& cmd,
             const dht::partition_range_vector& ranges,
@@ -514,13 +514,13 @@ public:
 };
 
 static std::pair<utils::chunked_vector<mutation>, size_t>
-read_partitions_with_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
+read_partitions_with_paged_scan(sharded<replica::database>& db, schema_ptr s, uint32_t page_size, uint64_t max_size, stateful_query is_stateful,
         const dht::partition_range& range, const query::partition_slice& slice, const std::function<void(size_t)>& page_hook = {}) {
     return read_partitions_with_generic_paged_scan<mutation_result_builder>(db, std::move(s), page_size, max_size, is_stateful, range, slice, page_hook);
 }
 
 static std::pair<utils::chunked_vector<mutation>, size_t>
-read_all_partitions_with_paged_scan(distributed<replica::database>& db, schema_ptr s, uint32_t page_size, stateful_query is_stateful,
+read_all_partitions_with_paged_scan(sharded<replica::database>& db, schema_ptr s, uint32_t page_size, stateful_query is_stateful,
         const std::function<void(size_t)>& page_hook) {
     return read_partitions_with_paged_scan(db, s, page_size, std::numeric_limits<uint64_t>::max(), is_stateful, query::full_partition_range,
             s->full_slice(), page_hook);
@@ -1051,7 +1051,7 @@ struct fuzzy_test_config {
 };
 
 static void
-run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
+run_fuzzy_test_scan(size_t i, fuzzy_test_config cfg, sharded<replica::database>& db, schema_ptr schema,
         const utils::chunked_vector<frozen_mutation>& frozen_mutations) {
     const auto seed = cfg.seed + (i + 1) * this_shard_id();
     auto rnd_engine = std::mt19937(seed);
@@ -1126,7 +1126,7 @@ future<> run_concurrently(size_t count, size_t concurrency, noncopyable_function
 }
 
 static future<>
-run_fuzzy_test_workload(fuzzy_test_config cfg, distributed<replica::database>& db, schema_ptr schema,
+run_fuzzy_test_workload(fuzzy_test_config cfg, sharded<replica::database>& db, schema_ptr schema,
         const utils::chunked_vector<frozen_mutation>& frozen_mutations) {
     return run_concurrently(cfg.scans, cfg.concurrency, [cfg, &db, schema = std::move(schema), &frozen_mutations] (size_t i) {
         return seastar::async([i, cfg, &db, schema, &frozen_mutations] () mutable {

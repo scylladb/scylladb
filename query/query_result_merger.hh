@@ -8,13 +8,13 @@
 
 #pragma once
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "query-result.hh"
 
 namespace query {
 
 // Merges non-overlapping results into one
-// Implements @Reducer concept from distributed.hh
+// Implements @Reducer concept from sharded.hh
 class result_merger {
     std::vector<foreign_ptr<lw_shared_ptr<query::result>>> _partial;
     const uint64_t _max_rows;

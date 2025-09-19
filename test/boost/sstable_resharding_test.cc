@@ -6,7 +6,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "sstables/sstables.hh"
 #include "test/lib/scylla_test_case.hh"
 #include "schema/schema.hh"

@@ -123,11 +123,11 @@ schema_ctxt::schema_ctxt(replica::database& db)
     : schema_ctxt(db.get_config(), db.as_user_types_storage(), db.features(), &db)
 {}
 
-schema_ctxt::schema_ctxt(distributed<replica::database>& db)
+schema_ctxt::schema_ctxt(sharded<replica::database>& db)
     : schema_ctxt(db.local())
 {}
 
-schema_ctxt::schema_ctxt(distributed<service::storage_proxy>& proxy)
+schema_ctxt::schema_ctxt(sharded<service::storage_proxy>& proxy)
     : schema_ctxt(proxy.local().get_db())
 {}
 
@@ -173,7 +173,7 @@ static void drop_index_from_schema_mutation(schema_ptr table,
                 utils::chunked_vector<mutation>& mutations);
 
 static future<schema_ptr> create_table_from_table_row(
-                distributed<service::storage_proxy>&,
+                sharded<service::storage_proxy>&,
                 const query::result_set_row&);
 
 static void prepare_builder_from_table_row(const schema_ctxt&, schema_builder&, const query::result_set_row&);
@@ -710,7 +710,7 @@ redact_columns_for_missing_features(mutation&& m, schema_features features) {
  * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
  * will be converted into UUID which would act as content-based version of the schema.
  */
-future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
+future<table_schema_version> calculate_schema_digest(sharded<service::storage_proxy>& proxy, schema_features features, noncopyable_function<bool(std::string_view)> accept_keyspace)
 {
     using mutations_generator = coroutine::experimental::generator<mutation>;
 
@@ -746,7 +746,7 @@ future<table_schema_version> calculate_schema_digest(distributed<service::storag
     }
 }
 
-future<table_schema_version> calculate_schema_digest(distributed<service::storage_proxy>& proxy, schema_features features)
+future<table_schema_version> calculate_schema_digest(sharded<service::storage_proxy>& proxy, schema_features features)
 {
     return calculate_schema_digest(proxy, features, std::not_fn(&is_system_keyspace));
 }
@@ -790,7 +790,7 @@ future<> with_merge_lock(noncopyable_function<future<> ()> func) {
     }
 }
 
-future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, schema_features features, std::optional<table_schema_version> version_from_group0) {
+future<> update_schema_version_and_announce(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, schema_features features, std::optional<table_schema_version> version_from_group0) {
     auto uuid = version_from_group0 ? *version_from_group0 : co_await calculate_schema_digest(proxy, features);
     co_await sys_ks.local().update_schema_version(uuid);
     co_await proxy.local().get_db().invoke_on_all([uuid] (replica::database& db) {
@@ -807,14 +807,14 @@ future<std::optional<table_schema_version>> get_group0_schema_version(db::system
     co_return table_schema_version{*version};
 }
 
-future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, gms::feature_service& feat) {
+future<> recalculate_schema_version(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, gms::feature_service& feat) {
     co_await with_merge_lock([&] () -> future<> {
         auto version_from_group0 = co_await get_group0_schema_version(sys_ks.local());
         co_await update_schema_version_and_announce(sys_ks, proxy, feat.cluster_schema_features(), version_from_group0);
     });
 }
 
-future<utils::chunked_vector<canonical_mutation>> convert_schema_to_mutations(distributed<service::storage_proxy>& proxy, schema_features features)
+future<utils::chunked_vector<canonical_mutation>> convert_schema_to_mutations(sharded<service::storage_proxy>& proxy, schema_features features)
 {
     auto map = [&proxy, features] (table_info table) -> future<utils::chunked_vector<canonical_mutation>> {
         auto& db = proxy.local().get_db();
@@ -870,7 +870,7 @@ future<mutation> query_partition_mutation(service::storage_proxy& proxy,
 }
 
 future<schema_result_value_type>
-read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, sstring schema_table_name, sstring keyspace_name)
+read_schema_partition_for_keyspace(sharded<service::storage_proxy>& proxy, sstring schema_table_name, sstring keyspace_name)
 {
     auto schema = proxy.local().get_db().local().find_schema(NAME, schema_table_name);
     auto keyspace_key = dht::decorate_key(*schema,
@@ -880,7 +880,7 @@ read_schema_partition_for_keyspace(distributed<service::storage_proxy>& proxy, s
 }
 
 future<mutation>
-read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, schema_ptr schema, const sstring& keyspace_name, const sstring& table_name)
+read_schema_partition_for_table(sharded<service::storage_proxy>& proxy, schema_ptr schema, const sstring& keyspace_name, const sstring& table_name)
 {
     SCYLLA_ASSERT(schema_tables_holding_schema_mutations().contains(schema->id()));
     auto keyspace_key = partition_key::from_singular(*schema, keyspace_name);
@@ -895,7 +895,7 @@ read_schema_partition_for_table(distributed<service::storage_proxy>& proxy, sche
 }
 
 future<mutation>
-read_keyspace_mutation(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name) {
+read_keyspace_mutation(sharded<service::storage_proxy>& proxy, const sstring& keyspace_name) {
     schema_ptr s = keyspaces();
     auto key = partition_key::from_singular(*s, keyspace_name);
     auto slice = s->full_slice();
@@ -951,7 +951,7 @@ static void fill_column_info(const schema& table,
     m.set_clustered_cell(ckey, "type", type->as_cql3_type().to_string(), timestamp, ttl);
 }
 
-future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl) {
+future<> store_column_mapping(sharded<service::storage_proxy>& proxy, schema_ptr s, bool with_ttl) {
     // Skip "system*" tables -- only user-related tables are relevant
     if (static_cast<std::string_view>(s->ks_name()).starts_with(db::system_keyspace::NAME)) {
         co_return;
@@ -978,7 +978,7 @@ future<> store_column_mapping(distributed<service::storage_proxy>& proxy, schema
     co_await proxy.local().mutate_locally(std::move(muts), tracing::trace_state_ptr());
 }
 
-future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(distributed<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
+future<lw_shared_ptr<query::result_set>> extract_scylla_specific_keyspace_info(sharded<service::storage_proxy>& proxy, const schema_result_value_type& partition) {
     lw_shared_ptr<query::result_set> scylla_specific_rs;
     if (proxy.local().local_db().has_schema(NAME, SCYLLA_KEYSPACES)) {
         auto&& rs = partition.second;
@@ -1280,7 +1280,7 @@ utils::chunked_vector<mutation> make_drop_keyspace_mutations(schema_features fea
  * @param partition Keyspace attributes in serialized form
  */
 future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
-        distributed<service::storage_proxy>& proxy,
+        sharded<service::storage_proxy>& proxy,
         const schema_result_value_type& result,
         lw_shared_ptr<query::result_set> scylla_specific_rs)
 {
@@ -2074,7 +2074,7 @@ utils::chunked_vector<mutation> make_drop_table_mutations(lw_shared_ptr<keyspace
     return mutations;
 }
 
-future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
+future<schema_mutations> read_table_mutations(sharded<service::storage_proxy>& proxy, const qualified_name& table, schema_ptr s)
 {
     auto&& [cf_m, col_m, vv_col_m, c_col_m, dropped_m, idx_m, st_m] = co_await coroutine::all(
         [&] { return read_schema_partition_for_table(proxy, s, table.keyspace_name, table.table_name); },
@@ -2088,7 +2088,7 @@ future<schema_mutations> read_table_mutations(distributed<service::storage_proxy
     co_return schema_mutations{std::move(cf_m), std::move(col_m), std::move(vv_col_m), std::move(c_col_m), std::move(idx_m), std::move(dropped_m), std::move(st_m)};
 }
 
-future<schema_ptr> create_table_from_name(distributed<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
+future<schema_ptr> create_table_from_name(sharded<service::storage_proxy>& proxy, const sstring& keyspace, const sstring& table)
 {
     auto qn = qualified_name(keyspace, table);
     auto sm = co_await read_table_mutations(proxy, qn, tables());
@@ -2111,7 +2111,7 @@ constexpr size_t max_concurrent = 8;
  *
  * @return map containing name of the table and its metadata for faster lookup
  */
-future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
+future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(sharded<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
     auto tables = std::map<sstring, schema_ptr>();
     co_await max_concurrent_for_each(result->rows().begin(), result->rows().end(), max_concurrent, [&] (const query::result_set_row& row) -> future<> {
@@ -2126,7 +2126,7 @@ future<std::map<sstring, schema_ptr>> create_tables_from_tables_partition(distri
  *
  * @return Metadata deserialized from schema
  */
-static future<schema_ptr> create_table_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row)
+static future<schema_ptr> create_table_from_table_row(sharded<service::storage_proxy>& proxy, const query::result_set_row& row)
 {
     auto ks_name = row.get_nonnull<sstring>("keyspace_name");
     auto cf_name = row.get_nonnull<sstring>("table_name");
@@ -2625,7 +2625,7 @@ view_ptr create_view_from_mutations(const schema_ctxt& ctxt, schema_mutations sm
     return view_ptr(builder.build());
 }
 
-static future<view_ptr> create_view_from_table_row(distributed<service::storage_proxy>& proxy, const query::result_set_row& row) {
+static future<view_ptr> create_view_from_table_row(sharded<service::storage_proxy>& proxy, const query::result_set_row& row) {
     qualified_name qn(row.get_nonnull<sstring>("keyspace_name"), row.get_nonnull<sstring>("view_name"));
     schema_mutations sm = co_await read_table_mutations(proxy, qn, views());
     if (!sm.live()) {
@@ -2640,7 +2640,7 @@ static future<view_ptr> create_view_from_table_row(distributed<service::storage_
  *
  * @return vector containing the view definitions
  */
-future<std::vector<view_ptr>> create_views_from_schema_partition(distributed<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
+future<std::vector<view_ptr>> create_views_from_schema_partition(sharded<service::storage_proxy>& proxy, const schema_result::mapped_type& result)
 {
     std::vector<view_ptr> views;
     co_await max_concurrent_for_each(result->rows().begin(), result->rows().end(), max_concurrent, [&] (auto&& row) -> future<> {
@@ -2844,7 +2844,7 @@ table_schema_version schema_mutations::digest() const {
     return table_schema_version(utils::UUID_gen::get_name_UUID(h.finalize()));
 }
 
-future<schema_mutations> read_table_mutations(distributed<service::storage_proxy>& proxy,
+future<schema_mutations> read_table_mutations(sharded<service::storage_proxy>& proxy,
     sstring keyspace_name, sstring table_name, schema_ptr s)
 {
     mutation cf_m = co_await read_schema_partition_for_table(proxy, s, keyspace_name, table_name);

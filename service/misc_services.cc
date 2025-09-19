@@ -27,7 +27,7 @@ constexpr std::chrono::milliseconds load_broadcaster::BROADCAST_INTERVAL;
 
 logging::logger llogger("load_broadcaster");
 
-future<> load_meter::init(distributed<replica::database>& db, gms::gossiper& gms) {
+future<> load_meter::init(sharded<replica::database>& db, gms::gossiper& gms) {
     _lb = make_shared<load_broadcaster>(db, gms);
     _lb->start_broadcasting();
     return make_ready_future<>();

@@ -23,7 +23,7 @@
 #include "mutation_query.hh"
 #include "system_keyspace_view_types.hh"
 #include "sstables/sstables_registry.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "cdc/generation_id.hh"
 #include "cdc/generation.hh"
 #include "locator/host_id.hh"
@@ -363,16 +363,16 @@ public:
     /// overloads
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-    static query_mutations(distributed<replica::database>& db,
+    static query_mutations(sharded<replica::database>& db,
                     schema_ptr schema);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-    static query_mutations(distributed<replica::database>& db,
+    static query_mutations(sharded<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name);
 
     future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-    static query_mutations(distributed<replica::database>& db,
+    static query_mutations(sharded<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name,
                     const dht::partition_range& partition_range,
@@ -380,14 +380,14 @@ public:
 
     // Returns all data from given system table.
     // Intended to be used by code which is not performance critical.
-    static future<lw_shared_ptr<query::result_set>> query(distributed<replica::database>& db,
+    static future<lw_shared_ptr<query::result_set>> query(sharded<replica::database>& db,
                     const sstring& ks_name,
                     const sstring& cf_name);
 
     // Returns a slice of given system table.
     // Intended to be used by code which is not performance critical.
     static future<lw_shared_ptr<query::result_set>> query(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         const sstring& ks_name,
         const sstring& cf_name,
         const dht::decorated_key& key,
@@ -648,7 +648,7 @@ public:
 
     // Obtain the contents of the group 0 history table in mutation form.
     // Assumes that the history table exists, i.e. Raft feature is enabled.
-    static future<mutation> get_group0_history(distributed<replica::database>&);
+    static future<mutation> get_group0_history(sharded<replica::database>&);
 
     // If the `group0_schema_version` key in `system.scylla_local` is present (either live or tombstone),
     // returns the corresponding mutation. Otherwise returns nullopt.

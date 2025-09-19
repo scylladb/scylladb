@@ -179,10 +179,10 @@ int main(int ac, char ** av) {
         ("stay-alive", bpo::value<bool>()->default_value(false), "Do not kill the test server after the test")
         ("cpuid", bpo::value<uint32_t>()->default_value(0), "Server cpuid");
 
-    distributed<replica::database> db;
+    sharded<replica::database> db;
     sharded<auth::service> auth_service;
     locator::shared_token_metadata tm({}, {});
-    distributed<qos::service_level_controller> sl_controller;
+    sharded<qos::service_level_controller> sl_controller;
 
     return app.run_deprecated(ac, av, [&app, &auth_service, &tm, &sl_controller] {
         return seastar::async([&app, &auth_service, &tm, &sl_controller] {

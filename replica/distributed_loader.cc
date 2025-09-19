@@ -163,7 +163,7 @@ distributed_loader::make_sstables_available(sstables::sstable_directory& dir, sh
 }
 
 future<>
-distributed_loader::process_upload_dir(distributed<replica::database>& db, sharded<db::view::view_builder>& vb, sharded<db::view::view_building_worker>& vbw, sstring ks, sstring cf, bool skip_cleanup, bool skip_reshape) {
+distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<db::view::view_builder>& vb, sharded<db::view::view_building_worker>& vbw, sstring ks, sstring cf, bool skip_cleanup, bool skip_reshape) {
     const auto& rs = db.local().find_keyspace(ks).get_replication_strategy();
     if (rs.is_per_table()) {
         on_internal_error(dblog, "process_upload_dir is not supported with tablets");
@@ -225,7 +225,7 @@ distributed_loader::process_upload_dir(distributed<replica::database>& db, shard
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg) {
+distributed_loader::get_sstables_from_upload_dir(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg) {
     return get_sstables_from(db, ks, cf, cfg, [] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
             sstables::sstable_state::upload, &error_handler_gen_for_upload_dir
@@ -234,7 +234,7 @@ distributed_loader::get_sstables_from_upload_dir(distributed<replica::database>&
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from_object_store(distributed<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src) {
+distributed_loader::get_sstables_from_object_store(sharded<replica::database>& db, sstring ks, sstring cf, std::vector<sstring> sstables, sstring endpoint, sstring bucket, sstring prefix, sstables::sstable_open_config cfg, std::function<seastar::abort_source*()> get_abort_src) {
     return get_sstables_from(db, ks, cf, cfg, [bucket, endpoint, prefix, sstables=std::move(sstables), &get_abort_src] (auto& global_table, auto& directory) {
         return directory.start(global_table.as_sharded_parameter(),
             sharded_parameter([bucket, endpoint, prefix, &get_abort_src] {
@@ -249,7 +249,7 @@ distributed_loader::get_sstables_from_object_store(distributed<replica::database
 }
 
 future<std::tuple<table_id, std::vector<std::vector<sstables::shared_sstable>>>>
-distributed_loader::get_sstables_from(distributed<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
+distributed_loader::get_sstables_from(sharded<replica::database>& db, sstring ks, sstring cf, sstables::sstable_open_config cfg,
         noncopyable_function<future<>(global_table_ptr&, sharded<sstables::sstable_directory>&)> start_dir) {
     return seastar::async([&db, ks = std::move(ks), cf = std::move(cf), start_dir = std::move(start_dir), cfg] {
         auto global_table = get_table_on_all_shards(db, ks, cf).get();
@@ -278,7 +278,7 @@ distributed_loader::get_sstables_from(distributed<replica::database>& db, sstrin
 }
 
 class table_populator {
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     sstring _ks;
     sstring _cf;
     global_table_ptr& _global_table;
@@ -286,7 +286,7 @@ class table_populator {
     sstables::sstable_version_types _highest_version = sstables::oldest_writable_sstable_format;
 
 public:
-    table_populator(global_table_ptr& ptr, distributed<replica::database>& db, sstring ks, sstring cf)
+    table_populator(global_table_ptr& ptr, sharded<replica::database>& db, sstring ks, sstring cf)
         : _db(db)
         , _ks(std::move(ks))
         , _cf(std::move(cf))
@@ -434,7 +434,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
     });
 }
 
-future<> distributed_loader::populate_keyspace(distributed<replica::database>& db,
+future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
         sharded<db::system_keyspace>& sys_ks, keyspace& ks, sstring ks_name)
 {
     dblog.info("Populating Keyspace {}", ks_name);
@@ -511,7 +511,7 @@ future<> distributed_loader::populate_keyspace(distributed<replica::database>& d
     }
 }
 
-future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, distributed<locator::effective_replication_map_factory>& erm_factory, distributed<replica::database>& db) {
+future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& sys_ks, sharded<locator::effective_replication_map_factory>& erm_factory, sharded<replica::database>& db) {
     return seastar::async([&sys_ks, &erm_factory, &db] {
         sys_ks.invoke_on_all([&erm_factory, &db] (auto& sys_ks) {
             return sys_ks.make(erm_factory.local(), db.local());
@@ -527,8 +527,8 @@ future<> distributed_loader::init_system_keyspace(sharded<db::system_keyspace>& 
     });
 }
 
-future<> distributed_loader::init_non_system_keyspaces(distributed<replica::database>& db,
-        distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
+future<> distributed_loader::init_non_system_keyspaces(sharded<replica::database>& db,
+        sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
     return seastar::async([&db, &proxy, &sys_ks] {
         db.invoke_on_all([&proxy, &sys_ks] (replica::database& db) {
             return db.parse_system_tables(proxy, sys_ks);

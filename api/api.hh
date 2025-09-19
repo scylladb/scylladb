@@ -73,7 +73,7 @@ inline std::vector<sstring> split(const sstring& text, const char* separator) {
  *
  */
 template<class T, class F, class V>
-future<json::json_return_type>  sum_stats(distributed<T>& d, V F::*f) {
+future<json::json_return_type>  sum_stats(sharded<T>& d, V F::*f) {
     return d.map_reduce0([f](const T& p) {return p.get_stats().*f;}, 0,
             std::plus<V>()).then([](V val) {
         return make_ready_future<json::json_return_type>(val);
@@ -106,7 +106,7 @@ httpd::utils_json::rate_moving_average_and_histogram timer_to_json(const utils::
 }
 
 template<class T, class F>
-future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
+future<json::json_return_type>  sum_histogram_stats(sharded<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
 
     return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).hist;}, utils::ihistogram(),
             std::plus<utils::ihistogram>()).then([](const utils::ihistogram& val) {
@@ -115,7 +115,7 @@ future<json::json_return_type>  sum_histogram_stats(distributed<T>& d, utils::ti
 }
 
 template<class T, class F>
-future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
+future<json::json_return_type>  sum_timer_stats(sharded<T>& d, utils::timed_rate_moving_average_and_histogram F::*f) {
 
     return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
             std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
@@ -124,7 +124,7 @@ future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_
 }
 
 template<class T, class F>
-future<json::json_return_type>  sum_timer_stats(distributed<T>& d, utils::timed_rate_moving_average_summary_and_histogram F::*f) {
+future<json::json_return_type>  sum_timer_stats(sharded<T>& d, utils::timed_rate_moving_average_summary_and_histogram F::*f) {
     return d.map_reduce0([f](const T& p) {return (p.get_stats().*f).rate();}, utils::rate_moving_average_and_histogram(),
             std::plus<utils::rate_moving_average_and_histogram>()).then([](const utils::rate_moving_average_and_histogram& val) {
         return make_ready_future<json::json_return_type>(timer_to_json(val));

@@ -178,7 +178,7 @@ class read_context : public reader_lifecycle_policy {
         }
     };
 
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     schema_ptr _schema;
     locator::effective_replication_map_ptr _erm;
     reader_permit _permit;
@@ -199,7 +199,7 @@ class read_context : public reader_lifecycle_policy {
     friend fmt::formatter<dismantle_buffer_stats>;
 
 public:
-    read_context(distributed<replica::database>& db, schema_ptr s, locator::effective_replication_map_ptr erm,
+    read_context(sharded<replica::database>& db, schema_ptr s, locator::effective_replication_map_ptr erm,
                  const query::read_command& cmd, const dht::partition_range_vector& ranges,
                  tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout)
             : _db(db)
@@ -228,7 +228,7 @@ public:
     read_context& operator=(read_context&&) = delete;
     read_context& operator=(const read_context&) = delete;
 
-    distributed<replica::database>& db() {
+    sharded<replica::database>& db() {
         return _db;
     }
 
@@ -755,7 +755,7 @@ future<page_consume_result<ResultBuilder>> read_page(
 
 template <typename ResultBuilder>
 future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query_vnodes(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -786,7 +786,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
 
 template <typename ResultBuilder>
 future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query_tablets(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -824,7 +824,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
 
 template <typename ResultBuilder>
 static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>, cache_temperature>> do_query_on_all_shards(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -982,7 +982,7 @@ public:
 } // anonymous namespace
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_on_all_shards(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr query_schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -995,7 +995,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
 }
 
 future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_data_on_all_shards(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr query_schema,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,

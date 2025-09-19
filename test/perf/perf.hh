@@ -11,7 +11,7 @@
 #include <ranges>
 #include <seastar/core/format.hh>
 #include <seastar/core/future-util.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/weak_ptr.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "seastarx.hh"
@@ -231,7 +231,7 @@ std::vector<Res> time_parallel_ex(Func func, unsigned concurrency_per_core, int 
     for (int i = 0; i < iterations; ++i) {
         auto start = clk::now();
         auto end_at = lowres_clock::now() + std::chrono::seconds(1);
-        distributed<executor<Func>> exec;
+        sharded<executor<Func>> exec;
         Res result;
         exec.start(concurrency_per_core, func, std::move(end_at), operations_per_shard, stop_on_error, operations_count_per_iteration).get();
         auto stop_exec = defer([&exec] {

@@ -7,7 +7,7 @@
  */
 
 #include <boost/program_options/errors.hpp>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/app-template.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/reactor.hh>
@@ -20,7 +20,7 @@ using namespace sstables;
 static unsigned iterations = 30;
 static unsigned parallelism = 1;
 
-future<> test_write(distributed<perf_sstable_test_env>& dt) {
+future<> test_write(sharded<perf_sstable_test_env>& dt) {
     return seastar::async([&dt] {
         dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.fill_memtable();
@@ -30,7 +30,7 @@ future<> test_write(distributed<perf_sstable_test_env>& dt) {
     });
 }
 
-future<> test_compaction(distributed<perf_sstable_test_env>& dt) {
+future<> test_compaction(sharded<perf_sstable_test_env>& dt) {
     return seastar::async([&dt] {
         dt.invoke_on_all([] (perf_sstable_test_env &t) {
             return t.fill_memtable();
@@ -40,19 +40,19 @@ future<> test_compaction(distributed<perf_sstable_test_env>& dt) {
     });
 }
 
-future<> test_index_read(distributed<perf_sstable_test_env>& dt) {
+future<> test_index_read(sharded<perf_sstable_test_env>& dt) {
     return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::read_all_indexes);
 }
 
-future<> test_sequential_read(distributed<perf_sstable_test_env>& dt) {
+future<> test_sequential_read(sharded<perf_sstable_test_env>& dt) {
     return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::read_sequential_partitions);
 }
 
-future<> test_full_scan_streaming(distributed<perf_sstable_test_env>& dt) {
+future<> test_full_scan_streaming(sharded<perf_sstable_test_env>& dt) {
     return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::full_scan_streaming);
 }
 
-future<> test_partitioned_streaming(distributed<perf_sstable_test_env>& dt) {
+future<> test_partitioned_streaming(sharded<perf_sstable_test_env>& dt) {
     return time_runs(iterations, parallelism, dt, &perf_sstable_test_env::partitioned_streaming);
 }
 
@@ -118,7 +118,7 @@ int scylla_sstable_main(int argc, char** argv) {
 
     return app.run(argc, argv, [&app] {
         return async([&app] {
-            distributed<perf_sstable_test_env> test;
+            sharded<perf_sstable_test_env> test;
 
             auto cfg = perf_sstable_test_env::conf();
             iterations = app.configuration()["iterations"].as<unsigned>();

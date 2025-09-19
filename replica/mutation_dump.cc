@@ -404,7 +404,7 @@ future<mutation_reader> make_partition_mutation_dump_reader(
         schema_ptr output_schema,
         schema_ptr underlying_schema,
         reader_permit permit,
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         const dht::decorated_key& dk,
         const query::partition_slice& ps,
         tracing::trace_state_ptr ts,
@@ -446,7 +446,7 @@ future<mutation_reader> make_partition_mutation_dump_reader(
 }
 
 class multi_range_partition_generator {
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     schema_ptr _schema;
     circular_buffer<dht::partition_range> _prs;
     tracing::trace_state_ptr _ts;
@@ -500,7 +500,7 @@ private:
         co_await read_next_page();
     }
 public:
-    multi_range_partition_generator(distributed<replica::database>& db, schema_ptr schema, const dht::partition_range_vector& prs,
+    multi_range_partition_generator(sharded<replica::database>& db, schema_ptr schema, const dht::partition_range_vector& prs,
             tracing::trace_state_ptr ts, db::timeout_clock::time_point timeout)
         : _db(db)
         , _schema(std::move(schema))
@@ -536,7 +536,7 @@ public:
 };
 
 noncopyable_function<future<std::optional<dht::decorated_key>>()>
-make_partition_key_generator(distributed<replica::database>& db, schema_ptr schema, const dht::partition_range_vector& prs,
+make_partition_key_generator(sharded<replica::database>& db, schema_ptr schema, const dht::partition_range_vector& prs,
         tracing::trace_state_ptr ts, db::timeout_clock::time_point timeout) {
     if (prs.size() == 1 && prs.front().is_singular()) {
         auto dk_opt = std::optional(prs.front().start()->value().as_decorated_key());

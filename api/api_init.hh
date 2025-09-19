@@ -83,9 +83,9 @@ struct http_context {
     sstring api_dir;
     sstring api_doc;
     httpd::http_server_control http_server;
-    distributed<replica::database>& db;
+    sharded<replica::database>& db;
 
-    http_context(distributed<replica::database>& _db)
+    http_context(sharded<replica::database>& _db)
             : db(_db)
     {
     }

@@ -24,7 +24,7 @@
 #include "locator/tablets.hh"
 #include "locator/tablet_metadata_guard.hh"
 #include "inet_address_vectors.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/condition-variable.hh>
 #include "dht/token_range_endpoints.hh"
 #include "gms/application_state.hh"
@@ -33,7 +33,7 @@
 #include <seastar/core/gate.hh>
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "service/migration_listener.hh"
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -169,7 +169,7 @@ private:
 
     abort_source& _abort_source;
     gms::feature_service& _feature_service;
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     gms::gossiper& _gossiper;
     sharded<netw::messaging_service>& _messaging;
     sharded<service::migration_manager>& _migration_manager;
@@ -225,7 +225,7 @@ private:
     void register_tablet_split_candidate(table_id) noexcept;
     future<> run_tablet_split_monitor();
 public:
-    storage_service(abort_source& as, distributed<replica::database>& db,
+    storage_service(abort_source& as, sharded<replica::database>& db,
         gms::gossiper& gossiper,
         sharded<db::system_keyspace>&,
         sharded<db::system_distributed_keyspace>&,
@@ -254,7 +254,7 @@ public:
     ~storage_service();
 
     node_ops::task_manager_module& get_node_ops_module() noexcept;
-    // Needed by distributed<>
+    // Needed by sharded<>
     future<> stop();
     void init_messaging_service();
     future<> uninit_messaging_service();

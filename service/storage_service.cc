@@ -31,7 +31,7 @@
 #include <exception>
 #include <optional>
 #include <fmt/ranges.h>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/util/defer.hh>
 #include <seastar/coroutine/as_future.hh>
 #include "gms/endpoint_state.hh"
@@ -182,7 +182,7 @@ void check_raft_rpc_scheduling_group(const replica::database& db, const gms::fea
 static constexpr std::chrono::seconds wait_for_live_nodes_timeout{30};
 
 storage_service::storage_service(abort_source& abort_source,
-    distributed<replica::database>& db, gms::gossiper& gossiper,
+    sharded<replica::database>& db, gms::gossiper& gossiper,
     sharded<db::system_keyspace>& sys_ks,
     sharded<db::system_distributed_keyspace>& sys_dist_ks,
     gms::feature_service& feature_service,

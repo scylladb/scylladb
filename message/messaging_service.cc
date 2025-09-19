@@ -18,7 +18,7 @@
 #include <seastar/coroutine/all.hh>
 
 #include "message/messaging_service.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "gms/gossiper.hh"
 #include "service/storage_service.hh"
 #include "service/qos/service_level_controller.hh"

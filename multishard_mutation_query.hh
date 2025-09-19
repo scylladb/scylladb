@@ -14,7 +14,7 @@
 #include "db/timeout_clock.hh"
 #include "dht/i_partitioner_fwd.hh"
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 
 #include "seastarx.hh"
 
@@ -66,7 +66,7 @@ namespace tracing {
 /// \see multishard_combined_reader
 /// \see querier_cache
 future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_temperature>> query_mutations_on_all_shards(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
@@ -78,7 +78,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
 /// Identical to `query_mutations_on_all_shards()` except that it builds results
 /// in the `query::result` format instead of in the `reconcilable_result` one.
 future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>> query_data_on_all_shards(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr s,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,

@@ -138,7 +138,7 @@ struct commitlog_service {
     }
 };
 
-static std::vector<clperf_result> do_commitlog_test(distributed<commitlog_service>& cls, test_config& cfg) {
+static std::vector<clperf_result> do_commitlog_test(sharded<commitlog_service>& cls, test_config& cfg) {
     auto uuid = table_id(utils::UUID_gen::get_time_UUID());
 
     return time_parallel_ex<clperf_result>([&] {
@@ -233,7 +233,7 @@ int main(int argc, char** argv) {
         tmpdir tmp;
         cl_cfg.commit_log_location = tmp.path().string();
 
-        distributed<commitlog_service> test_commitlog;
+        sharded<commitlog_service> test_commitlog;
 
         //logging::logger_registry().set_logger_level("commitlog", logging::log_level::debug);
 

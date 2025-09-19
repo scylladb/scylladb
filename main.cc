@@ -31,7 +31,7 @@
 #include "replica/database.hh"
 #include <seastar/core/reactor.hh>
 #include <seastar/core/app-template.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "transport/server.hh"
 #include <seastar/http/httpd.hh>
 #include "api/api_init.hh"
@@ -724,7 +724,7 @@ sharded<locator::shared_token_metadata> token_metadata;
     std::optional<utils::disk_space_monitor> disk_space_monitor_shard0;
     sharded<compaction_manager> cm;
     sharded<sstables::storage_manager> sstm;
-    distributed<replica::database> db;
+    sharded<replica::database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
     sharded<service::storage_proxy> proxy;
@@ -1680,7 +1680,7 @@ sharded<locator::shared_token_metadata> token_metadata;
 
             checkpoint(stop_signal, "starting tablet allocator");
             service::tablet_allocator::config tacfg;
-            distributed<service::tablet_allocator> tablet_allocator;
+            sharded<service::tablet_allocator> tablet_allocator;
             tablet_allocator.start(tacfg, std::ref(mm_notifier), std::ref(db)).get();
             auto stop_tablet_allocator = defer_verbose_shutdown("tablet allocator", [&tablet_allocator] {
                 tablet_allocator.stop().get();

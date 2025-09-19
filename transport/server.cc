@@ -254,7 +254,7 @@ void cql_sg_stats::rename_metrics() {
     }
 }
 
-cql_server::cql_server(distributed<cql3::query_processor>& qp, auth::service& auth_service,
+cql_server::cql_server(sharded<cql3::query_processor>& qp, auth::service& auth_service,
         service::memory_limiter& ml, cql_server_config config,
         qos::service_level_controller& sl_controller, gms::gossiper& g, scheduling_group_key stats_key,
         maintenance_socket_enabled used_by_maintenance_socket)
@@ -1053,7 +1053,7 @@ template <typename Process>
     requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
                                    Process,
                                    service::client_state&,
-                                   distributed<cql3::query_processor>&,
+                                   sharded<cql3::query_processor>&,
                                    request_reader,
                                    uint16_t,
                                    cql_protocol_version_type,
@@ -1086,7 +1086,7 @@ template <typename Process>
     requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
                                    Process,
                                    service::client_state&,
-                                   distributed<cql3::query_processor>&,
+                                   sharded<cql3::query_processor>&,
                                    request_reader,
                                    uint16_t,
                                    cql_protocol_version_type,
@@ -1118,7 +1118,7 @@ cql_server::connection::process(uint16_t stream, request_reader in, service::cli
 }
 
 static future<cql_server::process_fn_return_type>
-process_query_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
+process_query_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
         cql3::dialect dialect) {
@@ -1196,7 +1196,7 @@ future<std::unique_ptr<cql_server::response>> cql_server::connection::process_pr
 }
 
 static future<cql_server::process_fn_return_type>
-process_execute_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
+process_execute_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls,
         cql3::dialect dialect) {
@@ -1289,7 +1289,7 @@ future<cql_server::result_with_foreign_response_ptr> cql_server::connection::pro
 }
 
 static future<cql_server::process_fn_return_type>
-process_batch_internal(service::client_state& client_state, distributed<cql3::query_processor>& qp, request_reader in,
+process_batch_internal(service::client_state& client_state, sharded<cql3::query_processor>& qp, request_reader in,
         uint16_t stream, cql_protocol_version_type version,
         service_permit permit, tracing::trace_state_ptr trace_state, bool init_trace, cql3::computed_function_values cached_pk_fn_calls, cql3::dialect dialect) {
     const utils::result_with_exception_ptr<int8_t> type = in.read_byte();

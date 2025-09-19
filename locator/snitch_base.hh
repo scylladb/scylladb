@@ -18,7 +18,7 @@
 #include "locator/types.hh"
 #include "gms/inet_address.hh"
 #include <seastar/core/thread.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "utils/log.hh"
 
 namespace gms {
@@ -215,7 +215,7 @@ private:
  * @return ready future when the transition is complete
  *
  * The flow goes as follows:
- *  1) Create a new distributed<snitch_ptr> and initialize it with the new
+ *  1) Create a new sharded<snitch_ptr> and initialize it with the new
  *     snitch.
  *  2) Start the new snitches above - this will initialize the snitches objects
  *     and will make them ready to be used.
@@ -223,15 +223,15 @@ private:
  *  4) Pause the per-shard snitch objects from (1) - this will stop the async
  *     I/O parts of the snitches if any.
  *  5) Assign the per-shard snitch_ptr's from new distributed from (1) to the
- *     global one and update the distributed<> pointer in the new snitch
+ *     global one and update the sharded<> pointer in the new snitch
  *     instances.
  *  6) Start the new snitches.
- *  7) Stop() the temporary distributed<snitch_ptr> from (1).
+ *  7) Stop() the temporary sharded<snitch_ptr> from (1).
  */
 inline future<> i_endpoint_snitch::reset_snitch(sharded<snitch_ptr>& snitch, snitch_config cfg) {
     return seastar::async([cfg = std::move(cfg), &snitch] {
         // (1) create a new snitch
-        distributed<snitch_ptr> tmp_snitch;
+        sharded<snitch_ptr> tmp_snitch;
         try {
             tmp_snitch.start(cfg).get();
 

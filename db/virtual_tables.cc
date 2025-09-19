@@ -54,11 +54,11 @@ logging::logger vtlog("virtual_tables");
 
 class cluster_status_table : public memtable_filling_virtual_table {
 private:
-    distributed<service::storage_service>& _dist_ss;
-    distributed<gms::gossiper>& _dist_gossiper;
+    sharded<service::storage_service>& _dist_ss;
+    sharded<gms::gossiper>& _dist_gossiper;
 
 public:
-    cluster_status_table(distributed<service::storage_service>& ss, distributed<gms::gossiper>& g)
+    cluster_status_table(sharded<service::storage_service>& ss, sharded<gms::gossiper>& g)
             : memtable_filling_virtual_table(build_schema())
             , _dist_ss(ss), _dist_gossiper(g) {}
 
@@ -234,9 +234,9 @@ public:
 };
 
 class snapshots_table : public streaming_virtual_table {
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
 public:
-    explicit snapshots_table(distributed<replica::database>& db)
+    explicit snapshots_table(sharded<replica::database>& db)
             : streaming_virtual_table(build_schema())
             , _db(db)
     {
@@ -373,7 +373,7 @@ public:
 
 class runtime_info_table : public memtable_filling_virtual_table {
 private:
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     service::storage_service& _ss;
     std::optional<dht::decorated_key> _generic_key;
 
@@ -456,7 +456,7 @@ private:
     }
 
 public:
-    explicit runtime_info_table(distributed<replica::database>& db, service::storage_service& ss)
+    explicit runtime_info_table(sharded<replica::database>& db, service::storage_service& ss)
         : memtable_filling_virtual_table(build_schema())
         , _db(db)
         , _ss(ss) {
@@ -1320,8 +1320,8 @@ private:
 }
 
 future<> initialize_virtual_tables(
-        distributed<replica::database>& dist_db, distributed<service::storage_service>& dist_ss,
-        sharded<gms::gossiper>& dist_gossiper, distributed<service::raft_group_registry>& dist_raft_gr,
+        sharded<replica::database>& dist_db, sharded<service::storage_service>& dist_ss,
+        sharded<gms::gossiper>& dist_gossiper, sharded<service::raft_group_registry>& dist_raft_gr,
         sharded<db::system_keyspace>& sys_ks,
         sharded<service::tablet_allocator>& tablet_allocator,
         sharded<netw::messaging_service>& ms,
