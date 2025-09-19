@@ -246,7 +246,7 @@ template<>
 struct fmt::formatter<table_balance> : fmt::formatter<string_view> {
     template <typename FormatContext>
     auto format(const table_balance& b, FormatContext& ctx) const {
-        return fmt::format_to(ctx.out(), "{{shard={:.2f} (best={:.2f}), node={:.2f}}}",
+        return fmt::format_to(ctx.out(), "{{shard={} (best={}), node={}}}",
                               b.shard_overcommit, b.best_shard_overcommit, b.node_overcommit);
     }
 };
@@ -325,6 +325,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         const size_t rf2 = p.rf2;
         const shard_id shard_count = p.shards;
         const int cycles = p.iterations;
+        const uint64_t shard_capacity = default_target_tablet_size * 100;
 
         struct host_info {
             host_id id;
@@ -347,14 +348,19 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
         const sstring dc1 = topo.dc();
         populate_racks(rf1);
 
+        // The rack for which we output stats
+        sstring test_rack = racks.front().rack;
+
         const size_t rack_count = racks.size();
+        std::unordered_map<sstring, uint64_t> rack_capacity;
 
         auto add_host = [&] (endpoint_dc_rack dc_rack) {
             auto host = topo.add_node(service::node_state::normal, shard_count, dc_rack);
             hosts.emplace_back(host, dc_rack);
-            const uint64_t capacity = default_target_tablet_size * shard_count * 100;
+            const uint64_t capacity = shard_capacity * shard_count;
             stats.capacity[host] = capacity;
             stats.tablet_stats[host].effective_capacity = capacity;
+            rack_capacity[dc_rack.rack] += capacity;
             testlog.info("Added new node: {} / {}:{}", host, dc_rack.dc, dc_rack.rack);
         };
 
@@ -383,6 +389,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
             }
             topo.set_node_state(host, service::node_state::left);
             testlog.info("Node decommissioned: {}", host);
+            rack_capacity[it->dc_rack.rack] -= stats.capacity.at(host);
             hosts.erase(it);
             stats.tablet_stats.erase(host);
         };
@@ -396,49 +403,133 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
 
         generate_tablet_sizes(p.tablet_size_deviation_factor, stats, stm);
 
+        // Compute table size per rack, and collect all tablets per rack
+        std::unordered_map<sstring, std::unordered_map<table_id, uint64_t>> table_sizes_per_rack;
+        std::unordered_map<sstring, std::unordered_map<table_id, std::vector<uint64_t>>> tablet_sizes_in_rack;
+        for (auto& [host, tls] : stats.tablet_stats) {
+            auto host_i = std::ranges::find(hosts, host, &host_info::id);
+            if (host_i == hosts.end()) {
+                throw std::runtime_error(format("Host {} not found in hosts", host));
+            }
+            auto rack = host_i->dc_rack.rack;
+            for (auto& [table, ranges] : tls.tablet_sizes) {
+                for (auto& [trange, tablet_size] : ranges) {
+                    table_sizes_per_rack[rack][table] += tablet_size;
+                    tablet_sizes_in_rack[rack][table].push_back(tablet_size);
+                }
+            }
+        }
+
+        // Sort the tablet sizes per rack in descending order
+        for (auto& [rack, tables] : tablet_sizes_in_rack) {
+            for (auto& [table, tablets] : tables) {
+                std::ranges::sort(tablets, std::greater<uint64_t>());
+            }
+        }
+
+        struct node_used_size {
+            host_id host;
+            uint64_t used = 0;
+        };
+
+        // Compute best shard overcommit per table per rack
+        std::unordered_map<sstring, std::unordered_map<table_id, double>> best_shard_overcommit_per_rack;
+        auto compute_best_overcommit = [&] () {
+            auto node_size_compare = [] (const node_used_size& lhs, const node_used_size& rhs) {
+                return lhs.used > rhs.used;
+            };
+
+            for (auto& all_dc_rack : racks) {
+                auto rack = all_dc_rack.rack;
+
+                // Allocate tablet sizes to nodes
+                for (auto& [table, tablet_sizes]: tablet_sizes_in_rack.at(rack)) {
+                    load_sketch load(e.shared_token_metadata().local().get(), make_lw_shared<locator::load_stats>(stats));
+
+                    // Add nodes to load_sketch and to the nodes_used heap
+                    std::vector<node_used_size> nodes_used;
+                    for (const auto& [host_id, host_dc_rack] : hosts) {
+                        if (rack == host_dc_rack.rack) {
+                            load.ensure_node(host_id);
+                            nodes_used.push_back({host_id, 0});
+                        }
+                    }
+
+                    // Allocate tablets to nodes/shards
+                    for (uint64_t tablet_size : tablet_sizes) {
+                        std::pop_heap(nodes_used.begin(), nodes_used.end(), node_size_compare);
+                        host_id add_to_host = nodes_used.back().host;
+                        nodes_used.back().used += tablet_size;
+                        std::push_heap(nodes_used.begin(), nodes_used.end(), node_size_compare);
+
+                        // Add to the least loaded shard on the least loaded node
+                        load.next_shard(add_to_host, 1, tablet_size);
+                    }
+
+                    // Get the best overcommit from all the nodes
+                    min_max_tracker<locator::disk_usage::load_type> load_minmax;
+                    for (const auto& n : nodes_used) {
+                        load_minmax.update(load.get_shard_minmax(n.host));
+                    }
+
+                    const uint64_t table_size = table_sizes_per_rack.at(rack).at(table);
+                    const double ideal_load = double(table_size) / rack_capacity.at(rack);
+                    const double best_overcommit = load_minmax.max() / ideal_load;
+                    best_shard_overcommit_per_rack[rack][table] = best_overcommit;
+                }
+            }
+        };
+
         auto check_balance = [&] () -> cluster_balance {
             cluster_balance res;
 
             testlog.debug("tablet metadata: {}", stm.get()->tablets());
 
+            compute_best_overcommit();
+
+            auto load_stats_p = make_lw_shared<locator::load_stats>(stats);
             int table_index = 0;
             for (auto s : {s1, s2}) {
-                load_sketch load(stm.get());
-                load.populate(std::nullopt, s->id()).get();
+                auto table = s->id();
+                load_sketch load(stm.get(), load_stats_p);
+                load.populate(std::nullopt, table).get();
 
-                min_max_tracker<uint64_t> shard_load_minmax;
-                min_max_tracker<uint64_t> node_load_minmax;
-                uint64_t sum_node_load = 0;
-                uint64_t shard_count = 0;
-                for (auto [h, _] : hosts) {
+                min_max_tracker<double> shard_overcommit_minmax;
+                min_max_tracker<double> node_overcommit_minmax;
+                auto rack = test_rack;
+                auto table_size = table_sizes_per_rack.at(rack).at(table);
+                auto ideal_load = double(table_size) / rack_capacity.at(rack);
+                min_max_tracker<double> shard_load_minmax;
+                min_max_tracker<double> node_load_minmax;
+                for (auto [h, host_dc_rack] : hosts) {
+                    if (host_dc_rack.rack != rack) {
+                        continue;
+                    }
                     auto minmax = load.get_shard_minmax(h);
                     auto node_load = load.get_load(h);
-                    auto avg_shard_load = load.get_real_avg_tablet_count(h);
-                    auto overcommit = double(minmax.max()) / avg_shard_load;
-                    shard_load_minmax.update(minmax.max());
-                    shard_count += load.get_shard_count(h);
-                    testlog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
-                                 h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), avg_shard_load, overcommit);
+                    auto overcommit = double(minmax.max()) / ideal_load;
+                    testlog.info("Load on host {} for table {}: total={}, min={}, max={}, spread={}, ideal={}, overcommit={}",
+                                h, s->cf_name(), node_load, minmax.min(), minmax.max(), minmax.max() - minmax.min(), ideal_load, overcommit);
                     node_load_minmax.update(node_load);
-                    sum_node_load += node_load;
+                    shard_load_minmax.update(minmax.max());
                 }
 
-                auto avg_shard_load = double(sum_node_load) / shard_count;
-                auto shard_overcommit = shard_load_minmax.max() / avg_shard_load;
-                // Overcommit given the best distribution of tablets given current number of tablets.
-                auto best_shard_overcommit = div_ceil(sum_node_load, shard_count) / avg_shard_load;
-                testlog.info("Shard overcommit: {:.2f}, best={:.2f}", shard_overcommit, best_shard_overcommit);
+                auto shard_overcommit = shard_load_minmax.max() / ideal_load;
+                auto best_shard_overcommit = best_shard_overcommit_per_rack.at(rack).at(table);
+                testlog.info("Shard overcommit: {} best: {}", shard_overcommit, best_shard_overcommit);
 
                 auto node_imbalance = node_load_minmax.max() - node_load_minmax.min();
-                auto avg_node_load = double(sum_node_load) / hosts.size();
-                auto node_overcommit = node_load_minmax.max() / avg_node_load;
-                testlog.info("Node imbalance: min={}, max={}, spread={}, avg={:.2f}, overcommit={:.2f}",
-                              node_load_minmax.min(), node_load_minmax.max(), node_imbalance, avg_node_load, node_overcommit);
+                auto node_overcommit = node_load_minmax.max() / ideal_load;
+                testlog.info("Node imbalance in min={}, max={}, spread={}, ideal={}, overcommit={}",
+                            node_load_minmax.min(), node_load_minmax.max(), node_imbalance, ideal_load, node_overcommit);
+
+                shard_overcommit_minmax.update(shard_overcommit);
+                node_overcommit_minmax.update(node_overcommit);
 
                 res.tables[table_index++] = {
-                    .shard_overcommit = shard_overcommit,
+                    .shard_overcommit = shard_overcommit_minmax.max(),
                     .best_shard_overcommit = best_shard_overcommit,
-                    .node_overcommit = node_overcommit
+                    .node_overcommit = node_overcommit_minmax.max(),
                 };
             }
 
@@ -561,7 +652,7 @@ future<> run_simulation(const params& p, const sstring& name = "") {
         }
         auto overcommit = res.worst.tables[i].shard_overcommit;
         if (overcommit > 1.2) {
-            testlog.warn("[run {}] table{} shard overcommit {:.2f} > 1.2!", name, i + 1, overcommit);
+            testlog.warn("[run {}] table{} shard overcommit {:.4f} > 1.2!", name, i + 1, overcommit);
         }
     }
 }
