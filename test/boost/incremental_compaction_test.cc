@@ -83,9 +83,9 @@ SEASTAR_TEST_CASE(incremental_compaction_test) {
 
         table_for_tests cf = env.make_table_for_tests(s, tmp->path().string());
         auto close_cf = deferred_stop(cf);
-        cf->set_compaction_strategy(sstables::compaction_strategy_type::size_tiered);
+        cf->set_compaction_strategy(compaction::compaction_strategy_type::size_tiered);
         auto compact = [&, s] (std::vector<shared_sstable> all, auto replacer) -> std::vector<shared_sstable> {
-            auto desc = sstables::compaction_descriptor(std::move(all), 1, 0);
+            auto desc = compaction::compaction_descriptor(std::move(all), 1, 0);
             desc.enable_garbage_collection(cf->get_sstable_set());
             return compact_sstables(env, std::move(desc), cf, sst_gen, replacer).get().new_sstables;
         };
@@ -348,7 +348,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
         (void)run.insert(sst);
         BOOST_REQUIRE(std::fabs(run.estimate_droppable_tombstone_ratio(now, cf.as_compaction_group_view().get_tombstone_gc_state(), cf.schema()) - expired) <= 0.1);
 
-        auto cd = sstables::compaction_descriptor({ sst });
+        auto cd = compaction::compaction_descriptor({ sst });
         cd.enable_garbage_collection(cf->get_sstable_set());
         auto info = compact_sstables(env, std::move(cd), cf, creator).get();
         auto uncompacted_size = sst->data_size();
@@ -364,7 +364,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
             // that's needed because sstable with droppable data should be old enough.
             options.emplace("tombstone_compaction_interval", "1");
             sleep(2s).get();
-            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
+            auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, options);
             auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 1);
             BOOST_REQUIRE(descriptor.sstables.front() == sst);
@@ -374,7 +374,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
         {
             std::map<sstring, sstring> options;
             options.emplace("tombstone_threshold", "0.5f");
-            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
+            auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, options);
             auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
         }
@@ -382,7 +382,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
         {
             std::map<sstring, sstring> options;
             options.emplace("tombstone_compaction_interval", "3600");
-            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
+            auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now());
             auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 0);
@@ -394,7 +394,7 @@ SEASTAR_TEST_CASE(basic_garbage_collection_test) {
             options.emplace("tombstone_compaction_interval", "3600");
             options.emplace("tombstone_threshold", "0.5f");
             options.emplace("unchecked_tombstone_compaction", "true");
-            auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
+            auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, options);
             sstables::test(sst).set_data_file_write_time(db_clock::now() - std::chrono::seconds(7200));
             auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
             BOOST_REQUIRE(descriptor.sstables.size() == 1);
@@ -410,12 +410,12 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
                 .with_column("id", utf8_type, column_kind::partition_key)
                 .with_column("cl", ::timestamp_type, column_kind::clustering_key)
                 .with_column("value", int32_type);
-        builder.set_compaction_strategy(sstables::compaction_strategy_type::incremental);
+        builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
         constexpr unsigned target_sstable_size_in_mb = 1000;
         std::map <sstring, sstring> opts = {
                 {"sstable_size_in_mb", to_sstring(target_sstable_size_in_mb)},
         };
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, opts);
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, opts);
         builder.set_compaction_strategy_options(std::move(opts));
         auto s = builder.build();
 
@@ -522,7 +522,7 @@ SEASTAR_TEST_CASE(gc_tombstone_with_grace_seconds_test) {
         options.emplace("tombstone_compaction_interval", "1");
         forward_jump_clocks(std::chrono::seconds{1});
         auto control = make_strategy_control_for_test(false);
-        auto cs = sstables::make_compaction_strategy(sstables::compaction_strategy_type::incremental, options);
+        auto cs = compaction::make_compaction_strategy(compaction::compaction_strategy_type::incremental, options);
         auto descriptor = cs.get_sstables_for_compaction(cf.as_compaction_group_view(), *control).get();
         BOOST_REQUIRE_EQUAL(descriptor.sstables.size(), 1);
         BOOST_REQUIRE_EQUAL(descriptor.sstables.front(), sst);

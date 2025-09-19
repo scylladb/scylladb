@@ -197,7 +197,7 @@ class compact_mutation_state {
 
     std::unique_ptr<mutation_compactor_garbage_collector> _collector;
 
-    compaction_stats _stats;
+    ::compaction_stats _stats;
     tombstone_purge_stats* _tombstone_stats = nullptr;
 
     mutation_fragment_stream_validating_filter _validator;
@@ -680,7 +680,7 @@ public:
         }
     }
 
-    const compaction_stats& stats() const { return _stats; }
+    const ::compaction_stats& stats() const { return _stats; }
 };
 
 template<compact_for_sstables SSTableCompaction, typename Consumer, typename GCConsumer>

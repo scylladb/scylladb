@@ -3007,7 +3007,7 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
     auto sstables = open_sstables(env, s, format("test/resource/sstables/3.x/uncompressed/{}", table_name), generations);
     sstables::shared_sstable compacted_sst;
 
-    auto desc = sstables::compaction_descriptor(std::move(sstables));
+    auto desc = compaction::compaction_descriptor(std::move(sstables));
     desc.creator = [&] (shard_id dummy) {
         compacted_sst = env.make_sstable(s);
         return compacted_sst;
@@ -3015,7 +3015,7 @@ static mutation_reader compacted_sstable_reader(test_env& env, schema_ptr s,
     desc.replacer = replacer_fn_no_op();
     auto cdata = compaction_manager::create_compaction_data();
     compaction_progress_monitor progress_monitor;
-    sstables::compact_sstables(std::move(desc), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
+    compaction::compact_sstables(std::move(desc), cdata, cf->try_get_compaction_group_view_with_static_sharding(), progress_monitor).get();
 
     return compacted_sst->as_mutation_source().make_mutation_reader(s, env.make_reader_permit(), query::full_partition_range, s->full_slice());
 }

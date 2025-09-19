@@ -9,6 +9,8 @@
 
 using namespace sstables;
 
+namespace compaction {
+
 incremental_backlog_tracker::inflight_component incremental_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
     inflight_component in;
     for (auto& crp : ongoing_compactions) {
@@ -125,4 +127,6 @@ void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::s
             _sstable_runs_contributing_backlog = std::move(backlog_calculation_result.sstable_runs_contributing_backlog);
         }
     });
+}
+
 }

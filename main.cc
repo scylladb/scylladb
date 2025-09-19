@@ -721,7 +721,7 @@ sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::migration_notifier> mm_notifier;
     sharded<service::endpoint_lifecycle_notifier> lifecycle_notifier;
     std::optional<utils::disk_space_monitor> disk_space_monitor_shard0;
-    sharded<compaction_manager> cm;
+    sharded<compaction::compaction_manager> cm;
     sharded<sstables::storage_manager> sstm;
     sharded<replica::database> db;
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
@@ -1192,9 +1192,9 @@ sharded<locator::shared_token_metadata> token_metadata;
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
             auto get_cm_cfg = sharded_parameter([&] {
-                return compaction_manager::config {
-                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
-                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
+                return compaction::compaction_manager::config {
+                    .compaction_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
+                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
@@ -1205,7 +1205,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_cm = defer_verbose_shutdown("compaction_manager", [&cm] {
                cm.stop().get();
             });
-            cm.invoke_on_all(&compaction_manager::start, std::ref(*cfg), only_on_shard0(&*disk_space_monitor_shard0)).get();
+            cm.invoke_on_all(&compaction::compaction_manager::start, std::ref(*cfg), only_on_shard0(&*disk_space_monitor_shard0)).get();
 
             checkpoint(stop_signal, "starting storage manager");
             sstables::storage_manager::config stm_cfg;
@@ -1868,7 +1868,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 api::unset_server_compaction_manager(ctx).get();
             });
 
-            cm.invoke_on_all([&](compaction_manager& cm) {
+            cm.invoke_on_all([&](compaction::compaction_manager& cm) {
                 auto cl = db.local().commitlog();
                 auto scl = db.local().schema_commitlog();
                 if (cl && scl) {

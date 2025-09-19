@@ -29,9 +29,9 @@ namespace ss = httpd::storage_service_json;
 using namespace json;
 using namespace seastar::httpd;
 
-static future<json::json_return_type> get_cm_stats(sharded<compaction_manager>& cm,
-        int64_t compaction_manager::stats::*f) {
-    return cm.map_reduce0([f](compaction_manager& cm) {
+static future<json::json_return_type> get_cm_stats(sharded<compaction::compaction_manager>& cm,
+        int64_t compaction::compaction_manager::stats::*f) {
+    return cm.map_reduce0([f](compaction::compaction_manager& cm) {
         return cm.get_stats().*f;
     }, int64_t(0), std::plus<int64_t>()).then([](const int64_t& res) {
         return make_ready_future<json::json_return_type>(res);
@@ -47,9 +47,9 @@ static std::unordered_map<std::pair<sstring, sstring>, uint64_t, utils::tuple_ha
     return std::move(a);
 }
 
-void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_manager>& cm) {
+void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction::compaction_manager>& cm) {
     cm::get_compactions.set(r, [&cm] (std::unique_ptr<http::request> req) {
-        return cm.map_reduce0([](compaction_manager& cm) {
+        return cm.map_reduce0([](compaction::compaction_manager& cm) {
             std::vector<cm::summary> summaries;
 
             for (const auto& c : cm.get_compactions()) {
@@ -58,7 +58,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
                 s.ks = c.ks_name;
                 s.cf = c.cf_name;
                 s.unit = "keys";
-                s.task_type = sstables::compaction_name(c.type);
+                s.task_type = compaction::compaction_name(c.type);
                 s.completed = c.total_keys_written;
                 s.total = c.total_partitions;
                 summaries.push_back(std::move(s));
@@ -103,7 +103,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
 
     cm::stop_compaction.set(r, [&cm] (std::unique_ptr<http::request> req) {
         auto type = req->get_query_param("type");
-        return cm.invoke_on_all([type] (compaction_manager& cm) {
+        return cm.invoke_on_all([type] (compaction::compaction_manager& cm) {
             return cm.stop_compaction(type);
         }).then([] {
             return make_ready_future<json::json_return_type>(json_void());
@@ -113,7 +113,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
     cm::stop_keyspace_compaction.set(r, [&ctx, &cm] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto [ks_name, tables] = parse_table_infos(ctx, *req, "tables");
         auto type = req->get_query_param("type");
-        co_await cm.invoke_on_all([&] (compaction_manager& cm) {
+        co_await cm.invoke_on_all([&] (compaction::compaction_manager& cm) {
             return parallel_for_each(tables, [&] (const table_info& ti) {
                 return cm.stop_compaction(type, [id = ti.id] (const compaction::compaction_group_view* x) {
                     return x->schema()->id() == id;
@@ -130,7 +130,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
     });
 
     cm::get_completed_tasks.set(r, [&cm] (std::unique_ptr<http::request> req) {
-        return get_cm_stats(cm, &compaction_manager::stats::completed_tasks);
+        return get_cm_stats(cm, &compaction::compaction_manager::stats::completed_tasks);
     });
 
     cm::get_total_compactions_completed.set(r, [] (std::unique_ptr<http::request> req) {

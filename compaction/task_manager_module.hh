@@ -48,7 +48,7 @@ protected:
     future<uint64_t> get_shard_task_workload(replica::database& db, const std::vector<table_info>& tables) const;
     future<uint64_t> get_keyspace_task_workload(sharded<replica::database>& db, const std::vector<table_info>& tables) const;
 
-    future<tasks::task_manager::task::progress> get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const;
+    future<tasks::task_manager::task::progress> get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const;
 };
 
 using current_task_type = shared_ptr<compaction_task_impl>;
@@ -504,15 +504,15 @@ class scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl
 private:
     sharded<replica::database>& _db;
     std::vector<sstring> _column_families;
-    sstables::compaction_type_options::scrub _opts;
-    sstables::compaction_stats* _stats;
+    compaction_type_options::scrub _opts;
+    compaction_stats* _stats;
 public:
     scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             sharded<replica::database>& db,
             std::vector<sstring> column_families,
-            sstables::compaction_type_options::scrub opts,
-            sstables::compaction_stats* stats) noexcept
+            compaction_type_options::scrub opts,
+            compaction_stats* stats) noexcept
         : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "keyspace", std::move(keyspace), "", "", tasks::task_id::create_null_id())
         , _db(db)
         , _column_families(std::move(column_families))
@@ -534,16 +534,16 @@ class shard_scrub_sstables_compaction_task_impl : public sstables_compaction_tas
 private:
     replica::database& _db;
     std::vector<sstring> _column_families;
-    sstables::compaction_type_options::scrub _opts;
-    sstables::compaction_stats& _stats;
+    compaction_type_options::scrub _opts;
+    compaction_stats& _stats;
 public:
     shard_scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             tasks::task_id parent_id,
             replica::database& db,
             std::vector<sstring> column_families,
-            sstables::compaction_type_options::scrub opts,
-            sstables::compaction_stats& stats) noexcept
+            compaction_type_options::scrub opts,
+            compaction_stats& stats) noexcept
         : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), "", "", parent_id)
         , _db(db)
         , _column_families(std::move(column_families))
@@ -562,16 +562,16 @@ protected:
 class table_scrub_sstables_compaction_task_impl : public sstables_compaction_task_impl {
 private:
     replica::database& _db;
-    sstables::compaction_type_options::scrub _opts;
-    sstables::compaction_stats& _stats;
+    compaction_type_options::scrub _opts;
+    compaction_stats& _stats;
 public:
     table_scrub_sstables_compaction_task_impl(tasks::task_manager::module_ptr module,
             std::string keyspace,
             std::string table,
             tasks::task_id parent_id,
             replica::database& db,
-            sstables::compaction_type_options::scrub opts,
-            sstables::compaction_stats& stats) noexcept
+            compaction_type_options::scrub opts,
+            compaction_stats& stats) noexcept
         : sstables_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "table", std::move(keyspace), std::move(table), "", parent_id)
         , _db(db)
         , _opts(opts)
@@ -610,8 +610,8 @@ class table_reshaping_compaction_task_impl : public reshaping_compaction_task_im
 private:
     sharded<sstables::sstable_directory>& _dir;
     sharded<replica::database>& _db;
-    sstables::reshape_mode _mode;
-    sstables::compaction_sstable_creator_fn _creator;
+    reshape_mode _mode;
+    compaction_sstable_creator_fn _creator;
     std::function<bool (const sstables::shared_sstable&)> _filter;
 public:
     table_reshaping_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -619,8 +619,8 @@ public:
             std::string table,
             sharded<sstables::sstable_directory>& dir,
             sharded<replica::database>& db,
-            sstables::reshape_mode mode,
-            sstables::compaction_sstable_creator_fn creator,
+            reshape_mode mode,
+            compaction_sstable_creator_fn creator,
             std::function<bool (const sstables::shared_sstable&)> filter) noexcept
         : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "table", std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
         , _dir(dir)
@@ -637,8 +637,8 @@ class shard_reshaping_compaction_task_impl : public reshaping_compaction_task_im
 private:
     sstables::sstable_directory& _dir;
     sharded<replica::database>& _db;
-    sstables::reshape_mode _mode;
-    sstables::compaction_sstable_creator_fn _creator;
+    reshape_mode _mode;
+    compaction_sstable_creator_fn _creator;
     std::function<bool (const sstables::shared_sstable&)> _filter;
     uint64_t& _total_shard_size;
 
@@ -650,8 +650,8 @@ public:
             tasks::task_id parent_id,
             sstables::sstable_directory& dir,
             sharded<replica::database>& db,
-            sstables::reshape_mode mode,
-            sstables::compaction_sstable_creator_fn creator,
+            reshape_mode mode,
+            compaction_sstable_creator_fn creator,
             std::function<bool (const sstables::shared_sstable&)> filter,
             uint64_t& total_shard_size) noexcept
         : reshaping_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)
@@ -691,7 +691,7 @@ class table_resharding_compaction_task_impl : public resharding_compaction_task_
 private:
     sharded<sstables::sstable_directory>& _dir;
     sharded<replica::database>& _db;
-    sstables::compaction_sstable_creator_fn _creator;
+    compaction_sstable_creator_fn _creator;
     compaction::owned_ranges_ptr _owned_ranges_ptr;
 public:
     table_resharding_compaction_task_impl(tasks::task_manager::module_ptr module,
@@ -699,7 +699,7 @@ public:
             std::string table,
             sharded<sstables::sstable_directory>& dir,
             sharded<replica::database>& db,
-            sstables::compaction_sstable_creator_fn creator,
+            compaction_sstable_creator_fn creator,
             compaction::owned_ranges_ptr owned_ranges_ptr) noexcept
         : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), module->new_sequence_number(), "table", std::move(keyspace), std::move(table), "", tasks::task_id::create_null_id())
         , _dir(dir)
@@ -716,7 +716,7 @@ class shard_resharding_compaction_task_impl : public resharding_compaction_task_
 private:
     sharded<sstables::sstable_directory>& _dir;
     replica::database& _db;
-    sstables::compaction_sstable_creator_fn _creator;
+    compaction_sstable_creator_fn _creator;
     compaction::owned_ranges_ptr _local_owned_ranges_ptr;
     std::vector<replica::reshard_shard_descriptor>& _destinations;
 public:
@@ -726,7 +726,7 @@ public:
             tasks::task_id parent_id,
             sharded<sstables::sstable_directory>& dir,
             replica::database& db,
-            sstables::compaction_sstable_creator_fn creator,
+            compaction_sstable_creator_fn creator,
             compaction::owned_ranges_ptr local_owned_ranges_ptr,
             std::vector<replica::reshard_shard_descriptor>& destinations) noexcept;
 protected:

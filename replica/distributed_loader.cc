@@ -99,7 +99,7 @@ distributed_loader::lock_table(global_table_ptr& table, sharded<sstables::sstabl
 //  - The second part calls each shard's distributed object to reshard the SSTables they were
 //    assigned.
 future<>
-distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr) {
+distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr) {
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
     auto task = co_await compaction_module.make_and_start_task<table_resharding_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, std::move(creator), std::move(owned_ranges_ptr));
     co_await task->done();
@@ -114,8 +114,8 @@ highest_version_seen(sharded<sstables::sstable_directory>& dir, sstables::sstabl
 }
 
 future<>
-distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstables::reshape_mode mode,
-        sstring ks_name, sstring table_name, sstables::compaction_sstable_creator_fn creator,
+distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, compaction::reshape_mode mode,
+        sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator,
         std::function<bool (const sstables::shared_sstable&)> filter) {
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
     auto task = co_await compaction_module.make_and_start_task<table_reshaping_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, mode, std::move(creator), std::move(filter));
@@ -209,7 +209,7 @@ distributed_loader::process_upload_dir(sharded<replica::database>& db, sharded<d
         auto owned_ranges_ptr = skip_cleanup ? lw_shared_ptr<dht::token_range_vector>(nullptr) : compaction::make_owned_ranges_ptr(db.local().get_keyspace_local_ranges(erm).get());
         reshard(directory, db, ks, cf, make_sstable, owned_ranges_ptr).get();
         if (!skip_reshape) {
-            reshape(directory, db, sstables::reshape_mode::strict, ks, cf, make_sstable,
+            reshape(directory, db, compaction::reshape_mode::strict, ks, cf, make_sstable,
                     [] (const sstables::shared_sstable&) { return true; }).get();
         }
 
@@ -415,7 +415,7 @@ future<> table_populator::populate_subdir(sharded<sstables::sstable_directory>& 
         return sst->get_origin() != sstables::repair_origin;
     };
 
-    co_await distributed_loader::reshape(directory, _db, sstables::reshape_mode::relaxed, _ks, _cf, [this, state](shard_id shard) {
+    co_await distributed_loader::reshape(directory, _db, compaction::reshape_mode::relaxed, _ks, _cf, [this, state](shard_id shard) {
         auto gen = _global_table->calculate_generation_for_new_table();
         return make_sstable(*_global_table, state, gen, _version_for_reshaping);
     }, eligible_for_reshape_on_boot);

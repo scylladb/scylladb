@@ -15,7 +15,7 @@
 
 #include <ranges>
 
-namespace sstables {
+namespace compaction {
 
 extern logging::logger clogger;
 
@@ -222,10 +222,10 @@ mutation_reader_consumer time_window_compaction_strategy::make_interposer_consum
 }
 
 compaction_descriptor
-time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
+time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
     auto mode = cfg.mode;
-    std::vector<shared_sstable> single_window;
-    std::vector<shared_sstable> multi_window;
+    std::vector<sstables::shared_sstable> single_window;
+    std::vector<sstables::shared_sstable> multi_window;
 
     size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
     size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
@@ -237,7 +237,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 
     // Sort input sstables by first_key order
     // to allow efficient reshaping of disjoint sstables.
-    std::sort(input.begin(), input.end(), [&schema] (const shared_sstable& a, const shared_sstable& b) {
+    std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
         return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
     });
 
@@ -251,7 +251,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         }
     }
 
-    auto is_disjoint = [&schema, mode, max_sstables] (const std::vector<shared_sstable>& ssts) {
+    auto is_disjoint = [&schema, mode, max_sstables] (const std::vector<sstables::shared_sstable>& ssts) {
         size_t tolerance = (mode == reshape_mode::relaxed) ? max_sstables : 0;
         return sstable_set_overlapping_count(schema, ssts) <= tolerance;
     };
@@ -261,13 +261,13 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             multi_window.size(), !multi_window.empty() && sstable_set_overlapping_count(schema, multi_window) == 0,
             single_window.size(), !single_window.empty() && sstable_set_overlapping_count(schema, single_window) == 0);
 
-    auto get_job_size = [] (const std::vector<shared_sstable>& ssts) {
-        return std::ranges::fold_left(ssts | std::views::transform(std::mem_fn(&sstable::bytes_on_disk)), uint64_t(0), std::plus{});
+    auto get_job_size = [] (const std::vector<sstables::shared_sstable>& ssts) {
+        return std::ranges::fold_left(ssts | std::views::transform(std::mem_fn(&sstables::sstable::bytes_on_disk)), uint64_t(0), std::plus{});
     };
 
     // Targets a space overhead of 10%. All disjoint sstables can be compacted together as long as they won't
     // cause an overhead above target. Otherwise, the job targets a maximum of #max_threshold sstables.
-    auto need_trimming = [&] (const std::vector<shared_sstable>& ssts, const uint64_t job_size, bool is_disjoint) {
+    auto need_trimming = [&] (const std::vector<sstables::shared_sstable>& ssts, const uint64_t job_size, bool is_disjoint) {
         const size_t min_sstables = 2;
         auto is_above_target_size = job_size > target_job_size;
 
@@ -275,7 +275,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
                (ssts.size() > min_sstables && is_above_target_size);
     };
 
-    auto maybe_trim_job = [&need_trimming] (std::vector<shared_sstable>& ssts, uint64_t job_size, bool is_disjoint) {
+    auto maybe_trim_job = [&need_trimming] (std::vector<sstables::shared_sstable>& ssts, uint64_t job_size, bool is_disjoint) {
         while (need_trimming(ssts, job_size, is_disjoint)) {
             auto sst = ssts.back();
             ssts.pop_back();
@@ -292,7 +292,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
             // For example, if there are N sstables spanning window W, where N <= 32, then we can produce all data for W
             // in a single compaction round, removing the need to later compact W to reduce its number of files.
             auto sort_size = std::min(max_sstables, multi_window.size());
-            std::ranges::partial_sort(multi_window, multi_window.begin() + sort_size, std::ranges::less(), [] (const shared_sstable &a) {
+            std::ranges::partial_sort(multi_window, multi_window.begin() + sort_size, std::ranges::less(), [] (const sstables::shared_sstable &a) {
                 return a->get_stats_metadata().max_timestamp;
             });
             maybe_trim_job(multi_window, job_size, disjoint);
@@ -350,7 +350,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         auto expired = table_s.fully_expired_sstables(candidates, compaction_time);
         if (!expired.empty()) {
             clogger.debug("[{}] Going to compact {} expired sstables", fmt::ptr(this), expired.size());
-            co_return compaction_descriptor(has_only_fully_expired::yes, std::vector<shared_sstable>(expired.begin(), expired.end()));
+            co_return compaction_descriptor(has_only_fully_expired::yes, std::vector<sstables::shared_sstable>(expired.begin(), expired.end()));
         }
         // Keep checking for fully_expired_sstables until we don't find
         // any among the candidates, meaning they are either already compacted
@@ -381,9 +381,9 @@ time_window_compaction_strategy::compaction_mode(const time_window_compaction_st
     return bucket_compaction_mode::none;
 }
 
-std::vector<shared_sstable>
+std::vector<sstables::shared_sstable>
 time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control,
-        std::vector<shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time) {
+        std::vector<sstables::shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time) {
     auto most_interesting = get_compaction_candidates(table_s, control, non_expiring_sstables);
 
     if (!most_interesting.empty()) {
@@ -396,7 +396,7 @@ time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_
 
     // if there is no sstable to compact in standard way, try compacting single sstable whose droppable tombstone
     // ratio is greater than threshold.
-    std::erase_if(non_expiring_sstables, [this, compaction_time, &table_s] (const shared_sstable& sst) -> bool {
+    std::erase_if(non_expiring_sstables, [this, compaction_time, &table_s] (const sstables::shared_sstable& sst) -> bool {
         return !worth_dropping_tombstones(sst, compaction_time, table_s);
     });
     if (non_expiring_sstables.empty()) {
@@ -408,8 +408,8 @@ time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_
     return { *it };
 }
 
-std::vector<shared_sstable>
-time_window_compaction_strategy::get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<shared_sstable> candidate_sstables) {
+std::vector<sstables::shared_sstable>
+time_window_compaction_strategy::get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidate_sstables) {
     auto& state = get_state(table_s);
     auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
@@ -428,9 +428,9 @@ time_window_compaction_strategy::get_window_lower_bound(std::chrono::seconds sst
     return duration_cast<microseconds>(num_windows * sstable_window_size).count();
 }
 
-std::pair<std::map<timestamp_type, std::vector<shared_sstable>>, timestamp_type>
-time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, const time_window_compaction_strategy_options& options) {
-    std::map<timestamp_type, std::vector<shared_sstable>> buckets;
+std::pair<std::map<timestamp_type, std::vector<sstables::shared_sstable>>, timestamp_type>
+time_window_compaction_strategy::get_buckets(std::vector<sstables::shared_sstable> files, const time_window_compaction_strategy_options& options) {
+    std::map<timestamp_type, std::vector<sstables::shared_sstable>> buckets;
 
     timestamp_type max_timestamp = 0;
     // Create map to represent buckets
@@ -449,9 +449,9 @@ time_window_compaction_strategy::get_buckets(std::vector<shared_sstable> files, 
 }
 
 template <>
-struct fmt::formatter<std::map<sstables::timestamp_type, std::vector<sstables::shared_sstable>>> {
+struct fmt::formatter<std::map<compaction::timestamp_type, std::vector<sstables::shared_sstable>>> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-    auto format(const std::map<sstables::timestamp_type, std::vector<sstables::shared_sstable>>& buckets, fmt::format_context& ctx) const {
+    auto format(const std::map<compaction::timestamp_type, std::vector<sstables::shared_sstable>>& buckets, fmt::format_context& ctx) const {
         auto out = fmt::format_to(ctx.out(), "  buckets = {{\n");
         for (auto& [timestamp, sstables] : buckets | std::views::reverse) {
             out = fmt::format_to(out, "    key={}, size={}\n", timestamp, sstables.size());
@@ -460,10 +460,10 @@ struct fmt::formatter<std::map<sstables::timestamp_type, std::vector<sstables::s
     }
 };
 
-namespace sstables {
+namespace compaction {
 
-std::vector<shared_sstable>
-time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<timestamp_type, std::vector<shared_sstable>> buckets,
+std::vector<sstables::shared_sstable>
+time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<timestamp_type, std::vector<sstables::shared_sstable>> buckets,
         int min_threshold, int max_threshold, timestamp_type now) {
     auto& state = get_state(table_s);
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
@@ -506,11 +506,11 @@ time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, s
     return {};
 }
 
-std::vector<shared_sstable>
-time_window_compaction_strategy::trim_to_threshold(std::vector<shared_sstable> bucket, int max_threshold) {
+std::vector<sstables::shared_sstable>
+time_window_compaction_strategy::trim_to_threshold(std::vector<sstables::shared_sstable> bucket, int max_threshold) {
     auto n = std::min(bucket.size(), size_t(max_threshold));
     // Trim the largest sstables off the end to meet the maxThreshold
-    std::ranges::partial_sort(bucket, bucket.begin() + n, std::ranges::less(), std::mem_fn(&sstable::ondisk_data_size));
+    std::ranges::partial_sort(bucket, bucket.begin() + n, std::ranges::less(), std::mem_fn(&sstables::sstable::ondisk_data_size));
     bucket.resize(n);
     return bucket;
 }
@@ -540,7 +540,7 @@ future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(c
 }
 
 std::vector<compaction_descriptor>
-time_window_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
+time_window_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     for (auto&& [_, sstables] : get_buckets(std::move(candidates), _options).first) {
         auto per_window_jobs = size_tiered_compaction_strategy(_stcs_options).get_cleanup_compaction_jobs(table_s, std::move(sstables));
