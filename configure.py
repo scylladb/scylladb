@@ -1258,6 +1258,7 @@ scylla_core = (['message/messaging_service.cc',
                 'reader_concurrency_semaphore_group.cc',
                 'utils/disk_space_monitor.cc',
                 'vector_search/vector_store_client.cc',
+                'vector_search/dns.cc',
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )
