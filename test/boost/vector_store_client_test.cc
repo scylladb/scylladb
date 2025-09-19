@@ -26,6 +26,7 @@
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
 #include <seastar/util/short_streams.hh>
+#include <seastar/net/tcp.hh>
 #include <variant>
 
 
@@ -52,17 +53,6 @@ using status_type = http::reply::status_type;
 using url = httpd::url;
 
 constexpr auto const* LOCALHOST = "127.0.0.1";
-
-/// Generate an ephemeral port number for listening on localhost.
-/// After closing this socket, the port should be not listened on for a while.
-/// This is not guaranteed to be a robust solution, but it should work for most tests.
-auto generate_unavailable_localhost_port() -> port_number {
-    auto inaddr = net::inet_address(LOCALHOST);
-    auto server = listen(socket_address(inaddr, 0));
-    auto port = server.local_address().port();
-    server.abort_accept();
-    return port;
-}
 
 auto listen_on_ephemeral_port(std::unique_ptr<http_server> server) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
     auto inaddr = net::inet_address(LOCALHOST);
@@ -176,6 +166,72 @@ public:
         return *this;
     }
 };
+
+class unavailable_server {
+public:
+    explicit unavailable_server(uint16_t port)
+        : _port(port) {
+    }
+
+    void start() {
+        listen();
+        (void)try_with_gate(_gate, [this] {
+            return run();
+        });
+    }
+
+    future<> stop() {
+        _socket.abort_accept();
+        co_await _gate.close();
+    }
+
+    sstring host() const {
+        return _host;
+    }
+
+    uint16_t port() const {
+        return _port;
+    }
+
+private:
+    void listen() {
+        for (size_t i = 1; i < 20; i++) {
+            auto host = fmt::format("127.0.0.{}", i);
+            try {
+                _socket = seastar::listen(socket_address(net::inet_address(host), _port));
+                _port = _socket.local_address().port();
+                _host = host;
+                return;
+            } catch (...) {
+            }
+        }
+        throw std::runtime_error(fmt::format("unable to listen on any 127.0.0.x address on port {}", _port));
+    }
+
+    future<> run() {
+        while (true) {
+            try {
+                auto s = co_await _socket.accept();
+                s.connection.shutdown_output();
+                s.connection.shutdown_input();
+                co_await s.connection.wait_input_shutdown();
+            } catch (...) {
+                break;
+            }
+        }
+    }
+
+    seastar::server_socket _socket;
+    seastar::gate _gate;
+    uint16_t _port;
+    sstring _host;
+};
+
+std::unique_ptr<unavailable_server> make_unavailable_server(uint16_t port = 0) {
+    auto ret = std::make_unique<unavailable_server>(port);
+    ret->start();
+    return ret;
+}
 
 } // namespace
 
@@ -385,12 +441,13 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
+    auto server = make_unavailable_server();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
     co_await do_with_cql_env(
-            [](cql_test_env& env) -> future<> {
+            [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
+                configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", server->host()}});
 
                 vs.start_background_tasks();
 
@@ -400,19 +457,22 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
             },
             cfg);
+
+    co_await server->stop();
 }
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
+    auto server = make_unavailable_server();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
     co_await do_with_cql_env(
-            [](cql_test_env& env) -> future<> {
+            [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
                 auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
+                configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&server](auto const& host) -> future<std::optional<inet_address>> {
                     BOOST_CHECK_EQUAL(host, "good.authority.here");
                     co_await sleep(milliseconds(100));
-                    co_return inet_address("127.0.0.1");
+                    co_return inet_address(server->host());
                 });
 
                 vs.start_background_tasks();
@@ -423,6 +483,8 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
                 BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(keys.error()));
             },
             cfg);
+
+    co_await server->stop();
 }
 
 
