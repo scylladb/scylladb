@@ -337,3 +337,17 @@ def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, scylla_only):
                 f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
                 trace=True,
             )
+
+
+###############################################################################
+# Tests for vector search related functions
+###############################################################################
+
+
+def test_vector_similarity_fails_on_non_ann_query(cql, test_keyspace, scylla_only):
+    schema = 'pk int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="vector_similarity function can only be used with ANN queries"):
+            cql.execute(f"SELECT pk, vector_similarity() FROM {table}")
