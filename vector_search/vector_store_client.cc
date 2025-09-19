@@ -285,15 +285,17 @@ namespace vector_search {
 
 struct vector_store_client::impl {
 
+    using clients_type = std::vector<lw_shared_ptr<http_client>>;
+
     utils::observer<sstring> uri_observer;
-    lw_shared_ptr<http_client> current_client;
-    std::vector<lw_shared_ptr<http_client>> old_clients;
+    clients_type current_clients;
+    clients_type old_clients;
     std::optional<host_port> _host_port;
     gate client_producer_gate;
     condition_variable refresh_client_cv;
     milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
     unsigned http_request_retries = HTTP_REQUEST_RETRIES;
-    sequential_producer<lw_shared_ptr<http_client>> client_producer;
+    sequential_producer<clients_type> clients_producer;
     dns dns;
 
     impl(utils::config_file::named_value<sstring> cfg)
@@ -306,11 +308,11 @@ struct vector_store_client::impl {
             }
         }))
         , _host_port(get_host_port(cfg()))
-        , client_producer([&]() -> future<lw_shared_ptr<http_client>> {
-            return try_with_gate(client_producer_gate, [this] -> future<lw_shared_ptr<http_client>> {
+        , clients_producer([&]() -> future<clients_type> {
+            return try_with_gate(client_producer_gate, [this] -> future<clients_type> {
                 dns.trigger_refresh();
                 co_await wait_for_signal(refresh_client_cv, lowres_clock::now() + wait_for_client_timeout);
-                co_return current_client;
+                co_return current_clients;
             });
         })
         , dns(vslogger, _host_port ? std::optional<seastar::sstring>{_host_port->host} : std::nullopt, [this](auto const& addr) -> future<> {
@@ -319,22 +321,19 @@ struct vector_store_client::impl {
     }
 
     void handle_uri_changed(std::optional<host_port> uri) {
+        clear_current_clients();
         _host_port = std::move(uri);
-        if (current_client) {
-            old_clients.emplace_back(current_client);
-            current_client = nullptr;
-        }
         dns.host(_host_port ? std::optional<seastar::sstring>{_host_port->host} : std::nullopt);
     }
 
-    auto handle_address_changed(const std::optional<inet_address>& addr) -> future<> {
-        if (current_client) {
-            old_clients.emplace_back(current_client);
-            current_client = nullptr;
+    auto handle_address_changed(const std::vector<inet_address>& addrs) -> future<> {
+        clear_current_clients();
+        if (_host_port) {
+            for (const auto& addr : addrs) {
+                current_clients.push_back(make_lw_shared<http_client>(*_host_port, addr));
+            }
         }
-        if (addr && _host_port) {
-            current_client = make_lw_shared<http_client>(*_host_port, std::move(*addr));
-        }
+
         refresh_client_cv.broadcast();
         co_await cleanup_old_clients();
     }
@@ -357,12 +356,17 @@ struct vector_store_client::impl {
         return _host_port->port;
     }
 
-    /// Cleanup current client
-    auto cleanup_current_client() -> future<> {
-        if (current_client) {
-            co_await current_client->close();
+    void clear_current_clients() {
+        old_clients.insert(old_clients.end(), std::make_move_iterator(current_clients.begin()), std::make_move_iterator(current_clients.end()));
+        current_clients.clear();
+    }
+
+    /// Cleanup current clients
+    auto cleanup_current_clients() -> future<> {
+        for (auto& client : current_clients) {
+            co_await client->close();
         }
-        current_client = nullptr;
+        current_clients.clear();
     }
 
     /// Cleanup old clients that are no longer used.
@@ -386,15 +390,15 @@ struct vector_store_client::impl {
     using get_client_error = std::variant<aborted, addr_unavailable, disabled>;
 
     /// Get the current http client or wait for a new one to be available.
-    auto get_client(abort_source& as) -> future<std::expected<lw_shared_ptr<http_client>, get_client_error>> {
+    auto get_clients(abort_source& as) -> future<std::expected<clients_type, get_client_error>> {
         if (is_disabled()) {
             co_return std::unexpected{disabled{}};
         }
-        if (current_client) {
-            co_return current_client;
+        if (!current_clients.empty()) {
+            co_return current_clients;
         }
 
-        auto current_client = co_await coroutine::as_future(client_producer(as));
+        auto current_client = co_await coroutine::as_future(clients_producer(as));
 
         if (current_client.failed()) {
             auto err = current_client.get_exception();
@@ -403,11 +407,11 @@ struct vector_store_client::impl {
             }
             co_await coroutine::return_exception_ptr(std::move(err));
         }
-        auto client = co_await std::move(current_client);
-        if (!client) {
+        auto clients = co_await std::move(current_client);
+        if (clients.empty()) {
             co_return std::unexpected{addr_unavailable{}};
         }
-        co_return client;
+        co_return clients;
     }
 
     struct make_request_response {
@@ -422,33 +426,35 @@ struct vector_store_client::impl {
         auto resp = make_request_response{.status = http::reply::status_type::ok, .content = std::vector<temporary_buffer<char>>()};
 
         for (auto retries = 0; retries < HTTP_REQUEST_RETRIES; ++retries) {
-            auto client = co_await get_client(as);
-            if (!client) {
+            auto clients = co_await get_clients(as);
+            if (!clients) {
                 co_return std::unexpected{std::visit(
                         [](auto&& err) {
                             return make_request_error{err};
                         },
-                        client.error())};
+                        clients.error())};
             }
 
-            auto result = co_await coroutine::as_future(client.value()->make_request(
-                    method, std::move(path), std::move(content),
-                    [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
-                        resp.status = reply._status;
-                        resp.content = co_await util::read_entire_stream(body);
-                    },
-                    &as));
-            if (result.failed()) {
-                auto err = result.get_exception();
-                if (as.abort_requested()) {
-                    co_return std::unexpected{aborted{}};
+            for (auto client : *clients) {
+                auto result = co_await coroutine::as_future(client->make_request(
+                        method, path, content,
+                        [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
+                            resp.status = reply._status;
+                            resp.content = co_await util::read_entire_stream(body);
+                        },
+                        &as));
+                if (result.failed()) {
+                    auto err = result.get_exception();
+                    if (as.abort_requested()) {
+                        co_return std::unexpected{aborted{}};
+                    }
+                    if (try_catch<std::system_error>(err) == nullptr) {
+                        co_await coroutine::return_exception_ptr(std::move(err));
+                    }
+                    // std::system_error means that the server is unavailable, so we retry
+                } else {
+                    co_return resp;
                 }
-                if (try_catch<std::system_error>(err) == nullptr) {
-                    co_await coroutine::return_exception_ptr(std::move(err));
-                }
-                // std::system_error means that the server is unavailable, so we retry
-            } else {
-                co_return resp;
             }
 
             dns.trigger_refresh();
@@ -473,7 +479,7 @@ auto vector_store_client::stop() -> future<> {
     co_await _impl->client_producer_gate.close();
     co_await _impl->dns.stop();
     co_await _impl->cleanup_old_clients();
-    co_await _impl->cleanup_current_client();
+    co_await _impl->cleanup_current_clients();
 }
 
 auto vector_store_client::is_disabled() const -> bool {
@@ -534,7 +540,7 @@ void vector_store_client_tester::set_http_request_retries(vector_store_client& v
     vsc._impl->http_request_retries = retries;
 }
 
-void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
+void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<inet_address>>(sstring const&)> resolver) {
     vsc._impl->dns.resolver(std::move(resolver));
 }
 
@@ -543,11 +549,14 @@ void vector_store_client_tester::trigger_dns_resolver(vector_store_client& vsc) 
 }
 
 auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::optional<inet_address>> {
-    auto client = co_await vsc._impl->get_client(as);
-    if (!client) {
+    auto clients = co_await vsc._impl->get_clients(as);
+    if (!clients) {
         co_return std::nullopt;
     }
-    co_return client.value()->addr();
+    if (clients->empty()) {
+        co_return std::nullopt;
+    }
+    co_return clients.value().at(0)->addr();
 }
 
 } // namespace vector_search

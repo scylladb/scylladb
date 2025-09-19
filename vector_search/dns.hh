@@ -17,6 +17,7 @@
 #include "utils/log.hh"
 #include <chrono>
 #include <optional>
+#include <vector>
 #include <functional>
 #include <seastar/net/inet_address.hh>
 
@@ -24,7 +25,7 @@ namespace vector_search {
 
 class dns {
 public:
-    using address_type = std::optional<seastar::net::inet_address>;
+    using address_type = std::vector<seastar::net::inet_address>;
     using resolver_type = std::function<seastar::future<address_type>(seastar::sstring const&)>;
     using listener_type = std::function<seastar::future<>(address_type const&)>;
 
@@ -37,7 +38,7 @@ public:
     }
 
     void host(std::optional<seastar::sstring> h) {
-        current_addr = std::nullopt;
+        current_addrs.clear();
         _host = std::move(h);
         trigger_refresh();
     }
@@ -69,7 +70,7 @@ private:
     seastar::condition_variable refresh_cv;
     resolver_type _resolver;
     std::optional<seastar::sstring> _host;
-    std::optional<seastar::net::inet_address> current_addr;
+    std::vector<seastar::net::inet_address> current_addrs;
     listener_type _listener;
 };
 
