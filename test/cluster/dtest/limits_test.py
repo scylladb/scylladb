@@ -1,5 +1,4 @@
 #
-# Copyright (C) 2015-present The Apache Software Foundation
 # Copyright (C) 2025-present ScyllaDB
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
@@ -7,23 +6,10 @@
 
 import logging
 import math
-import os
-import pathlib
-import re
-import resource
-import ssl
-import sys
-from subprocess import PIPE, Popen, check_output
 
 import pytest
-import requests
-from cassandra import InvalidRequest, WriteFailure
-from cassandra.cluster import NoHostAvailable, Session
-from ccmlib.cluster import Cluster
-from ccmlib.node import Node
 
-from dtest_class import Tester, create_ks, get_ip_from_node
-from tools.misc import generate_ssl_stores, is_coverage
+from dtest_class import Tester, create_ks
 
 logger = logging.getLogger(__name__)
 # Those are ideal values according to c* specifications
@@ -54,7 +40,6 @@ MAX_CELLS = 16777216
 # MAX_CELLS = 1000
 
 
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestLimits(Tester):
     def prepare(self):
@@ -246,7 +231,6 @@ class TestLimits(Tester):
         assert len(list(res)) == rows
         session.execute("""DROP TABLE STUFF""")
 
-    @pytest.mark.dtest_debug
     def test_max_batch_size(self):
         cluster = self.prepare()
         cluster.populate(1).start()
@@ -260,7 +244,7 @@ class TestLimits(Tester):
             size <<= 1
             self._do_test_max_batch_size(session, node, size - 1)
 
-    def _do_test_max_cell_count(self, session, node, cells):
+    def _do_test_max_cell_count(self, session, cells):
         print("Testing max cells count for %i" % cells)
         keys = ""
         keys_create = ""
@@ -285,8 +269,9 @@ class TestLimits(Tester):
 
         session.execute("""DROP TABLE test1""")
 
-    @pytest.mark.scylla_mode("!debug")  # client times out in debug mode
     def test_max_cells(self):
+        if self.cluster.scylla_mode == "debug":
+            pytest.skip("client times out in debug mode")
         cluster = self.prepare()
         cluster.set_configuration_options(values={"query_tombstone_page_limit": 9999999, "batch_size_warn_threshold_in_kb": 1024 * 1024, "batch_size_fail_threshold_in_kb": 1024 * 1024, "commitlog_segment_size_in_mb": 64})
         cluster.populate(1).start(jvm_args=["--smp", "1", "--memory", "2G"])
@@ -298,4 +283,4 @@ class TestLimits(Tester):
         cells = 1
         for i in range(int(math.log(MAX_CELLS, 2))):
             cells <<= 1
-            self._do_test_max_cell_count(session, node, cells - 1)
+            self._do_test_max_cell_count(session, cells - 1)
