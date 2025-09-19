@@ -337,3 +337,148 @@ def test_vector_search_when_tracing_is_enabled(cql, test_keyspace, scylla_only):
                 f"SELECT * FROM {table} ORDER BY v ANN OF [0.2,0.3,0.4] LIMIT 1",
                 trace=True,
             )
+
+
+###############################################################################
+# Tests for vector search related functions
+###############################################################################
+
+
+# The test is Scylla-only because Cassandra does not require vector similarity functions to be used only with ANN queries.
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_non_ann_query(cql, test_keyspace, scylla_only, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        with pytest.raises(InvalidRequest, match="Vector similarity functions can only be used with ANN queries"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.3, 1.0, 20.25]) FROM {table}")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_non_vector_column(cql, test_keyspace, similarity_function):
+    schema = 'pk int, ck int, v vector<float, 3>, c int, PRIMARY KEY (pk, ck)'
+    custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, ck, v, c) VALUES (1, 2, [1.0, 2.0, 3.0], 5)")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument, but found argument pk of type int"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(pk, [0.3, 1.0, 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument, but found argument ck of type int"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(ck, [0.3, 1.0, 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument, but found argument c of type int"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(c, [0.3, 1.0, 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_non_vector_target(cql, test_keyspace, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument, but found argument 5"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, 5) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument, but found argument 'dog'"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, 'dog') FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument, but found argument '{{0.3, 1.0, 20.25}}'"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, '{{0.3, 1.0, 20.25}}') FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_non_float_vector_target(cql, test_keyspace, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument" if is_scylla(cql) else "Type error"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.3, '2025-10-07T14:05:00.000', 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument" if is_scylla(cql) else "Type error"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.3, 'dog', 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument" if is_scylla(cql) else "Type error"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.3, {{1.0, 2.0, 3.0}}, 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        # This test is Scylla-only because Cassandra does not handle it properly and crashes on org.apache.cassandra.serializers.MarshalException.
+        if is_scylla(cql):
+            with pytest.raises(InvalidRequest, match=f"null is not supported inside vectors"):
+                cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.3, null, 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+@pytest.mark.skip(reason="UNIMPLEMENTED")
+# The test is Scylla-only because Cassandra does not require the similarity function to match the index configuration.
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_mismatched_function(cql, test_keyspace, scylla_only, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+
+        # Only the configured similarity function should succeed; others should fail.
+        for func in ["cosine", "euclidean", "dot_product"]:
+            query = f"SELECT pk, similarity_{func}(v, [0.3, 1.0, 20.25]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1"
+            if func == similarity_function:
+                cql.execute(query)
+            else:
+                with pytest.raises(InvalidRequest, match="similarity function does not match the index configuration"):
+                    cql.execute(query)
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+
+@pytest.mark.skip(reason="UNIMPLEMENTED")
+# The test is Scylla-only because Cassandra does not require the arguments to be the same as for the ANN query.
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_mismatched_column(cql, test_keyspace, scylla_only, similarity_function):
+    schema = 'pk int primary key, v1 vector<float, 3>, v2 vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v1, v2) VALUES (1, [1.0, 2.0, 3.0], [4.0, 5.0, 6.0])")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v1) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        with pytest.raises(InvalidRequest, match=f"Function system.similarity_{similarity_function} requires a float vector argument, but found argument v2 of type vector<float, 3>"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v2, [0.3, 1.0, 20.25]) FROM {table} ORDER BY v1 ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v1_idx")
+
+
+@pytest.mark.skip(reason="UNIMPLEMENTED")
+# The test is Scylla-only because Cassandra does not require the arguments to be the same as for the ANN query.
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_mismatched_vector(cql, test_keyspace, scylla_only, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        with pytest.raises(InvalidRequest, match="Invalid vector literal" if is_scylla(cql) else "All arguments must have the same vector dimensions"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [1.8, 0.5, 20.03]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+
+@pytest.mark.skip(reason="UNIMPLEMENTED")
+# The test is Scylla-only because Cassandra does neither require the arguments to be the same as for the ANN query nor to be not null.
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_null_vector_target(cql, test_keyspace, scylla_only, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        # with pytest.raises(InvalidRequest, match="Unsupported null value for column v"):
+        #     cql.execute(f"SELECT pk, similarity_{similarity_function}(v, null) FROM {table} ORDER BY v ANN OF null LIMIT 1") # Reproduces VECTOR-257
+        with pytest.raises(InvalidRequest, match="Unsupported null value for column v"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, null) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
+
+
+@pytest.mark.parametrize("similarity_function", ["cosine", "euclidean", "dot_product"])
+def test_vector_similarity_fails_on_vector_of_different_size(cql, test_keyspace, similarity_function):
+    schema = 'pk int primary key, v vector<float, 3>'
+    custom_index = "vector_index" if is_scylla(cql) else "StorageAttachedIndex"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"INSERT INTO {table} (pk, v) VALUES (1, [1.0, 2.0, 3.0])")
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}' WITH OPTIONS = {{'similarity_function': '{similarity_function}'}}")
+        with pytest.raises(InvalidRequest, match="Invalid vector literal" if is_scylla(cql) else "All arguments must have the same vector dimensions"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.3, 1.0]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        with pytest.raises(InvalidRequest, match="Invalid vector literal" if is_scylla(cql) else "All arguments must have the same vector dimensions"):
+            cql.execute(f"SELECT pk, similarity_{similarity_function}(v, [0.3, 1.0, 20.25, 123.7]) FROM {table} ORDER BY v ANN OF [0.3, 1.0, 20.25] LIMIT 1")
+        cql.execute(f"DROP INDEX {test_keyspace}.{table.split('.')[1]}_v_idx")
