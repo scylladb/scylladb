@@ -44,7 +44,7 @@ future<> maintenance_socket_role_manager::stop() {
     return make_ready_future<>();
 }
 
-future<> maintenance_socket_role_manager::ensure_superuser_is_created() {
+future<> maintenance_socket_role_manager::ensure_superuser_is_created(seastar::abort_source&) {
     return make_ready_future<>();
 }
 

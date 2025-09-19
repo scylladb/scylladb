@@ -58,7 +58,7 @@ public:
 
     ::shared_ptr<sasl_challenge> new_sasl_challenge() const override;
 
-    virtual future<> ensure_superuser_is_created() const override {
+    virtual future<> ensure_superuser_is_created(seastar::abort_source&) const override {
         return make_ready_future<>();
     }
 private:

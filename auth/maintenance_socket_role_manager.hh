@@ -11,6 +11,7 @@
 #include "auth/resource.hh"
 #include "auth/role_manager.hh"
 #include <seastar/core/future.hh>
+#include <seastar/core/abort_source.hh>
 
 namespace cql3 {
 class query_processor;
@@ -39,7 +40,7 @@ public:
 
     virtual future<> stop() override;
 
-    virtual future<> ensure_superuser_is_created() override;
+    virtual future<> ensure_superuser_is_created(seastar::abort_source&) override;
 
     virtual future<> create(std::string_view role_name, const role_config&, ::service::group0_batch&) override;
 

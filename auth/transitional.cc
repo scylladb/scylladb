@@ -160,8 +160,8 @@ public:
         return ::make_shared<sasl_wrapper>(_authenticator->new_sasl_challenge());
     }
 
-    virtual future<> ensure_superuser_is_created() const override {
-        return _authenticator->ensure_superuser_is_created();
+    virtual future<> ensure_superuser_is_created(seastar::abort_source& as) const override {
+        return _authenticator->ensure_superuser_is_created(as);
     }
 };
 

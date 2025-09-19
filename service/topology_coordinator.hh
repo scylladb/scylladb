@@ -95,6 +95,7 @@ future<> run_topology_coordinator(
         cdc::generation_service& cdc_gens,
         std::chrono::milliseconds ring_delay,
         endpoint_lifecycle_notifier& lifecycle_notifier,
+        std::function<future<>(seastar::abort_source&)> auth_ready_cb,
         gms::feature_service& feature_service,
         qos::service_level_controller& sl_controller,
         topology_coordinator_cmd_rpc_tracker& topology_cmd_rpc_tracker);

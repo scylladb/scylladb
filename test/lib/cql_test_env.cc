@@ -920,6 +920,10 @@ private:
 
             auto compression_dict_updated_callback = [] (std::string_view) { return make_ready_future<>(); };
 
+            auto auth_ready_callback = [this] (abort_source& as) -> future<> {
+                return _auth_service.local().ready(as);
+            };
+
             _sys_dist_ks.start(std::ref(_qp), std::ref(_mm), std::ref(_proxy)).get();
 
             _view_update_generator.start(std::ref(_db), std::ref(_proxy), std::ref(abort_sources)).get();
@@ -956,6 +960,7 @@ private:
                 std::ref(_task_manager),
                 std::ref(_gossip_address_map),
                 compression_dict_updated_callback,
+                auth_ready_callback,
                 only_on_shard0(&*_disk_space_monitor_shard0)
             ).get();
             auto stop_storage_service = defer_verbose_shutdown("storage service", [this] { _ss.stop().get(); });

@@ -1221,6 +1221,10 @@ sharded<locator::shared_token_metadata> token_metadata;
             static sharded<qos::service_level_controller> sl_controller;
             debug::the_sl_controller = &sl_controller;
 
+            auto auth_ready_callback = [] (abort_source& as) -> future<> {
+                return auth_service.local().ready(as);
+            };
+
             //starting service level controller
             checkpoint(stop_signal, "starting service level controller");
             qos::service_level_options default_service_level_configuration;
@@ -1822,6 +1826,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 std::ref(tablet_allocator), std::ref(cdc_generation_service), std::ref(view_builder), std::ref(view_building_worker), std::ref(qp), std::ref(sl_controller),
                 std::ref(tsm), std::ref(vbsm), std::ref(task_manager), std::ref(gossip_address_map),
                 compression_dict_updated_callback,
+                auth_ready_callback,
                 only_on_shard0(&*disk_space_monitor_shard0)
             ).get();
 
@@ -2484,7 +2489,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 ss.local().drain_on_shutdown().get();
             });
 
-            auth_service.local().ensure_superuser_is_created().get();
+            auth_service.local().ready(stop_signal.as_local_abort_source()).get();
             ss.local().register_protocol_server(cql_server_ctl, cfg->start_native_transport()).get();
             api::set_transport_controller(ctx, cql_server_ctl).get();
             auto stop_transport_controller = defer_verbose_shutdown("transport controller API", [&ctx] {

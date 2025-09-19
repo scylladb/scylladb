@@ -246,7 +246,7 @@ future<> service::start(::service::migration_manager& mm, db::system_keyspace& s
         // mechanism where they asynchronously create the superuser role
         // in the background. Correct password creation depends on role
         // creation therefore we need to wait here.
-        co_await _role_manager->ensure_superuser_is_created();
+        co_await _role_manager->ensure_superuser_is_created(_as);
     }
     co_await when_all_succeed(_authorizer->start(), _authenticator->start()).discard_result();
     _permissions_cache = std::make_unique<permissions_cache>(_loading_cache_config, *this, log);
@@ -270,9 +270,9 @@ future<> service::stop() {
     });
 }
 
-future<> service::ensure_superuser_is_created() {
-    co_await _role_manager->ensure_superuser_is_created();
-    co_await _authenticator->ensure_superuser_is_created();
+future<> service::ready(abort_source& as) {
+    co_await _role_manager->ensure_superuser_is_created(as);
+    co_await _authenticator->ensure_superuser_is_created(as);
 }
 
 void service::update_cache_config() {

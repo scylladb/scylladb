@@ -85,7 +85,7 @@ public:
         throw std::runtime_error("Should not reach");
     }
 
-    virtual future<> ensure_superuser_is_created() const override {
+    virtual future<> ensure_superuser_is_created(seastar::abort_source&) const override {
         return make_ready_future<>();
     }
 };
