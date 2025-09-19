@@ -2499,9 +2499,10 @@ future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,
     }
 }
 
-future<> system_keyspace::read_cdc_streams_history(table_id table,
+future<> system_keyspace::read_cdc_streams_history(table_id table, std::optional<db_clock::time_point> from,
         noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f) {
-    static const sstring query = format("SELECT table_id, timestamp, stream_state, stream_id FROM {}.{} WHERE table_id = ?", NAME, CDC_STREAMS_HISTORY);
+    static const sstring query_all = format("SELECT table_id, timestamp, stream_state, stream_id FROM {}.{} WHERE table_id = ?", NAME, CDC_STREAMS_HISTORY);
+    static const sstring query_from = format("SELECT table_id, timestamp, stream_state, stream_id FROM {}.{} WHERE table_id = ? AND timestamp > ?", NAME, CDC_STREAMS_HISTORY);
 
     struct cur_t {
         table_id tid;
@@ -2510,7 +2511,11 @@ future<> system_keyspace::read_cdc_streams_history(table_id table,
     };
     std::optional<cur_t> cur;
 
-    co_await _qp.query_internal(query, db::consistency_level::ONE, {table.uuid()}, 1000, [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
+    co_await _qp.query_internal(from ? query_from : query_all,
+            db::consistency_level::ONE,
+            from ? data_value_list{table.uuid(), *from} : data_value_list{table.uuid()},
+            1000,
+            [&] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
         auto tid = table_id(row.get_as<utils::UUID>("table_id"));
         auto ts = row.get_as<db_clock::time_point>("timestamp");
         auto stream_state = cdc::read_stream_state(row.get_as<int8_t>("stream_state"));

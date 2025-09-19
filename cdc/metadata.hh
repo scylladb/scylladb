@@ -37,7 +37,9 @@ class metadata final {
     using container_t = std::map<api::timestamp_type, std::optional<topology_description>>;
     container_t _gens;
 
-    using table_streams_ptr = lw_shared_ptr<const table_streams>;
+    // per-table streams map for tables in tablets-based keyspaces.
+    // the streams map is shared with the virtual tables reader, hence we can only insert new entries to it, not erase.
+    using table_streams_ptr = lw_shared_ptr<table_streams>;
     using tablet_streams_map = std::unordered_map<table_id, table_streams_ptr>;
 
     tablet_streams_map _tablet_streams;
@@ -100,6 +102,7 @@ public:
     bool prepare(db_clock::time_point ts);
 
     void load_tablet_streams_map(table_id tid, table_streams new_table_map);
+    void append_tablet_streams_map(table_id tid, table_streams new_table_map);
     void remove_tablet_streams_map(table_id tid);
 
     const tablet_streams_map& get_all_tablet_streams() const {
