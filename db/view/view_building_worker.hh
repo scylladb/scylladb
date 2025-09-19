@@ -166,7 +166,7 @@ public:
     view_building_worker(replica::database& db, db::system_keyspace& sys_ks, service::migration_notifier& mnotifier,
             service::raft_group0_client& group0_client, view_update_generator& vug, netw::messaging_service& ms,
             view_building_state_machine& vbsm);
-    void start_backgroud_fibers();
+    void start_background_fibers();
 
     future<> register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, table_id table_id);
 
