@@ -7,6 +7,7 @@
  */
 
 #include "vector_store_client.hh"
+#include "dns.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/type_json.hh"
 #include "db/config.hh"
@@ -52,12 +53,6 @@ using service_reply_format_error = vector_search::vector_store_client::service_r
 using tcp_keepalive_params = net::tcp_keepalive_params;
 using time_point = lowres_clock::time_point;
 
-// Wait time before retrying after an exception occurred
-constexpr auto EXCEPTION_OCCURED_WAIT = std::chrono::seconds(5);
-
-// Minimum interval between dns name refreshes
-constexpr auto DNS_REFRESH_INTERVAL = std::chrono::seconds(5);
-
 /// Timeout for waiting for a new client to be available
 constexpr auto WAIT_FOR_CLIENT_TIMEOUT = std::chrono::seconds(5);
 
@@ -98,18 +93,6 @@ auto parse_service_uri(std::string_view uri) -> std::optional<host_port> {
     return {{host, *port}};
 }
 
-/// Wait for a timeout ar abort signal.
-auto wait_for_timeout(duration timeout, abort_source& as) -> future<bool> {
-    auto result = co_await coroutine::as_future(sleep_abortable(timeout, as));
-    if (result.failed()) {
-        auto err = result.get_exception();
-        if (as.abort_requested()) {
-            co_return false;
-        }
-        co_await coroutine::return_exception_ptr(std::move(err));
-    }
-    co_return true;
-}
 
 /// Wait for a condition variable to be signaled or timeout.
 auto wait_for_signal(condition_variable& cv, time_point timeout) -> future<void> {
@@ -311,47 +294,54 @@ struct vector_store_client::impl {
     lw_shared_ptr<http_client> current_client;
     std::vector<lw_shared_ptr<http_client>> old_clients;
     std::optional<host_port> _host_port;
-    time_point last_dns_refresh;
-    gate tasks_gate;
     gate client_producer_gate;
-    condition_variable refresh_cv;
     condition_variable refresh_client_cv;
-    abort_source abort_refresh;
-    milliseconds dns_refresh_interval = DNS_REFRESH_INTERVAL;
     milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
     unsigned http_request_retries = HTTP_REQUEST_RETRIES;
-    std::function<future<std::optional<inet_address>>(sstring const&)> dns_resolver;
     sequential_producer<lw_shared_ptr<http_client>> client_producer;
+    dns dns;
 
     impl(utils::config_file::named_value<sstring> cfg)
-        : uri_observer(cfg.observe([this](std::string_view uri) {
+        : uri_observer(cfg.observe([this](seastar::sstring uri) {
             try {
-                _host_port = get_host_port(uri);
-                trigger_dns_refresh();
+                handle_uri_changed(get_host_port(uri));
             } catch (const configuration_exception& e) {
                 vslogger.error("Failed to parse Vector Store service URI: {}", e.what());
-                _host_port = std::nullopt;
+                handle_uri_changed(std::nullopt);
             }
         }))
         , _host_port(get_host_port(cfg()))
-        , dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
-            auto addr = co_await coroutine::as_future(net::dns::resolve_name(host));
-            if (addr.failed()) {
-                auto err = addr.get_exception();
-                if (try_catch<std::system_error>(err) != nullptr) {
-                    co_return std::nullopt;
-                }
-                co_await coroutine::return_exception_ptr(std::move(err));
-            }
-            co_return co_await std::move(addr);
-        })
-        , client_producer([this]() -> future<lw_shared_ptr<http_client>> {
+        , client_producer([&]() -> future<lw_shared_ptr<http_client>> {
             return try_with_gate(client_producer_gate, [this] -> future<lw_shared_ptr<http_client>> {
-                trigger_dns_refresh();
+                dns.trigger_refresh();
                 co_await wait_for_signal(refresh_client_cv, lowres_clock::now() + wait_for_client_timeout);
                 co_return current_client;
             });
+        })
+        , dns(vslogger, _host_port ? std::optional<seastar::sstring>{_host_port->host} : std::nullopt, [this](auto const& addr) -> future<> {
+            co_await handle_address_changed(addr);
         }) {
+    }
+
+    void handle_uri_changed(std::optional<host_port> uri) {
+        _host_port = std::move(uri);
+        if (current_client) {
+            old_clients.emplace_back(current_client);
+            current_client = nullptr;
+        }
+        dns.host(_host_port ? std::optional<seastar::sstring>{_host_port->host} : std::nullopt);
+    }
+
+    auto handle_address_changed(const std::optional<inet_address>& addr) -> future<> {
+        if (current_client) {
+            old_clients.emplace_back(current_client);
+            current_client = nullptr;
+        }
+        if (addr && _host_port) {
+            current_client = make_lw_shared<http_client>(*_host_port, std::move(*addr));
+        }
+        refresh_client_cv.broadcast();
+        co_await cleanup_old_clients();
     }
 
     auto is_disabled() const -> bool {
@@ -370,87 +360,6 @@ struct vector_store_client::impl {
             return std::unexpected{disabled{}};
         }
         return _host_port->port;
-    }
-
-    /// Refresh the http client with a new address resolved from the DNS name.
-    /// If the DNS resolution fails, the current client is set to nullptr.
-    /// If the address is the same as the current one, do nothing.
-    /// Old clients are saved for later cleanup in a specific task.
-    auto refresh_addr() -> future<> {
-        if (is_disabled()) {
-            current_client = nullptr;
-            co_return;
-        }
-        auto [host, port] = *_host_port;
-        auto new_addr = co_await dns_resolver(host);
-        if (!new_addr) {
-            current_client = nullptr;
-            co_return;
-        }
-
-        // Check if the new address and port is the same as the current one
-        if (current_client && current_client->connects_to(*new_addr, port)) {
-            co_return;
-        }
-
-        old_clients.emplace_back(current_client);
-        current_client = make_lw_shared<http_client>(*_host_port, std::move(*new_addr));
-    }
-
-    /// A task for refreshing the vector store http client.
-    auto refresh_addr_task() -> future<> {
-        for (;;) {
-            auto exception_occured = false;
-            try {
-                if (abort_refresh.abort_requested()) {
-                    break;
-                }
-
-                // Do not refresh the service address too often
-                auto now = lowres_clock::now();
-                auto current_duration = now - last_dns_refresh;
-                if (current_duration > dns_refresh_interval) {
-                    last_dns_refresh = now;
-                    co_await refresh_addr();
-                } else {
-                    // Wait till the end of the refreshing interval
-                    if (co_await wait_for_timeout(dns_refresh_interval - current_duration, abort_refresh)) {
-                        continue;
-                    }
-                    // If the wait was aborted, we stop refreshing
-                    break;
-                }
-
-                if (abort_refresh.abort_requested()) {
-                    break;
-                }
-
-                // new client is available
-                refresh_client_cv.broadcast();
-
-                co_await cleanup_old_clients();
-
-                co_await refresh_cv.when();
-            } catch (const std::exception& e) {
-                vslogger.error("Vector Store Client refresh task failed: {}", e.what());
-                exception_occured = true;
-            } catch (...) {
-                vslogger.error("Vector Store Client refresh task failed with unknown exception");
-                exception_occured = true;
-            }
-            if (exception_occured) {
-                // If an exception occurred, we wait for the next signal to refresh the address
-                co_await wait_for_timeout(EXCEPTION_OCCURED_WAIT, abort_refresh);
-            }
-        }
-
-        co_await cleanup_old_clients();
-        co_await cleanup_current_client();
-    }
-
-    /// Request a DNS refresh in the specific task.
-    void trigger_dns_refresh() {
-        refresh_cv.signal();
     }
 
     /// Cleanup current client
@@ -547,7 +456,7 @@ struct vector_store_client::impl {
                 co_return resp;
             }
 
-            trigger_dns_refresh();
+            dns.trigger_refresh();
         }
 
         co_return std::unexpected{service_unavailable{}};
@@ -561,20 +470,15 @@ vector_store_client::vector_store_client(config const& cfg)
 vector_store_client::~vector_store_client() = default;
 
 void vector_store_client::start_background_tasks() {
-    /// start the background task to refresh the service address
-    (void)try_with_gate(_impl->tasks_gate, [this] {
-        return _impl->refresh_addr_task();
-    }).handle_exception([](std::exception_ptr eptr) {
-        on_internal_error_noexcept(vslogger, format("The Vector Store Client refresh task failed: {}", eptr));
-    });
+    _impl->dns.start_background_tasks();
 }
 
 auto vector_store_client::stop() -> future<> {
-    _impl->abort_refresh.request_abort();
-    _impl->refresh_cv.signal();
     _impl->refresh_client_cv.signal();
-    co_await _impl->tasks_gate.close();
     co_await _impl->client_producer_gate.close();
+    co_await _impl->dns.stop();
+    co_await _impl->cleanup_old_clients();
+    co_await _impl->cleanup_current_client();
 }
 
 auto vector_store_client::is_disabled() const -> bool {
@@ -624,7 +528,7 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
-    vsc._impl->dns_refresh_interval = interval;
+    vsc._impl->dns.refresh_interval(interval);
 }
 
 void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout) {
@@ -636,11 +540,11 @@ void vector_store_client_tester::set_http_request_retries(vector_store_client& v
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
-    vsc._impl->dns_resolver = std::move(resolver);
+    vsc._impl->dns.resolver(std::move(resolver));
 }
 
 void vector_store_client_tester::trigger_dns_resolver(vector_store_client& vsc) {
-    vsc._impl->trigger_dns_refresh();
+    vsc._impl->dns.trigger_refresh();
 }
 
 auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::optional<inet_address>> {

@@ -1,7 +1,8 @@
 add_library(vector_search STATIC)
 target_sources(vector_search
   PRIVATE
-    vector_store_client.cc)
+    vector_store_client.cc
+    dns.cc)
 target_link_libraries(vector_search
   PUBLIC
     Seastar::seastar
