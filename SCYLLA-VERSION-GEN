@@ -80,6 +80,9 @@ fi
 PRODUCT=scylla
 VERSION=2025.4.0-dev
 
+echo "Generating version files in $OUTPUT_DIR"
+echo "2"
+
 if test -f version
 then
 	SCYLLA_VERSION=$(cat version | awk -F'-' '{print $1}')
