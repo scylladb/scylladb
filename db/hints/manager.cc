@@ -141,7 +141,7 @@ future<> directory_initializer::ensure_rebalanced() {
 }
 
 manager::manager(service::storage_proxy& proxy, sstring hints_directory, host_filter filter, int64_t max_hint_window_ms,
-        resource_manager& res_manager, distributed<replica::database>& db)
+        resource_manager& res_manager, sharded<replica::database>& db)
     : _hints_dir(fs::path(hints_directory) / fmt::to_string(this_shard_id()))
     , _host_filter(std::move(filter))
     , _proxy(proxy)

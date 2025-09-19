@@ -11,7 +11,7 @@
 #include <functional>
 #include <vector>
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -152,16 +152,16 @@ public:
 
     virtual cql3::query_processor& local_qp() = 0;
 
-    virtual distributed<replica::database>& db() = 0;
+    virtual sharded<replica::database>& db() = 0;
 
-    virtual distributed<cql3::query_processor> & qp() = 0;
+    virtual sharded<cql3::query_processor> & qp() = 0;
 
     virtual auth::service& local_auth_service() = 0;
 
-    virtual distributed<db::view::view_builder>& view_builder() = 0;
+    virtual sharded<db::view::view_builder>& view_builder() = 0;
     virtual db::view::view_builder& local_view_builder() = 0;
 
-    virtual distributed<db::view::view_building_worker>& view_building_worker() = 0;
+    virtual sharded<db::view::view_building_worker>& view_building_worker() = 0;
 
     virtual db::view::view_update_generator& local_view_update_generator() = 0;
 

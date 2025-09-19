@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "db/view/view_building_worker.hh"
 #include "gms/gossiper.hh"
 #include "streaming/stream_manager.hh"

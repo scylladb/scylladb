@@ -22,7 +22,7 @@
 #include "db_clock.hh"
 #include "gc_clock.hh"
 #include <chrono>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <functional>
 #include <unordered_map>
 #include <set>
@@ -1498,7 +1498,7 @@ struct string_pair_eq {
 
 class db_user_types_storage;
 
-// Policy for distributed<database>:
+// Policy for sharded<database>:
 //   broadcast metadata writes
 //   local metadata reads
 //   use table::shard_for_reads()/table::shard_for_writes() for data
@@ -1757,7 +1757,7 @@ public:
 
     // Load the schema definitions kept in schema tables from disk and initialize in-memory schema data structures
     // (keyspace/table definitions, column mappings etc.)
-    future<> parse_system_tables(distributed<service::storage_proxy>&, sharded<db::system_keyspace>&);
+    future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
             compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&,
@@ -2134,7 +2134,7 @@ future<> start_large_data_handler(sharded<replica::database>& db);
 // size optimization (see make_multishard_combining_reader()), using the
 // given size.
 mutation_reader make_multishard_streaming_reader(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr schema,
         reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator,
@@ -2143,7 +2143,7 @@ mutation_reader make_multishard_streaming_reader(
         read_ahead read_ahead);
 
 mutation_reader make_multishard_streaming_reader(
-        distributed<replica::database>& db,
+        sharded<replica::database>& db,
         schema_ptr schema,
         reader_permit permit,
         const dht::partition_range& range,
@@ -2165,12 +2165,12 @@ class streaming_reader_lifecycle_policy
         foreign_unique_ptr<utils::phased_barrier::operation> read_operation;
         reader_concurrency_semaphore* semaphore;
     };
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     table_id _table_id;
     gc_clock::time_point _compaction_time;
     std::vector<reader_context> _contexts;
 public:
-    streaming_reader_lifecycle_policy(distributed<replica::database>& db, table_id table_id, gc_clock::time_point compaction_time)
+    streaming_reader_lifecycle_policy(sharded<replica::database>& db, table_id table_id, gc_clock::time_point compaction_time)
         : _db(db)
         , _table_id(table_id)
         , _compaction_time(compaction_time)

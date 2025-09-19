@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>  // IWYU pragma: keep
 #include <seastar/core/weak_ptr.hh>
 
@@ -138,7 +138,7 @@ public:
 };
 
 class toppartitions_query {
-    distributed<replica::database>& _xdb;
+    sharded<replica::database>& _xdb;
     std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash> _table_filters;
     std::unordered_set<sstring> _keyspace_filters;
     std::chrono::milliseconds _duration;
@@ -147,7 +147,7 @@ class toppartitions_query {
     std::unique_ptr<sharded<toppartitions_data_listener>> _query;
 
 public:
-    toppartitions_query(seastar::distributed<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
+    toppartitions_query(seastar::sharded<replica::database>& xdb, std::unordered_set<std::tuple<sstring, sstring>, utils::tuple_hash>&& table_filters,
         std::unordered_set<sstring>&& keyspace_filters, std::chrono::milliseconds duration, size_t list_size, size_t capacity);
 
     struct results {

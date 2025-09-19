@@ -16,7 +16,7 @@
 #include "streaming/stream_reason.hh"
 #include "service/topology_guard.hh"
 #include "gms/inet_address.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
 #include <unordered_map>
 #include <memory>
@@ -76,7 +76,7 @@ public:
         }
     };
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
+    range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source, std::unordered_set<token> tokens,
             locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason,
             service::frozen_topology_guard topo_guard,
             std::vector<sstring> tables = {})
@@ -95,7 +95,7 @@ public:
         _abort_source.check();
     }
 
-    range_streamer(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
+    range_streamer(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, const token_metadata_ptr tmptr, abort_source& abort_source,
             locator::host_id address, locator::endpoint_dc_rack dr, sstring description, streaming::stream_reason reason, service::frozen_topology_guard topo_guard, std::vector<sstring> tables = {})
         : range_streamer(db, sm, std::move(tmptr), abort_source, std::unordered_set<token>(), address, std::move(dr), description, reason, std::move(topo_guard), std::move(tables)) {
     }
@@ -151,7 +151,7 @@ public:
     future<> stream_async();
     size_t nr_ranges_to_stream();
 private:
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     token_metadata_ptr _token_metadata_ptr;
     abort_source& _abort_source;

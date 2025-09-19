@@ -437,16 +437,16 @@ public:
         }
         return *t;
     }
-    distributed<cql3::query_processor>& get_query_processor() const override {
+    sharded<cql3::query_processor>& get_query_processor() const override {
         return check_service_object(_qp);
     }
-    distributed<service::storage_service>& get_storage_service() const override {
+    sharded<service::storage_service>& get_storage_service() const override {
         return check_service_object(_ss);
     }
-    distributed<replica::database>& get_database() const override {
+    sharded<replica::database>& get_database() const override {
         return check_service_object(_db);
     }
-    distributed<service::migration_manager>& get_migration_manager() const override {
+    sharded<service::migration_manager>& get_migration_manager() const override {
         return check_service_object(_mm);
     }
 

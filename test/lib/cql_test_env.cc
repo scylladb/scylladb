@@ -22,7 +22,7 @@
 #include "cql3/statements/modification_statement.hh"
 #include "cql3/cql_config.hh"
 #include <fmt/ranges.h>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/scheduling.hh>
@@ -196,7 +196,7 @@ private:
             return make_ready_future<>();
         }
     };
-    distributed<core_local_state> _core_local;
+    sharded<core_local_state> _core_local;
 private:
     cql3::dialect test_dialect() {
         return cql3::dialect{
@@ -346,7 +346,7 @@ public:
         return _db;
     }
 
-    distributed<cql3::query_processor>& qp() override {
+    sharded<cql3::query_processor>& qp() override {
         return _qp;
     }
 
@@ -354,7 +354,7 @@ public:
         return _auth_service.local();
     }
 
-    virtual distributed<db::view::view_builder>& view_builder() override {
+    virtual sharded<db::view::view_builder>& view_builder() override {
         return _view_builder;
     }
 
@@ -366,7 +366,7 @@ public:
         return _view_update_generator.local();
     }
 
-    virtual distributed<db::view::view_building_worker>& view_building_worker() override {
+    virtual sharded<db::view::view_building_worker>& view_building_worker() override {
         return _view_building_worker;
     }
 

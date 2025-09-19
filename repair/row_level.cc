@@ -3522,7 +3522,7 @@ public:
 };
 
 repair_service::repair_service(sharded<service::topology_state_machine>& tsm,
-        distributed<gms::gossiper>& gossiper,
+        sharded<gms::gossiper>& gossiper,
         netw::messaging_service& ms,
         sharded<replica::database>& db,
         sharded<service::storage_proxy>& sp,

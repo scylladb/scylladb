@@ -356,7 +356,7 @@ public:
 // The function func should carry on with the test, and return the number of partitions processed.
 // time_runs will then map reduce it, and return the aggregate partitions / sec for the whole system.
 template <typename Func>
-future<> time_runs(unsigned iterations, unsigned parallelism, distributed<perf_sstable_test_env>& dt, Func func) {
+future<> time_runs(unsigned iterations, unsigned parallelism, sharded<perf_sstable_test_env>& dt, Func func) {
     using namespace boost::accumulators;
     auto acc = make_lw_shared<accumulator_set<double, features<tag::mean, tag::error_of<tag::mean>>>>();
     auto idx = std::views::iota(0, int(iterations));

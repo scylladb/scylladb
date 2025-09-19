@@ -3189,7 +3189,7 @@ storage_proxy::~storage_proxy() {
     SCYLLA_ASSERT(!_remote);
 }
 
-storage_proxy::storage_proxy(distributed<replica::database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
+storage_proxy::storage_proxy(sharded<replica::database>& db, storage_proxy::config cfg, db::view::node_update_backlog& max_view_update_backlog,
         scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm, locator::effective_replication_map_factory& erm_factory)
     : _db(db)
     , _shared_token_metadata(stm)

@@ -22,14 +22,14 @@
 #include "replica/global_table_ptr.hh"
 #include "replica/tables_metadata_lock.hh"
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <unordered_map>
 
 namespace db {
 
 namespace schema_tables {
 
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, distributed<service::storage_service>& ss, gms::feature_service& feat, utils::chunked_vector<mutation> mutations, bool reload = false);
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, gms::feature_service& feat, utils::chunked_vector<mutation> mutations, bool reload = false);
 
 enum class table_kind { table, view };
 
@@ -99,7 +99,7 @@ class in_progress_types_storage {
     std::vector<foreign_ptr<shared_ptr<in_progress_types_storage_per_shard>>> shards;
 public:
     in_progress_types_storage() : shards(smp::count) {}
-    future<> init(distributed<replica::database>& sharded_db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types);
+    future<> init(sharded<replica::database>& sharded_db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types);
     in_progress_types_storage_per_shard& local();
 };
 

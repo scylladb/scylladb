@@ -14,7 +14,7 @@
 #include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/core/shared_ptr.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 
 #include <fmt/core.h>
 #include <fmt/ostream.h>
@@ -177,10 +177,10 @@ public:
     virtual const encryption_config& config() const = 0;
     virtual shared_ptr<symmetric_key> get_config_encryption_key() const = 0;
 
-    virtual distributed<cql3::query_processor>& get_query_processor() const = 0;
-    virtual distributed<service::storage_service>& get_storage_service() const = 0;
-    virtual distributed<replica::database>& get_database() const = 0;
-    virtual distributed<service::migration_manager>& get_migration_manager() const = 0;
+    virtual sharded<cql3::query_processor>& get_query_processor() const = 0;
+    virtual sharded<service::storage_service>& get_storage_service() const = 0;
+    virtual sharded<replica::database>& get_database() const = 0;
+    virtual sharded<service::migration_manager>& get_migration_manager() const = 0;
 
     sstring maybe_decrypt_config_value(const sstring&) const;
 

@@ -2676,18 +2676,18 @@ static future<std::optional<mutation>> get_scylla_local_mutation(replica::databa
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-system_keyspace::query_mutations(distributed<replica::database>& db, schema_ptr schema) {
+system_keyspace::query_mutations(sharded<replica::database>& db, schema_ptr schema) {
     return replica::query_mutations(db, schema, query::full_partition_range, schema->full_slice(), db::no_timeout);
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-system_keyspace::query_mutations(distributed<replica::database>& db, const sstring& ks_name, const sstring& cf_name) {
+system_keyspace::query_mutations(sharded<replica::database>& db, const sstring& ks_name, const sstring& cf_name) {
     schema_ptr schema = db.local().find_schema(ks_name, cf_name);
     return query_mutations(db, schema);
 }
 
 future<foreign_ptr<lw_shared_ptr<reconcilable_result>>>
-system_keyspace::query_mutations(distributed<replica::database>& db, const sstring& ks_name, const sstring& cf_name, const dht::partition_range& partition_range, query::clustering_range row_range) {
+system_keyspace::query_mutations(sharded<replica::database>& db, const sstring& ks_name, const sstring& cf_name, const dht::partition_range& partition_range, query::clustering_range row_range) {
     auto schema = db.local().find_schema(ks_name, cf_name);
     auto slice_ptr = std::make_unique<query::partition_slice>(partition_slice_builder(*schema)
         .with_range(std::move(row_range))
@@ -2696,7 +2696,7 @@ system_keyspace::query_mutations(distributed<replica::database>& db, const sstri
 }
 
 future<lw_shared_ptr<query::result_set>>
-system_keyspace::query(distributed<replica::database>& db, const sstring& ks_name, const sstring& cf_name) {
+system_keyspace::query(sharded<replica::database>& db, const sstring& ks_name, const sstring& cf_name) {
     schema_ptr schema = db.local().find_schema(ks_name, cf_name);
     return replica::query_data(db, schema, query::full_partition_range, schema->full_slice(), db::no_timeout).then([schema] (auto&& qr) {
         return make_lw_shared<query::result_set>(query::result_set::from_raw_result(schema, schema->full_slice(), *qr));
@@ -2704,7 +2704,7 @@ system_keyspace::query(distributed<replica::database>& db, const sstring& ks_nam
 }
 
 future<lw_shared_ptr<query::result_set>>
-system_keyspace::query(distributed<replica::database>& db, const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
+system_keyspace::query(sharded<replica::database>& db, const sstring& ks_name, const sstring& cf_name, const dht::decorated_key& key, query::clustering_range row_range)
 {
     auto schema = db.local().find_schema(ks_name, cf_name);
     auto pr_ptr = std::make_unique<dht::partition_range>(dht::partition_range::make_singular(key));
@@ -3226,7 +3226,7 @@ mutation system_keyspace::make_group0_history_state_id_mutation(
     return m;
 }
 
-future<mutation> system_keyspace::get_group0_history(distributed<replica::database>& db) {
+future<mutation> system_keyspace::get_group0_history(sharded<replica::database>& db) {
     auto s = group0_history();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::GROUP0_HISTORY);
     SCYLLA_ASSERT(rs);

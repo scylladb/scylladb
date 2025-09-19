@@ -124,7 +124,7 @@ static std::optional<table_id> table_id_from_mutations(const schema_mutations& s
 
 static
 future<std::map<table_id, schema_mutations>>
-read_tables_for_keyspaces(distributed<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names, table_kind kind,
+read_tables_for_keyspaces(sharded<service::storage_proxy>& proxy, const std::set<sstring>& keyspace_names, table_kind kind,
                           const std::unordered_map<sstring, table_selector>& tables_per_keyspace)
 {
     std::map<table_id, schema_mutations> result;
@@ -186,7 +186,7 @@ table_selector get_affected_tables(const sstring& keyspace_name, const mutation&
 }
 
 future<schema_result>
-static read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
+static read_schema_for_keyspaces(sharded<service::storage_proxy>& proxy, const sstring& schema_table_name, const std::set<sstring>& keyspace_names)
 {
     auto map = [&proxy, schema_table_name] (const sstring& keyspace_name) { return read_schema_partition_for_keyspace(proxy, schema_table_name, keyspace_name); };
     auto insert = [] (schema_result&& result, auto&& schema_entity) {
@@ -200,7 +200,7 @@ static read_schema_for_keyspaces(distributed<service::storage_proxy>& proxy, con
 
 // Returns names of live table definitions of given keyspace
 future<std::vector<sstring>>
-static read_table_names_of_keyspace(distributed<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
+static read_table_names_of_keyspace(sharded<service::storage_proxy>& proxy, const sstring& keyspace_name, schema_ptr schema_table) {
     auto pkey = dht::decorate_key(*schema_table, partition_key::from_singular(*schema_table, keyspace_name));
     auto&& rs = co_await db::system_keyspace::query(proxy.local().get_db(), schema_table->ks_name(), schema_table->cf_name(), pkey);
     co_return rs->rows() | std::views::transform([schema_table] (const query::result_set_row& row) {
@@ -239,7 +239,7 @@ static void maybe_delete_schema_version(mutation& m) {
     }
 }
 
-static future<affected_keyspaces> merge_keyspaces(distributed<service::storage_proxy>& proxy,
+static future<affected_keyspaces> merge_keyspaces(sharded<service::storage_proxy>& proxy,
                                                  const schema_result& before, const schema_result& after,
                                                  const schema_result& sk_before, const schema_result& sk_after)
 {
@@ -453,7 +453,7 @@ static aggregate_diff diff_aggregates_rows(const schema_result& aggr_before, con
 }
 
 // see the comments for merge_keyspaces()
-static future<> merge_types(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, affected_user_types& affected, affected_keyspaces& affected_keyspaces)
+static future<> merge_types(sharded<service::storage_proxy>& proxy, schema_result before, schema_result after, affected_user_types& affected, affected_keyspaces& affected_keyspaces)
 {
     auto diff = diff_rows(before, after);
     co_await affected.start();
@@ -481,7 +481,7 @@ enum class schema_diff_side {
     right, // new, after
 };
 
-static schema_diff_per_shard diff_table_or_view(distributed<service::storage_proxy>& proxy,
+static schema_diff_per_shard diff_table_or_view(sharded<service::storage_proxy>& proxy,
     const std::map<table_id, schema_mutations>& before,
     const std::map<table_id, schema_mutations>& after,
     bool reload,
@@ -569,7 +569,7 @@ std::shared_ptr<data_dictionary::user_types_storage> in_progress_types_storage_p
     return _stored_user_types;
 }
 
-future<> in_progress_types_storage::init(distributed<replica::database>& sharded_db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types) {
+future<> in_progress_types_storage::init(sharded<replica::database>& sharded_db, const affected_keyspaces& affected_keyspaces, const affected_user_types& affected_types) {
     co_await sharded_db.invoke_on_all([&] (replica::database& db) {
         shards[this_shard_id()] = make_foreign(seastar::make_shared<in_progress_types_storage_per_shard>(db, affected_keyspaces, affected_types));
     });
@@ -584,8 +584,8 @@ in_progress_types_storage_per_shard& in_progress_types_storage::local() {
 // that when a base schema and a subset of its views are modified together (i.e.,
 // upon an alter table or alter type statement), then they are published together
 // as well, without any deferring in-between.
-static future<> merge_tables_and_views(distributed<service::storage_proxy>& proxy,
-    distributed<service::storage_service>& ss,
+static future<> merge_tables_and_views(sharded<service::storage_proxy>& proxy,
+    sharded<service::storage_service>& ss,
     sharded<db::system_keyspace>& sys_ks,
     const std::map<table_id, schema_mutations>& tables_before,
     const std::map<table_id, schema_mutations>& tables_after,
@@ -773,7 +773,7 @@ static void drop_cached_func(replica::database& db, const query::result_set_row&
     }
 }
 
-static future<> merge_functions(distributed<service::storage_proxy>& proxy, schema_result before, schema_result after, in_progress_types_storage& types_storage, functions_change_batch_all_shards& batches) {
+static future<> merge_functions(sharded<service::storage_proxy>& proxy, schema_result before, schema_result after, in_progress_types_storage& types_storage, functions_change_batch_all_shards& batches) {
     auto diff = diff_rows(before, after);
     co_await batches.start();
     co_await batches.invoke_on_all(coroutine::lambda([&] (cql3::functions::change_batch& batch) -> future<> {
@@ -798,7 +798,7 @@ static future<> merge_functions(distributed<service::storage_proxy>& proxy, sche
     }));
 }
 
-static future<> merge_aggregates(distributed<service::storage_proxy>& proxy,
+static future<> merge_aggregates(sharded<service::storage_proxy>& proxy,
         functions_change_batch_all_shards& batches,
         const schema_result& before, const schema_result& after,
         const schema_result& scylla_before, const schema_result& scylla_after, in_progress_types_storage& types_storage) {
@@ -1090,7 +1090,7 @@ future<> schema_applier::destroy() {
     co_await _functions_batch.stop();
 }
 
-static future<> execute_do_merge_schema(distributed<service::storage_proxy>& proxy, schema_applier& ap, utils::chunked_vector<mutation> mutations) {
+static future<> execute_do_merge_schema(sharded<service::storage_proxy>& proxy, schema_applier& ap, utils::chunked_vector<mutation> mutations) {
     co_await ap.prepare(mutations);
     co_await proxy.local().get_db().local().apply(freeze(mutations), db::no_timeout);
     co_await ap.update();
@@ -1104,7 +1104,7 @@ static future<> execute_do_merge_schema(distributed<service::storage_proxy>& pro
     co_await ap.post_commit();
 }
 
-static future<> do_merge_schema(distributed<service::storage_proxy>& proxy,  distributed<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations, bool reload)
+static future<> do_merge_schema(sharded<service::storage_proxy>& proxy,  sharded<service::storage_service>& ss, sharded<db::system_keyspace>& sys_ks, utils::chunked_vector<mutation> mutations, bool reload)
 {
     slogger.trace("do_merge_schema: {}", mutations);
     schema_applier ap(proxy, ss, sys_ks, reload);
@@ -1129,7 +1129,7 @@ static future<> do_merge_schema(distributed<service::storage_proxy>& proxy,  dis
  * @throws ConfigurationException If one of metadata attributes has invalid value
  * @throws IOException If data was corrupted during transportation or failed to apply fs operations
  */
-future<> merge_schema(sharded<db::system_keyspace>& sys_ks, distributed<service::storage_proxy>& proxy, distributed<service::storage_service>& ss, gms::feature_service& feat, utils::chunked_vector<mutation> mutations, bool reload)
+future<> merge_schema(sharded<db::system_keyspace>& sys_ks, sharded<service::storage_proxy>& proxy, sharded<service::storage_service>& ss, gms::feature_service& feat, utils::chunked_vector<mutation> mutations, bool reload)
 {
     if (this_shard_id() != 0) {
         // mutations must be applied on the owning shard (0).

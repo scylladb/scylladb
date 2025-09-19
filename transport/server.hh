@@ -15,7 +15,7 @@
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "service/migration_listener.hh"
 #include "auth/authenticator.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "service/qos/qos_configuration_change_subscriber.hh"
 #include "timeout_config.hh"
 #include <seastar/core/semaphore.hh>
@@ -199,7 +199,7 @@ private:
 
     static constexpr cql_protocol_version_type current_version = cql_serialization_format::latest_version;
 
-    distributed<cql3::query_processor>& _query_processor;
+    sharded<cql3::query_processor>& _query_processor;
     cql_server_config _config;
     semaphore& _memory_available;
     seastar::metrics::metric_groups _metrics;
@@ -211,7 +211,7 @@ private:
     gms::gossiper& _gossiper;
     scheduling_group_key _stats_key;
 public:
-    cql_server(distributed<cql3::query_processor>& qp, auth::service&,
+    cql_server(sharded<cql3::query_processor>& qp, auth::service&,
             service::memory_limiter& ml,
             cql_server_config config,
             qos::service_level_controller& sl_controller,
@@ -328,7 +328,7 @@ private:
             requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
                                            Process,
                                            service::client_state&,
-                                           distributed<cql3::query_processor>&,
+                                           sharded<cql3::query_processor>&,
                                            request_reader,
                                            uint16_t,
                                            cql_protocol_version_type,
@@ -345,7 +345,7 @@ private:
             requires std::is_invocable_r_v<future<cql_server::process_fn_return_type>,
                                            Process,
                                            service::client_state&,
-                                           distributed<cql3::query_processor>&,
+                                           sharded<cql3::query_processor>&,
                                            request_reader,
                                            uint16_t,
                                            cql_protocol_version_type,

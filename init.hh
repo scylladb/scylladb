@@ -11,7 +11,7 @@
 
 #include <seastar/core/sstring.hh>
 #include <seastar/core/future.hh>
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
 #include "utils/log.hh"
 #include "utils/s3/creds.hh"

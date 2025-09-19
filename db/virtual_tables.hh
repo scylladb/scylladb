@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <map>
 #include "schema/schema_fwd.hh"
 
@@ -37,8 +37,8 @@ class config;
 class system_keyspace;
 
 future<> initialize_virtual_tables(
-    distributed<replica::database>&,
-    distributed<service::storage_service>&,
+    sharded<replica::database>&,
+    sharded<service::storage_service>&,
     sharded<gms::gossiper>&,
     sharded<service::raft_group_registry>&,
     sharded<db::system_keyspace>&,

@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
@@ -143,7 +143,7 @@ class retrying_dispatcher;
 class mapreduce_service : public seastar::peering_sharded_service<mapreduce_service> {
     netw::messaging_service& _messaging;
     service::storage_proxy& _proxy;
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     abort_source _abort_outgoing_tasks;
 
     struct stats {
@@ -157,7 +157,7 @@ class mapreduce_service : public seastar::peering_sharded_service<mapreduce_serv
     bool _shutdown = false;
 
 public:
-    mapreduce_service(netw::messaging_service& ms, service::storage_proxy& p, distributed<replica::database> &db,
+    mapreduce_service(netw::messaging_service& ms, service::storage_proxy& p, sharded<replica::database> &db,
         abort_source& as)
         : _messaging(ms)
         , _proxy(p)

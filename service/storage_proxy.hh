@@ -14,7 +14,7 @@
 #include "inet_address_vectors.hh"
 #include "replica/database_fwd.hh"
 #include "message/messaging_service_fwd.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/execution_stage.hh>
 #include <seastar/core/scheduling_specific.hh>
 #include "db/read_repair_decision.hh"
@@ -265,7 +265,7 @@ public:
     future<utils::chunked_vector<dht::token_range_endpoints>> describe_ring(const sstring& keyspace, bool include_only_local_dc = false) const;
 
 private:
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     const locator::shared_token_metadata& _shared_token_metadata;
     locator::effective_replication_map_factory& _erm_factory;
     smp_service_group _read_smp_service_group;
@@ -514,15 +514,15 @@ private:
         host_id_vector_replica_set& l2) const;
 
 public:
-    storage_proxy(distributed<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
+    storage_proxy(sharded<replica::database>& db, config cfg, db::view::node_update_backlog& max_view_update_backlog,
             scheduling_group_key stats_key, gms::feature_service& feat, const locator::shared_token_metadata& stm,
             locator::effective_replication_map_factory& erm_factory);
     ~storage_proxy();
 
-    const distributed<replica::database>& get_db() const {
+    const sharded<replica::database>& get_db() const {
         return _db;
     }
-    distributed<replica::database>& get_db() {
+    sharded<replica::database>& get_db() {
         return _db;
     }
     const replica::database& local_db() const noexcept {

@@ -730,7 +730,7 @@ const table_schema_version& database::get_version() const {
 }
 
 static future<>
-do_parse_schema_tables(distributed<service::storage_proxy>& proxy, const sstring cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
+do_parse_schema_tables(sharded<service::storage_proxy>& proxy, const sstring cf_name, std::function<future<> (db::schema_tables::schema_result_value_type&)> func) {
     using namespace db::schema_tables;
 
     auto rs = co_await db::system_keyspace::query(proxy.local().get_db(), db::schema_tables::NAME, cf_name);
@@ -777,7 +777,7 @@ bool database::is_in_critical_disk_utilization_mode() const {
     return false;
 }
 
-future<> database::parse_system_tables(distributed<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
+future<> database::parse_system_tables(sharded<service::storage_proxy>& proxy, sharded<db::system_keyspace>& sys_ks) {
     using namespace db::schema_tables;
     co_await do_parse_schema_tables(proxy, db::schema_tables::KEYSPACES, coroutine::lambda([&] (schema_result_value_type &v) -> future<> {
         auto scylla_specific_rs = co_await extract_scylla_specific_keyspace_info(proxy, v);
@@ -3301,7 +3301,7 @@ void database::unplug_view_update_generator() noexcept {
 
 } // namespace replica
 
-mutation_reader make_multishard_streaming_reader(distributed<replica::database>& db,
+mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,
         schema_ptr schema, reader_permit permit,
         std::function<std::optional<dht::partition_range>()> range_generator,
         gc_clock::time_point compaction_time,
@@ -3331,7 +3331,7 @@ mutation_reader make_multishard_streaming_reader(distributed<replica::database>&
             std::move(range_generator), std::move(full_slice), {}, mutation_reader::forwarding::no);
 }
 
-mutation_reader make_multishard_streaming_reader(distributed<replica::database>& db,
+mutation_reader make_multishard_streaming_reader(sharded<replica::database>& db,
         schema_ptr schema,
         reader_permit permit,
         const dht::partition_range& range,

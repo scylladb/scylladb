@@ -39,7 +39,7 @@ utils::time_estimated_histogram timed_rate_moving_average_summary_merge(utils::t
  * @return A future that resolves to the result of the aggregation.
  */
 template<typename V, typename Reducer, typename InnerMapper>
-future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
+future<V> two_dimensional_map_reduce(sharded<service::storage_proxy>& d,
         InnerMapper mapper, Reducer reducer, V initial_value) {
     return d.map_reduce0( [mapper, reducer, initial_value] (const service::storage_proxy& sp) {
         return map_reduce_scheduling_group_specific<service::storage_proxy_stats::stats>(
@@ -59,7 +59,7 @@ future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
  * @return A future that resolves to the result of the aggregation.
  */
 template<typename V, typename Reducer, typename F, typename C>
-future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
+future<V> two_dimensional_map_reduce(sharded<service::storage_proxy>& d,
         C F::*f, Reducer reducer, V initial_value) {
     return two_dimensional_map_reduce(d, [f] (F& stats) -> V {
         return stats.*f;
@@ -75,20 +75,20 @@ future<V> two_dimensional_map_reduce(distributed<service::storage_proxy>& d,
  *
  */
 template<typename V, typename F>
-future<json::json_return_type>  sum_stats_storage_proxy(distributed<proxy>& d, V F::*f) {
+future<json::json_return_type>  sum_stats_storage_proxy(sharded<proxy>& d, V F::*f) {
     return two_dimensional_map_reduce(d, [f] (F& stats) { return stats.*f; }, std::plus<V>(), V(0)).then([] (V val) {
         return make_ready_future<json::json_return_type>(val);
     });
 }
 
 
-static future<utils::rate_moving_average>  sum_timed_rate(distributed<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
+static future<utils::rate_moving_average>  sum_timed_rate(sharded<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
         return (stats.*f).rate();
     }, std::plus<utils::rate_moving_average>(), utils::rate_moving_average());
 }
 
-static future<json::json_return_type>  sum_timed_rate_as_obj(distributed<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
+static future<json::json_return_type>  sum_timed_rate_as_obj(sharded<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
     return sum_timed_rate(d, f).then([](const utils::rate_moving_average& val) {
         httpd::utils_json::rate_moving_average m;
         m = val;
@@ -100,7 +100,7 @@ httpd::utils_json::rate_moving_average_and_histogram get_empty_moving_average() 
     return timer_to_json(utils::rate_moving_average_and_histogram());
 }
 
-static future<json::json_return_type>  sum_timed_rate_as_long(distributed<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
+static future<json::json_return_type>  sum_timed_rate_as_long(sharded<proxy>& d, utils::timed_rate_moving_average service::storage_proxy_stats::stats::*f) {
     return sum_timed_rate(d, f).then([](const utils::rate_moving_average& val) {
         return make_ready_future<json::json_return_type>(val.count);
     });
@@ -152,7 +152,7 @@ static future<json::json_return_type>  total_latency(sharded<service::storage_pr
  */
 template<typename F>
 future<json::json_return_type>
-sum_histogram_stats_storage_proxy(distributed<proxy>& d,
+sum_histogram_stats_storage_proxy(sharded<proxy>& d,
         utils::timed_rate_moving_average_summary_and_histogram F::*f) {
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {
         return (stats.*f).hist;
@@ -172,7 +172,7 @@ sum_histogram_stats_storage_proxy(distributed<proxy>& d,
  */
 template<typename F>
 future<json::json_return_type>
-sum_timer_stats_storage_proxy(distributed<proxy>& d,
+sum_timer_stats_storage_proxy(sharded<proxy>& d,
         utils::timed_rate_moving_average_summary_and_histogram F::*f) {
 
     return two_dimensional_map_reduce(d, [f] (service::storage_proxy_stats::stats& stats) {

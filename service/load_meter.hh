@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include "service/load_broadcaster.hh"
 
 using namespace seastar;
@@ -31,7 +31,7 @@ private:
 public:
     future<std::map<sstring, double>> get_load_map();
 
-    future<> init(distributed<replica::database>& db, gms::gossiper& gossiper);
+    future<> init(sharded<replica::database>& db, gms::gossiper& gossiper);
     future<> exit();
 };
 

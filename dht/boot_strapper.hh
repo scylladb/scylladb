@@ -15,7 +15,7 @@
 #include "replica/database_fwd.hh"
 #include "streaming/stream_reason.hh"
 #include "service/topology_guard.hh"
-#include <seastar/core/distributed.hh>
+#include <seastar/core/sharded.hh>
 #include <seastar/core/abort_source.hh>
 
 namespace streaming { class stream_manager; }
@@ -31,7 +31,7 @@ class boot_strapper {
     using token_metadata = locator::token_metadata;
     using token_metadata_ptr = locator::token_metadata_ptr;
     using token = dht::token;
-    distributed<replica::database>& _db;
+    sharded<replica::database>& _db;
     sharded<streaming::stream_manager>& _stream_manager;
     abort_source& _abort_source;
     /* endpoint that needs to be bootstrapped */
@@ -42,7 +42,7 @@ class boot_strapper {
     std::unordered_set<token> _tokens;
     const locator::token_metadata_ptr _token_metadata_ptr;
 public:
-    boot_strapper(distributed<replica::database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source,
+    boot_strapper(sharded<replica::database>& db, sharded<streaming::stream_manager>& sm, abort_source& abort_source,
             locator::host_id addr, locator::endpoint_dc_rack dr, std::unordered_set<token> tokens, const token_metadata_ptr tmptr)
         : _db(db)
         , _stream_manager(sm)
