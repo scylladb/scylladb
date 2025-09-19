@@ -63,6 +63,7 @@ public:
     /// The error from the vector-store service.
     struct service_error {
         status_type status; ///< The HTTP status code from the vector-store service.
+        sstring message; ///< The error message from the vector-store service.
     };
 
     /// An unsupported reply format from the vector-store service.
@@ -72,7 +73,7 @@ public:
 
     struct ann_error_visitor {
         sstring operator()(service::vector_store_client::service_error e) const {
-            return fmt::format("Vector Store error: HTTP status {}", e.status);
+            return fmt::format("Vector Store error: HTTP status {}, message: {}", e.status, e.message);
         }
         sstring operator()(service::vector_store_client::disabled) const {
             return fmt::format("Vector Store is disabled");
