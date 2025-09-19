@@ -731,24 +731,6 @@ rest_cdc_streams_check_and_repair(sharded<service::storage_service>& ss, std::un
 
 static
 future<json::json_return_type>
-rest_force_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
-        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
-        apilog.info("force_compaction: flush={} consider_only_existing_data={}", flush, consider_only_existing_data);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
-        if (!flush && !consider_only_existing_data) {
-            fmopt = flush_mode::skip;
-        }
-        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt, consider_only_existing_data);
-        co_await task->done();
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
 rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("cleanup_all");
         auto done = co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
@@ -1750,7 +1732,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
     ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
-    ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
@@ -1828,7 +1809,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_current_generation_number.unset(r);
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
-    ss::force_compaction.unset(r);
     ss::cleanup_all.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);

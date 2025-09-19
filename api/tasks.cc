@@ -165,6 +165,22 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
 
         co_return json::json_return_type(task->get_status().id.to_sstring());
     });
+
+    ss::force_compaction.set(r, [&ctx] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
+        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
+        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
+        apilog.info("force_compaction: flush={} consider_only_existing_data={}", flush, consider_only_existing_data);
+
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        std::optional<flush_mode> fmopt;
+        if (!flush && !consider_only_existing_data) {
+            fmopt = flush_mode::skip;
+        }
+        auto task = co_await compaction_module.make_and_start_task<global_major_compaction_task_impl>({}, db, fmopt, consider_only_existing_data);
+        co_await task->done();
+        co_return json_void();
+    });
 }
 
 void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
@@ -177,6 +193,7 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     t::upgrade_sstables_async.unset(r);
     ss::upgrade_sstables.unset(r);
     t::scrub_async.unset(r);
+    ss::force_compaction.unset(r);
 }
 
 }
