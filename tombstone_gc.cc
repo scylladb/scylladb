@@ -129,7 +129,7 @@ bool tombstone_gc_state::cheap_to_get_gc_before(const schema& s) const noexcept 
 
 gc_clock::time_point tombstone_gc_state::check_min(schema_ptr s, gc_clock::time_point t) const {
     if (_check_commitlog && _shared_state && t != gc_clock::time_point::min()) {
-        return std::min(t, _shared_state->get_gc_min_time(s->id()));
+        return std::min(t, _shared_state->get_gc_min_time(s->id(), _exclude));
     }
     return t;
 }

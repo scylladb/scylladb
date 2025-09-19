@@ -24,6 +24,7 @@
 #include "replica/query_state.hh"
 #include "sstables/shared_sstable.hh"
 #include "sstables/sstable_set.hh"
+#include "sstables/sstable_writer.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include "db/schema_tables.hh"
@@ -37,6 +38,7 @@
 #include "memtable-sstable.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/compaction_group_view.hh"
+#include "compaction/sstables_max_purgeable.hh"
 #include "sstables/sstable_directory.hh"
 #include "db/system_keyspace.hh"
 #include "db/extensions.hh"
@@ -1668,6 +1670,73 @@ table::seal_active_memtable(compaction_group& cg, flush_permit&& flush_permit) n
     // FIXME: provide back-pressure to upper layers
 }
 
+class compacted_stream_sstable_writer {
+    sstables::sstable_writer _writer;
+
+public:
+    explicit compacted_stream_sstable_writer(sstables::sstable_writer writer) : _writer(std::move(writer))
+    { }
+
+    void consume_new_partition(const dht::decorated_key& dk) {
+        _writer.consume_new_partition(dk);
+    }
+    void consume(tombstone t) {
+        _writer.consume(t);
+    }
+    stop_iteration consume(static_row&& sr, tombstone, bool) {
+        return _writer.consume(std::move(sr));
+    }
+    stop_iteration consume(clustering_row&& cr, row_tombstone, bool) {
+        return _writer.consume(std::move(cr));
+    }
+    stop_iteration consume(range_tombstone_change&& rtc) {
+        return _writer.consume(std::move(rtc));
+    }
+    stop_iteration consume_end_of_partition() {
+        return _writer.consume_end_of_partition();
+    }
+    void consume_end_of_stream() {
+        _writer.consume_end_of_stream();
+    }
+};
+
+static
+future<>
+write_memtable_to_sstable(mutation_reader reader,
+                          memtable& mt,
+                          sstables::shared_sstable sst,
+                          size_t estimated_partitions,
+                          sstables::write_monitor& monitor,
+                          sstables::sstable_writer_config& cfg,
+                          tombstone_gc gc,
+                          std::function<sstables::shared_sstable()> gc_sst_factory) {
+    cfg.replay_position = mt.replay_position();
+    cfg.monitor = &monitor;
+    cfg.origin = "memtable";
+
+    schema_ptr s = reader.schema();
+
+    if (!gc || !s->memtable_compact_flushed_data()) {
+        return sst->write_components(std::move(reader), estimated_partitions, s, cfg, mt.get_encoding_stats());
+    }
+
+    return async([&] {
+        auto close_mr = deferred_close(reader);
+        sstables::sstable_writer_config gc_config = cfg;
+        gc_config.monitor = &sstables::default_write_monitor();
+
+        auto compactor = compact_for_compaction<compacted_stream_sstable_writer, compacted_stream_sstable_writer>(
+                *s,
+                gc_clock::now(),
+                gc.get_max_purgeable_fn(),
+                gc.get_tombstone_gc_state(),
+                compacted_stream_sstable_writer(sst->get_writer(*s, estimated_partitions, cfg, mt.get_encoding_stats())),
+                compacted_stream_sstable_writer(gc_sst_factory()->get_writer(*s, estimated_partitions, gc_config, mt.get_encoding_stats())));
+
+        reader.consume_in_thread(std::move(compactor));
+    });
+}
+
 future<>
 table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> old, sstable_write_permit&& permit) {
     auto try_flush = [this, old = std::move(old), permit = make_lw_shared(std::move(permit)), &cg] () mutable -> future<> {
@@ -1706,7 +1775,21 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
             auto monitor = database_sstable_write_monitor(permit, newtab, cg,
                 old->get_max_timestamp());
 
-            co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg);
+            tombstone_gc_state gc_state = get_compaction_manager().get_tombstone_gc_state().with_commitlog_check_disabled();
+            auto gc = _schema->memtable_compact_flushed_data()
+                    // FIXME(#25428): max_purgeable_fn should use noncopyable_function to avoid jumping through hoops, like below
+                    ? tombstone_gc(gc_state, [sst_get_max_purgeable = make_lw_shared<compaction::sstables_max_purgeable>(cg.view_for_unrepaired_data())] (const dht::decorated_key& dk, const is_shadowable is_shadowable) {
+                        return (*sst_get_max_purgeable)(dk, is_shadowable);
+                    })
+                    : tombstone_gc::disabled();
+
+            co_return co_await write_memtable_to_sstable(std::move(reader), *old, newtab, estimated_partitions, monitor, cfg,
+                    std::move(gc), [&] () -> sstables::shared_sstable {
+                auto newtab = make_sstable();
+                newtabs.push_back(newtab);
+                tlogger.debug("Flushing GC data to {}", newtab->get_filename());
+                return newtab;
+            });
           } catch (...) {
             ex = std::current_exception();
           }
@@ -1724,10 +1807,21 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         auto post_flush = [this, old = std::move(old), &newtabs, f = std::move(f), &cg] () mutable -> future<> {
             try {
                 co_await std::move(f);
-                co_await coroutine::parallel_for_each(newtabs, [] (auto& newtab) -> future<> {
-                    co_await newtab->open_data();
-                    tlogger.debug("Flushing to {} done", newtab->get_filename());
+                auto empty_sstables = std::vector<sstables::shared_sstable>();
+                co_await coroutine::parallel_for_each(newtabs, [&empty_sstables] (auto& newtab) -> future<> {
+                    if (newtab->marked_for_deletion()) {
+                        empty_sstables.push_back(newtab);
+                        tlogger.debug("No data was flushed to {}, deleting", newtab->get_filename());
+                    } else {
+                        co_await newtab->open_data();
+                        tlogger.debug("Flushing to {} done", newtab->get_filename());
+                    }
                 });
+
+                auto [erase_begin, erase_end] = std::ranges::remove_if(newtabs, [&empty_sstables] (auto& sst) {
+                    return std::ranges::find(empty_sstables, sst) != empty_sstables.end();
+                });
+                newtabs.erase(erase_begin, erase_end);
 
                 co_await with_scheduling_group(_config.memtable_to_cache_scheduling_group, [this, old, &newtabs, &cg] {
                     return update_cache(cg, old, newtabs);
@@ -3986,6 +4080,7 @@ table::mutation_query(schema_ptr query_schema,
         tracing::trace_state_ptr trace_state,
         query::result_memory_accounter accounter,
         db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled,
         std::optional<query::querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return reconcilable_result();
@@ -4006,7 +4101,7 @@ table::mutation_query(schema_ptr query_schema,
     std::exception_ptr ex;
   try {
     auto rrb = reconcilable_result_builder(*query_schema, cmd.slice, std::move(accounter));
-    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
+    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state, tombstone_gc_enabled);
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
         co_await q.close();

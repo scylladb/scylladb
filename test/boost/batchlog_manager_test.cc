@@ -12,7 +12,9 @@
 
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
+#include "test/lib/log.hh"
 
 #include <seastar/core/future-util.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -20,6 +22,7 @@
 #include "cql3/untyped_result_set.hh"
 #include "db/batchlog_manager.hh"
 #include "db/commitlog/commitlog.hh"
+#include "db/config.hh"
 #include "message/messaging_service.hh"
 #include "service/storage_proxy.hh"
 
@@ -54,7 +57,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
                 return bp.count_all_batches().then([](auto n) {
                     BOOST_CHECK_EQUAL(n, 1);
                 }).then([&bp] () mutable {
-                    return bp.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes);
+                    return bp.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes).discard_result();
                 });
             });
         }).then([&qp] {
@@ -65,6 +68,65 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             });
         });
     });
+}
+
+SEASTAR_TEST_CASE(test_batchlog_cleanup) {
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+
+    return do_with_cql_env_thread([] (cql_test_env& env) -> void {
+        auto& bm = env.batchlog_manager().local();
+
+        env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
+
+        const uint64_t batch_count = 8;
+
+        for (uint64_t i = 0; i != batch_count; ++i) {
+            std::vector<sstring> queries;
+            std::vector<std::string_view> query_views;
+            for (uint64_t j = 0; j != i+2; ++j) {
+                queries.emplace_back(format("INSERT INTO tbl (pk, v) VALUES ({}, 'value');", j));
+                query_views.emplace_back(queries.back());
+            }
+            env.execute_batch(
+                    query_views,
+                    cql3::statements::batch_statement::type::LOGGED,
+                    std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
+        }
+
+        const auto fragments_query = "SELECT mutation_source FROM MUTATION_FRAGMENTS(system.batchlog) WHERE partition_region = 0 ALLOW FILTERING";
+
+        assert_that(env.execute_cql("SELECT id FROM system.batchlog").get())
+            .is_rows()
+            .is_empty();
+        assert_that(env.execute_cql(fragments_query).get())
+            .is_rows()
+            .with_size(batch_count)
+            .assert_for_columns_of_each_row([] (columns_assertions& columns) {
+                columns.with_typed_column<sstring>("mutation_source", "memtable:0");
+            });
+
+        bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no).get();
+
+        assert_that(env.execute_cql(fragments_query).get())
+            .is_rows()
+            .with_size(batch_count)
+            .assert_for_columns_of_each_row([] (columns_assertions& columns) {
+                columns.with_typed_column<sstring>("mutation_source", "memtable:0");
+            });
+
+        // Make all tombstones purgeable.
+        // Batchlog table tombston GC settings are hardcoded and the table is a local one too,
+        // so we cannot work around sleeps with using repair-mode here.
+        sleep(std::chrono::seconds(1)).get();
+
+        bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes).get();
+
+        assert_that(env.execute_cql(fragments_query).get())
+            .is_rows()
+            .is_empty();
+
+    }, cfg);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

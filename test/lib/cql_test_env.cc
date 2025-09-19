@@ -980,16 +980,16 @@ private:
                 auto cl = _db.local().commitlog();
                 auto scl = _db.local().schema_commitlog();
                 if (cl && scl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl, scl](const table_id& id) {
-                        return std::min(cl->min_gc_time(id), scl->min_gc_time(id));
+                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl, scl](const table_id& id, const db::rp_set* exclude) {
+                        return std::min(cl->min_gc_time(id, exclude), scl->min_gc_time(id, exclude));
                     });
                 } else if (cl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl](const table_id& id) {
-                        return cl->min_gc_time(id);
+                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([cl](const table_id& id, const db::rp_set* exclude) {
+                        return cl->min_gc_time(id, exclude);
                     });
                 } else if (scl) {
-                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([scl](const table_id& id) {
-                        return scl->min_gc_time(id);
+                    cm.get_shared_tombstone_gc_state().set_gc_time_min_source([scl](const table_id& id, const db::rp_set* exclude) {
+                        return scl->min_gc_time(id, exclude);
                     });
                 }
             }).get();
@@ -1196,9 +1196,15 @@ private:
 
 public:
     future<::shared_ptr<cql_transport::messages::result_message>> execute_batch(
-        const std::vector<std::string_view>& queries, std::unique_ptr<cql3::query_options> qo) override {
+            const std::vector<std::string_view>& queries,
+            cql3::statements::batch_statement::type batch_type,
+            std::unique_ptr<cql3::query_options> qo) override {
         using cql3::statements::batch_statement;
         using cql3::statements::modification_statement;
+
+        testlog.trace("{}(\"{} BATCH:\n{}\")",
+                __FUNCTION__, batch_type == batch_statement::type::LOGGED ? "LOGGED" : "UNLOGGED", fmt::join(queries, "\n"));
+
         std::vector<batch_statement::single_statement> modifications;
         std::ranges::transform(queries, back_inserter(modifications), [this](const auto& query) {
             auto stmt = local_qp().get_statement(query, _core_local.local().client_state, test_dialect());
@@ -1209,7 +1215,7 @@ public:
             return batch_statement::single_statement(static_pointer_cast<modification_statement>(stmt->statement));
         });
         auto batch = ::make_shared<batch_statement>(
-            batch_statement::type::UNLOGGED,
+            batch_type,
             std::move(modifications),
             cql3::attributes::none(),
             local_qp().get_cql_stats());
