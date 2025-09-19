@@ -113,7 +113,7 @@ void secondary_index_manager::add_index(const index_metadata& im) {
     sstring index_target_name = target_parser::get_target_column_name_from_string(index_target);
     _indices.emplace(im.name(), index{index_target_name, im});
     if (!_metrics.contains(im.name())) {
-        _metrics.emplace(im.name(), make_lw_shared<stats>(_cf.schema()->ks_name(), im.name()));
+        _metrics.emplace(im.name(), make_lw_shared<stats>(_cf.schema()->ks_name(), im));
     }
 }
 
@@ -396,7 +396,12 @@ std::optional<std::unique_ptr<custom_index>> secondary_index_manager::get_custom
     return (*custom_class_factory)();
 }
 
-stats::stats(const sstring& ks_name, const sstring& index_name) {
+stats::stats(const sstring& ks_name, const index_metadata& im) {
+    auto index_name = im.name();
+    if (im.options().contains(db::index::secondary_index::custom_class_option_name) &&
+        im.options().at(db::index::secondary_index::custom_class_option_name) == "vector_index") {
+        vector_index_stats = make_lw_shared<vector_stats>(ks_name, im);
+    }
     metrics.add_group("index",
             {seastar::metrics::make_histogram("query_latencies", seastar::metrics::description("Index query latencies"), {idx(index_name), ks(ks_name)},
                     [this]() {
@@ -408,6 +413,34 @@ stats::stats(const sstring& ks_name, const sstring& index_name) {
 
 void stats::add_latency(std::chrono::steady_clock::duration d) {
     query_latency.add(d);
+}
+
+vector_stats::vector_stats(const sstring& ks_name, const index_metadata& im){
+    auto index_name = im.name();
+    metrics.add_group("vector_index",
+            {
+                seastar::metrics::make_histogram("ann_limit", seastar::metrics::description("ANN request limit"), {idx(index_name), ks(ks_name)},
+                        [this]() {
+                            return estimated_histogram_to_metrics(ann_limit_histogram);
+                        })
+                        .aggregate({seastar::metrics::shard_label})
+                        .set_skip_when_empty(),
+                seastar::metrics::make_histogram("ann_latencies", seastar::metrics::description("ANN request latencies"), {idx(index_name), ks(ks_name)},
+                        [this]() {
+                            return to_metrics_histogram(ann_latencies);
+                        })
+                        .aggregate({seastar::metrics::shard_label})
+                        .set_skip_when_empty()
+            });
+
+}
+
+void vector_stats::add_limit(int limit) {
+    ann_limit_histogram.add(limit);
+}
+
+void vector_stats::add_latency(std::chrono::steady_clock::duration d) {
+    ann_latencies.add(d);
 }
 
 }

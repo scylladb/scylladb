@@ -38,6 +38,8 @@ seastar::metrics::histogram to_metrics_histogram(const utils::approx_exponential
     return res;
 }
 
+seastar::metrics::histogram estimated_histogram_to_metrics(const utils::estimated_histogram& histogram);
+
 /*!
  * \brief get a metrics summary from timed_rate_moving_average_with_summary
  *

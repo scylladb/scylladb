@@ -11,6 +11,7 @@
 #include "cql3/type_json.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
+#include "replica/database.hh"
 #include "utils/sequential_producer.hh"
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
@@ -20,6 +21,7 @@
 #include <exception>
 #include <fmt/ranges.h>
 #include <regex>
+#include <seastar/core/metrics.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/http/client.hh>
@@ -317,6 +319,7 @@ struct vector_store_client::impl {
     unsigned http_request_retries = HTTP_REQUEST_RETRIES;
     std::function<future<std::optional<inet_address>>(sstring const&)> dns_resolver;
     sequential_producer<lw_shared_ptr<http_client>> client_producer;
+    std::function<void()> _dns_observer; ///< The DNS observer for metrics collection.
 
     impl(utils::config_file::named_value<sstring> cfg)
         : uri_observer(cfg.observe([this](std::string_view uri) {
@@ -329,14 +332,18 @@ struct vector_store_client::impl {
             }
         }))
         , _host_port(get_host_port(cfg()))
-        , dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
+        , dns_resolver([this](auto const& host) -> future<std::optional<inet_address>> {
             auto addr = co_await coroutine::as_future(net::dns::resolve_name(host));
             if (addr.failed()) {
                 auto err = addr.get_exception();
+                vslogger.warn("Failed to resolve vector store service address: {}", err);
                 if (try_catch<std::system_error>(err) != nullptr) {
                     co_return std::nullopt;
                 }
                 co_await coroutine::return_exception_ptr(std::move(err));
+            }
+            if (_dns_observer) {
+                _dns_observer();
             }
             co_return co_await std::move(addr);
         })
@@ -547,10 +554,87 @@ struct vector_store_client::impl {
 
         co_return std::unexpected{service_unavailable{}};
     }
+
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, ann_error>> {
+        if (is_disabled()) {
+            vslogger.error("Disabled Vector Store while calling ann");
+            co_return std::unexpected{disabled{}};
+        }
+
+        auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
+        auto content = write_ann_json(std::move(vs_vector), limit);
+
+        auto resp = co_await make_request(operation_type::POST, std::move(path), std::move(content), as);
+        if (!resp) {
+            co_return std::unexpected{std::visit(
+                    [](auto&& err) {
+                        return ann_error{err};
+                    },
+                    resp.error())};
+        }
+
+        if (resp->status != status_type::ok) {
+            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status,
+                        seastar::value_of([&resp] {return response_content_to_sstring(resp->content);}));
+            co_return std::unexpected{service_error{resp->status}};
+        }
+
+        try {
+            co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
+        } catch (const rjson::error& e) {
+            vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+            co_return std::unexpected{service_reply_format_error{}};
+        }
+    }
+};
+
+class vector_store_client::metrics{
+    lw_shared_ptr<impl> _impl;
+    uint64_t dns_refreshes = 0;
+    seastar::metrics::metric_groups _metrics;
+
+public:
+
+    metrics(lw_shared_ptr<impl> _impl)
+        : _impl(_impl) {
+        _metrics.add_group("vector_store", {seastar::metrics::make_gauge(
+                                                   "dns_refreshes",
+                                                   [this] {
+                                                       return dns_refreshes;
+                                                   },
+                                                   seastar::metrics::description("Number of DNS refreshes"))});
+        _impl->_dns_observer = [this] {
+            dns_refreshes++;
+        };
+    }
+
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, ann_error>> {
+        auto start_time = lowres_system_clock::now();
+        auto value = co_await _impl->ann(keyspace, name, schema, vs_vector, limit, as);
+        auto latency = lowres_system_clock::now() - start_time;
+        auto table = schema->maybe_table();
+        if (table) {
+            auto stats = table->get_index_manager().get_index_stats(name);
+            if (stats) {
+                auto vector_stats = stats->vector_index_stats;
+                if (vector_stats) {
+                    vector_stats->add_latency(latency);
+                    vector_stats->add_limit(limit);
+                }
+            }
+        }
+
+
+        co_return value;
+    }
+
 };
 
 vector_store_client::vector_store_client(config const& cfg)
-    : _impl(std::make_unique<impl>(cfg.vector_store_uri)) {
+    : _impl(make_lw_shared<impl>(cfg.vector_store_uri))
+    , _metrics(std::make_unique<metrics>(_impl)) {
 }
 
 vector_store_client::~vector_store_client() = default;
@@ -568,6 +652,7 @@ auto vector_store_client::stop() -> future<> {
     _impl->abort_refresh.request_abort();
     _impl->refresh_cv.signal();
     _impl->refresh_client_cv.signal();
+    _impl->_dns_observer = nullptr;
     co_await _impl->tasks_gate.close();
     co_await _impl->client_producer_gate.close();
 }
@@ -586,35 +671,7 @@ auto vector_store_client::port() const -> std::expected<port_number, disabled> {
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, ann_error>> {
-    if (is_disabled()) {
-        vslogger.error("Disabled Vector Store while calling ann");
-        co_return std::unexpected{disabled{}};
-    }
-
-    auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-    auto content = write_ann_json(std::move(vs_vector), limit);
-
-    auto resp = co_await _impl->make_request(operation_type::POST, std::move(path), std::move(content), as);
-    if (!resp) {
-        co_return std::unexpected{std::visit(
-                [](auto&& err) {
-                    return ann_error{err};
-                },
-                resp.error())};
-    }
-
-    if (resp->status != status_type::ok) {
-        vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status,
-                       seastar::value_of([&resp] {return response_content_to_sstring(resp->content);}));
-        co_return std::unexpected{service_error{resp->status}};
-    }
-
-    try {
-        co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
-    } catch (const rjson::error& e) {
-        vslogger.error("Vector Store returned invalid JSON: {}", e.what());
-        co_return std::unexpected{service_reply_format_error{}};
-    }
+    return _metrics->ann(keyspace, name, schema, vs_vector, limit, as);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
