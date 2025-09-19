@@ -348,7 +348,7 @@ difference(collection_mutation_view_description a, collection_mutation_view_desc
             ++it;
         }
         if (it == b.cells.end() || !key_type.equal(it->first, c.first)
-            || compare_atomic_cell_for_merge(c.second, it->second) > 0) {
+            || compare_atomic_cell_for_merge(c.second, it->second) != std::strong_ordering::less) {
 
             auto cell = std::make_pair(c.first, c.second);
             diff.cells.emplace_back(std::move(cell));
