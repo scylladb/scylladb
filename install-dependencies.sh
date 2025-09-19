@@ -62,6 +62,8 @@ debian_base_packages=(
     curl
     jq
     git-lfs
+    e2fsprogs
+    fuse3
 )
 
 fedora_packages=(
@@ -129,6 +131,8 @@ fedora_packages=(
     wabt
     binaryen
     lcov
+    e2fsprogs
+    fuse3
 
     lld
     llvm-bolt
