@@ -274,7 +274,7 @@ class TestLimits(Tester):
             pytest.skip("client times out in debug mode")
         cluster = self.prepare()
         cluster.set_configuration_options(values={"query_tombstone_page_limit": 9999999, "batch_size_warn_threshold_in_kb": 1024 * 1024, "batch_size_fail_threshold_in_kb": 1024 * 1024, "commitlog_segment_size_in_mb": 64})
-        cluster.populate(1).start(jvm_args=["--smp", "1", "--memory", "2G"])
+        cluster.populate(1).start(jvm_args=["--smp", "1", "--memory", "2G", "--logger-log-level", "lsa-timing=debug"])
         node = cluster.nodelist()[0]
 
         session = self.patient_cql_connection(node)
