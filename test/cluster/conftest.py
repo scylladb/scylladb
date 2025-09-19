@@ -242,6 +242,10 @@ async def manager(request: pytest.FixtureRequest,
     # test failure.
     report = request.node.stash[PHASE_REPORT_KEY]
     failed = report.when == "call" and report.failed
+
+    found_errors = await manager_client.check_all_errors()
+    failed = failed or found_errors
+
     if failed:
         # Save scylladb logs for failed tests in a separate directory and copy XML report to the same directory to have
         # all related logs in one dir.
@@ -265,9 +269,31 @@ async def manager(request: pytest.FixtureRequest,
     await manager_client.stop()  # Stop client session and close driver after each test
     if cluster_status["server_broken"]:
         pytest.fail(
-            f"test case {test_case_name} leave unfinished tasks on Scylla server. Server marked as broken,"
+            f"test case {test_case_name} left unfinished tasks on Scylla server. Server marked as broken,"
             f" server_broken_reason: {cluster_status["message"]}"
         )
+    if found_errors:
+        lines = []
+        with open(failed_test_dir_path / "found_errors.txt", "w") as f:
+            for server, data in found_errors.items():
+                summary = []
+                detailed = []
+                if criticals := data.get("critical", []):
+                    summary.append(f"{len(criticals)} critical error(s)")
+                    detailed.extend(criticals)
+                if errors := data.get("error", []):
+                    summary.append(f"{len(errors)} error(s)")
+                    detailed.extend(errors)
+                if cores := data.get("cores", []):
+                    summary.append(f"{len(cores)} core(s): {', '.join(cores)}")
+                if summary:
+                    summary_line = f"Server {server.server_id}: found {', '.join(summary)} (log: { data['log']})"
+                    detailed = [f"  {line}" for line in detailed]
+                    lines.append(summary_line)
+                    lines.extend(map(str.rstrip, detailed))
+                    f.write(summary_line + "\n")
+                    f.writelines(detailed)
+            pytest.fail(f"\n{'\n'.join(lines)}\nSee found_errors.txt for details.")
 
 
 # "cql" fixture: set up client object for communicating with the CQL API.
