@@ -435,7 +435,7 @@ In order for workload prioritization to take effect, application users need to b
 
 Limits
 ======
-ScyllaDB is limited to 9 service levels, including the default and driver levels; this means you can create up to 7 service levels.
+ScyllaDB is limited to 10 service levels, including the default and driver levels; this means you can create up to 8 service levels.
 
 
 Additional References

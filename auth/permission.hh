@@ -33,6 +33,7 @@ enum class permission {
     // data access
     SELECT, // required for SELECT.
     MODIFY, // required for INSERT, UPDATE, DELETE, TRUNCATE.
+    VECTOR_SEARCH_INDEXING, // required for SELECT from tables with vector indexes if SELECT permission is not granted.
 
     // permission management
     AUTHORIZE, // required for GRANT and REVOKE.
@@ -54,7 +55,8 @@ typedef enum_set<
                 permission::MODIFY,
                 permission::AUTHORIZE,
                 permission::DESCRIBE,
-                permission::EXECUTE>> permission_set;
+                permission::EXECUTE,
+                permission::VECTOR_SEARCH_INDEXING>> permission_set;
 
 bool operator<(const permission_set&, const permission_set&);
 

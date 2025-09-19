@@ -21,7 +21,7 @@ import time
 # MAX_USER_SERVICE_LEVELS represents the maximal number of service levels that users can create.
 # The value is documentented in `docs/features/workload-prioritization.rst`.
 # It's used for regression testing of user service level limit in this and other files.
-MAX_USER_SERVICE_LEVELS = 7
+MAX_USER_SERVICE_LEVELS = 8
 
 @contextmanager
 def new_service_level(cql, timeout=None, workload_type=None, shares=None, role=None):
@@ -147,10 +147,10 @@ def test_list_effective_service_level_without_attached(scylla_only, cql):
         with pytest.raises(InvalidRequest, match=f"Role {role} doesn't have assigned any service level"):
             cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {role}")
 
-# ScyllaDB limits the number of service levels to a small number (9 including 1 default and 1 driver service level).
+# ScyllaDB limits the number of service levels to a small number (10 including 1 default and 1 driver service level).
 # This test verifies that attempting to create more service levels than that results in an InvalidRequest error
 # and doesn't silently succeed. 
-# The test also has a regression check if a user can create exactly 7 service levels.
+# The test also has a regression check if a user can create exactly 8 service levels.
 # In case you are adding a new internal scheduling group and this test failed, you should increase `SCHEDULING_GROUPS_COUNT`
 #
 # Reproduces enterprise issue #4481.
