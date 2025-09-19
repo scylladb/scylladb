@@ -771,21 +771,6 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
 
 static
 future<json::json_return_type>
-rest_upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
-
-        apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
-        co_await task->done();
-        co_return json::json_return_type(0);
-}
-
-static
-future<json::json_return_type>
 rest_force_flush(http_context& ctx, std::unique_ptr<http::request> req) {
         apilog.info("flush all tables");
         co_await ctx.db.invoke_on_all([] (replica::database& db) {
@@ -1767,7 +1752,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
     ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
-    ss::upgrade_sstables.set(r, rest_bind(rest_upgrade_sstables, ctx));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
     ss::force_keyspace_flush.set(r, rest_bind(rest_force_keyspace_flush, ctx));
     ss::decommission.set(r, rest_bind(rest_decommission, ss));
@@ -1846,7 +1830,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::cdc_streams_check_and_repair.unset(r);
     ss::force_compaction.unset(r);
     ss::cleanup_all.unset(r);
-    ss::upgrade_sstables.unset(r);
     ss::force_flush.unset(r);
     ss::force_keyspace_flush.unset(r);
     ss::decommission.unset(r);
