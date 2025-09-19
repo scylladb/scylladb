@@ -3930,9 +3930,15 @@ class scylla_io_queues(gdb.Command):
                     gdb.write("\tCapacity head:       {}\n".format(self.ticket(std_atomic(fg['_capacity_head']).get())))
                     gdb.write("\n")
 
-                handles = std_priority_queue(fq['_handles'])
+                try:
+                    handles = std_priority_queue(fq['_root']['_children'])
+                except gdb.error:
+                    handles = std_priority_queue(fq['_handles'])
                 gdb.write("\tHandles: ({})\n".format(len(handles)))
                 for pclass_ptr in handles:
+                    # ATTN: This is not necessarily a priority_class_data, it might
+                    # as well be priory_class_group_data, but scylla doesn't yet
+                    # create nested gorups
                     self._print_io_priority_class(fq_pclass(pclass_ptr), names_from_ptrs)
 
             try:
