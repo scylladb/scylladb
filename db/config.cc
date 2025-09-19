@@ -1527,7 +1527,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_tablets(this, "enable_tablets", value_status::Used, false, "Enable tablets for newly created keyspaces. (deprecated)")
     , tablets_mode_for_new_keyspaces(this, "tablets_mode_for_new_keyspaces", value_status::Used, tablets_mode_t::mode::unset, "Control tablets for new keyspaces.  Can be set to the following values:\n"
             "\tdisabled: New keyspaces use vnodes by default, unless enabled by the tablets={'enabled':true} option\n"
-            "\tenabled:  New keyspaces use tablets by default, unless disabled by the tablets={'disabled':true} option\n"
+            "\tenabled:  New keyspaces use tablets by default, unless disabled by the tablets={'enabled':false} option\n"
             "\tenforced: New keyspaces must use tablets. Tablets cannot be disabled using the CREATE KEYSPACE option")
     , view_flow_control_delay_limit_in_ms(this, "view_flow_control_delay_limit_in_ms", liveness::LiveUpdate, value_status::Used, 1000,
         "The maximal amount of time that materialized-view update flow control may delay responses "
