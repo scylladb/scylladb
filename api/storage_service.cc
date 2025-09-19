@@ -1719,8 +1719,12 @@ rest_repair_tablet(http_context& ctx, sharded<service::storage_service>& ss, std
             }) | std::ranges::to<std::unordered_set>();
         }
         auto dcs_filter = locator::tablet_task_info::deserialize_repair_dcs_filter(dcs);
-        auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant, hosts_filter, dcs_filter, await_completion, incremental_mode);
-        co_return json::json_return_type(res);
+        try {
+            auto res = co_await ss.local().add_repair_tablet_request(table_id, tokens_variant, hosts_filter, dcs_filter, await_completion, incremental_mode);
+            co_return json::json_return_type(res);
+        } catch (std::invalid_argument& e) {
+            throw httpd::bad_param_exception(e.what());
+        }
 }
 
 static

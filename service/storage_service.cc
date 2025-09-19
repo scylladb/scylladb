@@ -6646,9 +6646,17 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // Currently tablet repair works only on base tables.
+        // we don't allow requesting repair on tablets of colocated tables, because the repair task info
+        // is stored on the base table's tablet map which is shared by all the tables that are colocated with it.
+        // we don't have a way currently to store the repair task info for a specific colocated table.
+        // repair can only be requested for the base table, and this will repair the base table's tablets
+        // and all its colocated tablets as well.
         if (!get_token_metadata().tablets().is_base_table(table)) {
-            throw std::runtime_error("Can't set repair request on a co-located table");
+            throw std::invalid_argument(::format(
+                "Cannot set repair request on table {} because it is colocated with the base table {}. "
+                "Repair requests can be made only on the base table. "
+                "Repairing the base table will also repair all tables colocated with it.",
+                table, get_token_metadata().tablets().get_base_table(table)));
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
@@ -6726,9 +6734,12 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // Currently tablet repair requests can be set only on base tables.
+        // see add_repair_tablet_request. repair requests can only be added on base tables.
         if (!get_token_metadata().tablets().is_base_table(table)) {
-            throw std::runtime_error("Can't set repair request on a co-located table");
+            throw std::invalid_argument(::format(
+                "Cannot delete repair request on table {} because it is colocated with the base table {}. "
+                "Repair requests can be added and deleted only on the base table.",
+                table, get_token_metadata().tablets().get_base_table(table)));
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
