@@ -31,6 +31,8 @@ namespace db {
 
 class system_keyspace;
 
+using all_batches_replayed = bool_class<struct all_batches_replayed_tag>;
+
 struct batchlog_manager_config {
     std::chrono::duration<double> write_request_timeout;
     uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
@@ -70,7 +72,7 @@ private:
 
     gc_clock::time_point _last_replay;
 
-    future<> replay_all_failed_batches(post_replay_cleanup cleanup);
+    future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
@@ -81,7 +83,7 @@ public:
     future<> drain();
     future<> stop();
 
-    future<> do_batch_log_replay(post_replay_cleanup cleanup);
+    future<all_batches_replayed> do_batch_log_replay(post_replay_cleanup cleanup);
 
     future<size_t> count_all_batches() const;
     size_t get_total_batches_replayed() const {

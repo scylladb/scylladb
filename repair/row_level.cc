@@ -2367,6 +2367,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
     auto cache_time = std::chrono::milliseconds(get_db().local().get_config().repair_hints_batchlog_flush_cache_time_in_ms());
     auto cache_disabled = cache_time == std::chrono::milliseconds(0);
     auto flush_time = now;
+    db::all_batches_replayed all_replayed = db::all_batches_replayed::yes;
     if (cache_disabled || (now - _flush_hints_batchlog_time > cache_time)) {
         // Empty targets meants all nodes
         db::hints::sync_point sync_point = co_await _sp.local().create_hint_sync_point(std::vector<locator::host_id>{});
@@ -2383,7 +2384,7 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                     rlogger.info("repair[{}]: Finished to flush hints for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     co_return;
                 },
-                [this, now, cache_disabled, &flush_time, &cache_time, &from, &req] () -> future<>  {
+                [this, now, cache_disabled, &flush_time, &cache_time, &from, &req, &all_replayed] () -> future<>  {
                     rlogger.info("repair[{}]: Started to flush batchlog for repair_flush_hints_batchlog_request from node={}", req.repair_uuid, from);
                     auto last_replay = _bm.local().get_last_replay();
                     bool issue_flush = false;
@@ -2410,12 +2411,15 @@ future<repair_flush_hints_batchlog_response> repair_service::repair_flush_hints_
                         }
                     }
                     if (issue_flush) {
-                        co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
+                        all_replayed = co_await _bm.local().do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no);
                         utils::get_local_injector().set_parameter("repair_flush_hints_batchlog_handler", "issue_flush", fmt::to_string(flush_time));
                     }
                     rlogger.info("repair[{}]: Finished to flush batchlog for repair_flush_hints_batchlog_request from node={}, flushed={}", req.repair_uuid, from, issue_flush);
                 }
             );
+            if (!all_replayed) {
+                throw std::runtime_error("Not all batchlog entries were replayed");
+            }
         } catch (...) {
             rlogger.warn("repair[{}]: Failed to process repair_flush_hints_batchlog_request from node={}: {}",
                     req.repair_uuid, from, std::current_exception());
