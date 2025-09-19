@@ -59,18 +59,19 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
-    return container().invoke_on(0, [cleanup] (auto& bm) -> future<> {
+future<db::all_batches_replayed> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
+    return container().invoke_on(0, [cleanup] (auto& bm) -> future<db::all_batches_replayed> {
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
 
         auto dest = bm._cpu++ % smp::count;
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         auto last_replay = gc_clock::now();
+        all_batches_replayed all_replayed = all_batches_replayed::yes;
         if (dest == 0) {
-            co_await bm.replay_all_failed_batches(cleanup);
+            all_replayed = co_await bm.replay_all_failed_batches(cleanup);
         } else {
-            co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
+            all_replayed = co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
                 return with_gate(bm._gate, [&bm, cleanup] {
                     return bm.replay_all_failed_batches(cleanup);
                 });
@@ -80,6 +81,7 @@ future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) 
             bm._last_replay = last_replay;
         });
         blogger.debug("Batchlog replay on shard {}: done", dest);
+        co_return all_replayed;
     });
 }
 
@@ -159,9 +161,10 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     return _write_request_timeout * 2;
 }
 
-future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
     typedef db_clock::rep clock_type;
 
+    db::all_batches_replayed all_replayed = all_batches_replayed::yes;
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
     // max rate is scaled by the number of nodes in the cluster (same as for HHOM - see CASSANDRA-5272).
     auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
@@ -176,7 +179,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
     };
 
-    auto batch = [this, limiter, delete_batch = std::move(delete_batch)](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    auto batch = [this, limiter, delete_batch = std::move(delete_batch), &all_replayed](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
@@ -264,6 +267,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 // As above -- we should drop the batch if the table doesn't exist anymore.
             } catch (...) {
                 blogger.warn("Replay failed (will retry): {}", std::current_exception());
+                all_replayed = all_batches_replayed::no;
                 // timeout, overload etc.
                 // Do _not_ remove the batch, assuning we got a node write error.
                 // Since we don't have hints (which origin is satisfied with),
@@ -294,4 +298,6 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             blogger.debug("Finished replayAllFailedBatches");
         });
     });
+
+    co_return all_replayed;
 }
