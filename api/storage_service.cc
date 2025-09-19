@@ -749,31 +749,6 @@ rest_force_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
 
 static
 future<json::json_return_type>
-rest_force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
-        if (rs.is_local() || !rs.is_vnode_based()) {
-            auto reason = rs.is_local() ? "require" : "support";
-            apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
-            co_return json::json_return_type(0);
-        }
-        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
-        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
-            auto msg = "Can not perform cleanup operation when topology changes";
-            apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
-            co_await coroutine::return_exception(std::runtime_error(msg));
-        }
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
-            {}, std::move(keyspace), db, table_infos, flush_mode::all_tables, tasks::is_user_task::yes);
-        co_await task->done();
-        co_return json::json_return_type(0);
-}
-
-static
-future<json::json_return_type>
 rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         apilog.info("cleanup_all");
         auto done = co_await ss.invoke_on(0, [] (service::storage_service& ss) -> future<bool> {
@@ -1803,7 +1778,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
     ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
-    ss::force_keyspace_cleanup.set(r, rest_bind(rest_force_keyspace_cleanup, ctx, ss));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
     ss::perform_keyspace_offstrategy_compaction.set(r, rest_bind(rest_perform_keyspace_offstrategy_compaction, ctx));
     ss::upgrade_sstables.set(r, rest_bind(rest_upgrade_sstables, ctx));
@@ -1884,7 +1858,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
     ss::force_compaction.unset(r);
-    ss::force_keyspace_cleanup.unset(r);
     ss::cleanup_all.unset(r);
     ss::perform_keyspace_offstrategy_compaction.unset(r);
     ss::upgrade_sstables.unset(r);

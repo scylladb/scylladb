@@ -88,6 +88,29 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
         co_return json::json_return_type(task->get_status().id.to_sstring());
     });
 
+    ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
+        auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
+        const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
+        if (rs.is_local() || !rs.is_vnode_based()) {
+            auto reason = rs.is_local() ? "require" : "support";
+            apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
+            co_return json::json_return_type(0);
+        }
+        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
+        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
+            auto msg = "Can not perform cleanup operation when topology changes";
+            apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
+            co_await coroutine::return_exception(std::runtime_error(msg));
+        }
+
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
+            {}, std::move(keyspace), db, table_infos, flush_mode::all_tables, tasks::is_user_task::yes);
+        co_await task->done();
+        co_return json::json_return_type(0);
+    });
+
     t::perform_keyspace_offstrategy_compaction_async.set(r, wrap_ks_cf(ctx, [] (http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos) -> future<json::json_return_type> {
         apilog.info("perform_keyspace_offstrategy_compaction: keyspace={} tables={}", keyspace, table_infos);
         auto& compaction_module = ctx.db.local().get_compaction_manager().get_task_manager_module();
@@ -127,6 +150,7 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     t::force_keyspace_compaction_async.unset(r);
     ss::force_keyspace_compaction.unset(r);
     t::force_keyspace_cleanup_async.unset(r);
+    ss::force_keyspace_cleanup.unset(r);
     t::perform_keyspace_offstrategy_compaction_async.unset(r);
     t::upgrade_sstables_async.unset(r);
     t::scrub_async.unset(r);
