@@ -17,6 +17,7 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/uuid_fcts.hh"
+#include "cql3/functions/vector_search_fcts.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "as_json_function.hh"
 #include "cql3/prepare_context.hh"
@@ -389,6 +390,7 @@ functions::get(data_dictionary::database db,
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
+    static const function_name VECTOR_SIMILARITY_FUNCTION_NAME = function_name::native_function("vector_similarity");
 
     auto schema = std::invoke([&] () -> schema_ptr {
         if (receiver_cf.has_value() && db.has_schema(receiver_ks, *receiver_cf)) {
@@ -397,6 +399,14 @@ functions::get(data_dictionary::database db,
             return nullptr;
         }
     });
+
+    if (name.has_keyspace()
+                ? name == VECTOR_SIMILARITY_FUNCTION_NAME
+                : name.name == VECTOR_SIMILARITY_FUNCTION_NAME.name) {
+        auto fun = ::make_shared<vector_similarity_fct>();
+        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
+        return fun;
+    }
 
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
