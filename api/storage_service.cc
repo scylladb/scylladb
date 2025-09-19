@@ -749,25 +749,6 @@ rest_force_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
 
 static
 future<json::json_return_type>
-rest_force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
-        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
-        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
-        apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
-        if (!flush && !consider_only_existing_data) {
-            fmopt = flush_mode::skip;
-        }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
-        co_await task->done();
-        co_return json_void();
-}
-
-static
-future<json::json_return_type>
 rest_force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
@@ -1822,7 +1803,6 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
     ss::force_compaction.set(r, rest_bind(rest_force_compaction, ctx));
-    ss::force_keyspace_compaction.set(r, rest_bind(rest_force_keyspace_compaction, ctx));
     ss::force_keyspace_cleanup.set(r, rest_bind(rest_force_keyspace_cleanup, ctx, ss));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
     ss::perform_keyspace_offstrategy_compaction.set(r, rest_bind(rest_perform_keyspace_offstrategy_compaction, ctx));
@@ -1904,7 +1884,6 @@ void unset_storage_service(http_context& ctx, routes& r) {
     ss::get_natural_endpoints.unset(r);
     ss::cdc_streams_check_and_repair.unset(r);
     ss::force_compaction.unset(r);
-    ss::force_keyspace_compaction.unset(r);
     ss::force_keyspace_cleanup.unset(r);
     ss::cleanup_all.unset(r);
     ss::perform_keyspace_offstrategy_compaction.unset(r);

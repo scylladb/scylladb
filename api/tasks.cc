@@ -12,6 +12,7 @@
 #include "api/api.hh"
 #include "api/storage_service.hh"
 #include "api/api-doc/tasks.json.hh"
+#include "api/api-doc/storage_service.json.hh"
 #include "compaction/compaction_manager.hh"
 #include "compaction/task_manager_module.hh"
 #include "service/storage_service.hh"
@@ -25,6 +26,7 @@ extern logging::logger apilog;
 namespace api {
 
 namespace t = httpd::tasks_json;
+namespace ss = httpd::storage_service_json;
 using namespace json;
 
 using ks_cf_func = std::function<future<json::json_return_type>(http_context&, std::unique_ptr<http::request>, sstring, std::vector<table_info>)>;
@@ -51,6 +53,23 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
         auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt);
 
         co_return json::json_return_type(task->get_status().id.to_sstring());
+    });
+
+    ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto& db = ctx.db;
+        auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
+        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
+        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
+        apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
+
+        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+        std::optional<flush_mode> fmopt;
+        if (!flush && !consider_only_existing_data) {
+            fmopt = flush_mode::skip;
+        }
+        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
+        co_await task->done();
+        co_return json_void();
     });
 
     t::force_keyspace_cleanup_async.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
@@ -106,6 +125,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
 
 void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r) {
     t::force_keyspace_compaction_async.unset(r);
+    ss::force_keyspace_compaction.unset(r);
     t::force_keyspace_cleanup_async.unset(r);
     t::perform_keyspace_offstrategy_compaction_async.unset(r);
     t::upgrade_sstables_async.unset(r);
