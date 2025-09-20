@@ -34,7 +34,6 @@
 #include "serialization.hh"
 #include "expressions.hh"
 #include "conditions.hh"
-#include "cql3/util.hh"
 #include <optional>
 #include "utils/assert.hh"
 #include "utils/overloaded_functor.hh"
@@ -2636,6 +2635,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
     }
+
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
@@ -2790,6 +2790,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     per_table_stats->api_operations.put_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->operation_sizes.put_item_op_size_kb.add(bytes_to_kib_ceil(op->consumed_capacity()._total_bytes));
     per_table_stats->wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -2893,6 +2894,9 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     per_table_stats->api_operations.delete_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    if (op->consumed_capacity()._total_bytes > 1) {
+        per_table_stats->operation_sizes.delete_item_op_size_kb.add(bytes_to_kib_ceil(op->consumed_capacity()._total_bytes));
+    }
     per_table_stats->wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -3181,9 +3185,11 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
     // or, if we performed a read-before-write, on the larger of the operation size
     // and the previous item's size.
     for (const auto& w : per_table_wcu) {
+        uint64_t items_size = 0;
         total_wcu = 0;
         // The following loop goes over all items from the same table
         while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
+            items_size += mutation_builders[pos].second.length_in_bytes();
             size_t wcu = wcu_consumed_capacity_counter::get_units((mutation_builders[pos].second.length_in_bytes())? mutation_builders[pos].second.length_in_bytes() : 1);
             total_wcu += wcu;
             if (mutation_builders[pos].second.is_put_item()) {
@@ -3200,6 +3206,9 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
             rjson::add(entry, "TableName", rjson::from_string(w.second->cf_name()));
             rjson::add(entry, "CapacityUnits", total_wcu);
             rjson::push_back(consumed_capacity, std::move(entry));
+        }
+        if (items_size > 0) {
+            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kib_ceil(items_size));
         }
     }
     _stats.wcu_total[stats::PUT_ITEM] += wcu_put_units;
@@ -3714,7 +3723,7 @@ static size_t estimate_value_size(const rjson::value& value) {
     return size;
 }
 
-class update_item_operation  : public rmw_operation {
+class update_item_operation : public rmw_operation {
 public:
     // Some information parsed during the constructor to check for input
     // errors, and cached to be used again during apply().
@@ -4369,6 +4378,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->operation_sizes.update_item_op_size_kb.add(bytes_to_kib_ceil(op->consumed_capacity()._total_bytes));
     per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -4467,6 +4477,10 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
     per_table_stats->rcu_half_units_total += rcu_half_units;
     _stats.rcu_half_units_total += rcu_half_units;
+    // Update item size metrics only if we found an item.
+    if (qr.query_result->row_count().value_or(0) > 0) {
+        per_table_stats->operation_sizes.get_item_op_size_kib.add(bytes_to_kib_ceil(add_capacity._total_bytes));
+    }
     co_return rjson::print(std::move(res));
 }
 
@@ -4648,9 +4662,10 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     for (const auto& rs : requests) {
         std::string table = table_name(*rs.schema);
         size_t pos = 0;
+        // Sum of all items' sizes in bytes, for this table.
+        uint64_t size_for_op_size_histogram = 0;
         rcu_half_units = 0;
         for (const auto &r : rs.requests) {
-            auto& pk = r.first;
             auto& cks = r.second;
             auto& fut = *fut_it;
             ++fut_it;
@@ -4663,6 +4678,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
                 for (rjson::value& json : results) {
                     rjson::push_back(response["Responses"][table], std::move(json));
                 }
+                size_for_op_size_histogram += responses_sizes[responses_sizes_pos][pos];
                 rcu_half_units += rcu_consumed_capacity_counter::get_half_units(responses_sizes[responses_sizes_pos][pos], rs.cl == db::consistency_level::LOCAL_QUORUM);
             } catch(...) {
                 eptr = std::current_exception();
@@ -4692,6 +4708,11 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
         _stats.rcu_half_units_total += rcu_half_units;
         lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *rs.schema);
         per_table_stats->rcu_half_units_total += rcu_half_units;
+        // Update item size metrics only if at least one read for a non-empty
+        // item succeeded.
+        if (size_for_op_size_histogram > 0) {
+            per_table_stats->operation_sizes.batch_get_item_op_size_kib.add(bytes_to_kib_ceil(size_for_op_size_histogram));
+        }
         if (should_add_rcu) {
             rjson::value entry = rjson::empty_object();
             rjson::add(entry, "TableName", table);
