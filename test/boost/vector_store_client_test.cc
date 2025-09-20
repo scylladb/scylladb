@@ -358,9 +358,9 @@ SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
         auto& vs = env.local_qp().vector_store_client();
 
         auto as = abort_source_timeout();
-        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-        BOOST_REQUIRE(!keys);
-        BOOST_CHECK(std::holds_alternative<vector_store_client::disabled>(keys.error()));
+        auto ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+        BOOST_REQUIRE(!ann_result);
+        BOOST_CHECK(std::holds_alternative<vector_store_client::disabled>(ann_result.error()));
     });
 }
 
@@ -376,9 +376,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
                 vs.start_background_tasks();
 
                 auto as = abort_source_timeout();
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::addr_unavailable>(keys.error()));
+                auto ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::addr_unavailable>(ann_result.error()));
             },
             cfg);
 }
@@ -395,9 +395,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
                 vs.start_background_tasks();
 
                 auto as = abort_source_timeout();
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
+                auto ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(ann_result.error()));
             },
             cfg);
 }
@@ -418,9 +418,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
                 vs.start_background_tasks();
 
                 auto as = abort_source_timeout(milliseconds(10));
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(keys.error()));
+                auto ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(ann_result.error()));
             },
             cfg);
 }
@@ -454,9 +454,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // set the wrong idx (wrong endpoint) - service should return 404
                 auto as = abort_source_timeout();
-                auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
+                auto ann_result = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                auto* err = std::get_if<vector_store_client::service_error>(&ann_result.error());
                 BOOST_CHECK(err != nullptr);
                 BOOST_CHECK_EQUAL(err->status, status_type::not_found);
 
@@ -466,71 +466,72 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 auto const now = lowres_clock::now();
                 for (;;) {
                     as.reset();
-                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
                     BOOST_REQUIRE(lowres_clock::now() - now < STANDARD_WAIT);
-                    BOOST_REQUIRE(!keys);
+                    BOOST_REQUIRE(!ann_result);
 
                     // if the service is unavailable or 400, retry, seems http server is not ready yet
-                    auto* const unavailable = std::get_if<vector_store_client::service_unavailable>(&keys.error());
-                    auto* const service_error = std::get_if<vector_store_client::service_error>(&keys.error());
+                    auto* const unavailable = std::get_if<vector_store_client::service_unavailable>(&ann_result.error());
+                    auto* const service_error = std::get_if<vector_store_client::service_error>(&ann_result.error());
                     if ((unavailable == nullptr && service_error == nullptr) ||
                             (service_error != nullptr && service_error->status != status_type::bad_request)) {
                         break;
                     }
                 }
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_result.error()));
 
                 // missing distances in the reply - service should return format error
                 ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
                         R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances1":[0.1,0.2]})"));
                 as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_result.error()));
 
                 // missing pk1 key in the reply - service should return format error
                 ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
                         R"({"primary_keys":{"pk11":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
                 as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_result.error()));
 
                 // missing ck1 key in the reply - service should return format error
                 ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
                         R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck11":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
                 as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_result.error()));
 
                 // wrong size of pk2 key in the reply - service should return format error
                 ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
                         R"({"primary_keys":{"pk1":[5,6],"pk2":[78],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
                 as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_result.error()));
 
                 // wrong size of ck2 key in the reply - service should return format error
                 ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
                         R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[23]},"distances":[0.1,0.2]})"));
                 as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(!ann_result);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_result.error()));
 
                 // correct reply - service should return keys
                 ann_replies->emplace(std::make_tuple(R"({"vector":[0.1,0.2,0.3],"limit":2})",
                         R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"));
                 as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
-                BOOST_REQUIRE(keys);
-                BOOST_REQUIRE_EQUAL(keys->size(), 2);
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).partition.key().explode()), "[05, 07]");
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).clustering.explode()), "[09, 02]");
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).partition.key().explode()), "[06, 08]");
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).clustering.explode()), "[01, 03]");
+                ann_result = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                BOOST_REQUIRE(ann_result);
+                auto [keys, _] = ann_result.value();
+                BOOST_REQUIRE_EQUAL(keys.size(), 2);
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(0).partition.key().explode()), "[05, 07]");
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(0).clustering.explode()), "[09, 02]");
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(1).partition.key().explode()), "[06, 08]");
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(1).clustering.explode()), "[01, 03]");
             },
             cfg);
     co_await server->stop();

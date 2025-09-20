@@ -13,12 +13,10 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
 #include <expected>
+#include "cql3/statements/primary_key.hh"
 
 class schema;
 
-namespace cql3::statements {
-class primary_key;
-}
 
 namespace db {
 class config;
@@ -45,6 +43,8 @@ public:
     using port_number = std::uint16_t;
     using primary_key = cql3::statements::primary_key;
     using primary_keys = std::vector<primary_key>;
+    using distances = std::vector<float>;
+    using ann_result = std::pair<primary_keys, distances>;
     using schema_ptr = lw_shared_ptr<schema const>;
     using status_type = http::reply::status_type;
 
@@ -111,7 +111,7 @@ public:
 
     /// Request the vector store service for the primary keys of the nearest neighbors
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
-            -> future<std::expected<primary_keys, ann_error>>;
+            -> future<std::expected<ann_result, ann_error>>;
 
 private:
     friend struct vector_store_client_tester;

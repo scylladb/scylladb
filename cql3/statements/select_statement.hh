@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cql3/statements/raw/select_statement.hh"
+#include "cql3/statements/primary_key.hh"
 #include "cql3/expr/unset.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/stats.hh"
@@ -43,13 +44,6 @@ namespace restrictions {
 } // namespace restrictions
 
 namespace statements {
-
-
-/// Encapsulates a partition key and clustering key prefix as a primary key.
-struct primary_key {
-    dht::decorated_key partition;
-    clustering_key_prefix clustering;
-};
 
 /**
  * Encapsulates a completely parsed SELECT query, including the target
