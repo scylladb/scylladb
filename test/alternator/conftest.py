@@ -346,6 +346,17 @@ def scylla_only(dynamodb):
     if is_aws(dynamodb):
         pytest.skip('Scylla-only feature not supported by AWS')
 
+# "dynamodb_bug" is similar to "scylla_only", except instead of skipping
+# the test, it is expected to fail (xfail) on AWS DynamoDB. It should be
+# used in rare cases where we consider Alternator's behavior to be the
+# corect one, and DynamoDB's to be the bug. Tests using this fixture should
+# have a prominent comment explaining why we believe this to be a bug in
+# DynamoDB.
+@pytest.fixture(scope=testpy_test_fixture_scope)
+def dynamodb_bug(dynamodb):
+    if is_aws(dynamodb):
+        pytest.xfail('A known bug in AWS DynamoDB')
+
 # A fixture allowing to make Scylla-specific REST API requests.
 # If we're not testing Scylla, or the REST API port (10000) is not available,
 # the test using this fixture will be skipped with a message about the REST

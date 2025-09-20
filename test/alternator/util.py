@@ -188,7 +188,11 @@ def list_tables(dynamodb, limit=100):
         else:
             page = dynamodb.meta.client.list_tables(Limit=limit);
         results = page.get('TableNames', None)
-        assert(results)
+        if not results:
+            # DynamoDB may return a last empty page, without TableNames at
+            # all. It seems it doesn't happen on us-east-1, but does happen
+            # on eu-north-1 when limit=1.
+            break;
         ret = ret + results
         newpos = page.get('LastEvaluatedTableName', None)
         if not newpos:

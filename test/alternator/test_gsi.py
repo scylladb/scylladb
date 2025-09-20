@@ -1918,8 +1918,7 @@ def test_17119a(test_table_gsi_2):
     item = {'p': p, 'x': x, 'z': random_string()}
     test_table_gsi_2.put_item(Item=item)
     assert_index_query(test_table_gsi_2, 'hello', [item],
-        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
-                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
     # Change the GSI range key x to a different value.
     newx = random_string()
     test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': newx, 'Action': 'PUT'}})
@@ -1927,22 +1926,18 @@ def test_17119a(test_table_gsi_2):
     assert item == test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item']
     # The item newx should appear in the GSI, item x should be gone:
     assert_index_query(test_table_gsi_2, 'hello', [item],
-        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
-                       'x': {'AttributeValueList': [newx], 'ComparisonOperator': 'EQ'}})
+        KeyConditions={'x': {'AttributeValueList': [newx], 'ComparisonOperator': 'EQ'}})
     assert_index_query(test_table_gsi_2, 'hello', [],
-        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
-                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
     # Change the GSI range key x back to its original value. Item newx
     # should disappear from the GSI, and item x should reappear:
     test_table_gsi_2.update_item(Key={'p':  p}, AttributeUpdates={'x': {'Value': x, 'Action': 'PUT'}})
     item['x'] = x
     assert item == test_table_gsi_2.get_item(Key={'p': p}, ConsistentRead=True)['Item']
     assert_index_query(test_table_gsi_2, 'hello', [],
-        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
-                       'x': {'AttributeValueList': [newx], 'ComparisonOperator': 'EQ'}})
+        KeyConditions={'x': {'AttributeValueList': [newx], 'ComparisonOperator': 'EQ'}})
     assert_index_query(test_table_gsi_2, 'hello', [item],
-        KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
-                       'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+        KeyConditions={'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
 
 # The following test checks what happens when we have an LSI and a GSI using
 # the same base-table attribute. We want to verify that if the implementation
@@ -2030,3 +2025,59 @@ def test_gsi_invalid_key_types(dynamodb):
                     'Projection': { 'ProjectionType': 'ALL' }
                 }]) as table:
                 pass
+
+# In test_table_gsi_2, the base table has just a hash key "p", and the GSI
+# has just the hash key "x". The materialized view that Alternator uses to
+# implement this GSI needs to add "p" as an extra clustering key, but it
+# doesn't mean that "p" should be allowed in a KeyConditions or
+# KeyConditionExpression - it shouldn't because it's not a real range key.
+@pytest.mark.xfail(reason="Issue #26103")
+def test_faux_range_key_in_keyconditions(test_table_gsi_2):
+    p = random_string()
+    x = random_string()
+    item = {'p': p, 'x': x, 'z': random_string()}
+    test_table_gsi_2.put_item(Item=item)
+    # The GSI 'hello' has just "x" as a hash key, so it can be used in a
+    # KeyConditions in Query:
+    assert_index_query(test_table_gsi_2, 'hello', [item],
+        KeyConditions={ 'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # "p" is not a range key of this GSI, so it cannot be used in a
+    # KeyConditions, and should be an error.
+    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+        assert_index_query(test_table_gsi_2, 'hello', [item],
+            KeyConditions={'p': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+    # "z" is not a key of the GSI, so obviously the following command
+    # must not work, but let's also check that the error message mentions
+    # the write thing, not the irrelevant "p". The DynamoDB error message
+    # is just "Query key condition not supported".
+    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+        assert_index_query(test_table_gsi_2, 'hello', [item],
+            KeyConditions={'z': {'AttributeValueList': [p], 'ComparisonOperator': 'EQ'},
+                           'x': {'AttributeValueList': [x], 'ComparisonOperator': 'EQ'}})
+
+@pytest.mark.xfail(reason="Issue #26103")
+def test_faux_range_key_in_keyconditionexpression(test_table_gsi_2):
+    p = random_string()
+    x = random_string()
+    item = {'p': p, 'x': x, 'z': random_string()}
+    test_table_gsi_2.put_item(Item=item)
+    # The GSI 'hello' has just "x" as a hash key, so it can be used in a
+    # KeyConditionExpression in Query:
+    assert_index_query(test_table_gsi_2, 'hello', [item],
+        KeyConditionExpression='x=:x',
+        ExpressionAttributeValues={':x': x})
+    # "p" is not a range key of this GSI, so it cannot be used in a
+    # KeyConditionExpression, and should be an error.
+    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+        assert_index_query(test_table_gsi_2, 'hello', [item],
+            KeyConditionExpression='x=:x AND p=:p',
+            ExpressionAttributeValues={':x': x, ':p': p})
+    # "z" is not a key of the GSI, so obviously the following command
+    # must not work, but let's also check that the error message mentions
+    # the write thing, not the irrelevant "p". The DynamoDB error message
+    # is just "Query key condition not supported".
+    with pytest.raises(ClientError, match='ValidationException.*key condition'):
+        assert_index_query(test_table_gsi_2, 'hello', [item],
+            KeyConditionExpression='x=:x AND z=:z',
+            ExpressionAttributeValues={':x': x, ':z': p})
