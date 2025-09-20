@@ -189,7 +189,7 @@ BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
     }
     {
         auto cfg = config();
-        cfg.vector_store_uri.set("http://good.authority.com:6080");
+        cfg.vector_store_primary_uri.set("http://good.authority.com:6080");
         auto vs = vector_store_client{cfg};
         BOOST_CHECK(!vs.is_disabled());
         BOOST_CHECK_EQUAL(*vs.host(), "good.authority.com");
@@ -197,17 +197,17 @@ BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
     }
     {
         auto cfg = config();
-        cfg.vector_store_uri.set("http://bad,authority.com:6080");
+        cfg.vector_store_primary_uri.set("http://bad,authority.com:6080");
         BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("bad-schema://authority.com:6080");
+        cfg.vector_store_primary_uri.set("bad-schema://authority.com:6080");
         BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://bad.port.com:a6080");
+        cfg.vector_store_primary_uri.set("http://bad.port.com:a6080");
         BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://bad.port.com:60806080");
+        cfg.vector_store_primary_uri.set("http://bad.port.com:60806080");
         BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://bad.format.com:60:80");
+        cfg.vector_store_primary_uri.set("http://bad.format.com:60:80");
         BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_uri.set("http://authority.com:6080/bad/path");
+        cfg.vector_store_primary_uri.set("http://authority.com:6080/bad/path");
         BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
     }
 }
@@ -215,7 +215,7 @@ BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
 /// Resolving of the hostname is started in start_background_tasks()
 SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
     auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     configure(vs).with_dns({{"good.authority.here", "127.0.0.1"}});
 
@@ -232,7 +232,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
 /// Unable to resolve the hostname
 SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
     auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     configure(vs).with_dns({{"good.authority.here", std::nullopt}});
 
@@ -247,7 +247,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
 /// Resolving of the hostname is repeated after errors
 SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     auto count = 0;
     configure(vs)
@@ -297,7 +297,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
 /// Minimal interval between DNS refreshes is respected
 SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
     auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     auto count = 0;
     configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
@@ -335,7 +335,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
 /// DNS refresh could be aborted
 SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
     auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
@@ -366,7 +366,7 @@ SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_uri.set("http://bad.authority.here:6080");
+    cfg.db_config->vector_store_primary_uri.set("http://bad.authority.here:6080");
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
@@ -385,7 +385,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
@@ -404,7 +404,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", generate_unavailable_localhost_port()));
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
@@ -443,7 +443,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
     });
 
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr.port()));
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", addr.port()));
     co_await do_with_cql_env(
             [&ann_replies](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "idx");
@@ -538,10 +538,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
     auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
 
-    cfg.vector_store_uri.set("");
+    cfg.vector_store_primary_uri.set("");
 
     BOOST_CHECK(vs.is_disabled());
     co_await vs.stop();
@@ -558,7 +558,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_non_empty) {
 
     vs.start_background_tasks();
 
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
 
     BOOST_CHECK(!vs.is_disabled());
     // Wait for the DNS resolver to be called
@@ -571,12 +571,12 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_non_empty) {
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
     auto cfg = config();
-    cfg.vector_store_uri.set("http://good.authority.here:6080");
+    cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
 
     vs.start_background_tasks();
 
-    cfg.vector_store_uri.set("invalid-uri");
+    cfg.vector_store_primary_uri.set("invalid-uri");
 
     // vs becomes disabled
     BOOST_CHECK(vs.is_disabled());
@@ -605,7 +605,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
     };
 
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_uri.set(format("http://good.authority.here:{}", addr_s1.port()));
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", addr_s1.port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
@@ -616,7 +616,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
 
                 vs.start_background_tasks();
 
-                env.db_config().vector_store_uri.set(format("http://good.authority.here:{}", addr_s2.port()));
+                env.db_config().vector_store_primary_uri.set(format("http://good.authority.here:{}", addr_s2.port()));
 
                 // Wait until requests are handled by s2
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
