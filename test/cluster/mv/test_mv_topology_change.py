@@ -248,3 +248,60 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
     metrics_after = await manager.metrics.query(servers[2].ip_addr)
     failed_pairing_after = metrics_after.get('scylla_database_total_view_updates_failed_pairing')
     assert failed_pairing_before == failed_pairing_after
+
+# Write to a table with MV with RF=1, generating view updates, while data is migrating
+# either by tablet migration (tablets case) or by bootstrapping a new node (vnodes case), and
+# verify all expected rows appear in the MV eventually.
+# Checks for issues of view update generation during migration.
+# Reproduces #24292
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tablets_enabled", [True, False])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_mv_write_during_migration(manager: ManagerClient, tablets_enabled: bool):
+    N = 50000
+    cmdline = ['--logger-log-level', 'raft_topology=debug']
+
+    if tablets_enabled:
+        cfg = {'error_injections_at_startup': ['tablet_allocator_shuffle']}
+        keyspace_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'initial': 4}"
+    else:
+        cfg = {}
+        keyspace_opts = "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'enabled': false}"
+
+    await manager.servers_add(3, config=cfg, cmdline=cmdline)
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, keyspace_opts) as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.t (id int primary key, v int)")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.t_by_v AS SELECT * FROM t WHERE v IS NOT NULL AND id IS NOT NULL PRIMARY KEY (v, id)")
+
+        stmt = cql.prepare(f"INSERT INTO {ks}.t(id, v) VALUES(?, ?)")
+
+        async def do_inserts():
+            for i in range(0, N, 100):
+                await asyncio.gather(*[cql.run_async(stmt, [k, -k]) for k in range(i, i + 100)])
+
+        async def do_migration():
+            if tablets_enabled:
+                # Tablets are migrated by the tablet_allocator_shuffle injection
+                pass
+            else:
+                # Add a node
+                await manager.server_add(cmdline=cmdline)
+
+        await asyncio.gather(do_inserts(), do_migration())
+
+        async def all_rows_found():
+            rows = await cql.run_async(f"SELECT COUNT(*) AS cnt FROM {ks}.t_by_v")
+            if len(rows) == 1 and rows[0].cnt == N:
+                return True
+        try:
+            await wait_for(all_rows_found, time.time() + 60)
+        except Exception:
+            table_rows = await cql.run_async(f"SELECT id, token(id) AS tk FROM {ks}.t")
+            id_to_token = {row.id: row.tk for row in table_rows}
+            mv_rows = await cql.run_async(f"SELECT * FROM {ks}.t_by_v")
+            missing_id = id_to_token.keys() - {row.id for row in mv_rows}
+            for mid in missing_id:
+                logger.error("Missing MV row for id %s base token %s", mid, id_to_token[mid])
+            raise
