@@ -16,6 +16,10 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "mutation/tombstone.hh"
+#include "query-result.hh"
+#include "seastar/core/future.hh"
+#include "seastar/core/sstring.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -2194,6 +2198,7 @@ public:
     bool is_put_item() noexcept {
         return _cells.has_value();
     }
+    friend class put_item_operation;
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)
@@ -2354,23 +2359,39 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
             row.cells().apply(*cdef, atomic_cell::make_live(*cdef->type, ts, std::move(c.value)));
         }
     }
+    auto attrs = attrs_column(*schema);
     if (!attrs_collector.empty()) {
         auto serialized_map = attrs_collector.to_mut().serialize(*attrs_type());
-        row.cells().apply(attrs_column(*schema), std::move(serialized_map));
+        row.cells().apply(attrs, std::move(serialized_map));
     }
     // To allow creation of an item with no attributes, we need a row marker.
     row.apply(row_marker(ts));
     // PutItem is supposed to completely replace the old item, so we need to
-    // also have a tombstone removing old cells. We can't use the timestamp
-    // ts, because when data and tombstone tie on timestamp, the tombstone
-    // wins. So we need to use ts-1. Note that we use this trick also in
-    // Scylla proper, to implement the operation to replace an entire
-    // collection ("UPDATE .. SET x = ..") - see
-    // cql3::update_parameters::make_tombstone_just_before().
-    if (use_partition_tombstone) {
-        m.partition().apply(tombstone(ts-1, gc_clock::now()));
-    } else {
-        row.apply(tombstone(ts-1, gc_clock::now()));
+    // also have a tombstone removing old cells. Important points:
+    // 1) Alternator's schema is dynamic, therefore we store data in a map
+    //    in column :attrs. So, Alternator tables only have columns pk, ck, and
+    //    :attrs. Since we're replacing a row, invalidating only :attrs is
+    //    enough. Alternator base tables also had columns for LSI keys and GSI
+    //    keys. New tables no longer have such columns, but old tables created
+    //    in the past may still have them.
+    // 2) We use a collection tombstone for the :attrs column instead of a row
+    //    tombstone. While a row tombstone would also replace the data, it has
+    //    an undesirable side effect for CDC, which would report it as a 
+    //    separate deletion event. To model PutItem's "replace" semantic, we
+    //    leverage a corner case: a collection tombstone at ts-1 paired with an
+    //    upsert at ts is not reported by CDC as a separate REMOVE event. This
+    //    behavior was introduced in Scylla to handle collection replacements
+    //    in CQL (see #6084, PR #6491, e.g. cql3::maps::setter::execute()) and
+    //    we utilize it to avoid emitting the REMOVE event (resolving #6930).
+    //    Note that for old tables created with regular LSI and GSI key 
+    //    columns, we must also write a tombstone for all other regular columns
+    //    listed in the schema.
+    row.cells().apply(attrs, collection_mutation_description{tombstone{ts - 1, gc_clock::now()}}.serialize(*attrs.type));
+    // Delete legacy LSI or GSI columns, if any:
+    for (const auto& cdef : schema->regular_columns()) {
+        if (cdef.name_as_text() != executor::ATTRS_COLUMN_NAME) {
+            row.cells().apply(cdef, atomic_cell::make_dead(ts - 1, gc_clock::now()));
+        }
     }
     return m;
 }
@@ -2459,7 +2480,8 @@ rmw_operation::parse_returnvalues_on_condition_check_failure(const rjson::value&
 }
 
 rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& request)
-    : _request(std::move(request))
+    : _proxy(proxy)
+    , _request(std::move(request))
     , _schema(get_table_for_write(proxy, _request))
     , _write_isolation(get_write_isolation_for_schema(_schema))
     , _consumed_capacity(_request)
@@ -2471,7 +2493,7 @@ rmw_operation::rmw_operation(service::storage_proxy& proxy, rjson::value&& reque
     // the request).
 }
 
-std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) {
+std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options* cdc_opts) {
     if (qr->row_count()) {
         auto selection = cql3::selection::selection::wildcard(_schema);
         uint64_t item_length = 0;
@@ -2480,10 +2502,31 @@ std::optional<mutation> rmw_operation::apply(foreign_ptr<lw_shared_ptr<query::re
             _consumed_capacity._total_bytes = item_length;
         }
         if (previous_item) {
-            return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts);
+            if (cdc_opts->fill_preimage) {
+                elogger.trace("siema preimage fill previous_item={}", *previous_item);
+                cdc_opts->preimage = make_lw_shared<cql3::untyped_result_set>(*_schema, std::move(qr), *selection, slice);
+            }
+            return apply(std::make_unique<rjson::value>(std::move(*previous_item)), ts, cdc_opts);
         }
     }
-    return apply(std::unique_ptr<rjson::value>(), ts);
+    return apply(std::unique_ptr<rjson::value>(), ts, cdc_opts);
+}
+
+inline void rmw_operation::maybe_update_options(const std::unique_ptr<rjson::value>& previous_item, cdc::per_request_options* cdc_opts) const {
+    if (previous_item)
+        elogger.trace("siema maybe update {}", *previous_item);
+    else
+        elogger.trace("siema maybe update none");
+    if (cdc_opts) {
+        fixup_t fixup = get_cdc_operation_fixup(previous_item);
+        if (std::holds_alternative<cdc::operation>(fixup)) {
+            elogger.trace("siema maybe fixup={}", std::to_underlying(std::get<cdc::operation>(fixup)));
+            cdc_opts->log_operation_type_fixup.emplace(std::get<cdc::operation>(fixup));
+        } else if (std::get<desired_fixup>(fixup) == desired_fixup::skip_cdc) {
+            elogger.trace("siema desired=skip");
+            cdc_opts->skip_cdc = true;
+        }
+    }
 }
 
 rmw_operation::write_isolation rmw_operation::get_write_isolation_for_schema(schema_ptr schema) {
@@ -2597,6 +2640,39 @@ static future<uint64_t> get_previous_item_size(
     co_return item_length;
 }
 
+inline future<executor::request_return_type> rmw_operation::mutate_and_return(service::storage_proxy& proxy, std::optional<mutation> m,
+        tracing::trace_state_ptr trace_state, service_permit permit, uint64_t& wcu_total, cdc::per_request_options cdc_opts) {
+    SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+    return proxy
+            .mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), std::move(trace_state),
+                    std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts))
+            .then([this, &wcu_total]() mutable {
+                return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+            });
+}
+
+inline future<executor::request_return_type> rmw_operation::mutate_and_return_with_read_before_write(service::storage_proxy& proxy,
+        service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, uint64_t& wcu_total, bool propagate_failures,
+        cdc::per_request_options cdc_opts) {
+    auto selection = cql3::selection::selection::wildcard(schema());
+    auto command = previous_item_read_command(proxy, schema(), _ck, selection);
+    command->allow_limit = db::allow_per_partition_rate_limit::yes;
+    return proxy.query(schema(), command, to_partition_ranges(*schema(), _pk), db::consistency_level::LOCAL_QUORUM,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state))
+        .then([this, &proxy, &wcu_total, trace_state, command = std::move(command), selection = std::move(selection), cdc_opts = std::move(cdc_opts), permit, propagate_failures](service::storage_proxy::coordinator_query_result qr) mutable {
+            lw_shared_ptr<query::result> qr_ptr = qr.query_result.release();
+            std::optional<mutation> m = apply(make_foreign(qr_ptr), command->slice, api::new_timestamp(), &cdc_opts);
+            if (!m && propagate_failures) {
+                return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
+            }
+            SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+            if (qr_ptr->row_count() > 0) {
+                cdc_opts.preimage = make_lw_shared<cql3::untyped_result_set>(*schema(), make_foreign(qr_ptr), *selection, command->slice);
+            }
+            return mutate_and_return(proxy, m, trace_state, permit, wcu_total, std::move(cdc_opts));
+        });
+}
+
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
         std::optional<service::cas_shard> cas_shard,
         service::client_state& client_state,
@@ -2606,6 +2682,9 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         stats& global_stats,
         stats& per_table_stats,
         uint64_t& wcu_total) {
+    cdc::per_request_options cdc_opts{
+        .fill_preimage = schema()->cdc_options().enabled(),
+    };
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
             throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
@@ -2613,40 +2692,34 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         global_stats.reads_before_write++;
         per_table_stats.reads_before_write++;
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
+            elogger.trace("siema write isolation unsafe");
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, trace_state, permit = std::move(permit)] (std::unique_ptr<rjson::value> previous_item) mutable {
-                std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp());
-                if (!m) {
-                    return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
-                }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this,&wcu_total] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
-                });
-            });
+            return mutate_and_return_with_read_before_write(proxy, client_state, std::move(trace_state), std::move(permit), wcu_total, true, std::move(cdc_opts));
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
+                elogger.trace("siema write isolation != lwt always");
+        if (schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_strict_compatibility()) {
+            return mutate_and_return_with_read_before_write(proxy, client_state, std::move(trace_state), std::move(permit), wcu_total, true, std::move(cdc_opts));
+        }
         std::optional<mutation> m = apply(nullptr, api::new_timestamp());
-        SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes).then([this, &wcu_total] () mutable {
-            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
-        });
+        return mutate_and_return(proxy, m, trace_state, permit, wcu_total, std::move(cdc_opts));
     }
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
     }
+    elogger.trace("siema write isolation lwt");
     // If we're still here, we need to do this write using LWT:
     global_stats.write_using_lwt++;
     per_table_stats.write_using_lwt++;
     auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
-    auto read_command = needs_read_before_write ?
+    auto read_command = needs_read_before_write || (schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_strict_compatibility()) ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
     return proxy.cas(schema(), std::move(*cas_shard), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
             {timeout, std::move(permit), client_state, trace_state},
-            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout).then([this, read_command, &wcu_total] (bool is_applied) mutable {
+            db::consistency_level::LOCAL_SERIAL, db::consistency_level::LOCAL_QUORUM, timeout, timeout, true, std::move(cdc_opts)).then([this, read_command, &wcu_total] (bool is_applied) mutable {
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
@@ -2699,6 +2772,43 @@ static void verify_all_are_used(const rjson::value* field,
 class put_item_operation : public rmw_operation {
 private:
     put_or_delete_item _mutation_builder;
+protected:
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const override {
+        // Maybe new item
+        if (!previous_item) {
+            return desired_fixup::ignore_fixup;
+        }
+        // Identical item
+        size_t previous_item_cnt = previous_item->MemberCount() - _schema->primary_key_columns().size();
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && _mutation_builder._cells->size() == previous_item_cnt) {
+            std::unordered_map<sstring, bytes> attributes;
+            std::unordered_set<sstring> keys;
+            for (const auto& [attr_name, v] : *_mutation_builder._cells) {
+                sstring attr(to_string_view(attr_name));
+                attributes[attr] = v;
+            }
+            for (const auto& cdef : _schema->primary_key_columns()) {
+                keys.insert(cdef.name_as_text());
+            }
+            bool id = true;
+            for (auto it = previous_item->MemberBegin(); it != previous_item->MemberEnd(); ++it) {
+                const auto attr_name = it->name.GetString();
+                if (keys.contains(attr_name)) {
+                    continue;
+                }
+                auto attr = attributes.find(to_sstring(attr_name));
+                if (attr == attributes.end() || serialize_item(it->value) != attr->second) {
+                    id = false;
+                    break;
+                }
+            }
+            if (id) {
+                return desired_fixup::skip_cdc;
+            }
+        }
+        // Updated item
+        return cdc::operation::update;
+    }
 public:
     parsed::condition_expression _condition_expression;
     put_item_operation(service::storage_proxy& proxy, rjson::value&& request)
@@ -2736,7 +2846,11 @@ public:
                check_needs_read_before_write(_condition_expression) ||
                _returnvalues == returnvalues::ALL_OLD;
     }
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options* cdc_opts) const override {
+        if (!previous_item)
+            elogger.trace("siema apply put_item previous_item=none");
+        else
+            elogger.trace("siema apply put_item previous_item={}", *previous_item);
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
             if (previous_item && _returnvalues_on_condition_check_failure ==
@@ -2748,6 +2862,7 @@ public:
             // efficient than throwing an exception.
             return {};
         }
+        maybe_update_options(previous_item, cdc_opts);
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
         } else {
@@ -2800,6 +2915,16 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
 class delete_item_operation : public rmw_operation {
 private:
     put_or_delete_item _mutation_builder;
+protected:
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const override {
+        // Strict compatibility always does read-before-write, so the item
+        // doesn't exist.
+        // TODO: detect if rbw was performed, i.e. for preimage.
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && !previous_item) {
+            return desired_fixup::skip_cdc;
+        }
+        return desired_fixup::ignore_fixup;
+    }
 public:
     parsed::condition_expression _condition_expression;
     delete_item_operation(service::storage_proxy& proxy, rjson::value&& request)
@@ -2835,7 +2960,7 @@ public:
                 check_needs_read_before_write(_condition_expression) ||
                 _returnvalues == returnvalues::ALL_OLD;
     }
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override {
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options* cdc_opts) const override {
         if (!verify_expected(_request, previous_item.get()) ||
             !verify_condition_expression(_condition_expression, previous_item.get())) {
             if (previous_item && _returnvalues_on_condition_check_failure ==
@@ -2847,6 +2972,7 @@ public:
             // efficient than throwing an exception.
             return {};
         }
+        maybe_update_options(previous_item, cdc_opts);
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
         } else {
@@ -2939,7 +3065,7 @@ public:
     put_or_delete_item_cas_request(schema_ptr s, std::vector<put_or_delete_item>&& b) :
         schema(std::move(s)), _mutation_builders(std::move(b)) { }
     virtual ~put_or_delete_item_cas_request() = default;
-    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override {
+    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options* cdc_opts) override {
         std::optional<mutation> ret;
         for (const put_or_delete_item& mutation_builder : _mutation_builders) {
             // We assume all these builders have the same partition.
@@ -3715,6 +3841,17 @@ static size_t estimate_value_size(const rjson::value& value) {
 }
 
 class update_item_operation  : public rmw_operation {
+protected:
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const override {
+        // Strict compatibility always does read-before-write, so the item
+        // doesn't exist.
+        // TODO: detect if rbw was performed, i.e. for preimage.
+        if (_proxy.data_dictionary().get_config().alternator_streams_strict_compatibility() && !previous_item) {
+            return cdc::operation::insert;
+        }
+        return desired_fixup::ignore_fixup;
+    }
+
 public:
     // Some information parsed during the constructor to check for input
     // errors, and cached to be used again during apply().
@@ -3732,7 +3869,7 @@ public:
 
     update_item_operation(service::storage_proxy& proxy, rjson::value&& request);
     virtual ~update_item_operation() = default;
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const override;
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options* cdc_opts) const override;
     bool needs_read_before_write() const;
 };
 
@@ -4058,7 +4195,7 @@ static bool hierarchy_actions(
 }
 
 std::optional<mutation>
-update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const {
+update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options* cdc_opts) const {
     if (_consumed_capacity._total_bytes == 0) {
         _consumed_capacity._total_bytes = 1;
     }
@@ -4073,6 +4210,8 @@ update_item_operation::apply(std::unique_ptr<rjson::value> previous_item, api::t
         // efficient than throwing an exception.
         return {};
     }
+
+    maybe_update_options(previous_item, cdc_opts);
 
     mutation m(_schema, _pk);
     auto& row = m.partition().clustered_row(*_schema, _ck);

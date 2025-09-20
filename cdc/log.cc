@@ -69,6 +69,8 @@ shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy
 
 } // anonymous namespace
 
+extern logging::logger elogger;
+
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, const replica::database&, const keyspace_metadata&,
         std::optional<table_id> = {}, schema_ptr = nullptr);
@@ -311,7 +313,8 @@ public:
         lowres_clock::time_point timeout,
         utils::chunked_vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state,
-        db::consistency_level write_cl
+        db::consistency_level write_cl,
+        per_request_options options
     );
 
     template<typename Iter>
@@ -1366,6 +1369,8 @@ struct process_row_visitor {
 };
 
 struct process_change_visitor {
+    const per_request_options& _request_options;
+
     stats::part_type_set& _touched_parts;
 
     log_mutation_builder& _builder;
@@ -1421,7 +1426,7 @@ struct process_change_visitor {
             _clustering_row_states.try_emplace(ckey);
         }
 
-        _builder.set_operation(log_ck, v._cdc_op);
+        _builder.set_operation(log_ck, _request_options.log_operation_type_fixup.value_or(v._cdc_op));
         _builder.set_ttl(log_ck, v._ttl_column);
     }
 
@@ -1487,6 +1492,7 @@ private:
     schema_ptr _schema;
     dht::decorated_key _dk;
     schema_ptr _log_schema;
+    const per_request_options& _options;
 
     /**
      * #6070, #6084
@@ -1576,11 +1582,12 @@ private:
     stats::part_type_set _touched_parts;
 
 public:
-    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk)
+    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk, const per_request_options& options)
         : _ctx(ctx)
         , _schema(std::move(s))
         , _dk(std::move(dk))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
+        , _options(options)
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
         , _uses_tablets(ctx._proxy.get_db().local().find_keyspace(_schema->ks_name()).uses_tablets())
     {
@@ -1681,6 +1688,7 @@ public:
     void process_change(const mutation& m) override {
         SCYLLA_ASSERT(_builder);
         process_change_visitor v {
+            ._request_options = _options,
             ._touched_parts = _touched_parts,
             ._builder = *_builder,
             ._enable_updating_state = _enable_updating_state,
@@ -1881,7 +1889,8 @@ transform_mutations(utils::chunked_vector<mutation>& muts, decltype(muts.size())
 } // namespace cdc
 
 future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl, per_request_options options) {
+    elogger.trace("siema a type_fixup={} skip_cdc={}", options.log_operation_type_fixup.has_value() ? std::to_underlying(*options.log_operation_type_fixup) : -1, options.skip_cdc);
     // we do all this because in the case of batches, we can have mixed schemas.
     auto e = mutations.end();
     auto i = std::find_if(mutations.begin(), e, [](const mutation& m) {
@@ -1895,9 +1904,9 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     tracing::trace(tr_state, "CDC: Started generating mutations for log rows");
     mutations.reserve(2 * mutations.size());
 
-    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{},
-            [this, tr_state = std::move(tr_state), write_cl] (utils::chunked_vector<mutation>& mutations, service::query_state& qs, operation_details& details) {
-        return transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl] (int idx) mutable {
+    return do_with(std::move(mutations), service::query_state(service::client_state::for_internal_calls(), empty_service_permit()), operation_details{}, std::move(options),
+            [this, tr_state = std::move(tr_state), write_cl] (utils::chunked_vector<mutation>& mutations, service::query_state& qs, operation_details& details, per_request_options& options) {
+        return transform_mutations(mutations, 1, [this, &mutations, &qs, tr_state = tr_state, &details, write_cl, &options] (int idx) mutable {
             auto& m = mutations[idx];
             auto s = m.schema();
 
@@ -1905,27 +1914,37 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 return make_ready_future<>();
             }
 
-            transformer trans(_ctxt, s, m.decorated_key());
+            transformer trans(_ctxt, s, m.decorated_key(), options);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
             if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
-                tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
-                f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
-                    auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
-                    cdc_stats.counters_total.preimage_selects++;
-                    if (f.failed()) {
-                        cdc_stats.counters_failed.preimage_selects++;
-                    }
-                    return f;
-                });
+                cdc_log.info("siema ktores preimage");
+                if (options.preimage && !options.preimage->empty()) {
+                    cdc_log.info("Using a prefetched image siema");
+                    tracing::trace(tr_state, "CDC: Using a prefetched preimage");
+                    // Preimage has been fetched by upper layers.
+                    f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(std::move(options.preimage));
+                } else {
+                    cdc_log.info("siema 2 nie");
+                    tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
+                    f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
+                        // TODO: separate stats for prefetched preimages
+                        auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
+                        cdc_stats.counters_total.preimage_selects++;
+                        if (f.failed()) {
+                            cdc_stats.counters_failed.preimage_selects++;
+                        }
+                        return f;
+                    });
+                }
             } else {
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state, &details] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+            return f.then([trans = std::move(trans), &mutations, idx, tr_state, &details, &options] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
                 auto& m = mutations[idx];
                 auto& s = m.schema();
 
@@ -1937,10 +1956,11 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
 
                 const bool preimage = s->cdc_options().preimage();
                 const bool postimage = s->cdc_options().postimage();
+                elogger.trace("siema preimage={} postimage={} type_fixup={} skip_cdc={}", preimage, postimage, options.log_operation_type_fixup.has_value() ? std::to_underlying(*options.log_operation_type_fixup) : -1, options.skip_cdc);
                 details.had_preimage |= preimage;
                 details.had_postimage |= postimage;
                 tracing::trace(tr_state, "CDC: Generating log mutations for {}", m.decorated_key());
-                if (should_split(m)) {
+                if (should_split(m) && !options.log_operation_type_fixup.has_value()) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
                     process_changes_with_splitting(m, trans, preimage, postimage);
@@ -1964,18 +1984,21 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     });
 }
 
-bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations) const {
+bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations, const per_request_options& cdc_opts) const {
+    if (cdc_opts.skip_cdc && mutations.size() == 1) {
+        return false;
+    }
     return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
         return cdc_enabled(*m.schema());
     });
 }
 
 future<std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>>
-cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl) {
+cdc::cdc_service::augment_mutation_call(lowres_clock::time_point timeout, utils::chunked_vector<mutation>&& mutations, tracing::trace_state_ptr tr_state, db::consistency_level write_cl, per_request_options&& options) {
     if (utils::get_local_injector().enter("sleep_before_cdc_augmentation")) {
-        return seastar::sleep(std::chrono::milliseconds(100)).then([this, timeout, mutations = std::move(mutations), tr_state = std::move(tr_state), write_cl] () mutable {
-            return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
+        return seastar::sleep(std::chrono::milliseconds(100)).then([this, timeout, mutations = std::move(mutations), tr_state = std::move(tr_state), write_cl, options = std::move(options)] () mutable {
+            return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl, std::move(options));
         });
     }
-    return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl);
+    return _impl->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), write_cl, std::move(options));
 }

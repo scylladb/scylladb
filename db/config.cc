@@ -1395,6 +1395,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_allow_system_table_write(this, "alternator_allow_system_table_write", liveness::LiveUpdate, value_status::Used,
         false,
         "Allow writing to system tables using the .scylla.alternator.system prefix")
+    , alternator_streams_strict_compatibility(this, "alternator_streams_strict_compatibility", liveness::LiveUpdate, value_status::Used, false, "Maintain strict compatibility with DynamoDB Streams at the cost of performance.")
     , vector_store_uri(this, "vector_store_uri", liveness::LiveUpdate, value_status::Used, "", "The URI of the vector store to use for vector search. If not set, vector search is disabled.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,

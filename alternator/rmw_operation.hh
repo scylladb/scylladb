@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "cdc/log.hh"
 #include "seastarx.hh"
 #include "service/paxos/cas_request.hh"
 #include "service/cas_shard.hh"
@@ -20,6 +21,11 @@
 namespace alternator {
 
 class consumed_capacity;
+
+enum class desired_fixup : int8_t {
+    ignore_fixup, skip_cdc
+};
+using fixup_t = std::variant<cdc::operation, desired_fixup>;
 
 // An rmw_operation encapsulates the common logic of all the item update
 // operations which may involve a read of the item before the write
@@ -60,6 +66,7 @@ public:
     static void set_default_write_isolation(std::string_view mode);
 
 protected:
+    service::storage_proxy& _proxy;
     // The full request JSON
     rjson::value _request;
     // All RMW operations involve a single item with a specific partition
@@ -90,6 +97,12 @@ protected:
     // Additionally when _returnvalues_on_condition_check_failure is ALL_OLD
     // then condition check failure will also result in storing values here.
     mutable rjson::value _return_attributes;
+
+    virtual fixup_t get_cdc_operation_fixup(const std::unique_ptr<rjson::value>& previous_item) const {
+        // Keep the operation as is by default.
+        return desired_fixup::ignore_fixup;
+    }
+    void maybe_update_options(const std::unique_ptr<rjson::value>& previous_item, cdc::per_request_options* cdc_opts = nullptr) const;
 public:
     // The constructor of a rmw_operation subclass should parse the request
     // and try to discover as many input errors as it can before really
@@ -107,9 +120,9 @@ public:
     // violating this). We mark apply() "const" to let the compiler validate
     // this for us. The output-only field _return_attributes is marked
     // "mutable" above so that apply() can still write to it.
-    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts) const = 0;
+    virtual std::optional<mutation> apply(std::unique_ptr<rjson::value> previous_item, api::timestamp_type ts, cdc::per_request_options* cdc_opts = nullptr) const = 0;
     // Convert the above apply() into the signature needed by cas_request:
-    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts) override;
+    virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options* cdc_opts) override;
     virtual ~rmw_operation() = default;
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
@@ -124,6 +137,12 @@ public:
             stats& per_table_stats,
             uint64_t& wcu_total);
     std::optional<service::cas_shard> shard_for_execute(bool needs_read_before_write);
+
+private:
+    future<executor::request_return_type> mutate_and_return(service::storage_proxy& proxy, std::optional<mutation> m, tracing::trace_state_ptr trace_state,
+            service_permit permit, uint64_t& wcu_total, cdc::per_request_options cdc_opts);
+    future<executor::request_return_type> mutate_and_return_with_read_before_write(service::storage_proxy& proxy, service::client_state& client_state,
+            tracing::trace_state_ptr trace_state, service_permit permit, uint64_t& wcu_total, bool propagate_failures, cdc::per_request_options cdc_opts);
 };
 
 } // namespace alternator
