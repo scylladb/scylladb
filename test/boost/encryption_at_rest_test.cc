@@ -1807,9 +1807,9 @@ static future<> configure_azure_mock_server(const std::string& host, const unsig
     auto close_client = deferred_close(cln);
     auto req = http::request::make("POST", host, "/config/error");
     req._headers["Content-Length"] = "0";
-    req.query_parameters["service"] = service;
-    req.query_parameters["error_type"] = error_type;
-    req.query_parameters["repeat"] = std::to_string(repeat);
+    req.set_query_param("service", service);
+    req.set_query_param("error_type", error_type);
+    req.set_query_param("repeat", std::to_string(repeat));
     co_await cln.make_request(std::move(req), [](const http::reply&, input_stream<char>&&) -> future<> { return seastar::make_ready_future(); });
 }
 

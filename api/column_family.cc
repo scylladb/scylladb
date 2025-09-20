@@ -1066,7 +1066,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
     });
 
     cf::force_major_compaction.set(r, [&ctx, &db](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        if (req->query_parameters.contains("split_output")) {
+        if (!req->get_query_param("split_output").empty()) {
             fail(unimplemented::cause::API);
         }
         auto [ks, cf] = parse_fully_qualified_cf_name(req->get_path_param("name"));

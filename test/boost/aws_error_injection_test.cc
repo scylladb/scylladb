@@ -51,8 +51,8 @@ static void register_policy(const std::string& key, failure_policy policy) {
     auto close_client = deferred_close(cln);
     auto req = http::request::make("PUT", get_address(), "/");
     req._headers["Content-Length"] = "0";
-    req.query_parameters["Key"] = key;
-    req.query_parameters["Policy"] = std::to_string(std::to_underlying(policy));
+    req.set_query_param("Key", key);
+    req.set_query_param("Policy", std::to_string(std::to_underlying(policy)));
     cln.make_request(std::move(req), [](const http::reply&, input_stream<char>&&) -> future<> { return seastar::make_ready_future(); }).get();
 }
 

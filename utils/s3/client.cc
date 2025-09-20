@@ -181,8 +181,8 @@ future<> client::authorize(http::request& req) {
     }
     sstring query_string = "";
     std::map<std::string_view, std::string_view> query_parameters;
-    for (const auto& q : req.query_parameters) {
-        query_parameters[q.first] = q.second;
+    for (const auto& q : req.get_query_params()) {
+        query_parameters[q.first] = q.second.back();
     }
     unsigned query_nr = query_parameters.size();
     for (const auto& q : query_parameters) {
@@ -395,7 +395,7 @@ static tag_set parse_tagging(sstring& body) {
 future<tag_set> client::get_object_tagging(sstring object_name, seastar::abort_source* as) {
     // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObjectTagging.html
     auto req = http::request::make("GET", _host, object_name);
-    req.query_parameters["tagging"] = "";
+    req.set_query_param("tagging", "");
     s3l.trace("GET {} tagging", object_name);
     tag_set tags;
     co_await make_request(std::move(req),
@@ -418,7 +418,7 @@ static auto dump_tagging(const tag_set& tags) {
 future<> client::put_object_tagging(sstring object_name, tag_set tagging, seastar::abort_source* as) {
     // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObjectTagging.html
     auto req = http::request::make("PUT", _host, object_name);
-    req.query_parameters["tagging"] = "";
+    req.set_query_param("tagging", "");
     s3l.trace("PUT {} tagging", object_name);
     auto body = dump_tagging(tagging);
     size_t body_size = body.size();
@@ -442,7 +442,7 @@ future<> client::put_object_tagging(sstring object_name, tag_set tagging, seasta
 future<> client::delete_object_tagging(sstring object_name, seastar::abort_source* as) {
     // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjectTagging.html
     auto req = http::request::make("DELETE", _host, object_name);
-    req.query_parameters["tagging"] = "";
+    req.set_query_param("tagging", "");
     s3l.trace("DELETE {} tagging", object_name);
     co_await make_request(std::move(req), ignore_reply, http::reply::status_type::no_content, as);
 }
@@ -659,8 +659,8 @@ private:
         s3l.trace("PUT part {}, Upload range: {}, Upload ID:", part_number, range, _upload_id);
 
         req._headers["x-amz-copy-source-range"] = range;
-        req.query_parameters.emplace("partNumber", to_sstring(part_number + 1));
-        req.query_parameters.emplace("uploadId", _upload_id);
+        req.set_query_param("partNumber", to_sstring(part_number + 1));
+        req.set_query_param("uploadId", _upload_id);
 
         // upload the parts in the background for better throughput
         auto gh = _bg_flushes.hold();
@@ -791,7 +791,7 @@ future<> dump_multipart_upload_parts(output_stream<char> out, const utils::chunk
 future<> client::multipart_upload::start_upload() {
     s3l.trace("POST uploads {} (tag {})", _object_name, seastar::value_of([this] { return _tag ? _tag->key + "=" + _tag->value : "none"; }));
     auto rep = http::request::make("POST", _client->_host, _object_name);
-    rep.query_parameters["uploads"] = "";
+    rep.set_query_param("uploads", "");
     if (_tag) {
         rep._headers["x-amz-tagging"] = seastar::format("{}={}", _tag->key, _tag->value);
     }
@@ -819,8 +819,8 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
     auto req = http::request::make("PUT", _client->_host, _object_name);
     auto size = bufs.size();
     req._headers["Content-Length"] = seastar::format("{}", size);
-    req.query_parameters["partNumber"] = seastar::format("{}", part_number + 1);
-    req.query_parameters["uploadId"] = _upload_id;
+    req.set_query_param("partNumber", seastar::format("{}", part_number + 1));
+    req.set_query_param("uploadId", _upload_id);
     req.write_body("bin", size, [this, part_number, bufs = std::move(bufs), p = std::move(claim)] (output_stream<char>&& out_) mutable -> future<> {
         auto out = std::move(out_);
         std::exception_ptr ex;
@@ -868,7 +868,7 @@ future<> client::multipart_upload::upload_part(memory_data_sink_buffers bufs) {
 future<> client::multipart_upload::abort_upload() {
     s3l.trace("DELETE upload {}", _upload_id);
     auto req = http::request::make("DELETE", _client->_host, _object_name);
-    req.query_parameters["uploadId"] = std::exchange(_upload_id, ""); // now upload_started() returns false
+    req.set_query_param("uploadId", std::exchange(_upload_id, "")); // now upload_started() returns false
     co_await _client->make_request(std::move(req), ignore_reply, http::reply::status_type::no_content)
         .handle_exception([this](const std::exception_ptr& ex) -> future<> {
             // Here we discard whatever exception is thrown when aborting multipart upload since we don't care about cleanly aborting it since there are other
@@ -889,7 +889,7 @@ future<> client::multipart_upload::finalize_upload() {
 
     s3l.trace("POST upload completion {} parts (upload id {})", _part_etags.size(), _upload_id);
     auto req = http::request::make("POST", _client->_host, _object_name);
-    req.query_parameters["uploadId"] = _upload_id;
+    req.set_query_param("uploadId", _upload_id);
     req.write_body("xml", parts_xml_len, [this] (output_stream<char>&& out) -> future<> {
         return dump_multipart_upload_parts(std::move(out), _part_etags);
     });
@@ -994,8 +994,8 @@ future<> client::multipart_upload::upload_part(std::unique_ptr<upload_sink> piec
     _part_etags.emplace_back();
     s3l.trace("PUT part {} from {} (upload id {})", part_number, piece._object_name, _upload_id);
     auto req = http::request::make("PUT", _client->_host, _object_name);
-    req.query_parameters["partNumber"] = format("{}", part_number + 1);
-    req.query_parameters["uploadId"] = _upload_id;
+    req.set_query_param("partNumber", format("{}", part_number + 1));
+    req.set_query_param("uploadId", _upload_id);
     req._headers["x-amz-copy-source"] = piece._object_name;
 
     // See comment in upload_part(memory_data_sink_buffers) overload regarding the
@@ -1462,8 +1462,8 @@ class client::do_upload_file : private multipart_upload {
         _part_etags.emplace_back();
         auto req = http::request::make("PUT", _client->_host, _object_name);
         req._headers["Content-Length"] = to_sstring(part_size);
-        req.query_parameters.emplace("partNumber", to_sstring(part_number + 1));
-        req.query_parameters.emplace("uploadId", _upload_id);
+        req.set_query_param("partNumber", to_sstring(part_number + 1));
+        req.set_query_param("uploadId", _upload_id);
         s3l.trace("PUT part {}, {} bytes (upload id {})", part_number, part_size, _upload_id);
         req.write_body("bin", part_size, [f=std::move(f), mem_units=std::move(mem_units), offset, part_size, &progress = _progress] (output_stream<char>&& out_) {
             auto input = make_file_input_stream(f, offset, part_size, input_stream_options());
@@ -1805,13 +1805,13 @@ future<> client::bucket_lister::start_listing() {
     do {
         s3l.trace("GET /?list-type=2 (prefix={})", _prefix);
         auto req = http::request::make("GET", _client->_host, format("/{}", _bucket));
-        req.query_parameters.emplace("list-type", "2");
-        req.query_parameters.emplace("max-keys", _max_keys);
+        req.set_query_param("list-type", "2");
+        req.set_query_param("max-keys", _max_keys);
         if (!continuation_token.empty()) {
-            req.query_parameters.emplace("continuation-token", std::exchange(continuation_token, ""));
+            req.set_query_param("continuation-token", std::exchange(continuation_token, ""));
         }
         if (!_prefix.empty()) {
-            req.query_parameters.emplace("prefix", _prefix);
+            req.set_query_param("prefix", _prefix);
         }
 
         std::vector<sstring> names;
