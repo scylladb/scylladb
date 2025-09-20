@@ -150,7 +150,7 @@ void set_compaction_manager(http_context& ctx, routes& r, sharded<compaction_man
     });
 
     cm::get_compaction_history.set(r, [&cm] (std::unique_ptr<http::request> req) {
-        std::function<future<>(output_stream<char>&&)> f = [&cm] (output_stream<char>&& out) -> future<> {
+        noncopyable_function<future<>(output_stream<char>&&)> f = [&cm] (output_stream<char>&& out) -> future<> {
             auto s = std::move(out);
             bool first = true;
             std::exception_ptr ex;
