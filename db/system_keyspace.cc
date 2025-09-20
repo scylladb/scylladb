@@ -2896,6 +2896,28 @@ future<> system_keyspace::register_view_for_building(sstring ks_name, sstring vi
             token.to_sstring()).discard_result();
 }
 
+future<> system_keyspace::register_view_for_building_for_all_shards(sstring ks_name, sstring view_name, const dht::token& token) {
+    // registers this_shard_id() with the given token and inserts an empty status for all other shards.
+    // this is used to register all shards atomically and ensure all shards have a status, even if we crash
+    // before all shards are registered.
+    // if another shard has already registered, this won't overwrite its status. if it hasn't registered, we insert
+    // a status with first_token=null and next_token=null, indicating it hasn't made progress.
+    auto&& schema = db::system_keyspace::v3::scylla_views_builds_in_progress();
+    auto timestamp = api::new_timestamp();
+    mutation m{schema, partition_key::from_single_value(*schema, utf8_type->decompose(ks_name))};
+
+    for (size_t s = 0; s < smp::count; s++) {
+        auto ck = clustering_key_prefix(std::vector<bytes>{
+                utf8_type->decompose(view_name),
+                int32_type->decompose(int32_t(s))});
+        m.set_clustered_cell(ck, "generation_number", int32_t(0), timestamp);
+        if (s == this_shard_id()) {
+            m.set_clustered_cell(ck, "first_token", token.to_sstring(), timestamp);
+        }
+    }
+    return apply_mutation(std::move(m));
+}
+
 future<> system_keyspace::update_view_build_progress(sstring ks_name, sstring view_name, const dht::token& token) {
     sstring req = format("INSERT INTO system.{} (keyspace_name, view_name, next_token, cpu_id) VALUES (?, ?, ?, ?)",
             v3::SCYLLA_VIEWS_BUILDS_IN_PROGRESS);
@@ -2954,7 +2976,8 @@ future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_
         for (auto& row : *cql_result) {
             auto ks_name = row.get_as<sstring>("keyspace_name");
             auto cf_name = row.get_as<sstring>("view_name");
-            auto first_token = dht::token::from_sstring(row.get_as<sstring>("first_token"));
+            auto first_token_opt = row.get_opt<sstring>("first_token").transform(dht::token::from_sstring);
+
             auto next_token_sstring = row.get_opt<sstring>("next_token");
             std::optional<dht::token> next_token;
             if (next_token_sstring) {
@@ -2963,7 +2986,7 @@ future<std::vector<system_keyspace::view_build_progress>> system_keyspace::load_
             auto cpu_id = row.get_as<int32_t>("cpu_id");
             progress.emplace_back(view_build_progress{
                     view_name(std::move(ks_name), std::move(cf_name)),
-                    std::move(first_token),
+                    std::move(first_token_opt),
                     std::move(next_token),
                     static_cast<shard_id>(cpu_id)});
         }

@@ -2317,24 +2317,25 @@ future<> view_builder::initialize_reader_at_current_token(build_step& step) {
   });
 }
 
-void view_builder::load_view_status(view_builder::view_build_status status, std::unordered_set<table_id>& loaded_views) {
-    if (!status.next_token) {
+void view_builder::load_view_status(view_builder::view_build_init_status status, std::unordered_set<table_id>& loaded_views) {
+    if (!status.first_token || !status.next_token) {
         // No progress was made on this view, so we'll treat it as new.
         return;
     }
     vlogger.info0("Resuming to build view {}.{} at {}", status.view->ks_name(), status.view->cf_name(), *status.next_token);
     loaded_views.insert(status.view->id());
-    if (status.first_token == *status.next_token) {
+    if (*status.first_token == *status.next_token) {
         // Completed, so nothing to do for this shard. Consider the view
         // as loaded and not as a new view.
         _built_views.emplace(status.view->id());
         return;
     }
-    get_or_create_build_step(status.view->view_info()->base_id()).build_status.emplace_back(std::move(status));
+    get_or_create_build_step(status.view->view_info()->base_id()).build_status.emplace_back(
+            view_build_status { status.view, *status.first_token, status.next_token });
 }
 
 void view_builder::reshard(
-        std::vector<std::vector<view_builder::view_build_status>> view_build_status_per_shard,
+        std::vector<std::vector<view_builder::view_build_init_status>> view_build_status_per_shard,
         std::unordered_set<table_id>& loaded_views) {
     // We must reshard. We aim for a simple algorithm, a step above not starting from scratch.
     // Shards build entries at different paces, so both first and last tokens will differ. We
@@ -2357,17 +2358,17 @@ void view_builder::reshard(
             auto& my_range = my_status.emplace(
                     std::move(view),
                     interval<dht::token>::make_open_ended_both_sides()).first->second;
-            if (!next_token || !my_range) {
+            if (!first_token || !next_token || !my_range) {
                 // A previous shard made no progress, so for this view we'll start over.
                 my_range = std::nullopt;
                 continue;
             }
-            if (first_token == *next_token) {
+            if (*first_token == *next_token) {
                 // Completed, so don't consider this shard's progress. We know that if the view
                 // is marked as in-progress, then at least one shard will have a non-full range.
                 continue;
             }
-            wrapping_interval<dht::token> other_range(first_token, *next_token);
+            wrapping_interval<dht::token> other_range(*first_token, *next_token);
             if (other_range.is_wrap_around(dht::token_comparator())) {
                 // The intersection of a wrapping range with a non-wrapping range may yield more
                 // multiple non-contiguous ranges. To avoid the complexity of dealing with more
@@ -2390,7 +2391,7 @@ void view_builder::reshard(
         }
         auto start_bound = opt_range->start() ? std::move(opt_range->start()->value()) : dht::minimum_token();
         auto end_bound = opt_range->end() ? std::move(opt_range->end()->value()) : dht::minimum_token();
-        auto s = view_build_status{std::move(view), std::move(start_bound), std::move(end_bound)};
+        auto s = view_build_init_status{std::move(view), std::move(start_bound), std::move(end_bound)};
         load_view_status(std::move(s), loaded_views);
     }
 }
@@ -2447,7 +2448,7 @@ void view_builder::setup_shard_build_step(
                 continue;
             }
             vbi.status_per_shard.resize(std::max(vbi.status_per_shard.size(), size_t(cpu_id + 1)));
-            vbi.status_per_shard[cpu_id].emplace_back(view_build_status{
+            vbi.status_per_shard[cpu_id].emplace_back(view_build_init_status{
                     std::move(view),
                     std::move(first_token),
                     std::move(next_token_opt)});
@@ -2634,7 +2635,12 @@ future<> view_builder::add_new_view(view_ptr view, build_step& step) {
     if (this_shard_id() == 0) {
         co_await mark_view_build_started(view->ks_name(), view->cf_name());
     }
-    co_await _sys_ks.register_view_for_building(view->ks_name(), view->cf_name(), step.current_token());
+
+    if (this_shard_id() == smp::count - 1) {
+        co_await utils::get_local_injector().inject("add_new_view_pause_last_shard", utils::wait_for_message(5min));
+    }
+
+    co_await _sys_ks.register_view_for_building_for_all_shards(view->ks_name(), view->cf_name(), step.current_token());
     step.build_status.emplace(step.build_status.begin(), view_build_status{view, step.current_token(), std::nullopt});
 }
 
