@@ -2130,8 +2130,8 @@ if not args.staticboost:
 for pkg in pkgs:
     user_cflags += ' ' + pkg_config(pkg, '--cflags')
     libs += ' ' + pkg_config(pkg, '--libs')
-user_cflags += ' -fvisibility=hidden'
-user_ldflags += ' -fvisibility=hidden'
+user_cflags += ' -fvisibility-inlines-hidden'
+user_ldflags += ' -fvisibility-inlines-hidden'
 if args.staticcxx:
     user_ldflags += " -static-libstdc++"
 
