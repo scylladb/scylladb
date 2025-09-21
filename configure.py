@@ -384,7 +384,7 @@ modes = {
     },
     'release': {
         'cxxflags': '-ffunction-sections -fdata-sections ',
-        'cxx_ld_flags': '-Wl,--gc-sections',
+        'cxx_ld_flags': '-Wl,--gc-sections -Wl,--no-lto-pgo-warn-mismatch',
         'stack-usage-threshold': 1024*13,
         'optimization-level': '3',
         'per_src_extra_cxxflags': {},
