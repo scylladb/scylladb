@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <fmt/format.h>
 
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 #include <deque>
 #include <random>
 #include "utils/chunked_vector.hh"
