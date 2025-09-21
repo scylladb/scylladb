@@ -1209,6 +1209,23 @@ future<mutation> create_table_streams_mutation(table_id table, db_clock::time_po
     co_return std::move(m);
 }
 
+future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const std::vector<cdc::stream_id>& stream_ids, api::timestamp_type ts) {
+    auto s = db::system_keyspace::cdc_streams_state();
+
+    mutation m(s, partition_key::from_single_value(*s,
+        data_value(table.uuid()).serialize_nonnull()
+    ));
+    m.set_static_cell("timestamp", stream_ts, ts);
+
+    for (const auto& sid : stream_ids) {
+        auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+        m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+        co_await coroutine::maybe_yield();
+    }
+
+    co_return std::move(m);
+}
+
 utils::chunked_vector<mutation>
 make_drop_table_streams_mutations(table_id table, api::timestamp_type ts) {
     utils::chunked_vector<mutation> mutations;
@@ -1384,6 +1401,115 @@ future<> generation_service::generate_tablet_resize_update(utils::chunked_vector
     auto diff = co_await _cdc_metadata.generate_stream_diff(current_streams.streams, new_streams);
     auto mut = co_await get_switch_streams_mutation(table, new_ts, std::move(diff), ts);
     muts.emplace_back(std::move(mut));
+}
+
+future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id table, db_clock::time_point base_ts, const std::vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts) {
+    utils::chunked_vector<mutation> muts;
+    muts.reserve(2);
+
+    auto gc_now = gc_clock::now();
+    auto tombstone_ts = ts - 1;
+
+    {
+        // write the new base stream set to cdc_streams_state
+        auto s = db::system_keyspace::cdc_streams_state();
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        m.partition().apply(tombstone(tombstone_ts, gc_now));
+        m.set_static_cell("timestamp", data_value(base_ts), ts);
+
+        for (const auto& sid : base_stream_set) {
+            co_await coroutine::maybe_yield();
+            auto ck = clustering_key::from_singular(*s, dht::token::to_int64(sid.token()));
+            m.set_cell(ck, "stream_id", data_value(sid.to_bytes()), ts);
+        }
+        muts.emplace_back(std::move(m));
+    }
+
+    {
+        // remove all entries from cdc_streams_history up to the new base
+        auto s = db::system_keyspace::cdc_streams_history();
+        mutation m(s, partition_key::from_single_value(*s,
+            data_value(table.uuid()).serialize_nonnull()
+        ));
+        auto range = query::clustering_range::make_ending_with({
+                clustering_key_prefix::from_single_value(*s, timestamp_type->decompose(base_ts)), true});
+        auto bv = bound_view::from_range(range);
+        m.partition().apply_delete(*s, range_tombstone{bv.first, bv.second, tombstone{ts, gc_now}});
+        muts.emplace_back(std::move(m));
+    }
+
+    co_return std::move(muts);
+}
+
+table_streams::const_iterator get_new_base_for_gc(const table_streams& streams_map, std::chrono::seconds ttl) {
+    // find the most recent timestamp that is older than ttl_seconds, which will become the new base.
+    // all streams with older timestamps can be removed because they are closed for more than ttl_seconds
+    // (they are all replaced by streams with the newer timestamp).
+
+    auto ts_upper_bound = db_clock::now() - ttl;
+
+    auto it = streams_map.begin();
+    while (it != streams_map.end()) {
+        auto next_it = std::next(it);
+        if (next_it == streams_map.end()) {
+            break;
+        }
+
+        auto next_tp = next_it->second.ts;
+        if (next_tp <= ts_upper_bound) {
+            // the next timestamp is older than ttl_seconds, so the current one is obsolete
+            it = next_it;
+        } else {
+            break;
+        }
+    }
+
+    return it;
+}
+
+future<utils::chunked_vector<mutation>> generation_service::garbage_collect_cdc_streams_for_table(table_id table, std::optional<std::chrono::seconds> ttl, api::timestamp_type ts) {
+    const auto& table_streams = *_cdc_metadata.get_all_tablet_streams().at(table);
+
+    // if TTL is not provided by the caller then use the table's CDC TTL
+    auto base_schema = cdc::get_base_table(_db, *_db.find_schema(table));
+    ttl = ttl.or_else([&] -> std::optional<std::chrono::seconds> {
+        auto ttl_seconds = base_schema->cdc_options().ttl();
+        if (ttl_seconds > 0) {
+            return std::chrono::seconds(ttl_seconds);
+        } else {
+            // ttl=0 means no ttl
+            return std::nullopt;
+        }
+    });
+    if (!ttl) {
+        co_return utils::chunked_vector<mutation>{};
+    }
+
+    auto new_base_it = get_new_base_for_gc(table_streams, *ttl);
+    if (new_base_it == table_streams.begin() || new_base_it == table_streams.end()) {
+        // nothing to gc
+        co_return utils::chunked_vector<mutation>{};
+    }
+
+    for (auto it = table_streams.begin(); it != new_base_it; ++it) {
+        cdc_log.info("Garbage collecting CDC stream metadata for table {}: removing generation {} because it is older than the CDC TTL of {} seconds",
+                table, it->second.ts, *ttl);
+    }
+
+    co_return co_await get_cdc_stream_gc_mutations(table, new_base_it->second.ts, new_base_it->second.streams, ts);
+}
+
+future<> generation_service::garbage_collect_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, api::timestamp_type ts) {
+    for (auto table : _cdc_metadata.get_tables_with_cdc_tablet_streams()) {
+        co_await coroutine::maybe_yield();
+
+        auto table_muts = co_await garbage_collect_cdc_streams_for_table(table, std::nullopt, ts);
+        for (auto&& m : table_muts) {
+            muts.emplace_back(std::move(m));
+        }
+    }
 }
 
 } // namespace cdc
