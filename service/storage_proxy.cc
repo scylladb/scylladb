@@ -809,6 +809,12 @@ private:
             tracing::begin(trace_state_ptr);
             tracing::trace(trace_state_ptr, "{}: message received from /{}", verb, src_addr);
         }
+
+        // Check the fence early to avoid querying the schema for stale requests.
+        if (auto f = _sp.apply_fence_result<Result>(fence_opt, src_addr)) {
+            co_return co_await std::move(*f);
+        }
+
         auto rate_limit_info = rate_limit_info_opt.value_or(std::monostate());
         if (!cmd1.max_result_size) {
             if constexpr (verb == read_verb::read_data) {
