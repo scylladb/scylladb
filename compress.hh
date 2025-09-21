@@ -107,7 +107,7 @@ public:
 
     using dicts_feature_enabled = bool_class<struct dicts_feature_enabled_tag>;
     using dicts_usage_allowed = bool_class<struct dicts_usage_allowed_tag>;
-    void validate(dicts_feature_enabled, dicts_usage_allowed);
+    void validate(dicts_feature_enabled, dicts_usage_allowed) const;
 
     std::map<sstring, sstring> get_options() const;
 
