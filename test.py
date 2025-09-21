@@ -337,6 +337,8 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.quiet:
         args.append('--quiet')
         args.extend(['-p','no:sugar'])
+    else:
+        args.append('--force-sugar')
     if options.pytest_arg:
         # If pytest_arg is provided, it should be a string with arguments to pass to pytest
         args.extend(shlex.split(options.pytest_arg))
