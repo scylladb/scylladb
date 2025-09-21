@@ -23,13 +23,9 @@ By assigning each service level to the different roles within your organization,
 
 .. _`role` : /operating-scylla/security/rbac_usecase/
 
-Initially ScyllaDB has two service levels:
- * ``'default'`` - Receives all load unassigned to any other service level.
- * ``'driver'`` - Isolates metadata operations (for example, driver schema and topology fetches) and handles new connections before the user is authenticated and authorized. This reduces the impact of connection handling on regular query traffic. In most deployments, you do not need to tune the ``'driver'`` service level.
-
 Prerequisites
 =============
-To create a new service level and assign it to a role, you need:
+To create a level of service and assign it to a role, you need:
 
 * An :doc:`authenticated </operating-scylla/security/runtime-authentication>` and :doc:`authorized </operating-scylla/security/enable-authorization>` user 
 * At least one :ref:`role created <create-role-statement>`.
@@ -80,7 +76,7 @@ Where:
 Example
 .......
 
-There are 4 service levels (OLAP, OLTP, driver, default) where: (the percentage of resources = (Assigned Shares / Total Shares) x 100). Total Shares in this case is the total of all allocated shares + the Default SLA (1000). The percentage of resources would be:
+There are 3 service levels (OLAP, OLTP, Default) where: (the percentage of resources = (Assigned Shares / Total Shares) x 100). Total Shares in this case is the total of all allocated shares + the Default SLA (1000). The percentage of resources would be:
 
 .. list-table::
    :widths: 30 30 30 
@@ -94,15 +90,12 @@ There are 4 service levels (OLAP, OLTP, driver, default) where: (the percentage 
      - 4%
    * - OLTP
      - 1000
-     - 44%
-   * - driver
-     - 200
-     - 8%
-   * - default
+     - 48%
+   * - Default
      - 1000
-     - 44%
+     - 48%
    * - Total 
-     - 2300
+     - 2100
      - 100%
 
 **Procedure**
@@ -122,12 +115,10 @@ There are 4 service levels (OLAP, OLTP, driver, default) where: (the percentage 
 
    service_level | shares
    --------------+-------
-          driver |    200
-   --------------+-------
             olap |    100
    --------------+-------
             oltp |   1000
-   (3 rows)
+   (2 rows)
 
 Change Resource Allocation for a Service Level 
 -----------------------------------------------
@@ -244,10 +235,9 @@ Run the following:
 
    service_level  | shares
    ---------------+--------
-           driver |     200
              olap |     100
              oltp |    1000
-   (3 rows)
+   (2 rows)
 
 
 Delete a Service Level
@@ -435,7 +425,7 @@ In order for workload prioritization to take effect, application users need to b
 
 Limits
 ======
-ScyllaDB is limited to 9 service levels, including the default and driver levels; this means you can create up to 7 service levels.
+ScyllaDB is limited to 8 service levels, including the default one; this means you can create up to 7 service levels.
 
 
 Additional References

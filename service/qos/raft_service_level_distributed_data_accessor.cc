@@ -56,34 +56,31 @@ static void validate_state(const service::raft_group0_client& group0_client) {
     }
 }
 
-future<utils::chunked_vector<mutation>> raft_service_level_distributed_data_accessor::set_service_level_mutations(cql3::query_processor& qp, sstring service_level_name, qos::service_level_options slo, api::timestamp_type timestamp) {
+future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch& mc) const {
+    validate_state(_group0_client);
+    
     static sstring insert_query = format("INSERT INTO {}.{} (service_level, timeout, workload_type) VALUES (?, ?, ?);", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
     static sstring update_shares_query = format("UPDATE {}.{} SET shares = ? WHERE service_level = ?", db::system_keyspace::NAME, db::system_keyspace::SERVICE_LEVELS_V2);
     data_value workload = slo.workload == qos::service_level_options::workload_type::unspecified
             ? data_value::make_null(utf8_type)
             : data_value(qos::service_level_options::to_string(slo.workload));
 
-    auto muts = co_await qp.get_mutations_internal(insert_query, qos_query_state(), timestamp, {service_level_name, timeout_to_data_value(slo.timeout), workload});
+    auto muts = co_await _qp.get_mutations_internal(insert_query, qos_query_state(), mc.write_timestamp(), {service_level_name, timeout_to_data_value(slo.timeout), workload});
     auto muts_shares = co_await std::visit(overloaded_functor {
         [&] (const service_level_options::unset_marker& um) -> future<utils::chunked_vector<mutation>> {
             co_return utils::chunked_vector<mutation>();
         },
         [&] (const service_level_options::delete_marker& dm) -> future<utils::chunked_vector<mutation>> {
-            co_return co_await qp.get_mutations_internal(update_shares_query, qos_query_state(), timestamp, {data_value::make_null(int32_type), data_value(service_level_name)});
+            co_return co_await _qp.get_mutations_internal(update_shares_query, qos_query_state(), mc.write_timestamp(), {data_value::make_null(int32_type), data_value(service_level_name)});
         },
         [&] (const int32_t& s) -> future<utils::chunked_vector<mutation>> {
-            co_return co_await qp.get_mutations_internal(update_shares_query, qos_query_state(), timestamp, {data_value(s), data_value(service_level_name)});
+            co_return co_await _qp.get_mutations_internal(update_shares_query, qos_query_state(), mc.write_timestamp(), {data_value(s), data_value(service_level_name)});
         }
     }, slo.shares);
 
     muts.insert(muts.end(), muts_shares.begin(), muts_shares.end());
-    co_return muts;
-}
 
-future<> raft_service_level_distributed_data_accessor::set_service_level(sstring service_level_name, qos::service_level_options slo, service::group0_batch& mc) const {
-    validate_state(_group0_client);
-    auto muts = co_await raft_service_level_distributed_data_accessor::set_service_level_mutations(_qp, service_level_name, slo, mc.write_timestamp());
-    mc.add_mutations(std::move(muts), format("set_service_level with service_level={}, timeout={}, workload_type={}", service_level_name, timeout_to_data_value(slo.timeout).to_parsable_string(), data_value(qos::service_level_options::to_string(slo.workload))));
+    mc.add_mutations(std::move(muts), format("service levels internal statement: {}", insert_query));
 }
 
 future<> raft_service_level_distributed_data_accessor::drop_service_level(sstring service_level_name, service::group0_batch& mc) const {
