@@ -7,7 +7,7 @@
  */
 
 #define BOOST_TEST_MODULE alternator
-#include <boost/test/included/unit_test.hpp>
+#include <boost/test/unit_test.hpp>
 
 #include <seastar/util/defer.hh>
 #include <seastar/core/memory.hh>
