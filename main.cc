@@ -2208,6 +2208,20 @@ sharded<locator::shared_token_metadata> token_metadata;
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             db.local().check_rf_rack_validity(cfg->rf_rack_valid_keyspaces(), token_metadata.local().get());
 
+            // Semantic validation of sstable compression parameters from config.
+            // Adding here (i.e., after `join_cluster`) to ensure that the
+            // required SSTABLE_COMPRESSION_DICTS cluster feature has been negotiated.
+            try {
+                const auto& dicts_feature_enabled = feature_service.local().sstable_compression_dicts;
+                const auto& dicts_usage_allowed = cfg->sstable_compression_dictionaries_allow_in_ddl();
+                cfg->sstable_compression_user_table_options().validate(
+                        compression_parameters::dicts_feature_enabled(bool(dicts_feature_enabled)),
+                        compression_parameters::dicts_usage_allowed(dicts_usage_allowed));
+            } catch (const std::exception& e) {
+                startlog.error("Invalid sstable_compression_user_table_options: {}", e.what());
+                throw bad_configuration_error();
+            }
+
             dictionary_service dict_service(
                 dict_sampler,
                 sys_ks.local(),
