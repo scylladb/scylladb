@@ -1,0 +1,34 @@
+name: Docs / Validate metrics
+
+on:
+  pull_request:
+    branches:
+      - master
+      - enterprise
+    paths:
+      - '**/*.cc'
+      - 'scripts/metrics-config.yml' 
+      - 'scripts/get_description.py'
+      - 'docs/_ext/scylladb_metrics.py'
+
+jobs:
+  validate-metrics:
+    runs-on: ubuntu-latest
+    name: Check metrics documentation coverage
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+      
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: pip install PyYAML
+        
+    - name: Validate metrics
+      run: python3 scripts/get_description.py --validate -c scripts/metrics-config.yml

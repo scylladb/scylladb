@@ -29,6 +29,7 @@ def readable_desc_rst(description):
 
         cleaned_line = cleaned_line.lstrip()
         cleaned_line = cleaned_line.replace('"', '')
+        cleaned_line = cleaned_line.replace('`', '\\`')
         
         if cleaned_line != '':
             cleaned_line = indent + cleaned_line
