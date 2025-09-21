@@ -13,7 +13,7 @@ import logging
 from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for_first_completed, gather_safely, wait_for
 from test.pylib.internal_types import ServerInfo, HostID
-from test.pylib.tablets import get_tablet_replicas, get_tablet_replica
+from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replica
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
 from test.cluster.util import new_test_keyspace, get_topology_coordinator, trigger_stepdown
 from test.pylib.scylla_cluster import ReplaceConfig
@@ -539,3 +539,79 @@ async def test_view_building_failure(manager: ManagerClient):
 
         await wait_for_view(cql, 'mv_cf_view', node_count)
         await check_view_contents(cql, ks, "tab", "mv_cf_view")
+
+# Reproduces scylladb/scylladb#25912
+@pytest.mark.asyncio
+async def test_concurrent_tablet_migrations(manager: ManagerClient):
+    """
+    The test creates a situation where a single tablet is replicated across
+    multiple DCs / racks, and all those tablet replicas are eligible for migration.
+    As described in scylladb/scylladb#25912, the tablet load balancer computes
+    plans for each DC independently and, in each DC, it may decide to migrate
+    a replica of the same tablet. However, the system.tablets schema only allows
+    migration of only one replica of a tablet at a time, so only one of those
+    generated migrations will "win" and will actually proceed. This confused
+    the view build coordinator because it reacted to all of the proposed migrations
+    by cancelling the view building task associated with the to-be-migrated base
+    replica, but the tasks aborted due to the migrations that "lost" may never
+    be resumed, resulting in a view which never gets built.
+
+    Scenario:
+    - Create a 3 node cluster, with two DCs, two racks in the first DC and one rack
+      in the second DC. One node in each rack
+    - Create a keyspace with one replica in each rack
+    - Pause tablet load balancing and view building
+    - Within that keyspace, create a base table and a colocated view with two tablets
+    - Add one more node to each rack (cluster has 6 nodes in total afterwards)
+    - Unpause tablet load balancing
+    - Wait until tablets are evenly distributed
+    - Unpause view building
+    - Wait until the view is built
+
+    At the moment when tablet load balancing is unpaused, the tablet load balancer
+    should be in a situation where it should consider moving a replica of a tablet
+    in each rack, generating 3 conflicting plans.
+    """
+
+    rack_property_files = [
+        {'dc': 'dc1', 'rack': 'rack1'},
+        {'dc': 'dc1', 'rack': 'rack2'},
+        {'dc': 'dc2', 'rack': 'rack3'},
+    ]
+
+    servers = []
+    for property_file in rack_property_files:
+        servers.append(await manager.server_add(property_file=property_file, cmdline=cmdline_loggers))
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    await pause_view_building_tasks(manager)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2, 'dc2': 1} AND tablets = {'initial': 2}") as ks:
+        cql = manager.get_cql()
+
+        # The base and the view are colocated, so their tablets are always migrated together.
+        # With 2 tablets per table and RF=3, we will have 2 tablet groups (base+view) per node.
+        await cql.run_async(f"CREATE TABLE {ks}.base (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT pk, ck, v FROM {ks}.base WHERE ck IS NOT NULL AND v IS NOT NULL PRIMARY KEY (pk, v, ck)")
+
+        async def get_nodes_which_are_tablet_replicas():
+            all_tablet_replicas = await get_all_tablet_replicas(manager, servers[0], ks, 'base')
+            return frozenset(r[0] for tablet in all_tablet_replicas for r in tablet.replicas)
+
+        # Add one more node to each rack. Load balancing is disabled so new nodes should not get new tablets.
+        for property_file in rack_property_files:
+            servers.append(await manager.server_add(property_file=property_file, cmdline=cmdline_loggers))
+        assert len(await get_nodes_which_are_tablet_replicas()) == 3
+
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+        # The effect of unpausing the balancer should be that all replicas are distributed evenly between nodes
+        # (1 base + 1 view tablet for each node).
+        async def tablets_are_evenly_distributed():
+            if len(await get_nodes_which_are_tablet_replicas()) == 6:
+                return True
+
+        await wait_for(tablets_are_evenly_distributed, time.time() + 60)
+
+        await unpause_view_building_tasks(manager)
+        await wait_for_view(cql, "mv", len(servers))
