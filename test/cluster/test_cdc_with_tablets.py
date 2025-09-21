@@ -292,3 +292,56 @@ async def test_cdc_colocation(manager: ManagerClient):
                     f"Stream {stream_id} partitions {partitions} are not fully contained in inaccessible partitions"
 
         await manager.server_start(servers[0].server_id)
+
+# Test garbage collection of CDC streams.
+# Create a CDC table with short TTL, then split the tablets to create a new stream set,
+# and wait until the old streams are garbage collected and we have a single stream set again.
+# Verify the remaining stream set is equal to the most recent stream set.
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_cdc_stream_garbage_collection(manager: ManagerClient):
+    cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1, 'error_injections_at_startup': ['short_cdc_streams_gc_refresh_interval' ] }
+    servers = await manager.servers_add(1, config=cfg)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int) WITH cdc={{'enabled': true, 'ttl': 3600}}")
+
+        rows = await cql.run_async(f"SELECT toUnixTimestamp(timestamp) as ts FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test'")
+        assert len(rows) == 1
+        ts1 = rows[0].ts
+
+        await cql.run_async(f"ALTER TABLE {ks}.test_scylla_cdc_log WITH tablets = {{'min_tablet_count': 4}};")
+
+        async def new_stream_timestamp_created():
+            rows = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test' AND timestamp > {ts1}")
+            if len(rows) > 0:
+                return True
+        await wait_for(new_stream_timestamp_created, time.time() + 60)
+
+        ts_before = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test' ORDER BY timestamp DESC")
+        streams_before = await cql.run_async(f"SELECT * FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='test'")
+        assert len(ts_before) == 2
+
+        # set short TTL to trigger garbage collection
+        await cql.run_async(f"ALTER TABLE {ks}.test WITH cdc = {{'enabled': true, 'ttl': 5}}")
+
+        async def streams_garbage_collected():
+            rows = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test'")
+            if len(rows) == 1:
+                return True
+        await wait_for(streams_garbage_collected, time.time() + 60)
+
+        ts_after = await cql.run_async(f"SELECT * FROM system.cdc_timestamps WHERE keyspace_name='{ks}' AND table_name='test' ORDER BY timestamp DESC")
+        streams_after = await cql.run_async(f"SELECT * FROM system.cdc_streams WHERE keyspace_name='{ks}' AND table_name='test'")
+
+        # now we have a single timestamp, and it is the most recent one
+        assert len(ts_after) == 1
+        assert ts_after[0].timestamp == ts_before[0].timestamp
+
+        # now there is a single stream set, and it is the same as the stream set for the most recent timestamp
+        assert set([r.stream_id for r in streams_after if r.stream_state == CdcStreamState.CURRENT]) == \
+                set([r.stream_id for r in streams_before if r.timestamp == ts_before[0].timestamp and r.stream_state == CdcStreamState.CURRENT])
+
+        # cdc_streams_history is empty. we have only a base stream set
+        rows = await cql.run_async("SELECT * FROM system.cdc_streams_history")
+        assert len(rows) == 0
