@@ -6,13 +6,10 @@
 "db/commitlog/commitlog.cc":
     params:
         metrics_category_name: ["commitlog", "schema_commitlog"]
-        cfg.max_active_flushes: "cfg.max_active_flushes"
+        "cfg.max_active_flushes": "cfg.max_active_flushes"
 "cql3/query_processor.cc":
     groups:
         "80": query_processor
-    allowmismatch: true
-"raft/server.cc":
-  allowmismatch: true
 "replica/dirty_memory_manager.cc":
   params:
     namestr: ["regular", "system"]
@@ -20,7 +17,6 @@
   params:
     stat_name: ["exclusive_row", "shared_row", "exclusive_partition", "shared_partition"]
 "replica/database.cc":
-  allowmismatch: true
   params:
     "_dirty_memory_manager.throttle_threshold()": "throttle threshold"
 "seastar/apps/metrics_tester/metrics_tester.cc": skip
@@ -32,10 +28,10 @@
     COORDINATOR_STATS_CATEGORY: "storage_proxy_coordinator"
     "storage_proxy_stats::COORDINATOR_STATS_CATEGORY": "storage_proxy_coordinator"
     REPLICA_STATS_CATEGORY: "storage_proxy_replica"
+    "storage_proxy_stats::REPLICA_STATS_CATEGORY": "storage_proxy_replica"
     _short_description_prefix: ["total_write_attempts", "write_errors", "background_replica_writes_failed", "read_repair_write_attempts"]
     _long_description_prefix: ["total number of write requests", "number of write requests that failed", "background_replica_writes_failed", "number of write operations in a read repair context"]
     _category: "storage_proxy_coordinator"
-  allowmismatch: true
 "thrift/server.cc": skip
 "tracing/tracing.cc":
   params:
@@ -44,7 +40,7 @@
   groups:
     "200": transport
   params:
-    _max_request_size: "max_request_size"
+    "_config.max_request_size": "max_request_size"
 "seastar/src/net/dpdk.cc": skip
 "db/hints/manager.cc":
     params:
@@ -67,6 +63,5 @@
         "_queue_name + \"_tx_frags\"": ["queue"]
         "_queue_name + \"_rx_frags\"": ["queue"]
 "alternator/stats.cc":
-  allowmismatch: true
   params:
     group_name: "alternator"
