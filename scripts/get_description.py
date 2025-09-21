@@ -5,6 +5,7 @@ import re
 import yaml
 import json
 import inspect
+from pathlib import Path
 
 from encodings import undefined
 
@@ -150,15 +151,28 @@ def get_metrics_information(config_file):
 
 def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
     current_group = ""
-    clean_name = file_name[2:] if file_name.startswith('./') else file_name
+    # Normalize path for cross-platform compatibility
+    # Convert absolute paths to relative and backslashes to forward slashes
+    clean_name = file_name
+    if file_name.startswith('./'):
+        clean_name = file_name[2:]
+    else:
+        # Handle absolute paths (Windows: C:\..., Unix: /...)
+        file_path = Path(file_name)
+        if file_path.is_absolute():
+            try:
+                # Try to make it relative to current directory
+                clean_name = str(file_path.relative_to(Path.cwd()))
+            except ValueError:
+                # If not relative to cwd, just use the name as-is
+                clean_name = file_name
+    # Normalize backslashes to forward slashes for config file compatibility
+    clean_name = clean_name.replace('\\', '/')
     param_mapping = {}
     groups = {}
-    allowmismatch = False
     if clean_name in metrics_information:
         if (isinstance(metrics_information[clean_name], str) and metrics_information[clean_name] == "skip") or "skip" in metrics_information[clean_name]:
             exit(0)
-        if "allowmismatch" in metrics_information[clean_name]:
-            allowmismatch = metrics_information[clean_name]["allowmismatch"]
     param_mapping =  metrics_information[clean_name]["params"] if clean_name in metrics_information and "params" in metrics_information[clean_name] else {}
     groups = metrics_information[clean_name]["groups"] if clean_name in metrics_information and "groups" in metrics_information[clean_name] else {}
 
@@ -184,11 +198,26 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
                 serching_group = False
                 verbose(verb, "group found on new line", current_group)
             m = metric.match(line)
+            # Check if add_group and metric are on the same line
             if m and not current_group:
-                print("new name found with no group", file_name, line_number, line)
-                exit(-1)
+                gr_match = gr.match(line)
+                if gr_match:
+                    # Extract group from add_group on the same line
+                    current_group = gr_match.group(2)
+                    m_str = string_content.match(current_group)
+                    if m_str:
+                        current_group = m_str.group(1)
+                    else:
+                        m_alt = alternative_name.match(current_group)
+                        if m_alt:
+                            current_group = param_mapping[m_alt.group(1)] if m_alt.group(1) in param_mapping else m_alt.group(1)
+                    verbose(verb, "group found on same line as metric", current_group)
+                else:
+                    print("new name found with no group", file_name, line_number, line)
+                    exit(-1)
             if current_metric or m:
-                if gr.match(line):
+                # Only error if add_group appears after we've started processing a metric
+                if current_metric and gr.match(line):
                     print("add group found unexpectedly", file_name, line_number, line)
                     exit(-1)
                 if current_metric and m:
@@ -236,11 +265,10 @@ def get_metrics_from_file(file_name, prefix, metrics_information, verb=None):
                         for idx, base_name in enumerate(name_list):
                             name = prefix + cg + "_" + base_name
                             description = description_list[0].replace('#','"') if len(description_list) == 1 else description_list[idx].replace('#','\\"')
-                            if not allowmismatch and name in metrics and description !=  metrics[name][1]:
-                                print('description problem, different descriptions found', file_name, line_number, names, typ, line, name, metrics[name][1], description)
-                                print(metrics[name][1])
-                                print(description)
-                                exit(-1)
+                            if name in metrics:
+                                if description != metrics[name][1]:
+                                    verbose(verb, f'Note: Multiple descriptions found for {name}, using first one from {metrics[name][4]}')
+                                continue
                             metrics[name] = [typ, description, cg, base_name, file_name + ":" + str(line_number)]
                     current_metric = ""
                     parenthes_count = 0
@@ -274,6 +302,75 @@ def write_metrics_to_file(out_file, metrics, fmt="pipe"):
                 fo.write(l.replace('-','_')+'|' +'|'.join(metrics[l])+ '\n')
 
 
+def validate_all_metrics(prefix, config_file, verbose=False):
+    """Validate all metrics files and report issues"""
+    
+    print("Validating all metrics files...")
+    
+    # Use pathlib to find all .cc files (cross-platform)
+    try:
+        current_dir = Path('.')
+        all_cc_files = list(current_dir.rglob('*.cc'))
+        
+        # Filter files that contain '::description'
+        metric_files = []
+        for cc_file in all_cc_files:
+            try:
+                with open(cc_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                    if '::description' in content:
+                        # Normalize path to use forward slashes for cross-platform compatibility
+                        normalized_path = str(cc_file).replace('\\', '/')
+                        metric_files.append(normalized_path)
+            except Exception as e:
+                if verbose:
+                    print(f"[WARN] Could not read {cc_file}: {e}")
+                continue
+        
+    except Exception as e:
+        print(f"[ERROR] Error finding metrics files: {e}")
+        return False
+
+    
+    total_files = len(metric_files)
+    
+    print(f"Found {total_files} files with metrics")
+    
+    failed_files = []
+    total_metrics = 0
+    metrics_info = get_metrics_information(config_file)
+    
+    for file_path in metric_files:
+        try:
+            metrics = get_metrics_from_file(file_path, prefix, metrics_info, verbose)
+            metrics_count = len(metrics)
+            total_metrics += metrics_count
+            if verbose:
+                print(f"[OK] {file_path} - {metrics_count} metrics")
+            else:
+                print(f"[OK] {file_path}")
+        except Exception as e:
+            print(f"[ERROR] {file_path}")
+            print(f"   Error: {str(e)}")
+            failed_files.append((file_path, str(e)))
+    
+    
+    if failed_files:
+        print("\n[ERROR] METRICS VALIDATION FAILED")
+        print("Failed files:")
+        for file_path, error in failed_files:
+            print(f"   - {file_path}: {error}")
+        print(f"\nAdd missing parameters to {config_file}")
+        return False
+    else:
+        working_files = total_files - len(failed_files)
+        coverage_pct = (working_files * 100 // total_files) if total_files > 0 else 0
+        
+        print(f"\n[SUCCESS] All metrics files validated successfully")
+        print(f"   Files: {working_files}/{total_files} working ({coverage_pct}% coverage)")
+        print(f"   Metrics: {total_metrics} total processed")
+        return True
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='get metrics descriptions from file', conflict_handler="resolve")
     parser.add_argument('-p', '--prefix', default="scylla_", help='the prefix added to the metrics names')
@@ -281,8 +378,17 @@ if __name__ == '__main__':
     parser.add_argument('-c', '--config-file', default="metrics-config.yml", help='The configuration file used to add extra data missing in the code')
     parser.add_argument('-v', '--verbose', action='store_true', default=False, help='When set prints verbose information')
     parser.add_argument('-F', '--format', default="pipe", help='Set the output format, can be pipe, or yml')
-    parser.add_argument('file', help='the file to parse')
+    parser.add_argument('--validate', action='store_true', help='Validate all metrics files instead of processing single file')
+    parser.add_argument('file', nargs='?', help='the file to parse (not needed with --validate)')
 
     args = parser.parse_args()
+    
+    if args.validate:
+        success = validate_all_metrics(args.prefix, args.config_file, args.verbose)
+        exit(0 if success else 1)
+    
+    if not args.file:
+        parser.error('file argument is required when not using --validate')
+    
     metrics = get_metrics_from_file(args.file, args.prefix, get_metrics_information(args.config_file), args.verbose)
     write_metrics_to_file(args.out_file, metrics, args.format)

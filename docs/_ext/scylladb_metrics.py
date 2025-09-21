@@ -32,17 +32,29 @@ class MetricsProcessor:
             content = f.read()
         if self.MARKER in content and not os.path.exists(destination_path):
             try:
-                metrics_file = metrics.get_metrics_from_file(file_path, "scylla", metrics.get_metrics_information(metrics_config_path))
-                with open(destination_path, 'w+', encoding='utf-8') as f:
-                    json.dump(metrics_file, f, indent=4)
-            except SystemExit:
-                LOGGER.info(f'Skipping file: {file_path}')
+                metrics_info = metrics.get_metrics_information(metrics_config_path)
+                
+                # Get relative path to the repo root
+                relative_path = os.path.relpath(file_path, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+                repo_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                old_cwd = os.getcwd()
+                os.chdir(repo_root)
+                
+                # Get metrics from the file
+                try:
+                    metrics_file = metrics.get_metrics_from_file(relative_path, "scylla_", metrics_info)
+                finally:
+                    os.chdir(old_cwd)
+                
+                if metrics_file:
+                    with open(destination_path, 'w+', encoding='utf-8') as f:
+                        json.dump(metrics_file, f, indent=4)
+                    LOGGER.info(f'Generated {len(metrics_file)} metrics for {file_path}')
+                else:
+                    LOGGER.info(f'No metrics generated for {file_path}')
+                    
             except Exception as error:
-                # Remove [Errno X] prefix from error message
-                error_msg = str(error)
-                if '[Errno' in error_msg:
-                    error_msg = error_msg.split('] ', 1)[1]
-                LOGGER.info(error_msg)
+                LOGGER.info(f'Error processing {file_path}: {str(error)}')
 
     def _process_metrics_files(self, repo_dir, output_directory, metrics_config_path):
         for root, _, files in os.walk(repo_dir):
@@ -163,7 +175,7 @@ class MetricsDirective(Directive):
         output = []
         try:
             relative_path_from_current_rst = self._get_relative_path(metrics_directory, app, docname)
-            files = os.listdir(metrics_directory)
+            files = sorted(os.listdir(metrics_directory))
             for _, file in enumerate(files):
                 output.extend(self._process_file(file, relative_path_from_current_rst))
         except Exception as error:
