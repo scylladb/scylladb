@@ -532,8 +532,6 @@ class ScyllaRESTAPIClient:
         params = {"cf": table, "key": key}
         return await self.client.get_json(f'/storage_service/natural_endpoints/{keyspace}', host=node_ip, params=params)
 
-    async def reload_raft_topology_state(self, node_ip: str):
-        await self.client.post("/storage_service/raft_topology/reload", node_ip)
 
 class ScyllaMetricsLine:
     def __init__(self, name: str, labels: dict, value: float):

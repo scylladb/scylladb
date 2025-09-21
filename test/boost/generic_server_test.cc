@@ -29,7 +29,6 @@ protected:
     [[noreturn]] shared_ptr<connection> make_connection(socket_address, connected_socket&&, socket_address, named_semaphore& sem, semaphore_units<named_semaphore_exception_factory> initial_sem_units) override {
         SCYLLA_ASSERT(false);
     }
-    scheduling_group get_scheduling_group_for_new_connection() const override { return current_scheduling_group(); }
 };
 
 SEASTAR_TEST_CASE(stop_without_listening) {
