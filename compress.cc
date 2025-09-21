@@ -539,7 +539,7 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
     }
 }
 
-void compression_parameters::validate(dicts_feature_enabled dicts_enabled, dicts_usage_allowed dicts_allowed) {
+void compression_parameters::validate(dicts_feature_enabled dicts_enabled, dicts_usage_allowed dicts_allowed) const {
     if (_algorithm == algorithm::zstd_with_dicts || _algorithm == algorithm::lz4_with_dicts) {
         if (!dicts_enabled) {
             throw std::runtime_error(std::format("sstable_compression {} can't be used before "
