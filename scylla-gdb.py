@@ -3791,19 +3791,25 @@ class scylla_io_queues(gdb.Command):
     def __init__(self):
         gdb.Command.__init__(self, 'scylla io-queues', gdb.COMMAND_USER, gdb.COMPLETE_NONE, True)
 
-    class ticket:
+    class entry:
         def __init__(self, ref):
-            self.ref = ref
+            try:
+                self.cap = ref['_capacity']
+            except gdb.error:
+                self.cap = None
+                self.ticket = ref['_ticket']
 
         def __str__(self):
-            return f"Ticket(weight: {self.ref['_weight']}, size: {self.ref['_size']})"
+            if self.cap is not None:
+                return f"Capacity: {self.cap}"
+            return f"Ticket(weight: {self.ticket['_weight']}, size: {self.ticket['_size']})"
 
     @staticmethod
     def _print_io_priority_class(pclass, names_from_ptrs, indent = '\t\t'):
         gdb.write("{}Class {}:\n".format(indent, names_from_ptrs.get(pclass.address, pclass.address)))
         slist = intrusive_slist(pclass['_queue'], link='_hook')
         for entry in slist:
-            gdb.write("{}\t{}\n".format(indent, scylla_io_queues.ticket(entry['_ticket'])))
+            gdb.write("{}\t{}\n".format(indent, scylla_io_queues.entry(entry)))
 
     def _get_classes_infos(self, ioq):
         # Starting from 5.3 priority classes are removed and IO inherits its name and
