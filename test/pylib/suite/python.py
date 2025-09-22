@@ -249,15 +249,14 @@ class PythonTest(Test):
             cluster.after_test(self.uname, self.success)
             self.is_after_test_ok = True
         except Exception as e:
-            self.server_log = cluster.read_server_log()
             if not self.is_before_test_ok:
-                print("Test {} pre-check failed: {}".format(self.name, str(e)))
-                print("Server log of the first server:\n{}".format(self.server_log))
+                print(f"Test {self.name} pre-check failed: {str(e)}\ncheck server logs: {self.server_log_filename}")
                 logger.info(f"Discarding cluster after failed start for test %s...", self.name)
             elif not self.is_after_test_ok:
-                print("Test {} post-check failed: {}".format(self.name, str(e)))
-                print("Server log of the first server:\n{}".format(self.server_log))
+                print(f"Test {self.name} post-check failed: {str(e)}\ncheck server logs: {self.server_log_filename}")
                 logger.info(f"Discarding cluster after failed test %s...", self.name)
+            self.success = False
+            cluster.is_dirty = True
         await self.suite.clusters.put(cluster, is_dirty=cluster.is_dirty)
         logger.info("Test %s %s", self.uname, "succeeded" if self.success else "failed ")
 

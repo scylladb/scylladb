@@ -2,6 +2,8 @@ type: Python
 pool_size: 4
 dirties_cluster:
   - test_native_transport
+  - test_describe # Broke CQL connections for next tests
+  - cassandra_tests/validation/operations/alter_test # Do not clean keyspaces after test that might affect next tests
 extra_scylla_cmdline_options:
   - '--rf-rack-valid-keyspaces=1'
   - '--experimental-features=udf'
