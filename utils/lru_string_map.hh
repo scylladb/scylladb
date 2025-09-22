@@ -13,6 +13,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include "seastarx.hh"
+#include <seastar/core/future.hh>
+#include <seastar/core/on_internal_error.hh>
+#include <seastar/core/coroutine.hh>
+#include "seastar/coroutine/maybe_yield.hh"
+#include "utils/log.hh"
 
 // A simple LRU cache, mapping strings to values of type Value.
 // The cache keeps track of the order of usage of the entries, and allows
@@ -116,6 +122,28 @@ public:
         return ret;
     }
 
+    // Clears all entries from cache gently - yielding after every `evictions_per_yield` iterations,
+    // unless `evictions_per_yield` is 0, in which case it behaves like clear().
+    // If `release` is true, the memory used by the cache is released.
+    // Cache remains valid and usable during yields, however if anything is added, it will
+    // get removed eventually.
+    // Returns the number of entries removed.
+    future<size_t> clear_gently(bool release=false, size_t evictions_per_yield=100) {
+        size_t ret = 0;
+        if (evictions_per_yield > 0 && evictions_per_yield < _map.size()) {
+            while (!_map.empty()) {
+                if (!pop()) [[unlikely]] {
+                    // try to recover from sanity check failure
+                    _map.erase(_map.begin());
+                }
+                if (++ret % evictions_per_yield == 0) {
+                    co_await coroutine::maybe_yield();
+                }
+            }
+        }
+        co_return ret + clear(release);
+    }
+
     // Lookup a value by a key
     // If found, the value is moved to the back of the LRU list (most recently used).
     // Returns std::nullopt if the key is not found.
@@ -150,5 +178,181 @@ public:
         } else {
             touch_lru(ret.first);
         }
+    }
+};
+
+// A sized LRU cache, with a maximum number of entries.
+// This class provides functions to manage cache size, especially evictions
+// and resizing.
+template<typename Value>
+class sized_lru_string_map : protected lru_string_map<Value> {
+    using _base = lru_string_map<Value>;
+    logging::logger& _logger;
+    uint64_t& _evictions;
+public:
+    sized_lru_string_map(logging::logger& logger, uint64_t& evictions)
+     : _logger(logger), _evictions(evictions) {
+    }
+    template<typename KeyType>
+    std::optional<std::reference_wrapper<Value>> find(KeyType&& key) {
+        return _base::find(std::forward<KeyType>(key));
+    }
+    template<typename KeyType>
+    void insert(KeyType&& key, Value&& value) {
+        if (make_space_for_one()) {
+            _base::insert_or_assign(std::forward<KeyType>(key), std::move(value));
+        }
+    }
+
+private:
+    size_t _max_cache_entries = 0;
+public:
+    size_t get_max_size() const {
+        return _max_cache_entries;
+    }
+    inline bool disabled() const {
+        return _max_cache_entries == 0;
+    }
+
+    void set_max_size(size_t max_cache_entries) {
+        if (max_cache_entries == _resize_target) {
+            return;
+        }
+        _resize_target = max_cache_entries;
+        if (max_cache_entries == 0) {
+            request_flush();
+        }
+        resize_maybe_in_background();
+    }
+
+private:
+    future<> _background_resizing = make_ready_future<>();
+public:
+    // Stop the background resizing task, if running.
+    future<> stop() {
+        set_max_size(0);
+        co_await std::move(_background_resizing);
+    }
+
+    // Start background resizing if not already running.
+    void start_background_resizing() {
+        if (!_background_resizing.available()) {
+            // Background thread is already running
+            return;
+        }
+        _background_resizing.ignore_ready_future();
+        _background_resizing = resize_in_background();
+    }
+    size_t max_loop = 3000; // max number of evictions before yielding to other tasks
+                            // if 0 then no yielding is done
+
+private:
+    size_t _resize_target = 0;
+    bool _resize_flush = false;
+
+    inline void request_flush() {
+        _max_cache_entries = 0; // immediately block new entries
+        _resize_flush = true;        
+    }
+
+    inline void on_invalid_state() {
+        on_internal_error(_logger, ("Detected cache inconsistency, purging cache."));
+        request_flush();
+    }
+
+    bool pop() {
+        if (!_base::pop() || !_base::sanity_check()) [[unlikely]] {
+            on_invalid_state();
+            return false;
+        }
+        _evictions++;
+        return true;
+    }
+
+    // Background task to resize the cache. It yields between chunks to avoid stalling the reactor.
+    // Mind that during yielding the cache may be modified by other tasks or resizing may be requested again.
+    future<> resize_in_background() {
+        size_t loop = max_loop;
+        while (!_resize_flush && _base::size() > _resize_target && pop()) {
+            // Yield control to allow other tasks to run
+            if (max_loop && --loop == 0) {
+                _max_cache_entries = _base::size();
+                co_await coroutine::maybe_yield();
+                loop = max_loop;
+            }
+        }
+        if (_resize_flush) {
+            _evictions += co_await _base::clear_gently(true, max_loop);
+            _resize_flush = false;
+            _logger.trace("Flushed.");
+        }
+        // Reserve space for the new size
+        _base::reserve(_resize_target);
+        _max_cache_entries = _resize_target;
+        _logger.trace("Max entries changed to {}", _max_cache_entries);
+    }
+
+    // Reserve space for new size. Evict excess entries.
+    // If the change is too big, run it in background to avoid stalling the reactor.
+    // Returns true if the resizing is done, false if it was started in background.
+    bool resize_maybe_in_background(bool prefer_background=false) {
+        if (!_background_resizing.available()) {
+            // Background task is running.
+            return false;
+        }
+        auto should_start_background_resizing = [&] (size_t expected_change) {
+            return (max_loop && (prefer_background || expected_change > max_loop));
+        };
+        if (!_resize_flush && _base::size() > _resize_target) {
+            size_t expected_change = _base::size() - _resize_target;
+            if (should_start_background_resizing(expected_change)) {
+                // We need to evict a lot of entries, do it in background
+                start_background_resizing();
+                return false;
+            }
+            while (_base::size() > _resize_target && pop()) { // if pop fails it may request flush
+            }
+        }
+        if (_resize_flush) {
+            if (should_start_background_resizing(_base::size())) {
+                // We need to flush the cache, and it's big enough to do it in background
+                start_background_resizing();
+                return false;
+            }
+            _evictions += _base::clear(true);
+            _resize_flush = false;
+            _logger.trace("Flushed.");
+        }
+        // Reserve space for the new size
+        _base::reserve(_resize_target);
+        _max_cache_entries = _resize_target;
+        _logger.trace("Max entries changed to {}", _max_cache_entries);
+        return true;
+    }
+
+public:
+    bool sanity_check() {
+        if (!_base::sanity_check()) [[unlikely]] {
+            on_invalid_state();
+            return resize_maybe_in_background(true);
+        }
+        return true;
+    }
+
+    bool make_space_for_one() {
+        if (disabled()) {
+            return false;
+        }
+        if (_base::size() == _max_cache_entries) {
+            if (!pop()) [[unlikely]] {
+                // Flush was ordered, make sure it happens
+                return resize_maybe_in_background(true);
+            }
+        } else if (_base::size() > _max_cache_entries) [[unlikely]] {
+            on_internal_error(_logger, ("Cache size exceeded maximum, resizing."));
+            // Is there some unfinished resizing? Restart it.
+            return resize_maybe_in_background(true);
+        }
+        return true;
     }
 };
