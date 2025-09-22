@@ -55,7 +55,7 @@ public:
             , _func(std::move(func)) {
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
         return _func(parameters);
     }
 
