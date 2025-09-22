@@ -26,9 +26,7 @@ public:
         return false;
     }
 
-    bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
-        return std::nullopt; // Unimplemented
-    }
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override;
 };
 
 }
