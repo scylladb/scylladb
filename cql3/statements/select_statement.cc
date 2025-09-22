@@ -2049,7 +2049,13 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
             pkeys.emplace_back(vector_search::primary_key{pk.partition, pk.clustering});
         }
 
-        co_return co_await query_base_table(qp, state, options, pkeys, timeout);
+        std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(
+            std::make_unique<cql3::query_options>(options),
+            _prepared_ann_ordering,
+            std::move(ann_results)
+        );
+
+        co_return co_await query_base_table(qp, state, *internal_options, pkeys, timeout);
     });
 
     auto page_size = options.get_page_size();
