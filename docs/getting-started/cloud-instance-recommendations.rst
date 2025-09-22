@@ -209,7 +209,7 @@ Image with NVMe disk interface is recommended.
 (`More info <https://cloud.google.com/compute/docs/disks/local-ssd>`_)
 
 Recommended instances types are `z3-highmem-highlssd, z3-highmem-standardlssd <https://cloud.google.com/compute/docs/storage-optimized-machines#z3_machine_types>`_,
-and `n2-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines>`_.
+and `n2-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n2_series>`_.
 
 
 .. list-table::
@@ -314,9 +314,15 @@ and `n2-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#
      - 80
      - 640
      - 9,000
+   * - n2-highmem-96
+     - 96
+     - 768
+     - 9,000
 
+Storage: Each instance can support  maximum of 24 local SSD of 375 GB partitions each for a total of `9 TB per instance <https://cloud.google.com/compute/docs/disks>`_.
 
-Storage: each instance can support  maximum of 24 local SSD of 375 GB partitions each for a total of `9 TB per instance <https://cloud.google.com/compute/docs/disks>`_       
+Processors: Ice Lake (the default for larger machine types) and Cascade Lake
+(the default for machine types up to 80 vCPUs).
 
 .. _system-requirements-azure:
 
