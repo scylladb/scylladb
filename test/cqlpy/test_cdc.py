@@ -365,3 +365,14 @@ def test_desc_log_table_properties_preserved_after_noop_alter(cql, test_keyspace
         new_log_stmt = get_log_alter_stmt(cdc_log_table)
 
         assert old_log_stmt == new_log_stmt
+
+
+def test_create_if_not_exists_with_cdc(scylla_only, cql, test_keyspace):
+    table_name = f"{test_keyspace}.{unique_name()}"
+    create_table_query = f"CREATE TABLE IF NOT EXISTS {table_name} (p int PRIMARY KEY) WITH cdc = {{ 'enabled': true }}"
+    cql.execute(create_table_query)
+    try:
+        # Creating again should be a no-op and not fail.
+        cql.execute(create_table_query)
+    finally:
+        cql.execute(f"DROP TABLE IF EXISTS {table_name}")

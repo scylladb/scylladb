@@ -664,8 +664,6 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
     auto& db = sp.local_db();
 
     return seastar::async([&db, &ksm, timestamp, cfms = std::move(cfms)] mutable {
-        db.get_notifier().pre_create_column_families(ksm, cfms);
-
         for (auto cfm : cfms) {
             if (db.has_schema(cfm->ks_name(), cfm->cf_name())) {
                 throw exceptions::already_exists_exception(cfm->ks_name(), cfm->cf_name());
@@ -678,6 +676,8 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_families_an
         for (auto cfm : cfms) {
             mlogger.info("Create new ColumnFamily: {}", cfm);
         }
+
+        db.get_notifier().pre_create_column_families(ksm, cfms);
 
         utils::chunked_vector<mutation> mutations;
         for (schema_ptr cfm : cfms) {
