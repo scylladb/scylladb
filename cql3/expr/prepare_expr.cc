@@ -1647,7 +1647,7 @@ public:
         return "LIKE";
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
         auto& str_opt = parameters[0];
         if (!str_opt) {
             return std::nullopt;
