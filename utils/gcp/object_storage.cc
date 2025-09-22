@@ -287,7 +287,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
         req.method(op);
 
         if (do_backoff) {
-            co_await backoff(retries);
+            co_await backoff(retries++);
         }
 
         if (_credentials) {
