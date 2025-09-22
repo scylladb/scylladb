@@ -613,7 +613,7 @@ tablet_id process_one_row(replica::database* db, table_id table, tablet_map& map
                 std::move(new_tablet_replicas), pending_replica, session_id});
     }
 
-    tablet_logger.info("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
+    tablet_logger.debug("Set sstables_repaired_at={} table={} tablet={}", sstables_repaired_at, table, tid);
     map.set_tablet(tid, tablet_info{std::move(tablet_replicas), repair_time, repair_task_info, migration_task_info, sstables_repaired_at});
 
     if (update_repair_time && db) {
