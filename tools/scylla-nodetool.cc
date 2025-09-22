@@ -163,7 +163,11 @@ class scylla_rest_client {
                             std::optional<request_body> body = {}) {
         auto req = http::request::make(type, _host_name, path);
         auto url = req.get_url();
-        req.query_parameters = params;
+
+        for (const auto& [k, v] : params) {
+            req.set_query_param(k, v);
+        }
+
         if (body) {
             req.write_body(body->content_type, body->content);
         }
