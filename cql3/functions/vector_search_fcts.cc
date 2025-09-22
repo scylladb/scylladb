@@ -7,11 +7,23 @@
  */
 
 #include "vector_search_fcts.hh"
+#include "dht/i_partitioner.hh"
 #include "cql3/column_identifier.hh"
 #include "types/vector.hh"
 
 namespace cql3 {
 namespace functions {
+
+float vector_similarity_fct::find_matching_distance() {
+    vector_search::primary_key row_primary_key =
+            vector_search::primary_key{dht::decorated_key{dht::get_token(*_schema, *_row_partition_key), *_row_partition_key}, *_row_clustering_key};
+
+    auto it = _ann_results.find(row_primary_key);
+    if (it == _ann_results.end()) {
+        throw std::runtime_error("No matching distance found for given primary key");
+    }
+    return it->second;
+}
 
 std::vector<data_type> vector_similarity_fct::provide_arg_types(
         const function_name& name, const std::vector<shared_ptr<assignment_testable>>& provided_args, const data_dictionary::database& db) {
@@ -53,7 +65,17 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
         throw exceptions::invalid_request_exception("Vector similarity functions cannot be executed with null arguments");
     }
 
-    return std::nullopt; // Unimplemented
+    // It is not possible that the result here is empty when using ANN queries.
+    // If the ANN returns no result, we won't call this function at all as it's called once per every row selected.
+    // The rows are selected according to the ANN result - the same we use here.
+    // No ANN results = no rows selected = no execute() function calls.
+    if (_ann_results.empty()) {
+        throw exceptions::invalid_request_exception("Vector similarity functions can only be used with ANN queries");
+    }
+
+    float distance = find_matching_distance();
+
+    return float_type->decompose(distance);
 }
 
 bytes_opt similarity_cosine_fct::execute(std::span<const bytes_opt> parameters) {

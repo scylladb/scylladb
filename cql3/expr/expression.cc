@@ -30,6 +30,7 @@
 #include "types/user.hh"
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/first_function.hh"
+#include "cql3/functions/vector_search_fcts.hh"
 #include "cql3/prepare_context.hh"
 
 namespace cql3 {
@@ -1668,6 +1669,14 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         if (cached_value != nullptr) {
             return raw_value::make_value(*cached_value);
         }
+    }
+
+    functions::vector_similarity_fct* vector_similarity_fun = dynamic_cast<functions::vector_similarity_fct*>(scalar_fun);
+    if (vector_similarity_fun) {
+        auto partition_key = partition_key::from_exploded(inputs.partition_key);
+        auto clustering_key = clustering_key_prefix::from_exploded(inputs.clustering_key);
+        vector_similarity_fun->set_primary_key(partition_key, clustering_key);
+        vector_similarity_fun->set_results(inputs.options->get_specific_options().ann_results);
     }
 
     bytes_opt result = scalar_fun->execute(arguments);
