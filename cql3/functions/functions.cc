@@ -417,11 +417,11 @@ functions::get(data_dictionary::database db,
 
         shared_ptr<vector_similarity_fct> fun;
         if (*similarity_fun_it == SIMILARITY_COSINE_FUNCTION_NAME) {
-            fun = ::make_shared<similarity_cosine_fct>(arg_types);
+            fun = ::make_shared<similarity_cosine_fct>(schema, arg_types);
         } else if (*similarity_fun_it == SIMILARITY_EUCLIDEAN_FUNCTION_NAME) {
-            fun = ::make_shared<similarity_euclidean_fct>(arg_types);
+            fun = ::make_shared<similarity_euclidean_fct>(schema, arg_types);
         } else if (*similarity_fun_it == SIMILARITY_DOT_PRODUCT_FUNCTION_NAME) {
-            fun = ::make_shared<similarity_dot_product_fct>(arg_types);
+            fun = ::make_shared<similarity_dot_product_fct>(schema, arg_types);
         }
 
         validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);

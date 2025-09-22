@@ -1967,6 +1967,17 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     auto& sim = cf.get_index_manager();
     auto [index_opt, _] = restrictions->find_idx(sim);
 
+    for (const auto& cdef : schema->partition_key_columns()) {
+        if (!selection->has_column(cdef)) {
+            selection->add_column_for_post_processing(cdef);
+        }
+    }
+    for (const auto& cdef : schema->clustering_key_columns()) {
+        if (!selection->has_column(cdef)) {
+            selection->add_column_for_post_processing(cdef);
+        }
+    }
+
     auto indexes = sim.list_indexes();
     auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
         return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
