@@ -16,7 +16,7 @@
 #include <seastar/core/thread.hh>
 
 #include "db/config.hh"
-#include "generic_server.hh"
+#include "transport/generic_server.hh"
 #include "test/perf/perf.hh"
 
 seastar::logger plog("perf");
