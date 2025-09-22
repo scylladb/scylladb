@@ -1014,6 +1014,20 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
     auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
 
     if (prepared_ann_ordering.has_value()) {
+
+        // Add partition and clustering key columns to process ANN ordering.
+        // They are needed to compare the result row primary key with ann result to return distance properly.
+        for (const auto& cdef : schema->partition_key_columns()) {
+            if (!selection->has_column(cdef)) {
+                selection->add_column_for_post_processing(cdef);
+            }
+        }
+        for (const auto& cdef : schema->clustering_key_columns()) {
+            if (!selection->has_column(cdef)) {
+                selection->add_column_for_post_processing(cdef);
+            }
+        }
+
         auto indexes = sim.list_indexes();
         auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
             return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name)
