@@ -538,12 +538,29 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
     auto cfg = config();
+    auto count = 0;
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
+    auto DNS_REFRESH_INTERVAL = milliseconds(5);
+    configure(vs).with_dns_refresh_interval(DNS_REFRESH_INTERVAL).with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
+        count++;
+        co_return inet_address(format("127.0.0.0"));
+    });
+    vs.start_background_tasks();
+
+    // Wait for initial DNS resolution
+    BOOST_CHECK(co_await repeat_until(std::chrono::seconds(5), [&]() -> future<bool> {
+        co_return count > 0;
+    }));
 
     cfg.vector_store_primary_uri.set("");
+    vector_store_client_tester::trigger_dns_resolver(vs);
+    co_await sleep(DNS_REFRESH_INTERVAL * 2); // wait for the next DNS refresh
 
     BOOST_CHECK(vs.is_disabled());
+    // DNS is not resolved again, after URI is set to empty
+    BOOST_CHECK_EQUAL(count, 1);
+
     co_await vs.stop();
 }
 
