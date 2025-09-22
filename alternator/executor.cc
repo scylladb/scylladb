@@ -1123,7 +1123,7 @@ static schema_ptr get_table_from_arn(service::storage_proxy& proxy, std::string_
         // FIXME: remove sstring creation once find_schema gains a view-based interface
         return proxy.data_dictionary().find_schema(sstring(keyspace_name), sstring(table_name));
     } catch (const data_dictionary::no_such_column_family& e) {
-        throw api_error::access_denied("Incorrect resource identifier");
+        throw api_error::resource_not_found(fmt::format("ResourceArn '{}' not found", arn));
     } catch (const std::out_of_range& e) {
         throw api_error::access_denied("Incorrect resource identifier");
     }
