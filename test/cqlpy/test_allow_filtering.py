@@ -310,7 +310,6 @@ def test_allow_filtering_prefix(cql, table3):
 # reproduces issue #5545 / #13533
 def test_allow_filtering_pk_in(cql, table1):
     check_af_optional(cql, table1, 'k IN (1,2)', lambda row: row.k in {1,2})
-@pytest.mark.xfail(reason="issue #5545, #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
 def test_allow_filtering_index_in(cql, table2):
     check_af_optional(cql, table2, 'a IN (1,2)', lambda row: row.a in {1,2})
 
@@ -331,7 +330,6 @@ def table2local(cql, test_keyspace):
     wait_for_local_index(cql, table, 'k', 'a', everything)
     yield (table, everything)
     cql.execute("DROP TABLE " + table)
-@pytest.mark.xfail(reason="issue #13533: Scylla supports IN on indexed column, but only with ALLOW FILTERING")
 def test_allow_filtering_local_index_in(cql, table2local, scylla_only):
     check_af_optional(cql, table2local, 'k = 0 AND a IN (1,2)', lambda row: row.a in {1,2})
 
