@@ -282,6 +282,7 @@ add_subdirectory(tracing)
 add_subdirectory(transport)
 add_subdirectory(types)
 add_subdirectory(utils)
+add_subdirectory(vector_search)
 add_version_library(scylla_version
     release.cc)
 
@@ -323,7 +324,8 @@ set(scylla_libs
     tracing
     transport
     types
-    utils)
+    utils
+    vector_search)
 target_link_libraries(scylla PRIVATE
     ${scylla_libs})
 

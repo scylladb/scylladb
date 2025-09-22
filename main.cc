@@ -42,7 +42,6 @@
 #include "service/migration_manager.hh"
 #include "service/tablet_allocator.hh"
 #include "service/load_meter.hh"
-#include "service/vector_store_client.hh"
 #include "service/view_update_backlog_broker.hh"
 #include "service/qos/service_level_controller.hh"
 #include "streaming/stream_session.hh"
@@ -64,6 +63,7 @@
 #include "release.hh"
 #include "repair/repair.hh"
 #include "repair/row_level.hh"
+#include "vector_search/vector_store_client.hh"
 #include <cstdio>
 #include <seastar/core/file.hh>
 #include <unistd.h>
@@ -747,7 +747,7 @@ sharded<locator::shared_token_metadata> token_metadata;
     sharded<service::mapreduce_service> mapreduce_service;
     sharded<gms::gossiper> gossiper;
     sharded<locator::snitch_ptr> snitch;
-    sharded<service::vector_store_client> vector_store_client;
+    sharded<vector_search::vector_store_client> vector_store_client;
 
     // This worker wasn't designed to be used from multiple threads.
     // If you are attempting to do that, make sure you know what you are doing.
@@ -1339,7 +1339,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             auto stop_vector_store_client = defer_verbose_shutdown("vector store client", [&vector_store_client] {
                 vector_store_client.stop().get();
             });
-            vector_store_client.invoke_on_all(&service::vector_store_client::start_background_tasks).get();
+            vector_store_client.invoke_on_all(&vector_search::vector_store_client::start_background_tasks).get();
 
             checkpoint(stop_signal, "starting query processor");
             cql3::query_processor::memory_config qp_mcfg = {memory::stats().total_memory() / 256, memory::stats().total_memory() / 2560};
