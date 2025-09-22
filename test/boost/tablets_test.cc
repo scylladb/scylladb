@@ -1833,6 +1833,105 @@ void check_no_rack_overload(const token_metadata& tm) {
     }
 }
 
+void check_rack_list(const locator::topology& topo, const tablet_map& tmap, sstring dc, rack_list racks) {
+    std::sort(racks.begin(), racks.end());
+    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        std::unordered_map<sstring, std::unordered_set<sstring>> racks_by_dc;
+        auto replicas = tinfo.replicas;
+        rack_list actual_racks;
+        for (auto& r : tinfo.replicas) {
+            if (topo.get_datacenter(r.host) == dc) {
+                actual_racks.push_back(topo.get_rack(r.host));
+            }
+        }
+        std::sort(actual_racks.begin(), actual_racks.end());
+        if (actual_racks != racks) {
+            throw std::runtime_error(fmt::format("Bad racks for tablet {}: expected {}, got {}", tid, racks, actual_racks));
+        }
+        return make_ready_future<>();
+    }).get();
+}
+
+// Invokes tablet reallocation which is done on ALTER KEYSPACE.
+static
+tablet_map reallocate_tablets(cql_test_env& e, const sstring& ks, table_id table,
+                              std::function<void(replication_strategy_config_options&)> alter_options) {
+    auto& stm = e.shared_token_metadata().local();
+    auto tmptr = stm.get();
+    auto& old_tablets = tmptr->tablets().get_tablet_map(table);
+    auto& rs = e.local_db().find_keyspace(ks).get_replication_strategy();
+    auto options = rs.get_config_options();
+    alter_options(options);
+    testlog.info("Reallocating tablets of {}.{} from {} to {}", ks, table, rs.get_config_options(), options);
+    locator::replication_strategy_params params{std::move(options), old_tablets.tablet_count()};
+    auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy(
+            "NetworkTopologyStrategy", params, tmptr->get_topology());
+    auto s = e.local_db().find_schema(table);
+    return new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, tmptr, old_tablets.clone_gently().get()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
+    cql_test_config cfg{};
+    cfg.db_config->rf_rack_valid_keyspaces.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        // dc1
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        // dc2
+        auto rack4 = topo.start_new_dc();
+        auto rack5 = topo.start_new_rack();
+
+        auto dc1 = rack1.dc;
+        auto dc2 = rack4.dc;
+
+        // dc1
+        topo.add_node(node_state::normal, 1, rack1);
+        topo.add_node(node_state::normal, 1, rack2);
+        topo.add_node(node_state::normal, 1, rack3);
+        topo.add_node(node_state::normal, 1, rack3);
+        auto bad1 = topo.add_node(node_state::left, 1, rack3);
+
+        // dc2
+        topo.add_node(node_state::normal, 1, rack4);
+        auto bad2 = topo.add_node(node_state::decommissioning, 1, rack4);
+        topo.add_node(node_state::normal, 1, rack5);
+
+        auto test_alter = [&] (rack_list dc1_racks, rack_list dc2_racks,
+                                           rack_list dc1_new_racks, rack_list dc2_new_racks) {
+            auto ks1 = add_keyspace_racks(e, {{dc1, dc1_racks}, {dc2, dc2_racks}}, 3);
+            auto table1 = add_table(e, ks1).get();
+
+            rebalance_tablets(e);
+
+            auto& stm = e.shared_token_metadata().local();
+            auto tmptr = stm.get();
+            auto& tm_topo = tmptr->get_topology();
+
+            check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table1), dc1, dc1_racks);
+            check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table1), dc2, dc2_racks);
+
+            auto new_tablet_map = reallocate_tablets(e, ks1, table1, [&] (auto& options) {
+                options[dc1] = dc1_new_racks;
+                options[dc2] = dc2_new_racks;
+            });
+            check_rack_list(tm_topo, new_tablet_map, dc1, dc1_new_racks);
+            check_rack_list(tm_topo, new_tablet_map, dc2, dc2_new_racks);
+        };
+
+        test_alter({rack1.rack, rack2.rack}, {}, {rack1.rack, rack2.rack, rack3.rack}, {});
+        test_alter({rack1.rack, rack2.rack, rack3.rack}, {}, {rack1.rack, rack3.rack}, {});
+        test_alter({rack1.rack, rack2.rack}, {rack4.rack}, {rack2.rack}, {rack4.rack});
+        test_alter({rack2.rack}, {rack4.rack}, {}, {rack4.rack});
+        test_alter({rack2.rack}, {rack4.rack}, {rack2.rack}, {rack4.rack, rack5.rack});
+        test_alter({rack1.rack, rack2.rack, rack3.rack}, {}, {rack1.rack, rack2.rack, rack3.rack}, {rack4.rack});
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
     cql_test_config cfg{};
     // This test relies on the fact that we use an RF strictly smaller than the number of racks.
