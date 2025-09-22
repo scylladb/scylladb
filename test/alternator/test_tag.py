@@ -179,6 +179,22 @@ def test_tag_resource_incorrect(test_table):
         with pytest.raises(ClientError, match='ValidationException'):
             test_table.meta.client.tag_resource(ResourceArn=arn, Tags=[{'Key':incorrect_tag[0],'Value':incorrect_tag[1]}])
 
+# The previous test, test_tag_resource_incorrect, tried several cases of
+# misformatted or obviously incorrect ARNs and checked the appropriate
+# errors. Here we try a more subtle error - an ARN that looks like it could
+# have been a real one - it's close to an existing table's ARN - but isn't.
+def test_tag_resource_subtly_incorrect_arn(test_table):
+    arn = test_table.meta.client.describe_table(TableName=test_table.name)['Table']['TableArn']
+    # The very last component of the ARN, on both Alternator and DynamoDB,
+    # is the table's name. If we add one character at the end of the ARN,
+    # it will look like it might be correct, but the table would not found.
+    incorrect_arn = arn + 'x'
+    # In this case, where the ARN is well-formatted but refers to a non-
+    # existent table, DynamoDB returns ResourceNotFoundException and not
+    # AccessDeniedException or ValidationException as in other cases.
+    with pytest.raises(ClientError, match='ResourceNotFoundException'):
+        test_table.meta.client.tag_resource(ResourceArn=incorrect_arn, Tags=[{'Key':'x', 'Value':'y'}])
+
 # Test that only specific values are allowed for write isolation (system:write_isolation tag)
 def test_tag_resource_write_isolation_values(scylla_only, test_table):
     got = test_table.meta.client.describe_table(TableName=test_table.name)['Table']
