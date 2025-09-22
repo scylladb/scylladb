@@ -1091,25 +1091,22 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                 return me && me->second.cleanup == cleanup_status::running;
             });
 
-            std::vector<future<>> tasks;
-
-            auto do_cleanup_ks = [this, &proxy] (sstring ks_name, std::vector<table_info> table_infos) -> future<> {
-                // Wait for all local writes to complete before cleanup
-                co_await proxy.invoke_on_all([] (storage_proxy& sp) -> future<> {
-                    co_return co_await sp.await_pending_writes();
-                });
+            auto do_cleanup_ks = [this] (sstring ks_name, std::vector<table_info> table_infos) -> future<> {
                 auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
                 // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
                 auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
                     {}, ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
                 try {
-                    co_return co_await task->done();
+                    rtlogger.info("cleanup {} started", ks_name);
+                    co_await task->done();
+                    rtlogger.info("cleanup {} finished", ks_name);
                 } catch (...) {
                     rtlogger.error("cleanup failed keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
                     throw;
                 }
             };
 
+            std::unordered_map<sstring, std::vector<table_info>> ks_tables;
             {
                 // The scope for the guard
                 auto guard = co_await _group0->client().start_operation(_group0_as);
@@ -1125,12 +1122,9 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                 // Skip tablets tables since they do their own cleanup and system tables
                 // since they are local and not affected by range movements.
                 auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-                tasks.reserve(ks_erms.size());
+                ks_tables.reserve(ks_erms.size());
 
-                co_await _db.invoke_on_all([&] (replica::database& db) {
-                    return db.flush_all_tables();
-                });
-                for (auto [ks_name, erm] : ks_erms) {
+                for (auto&& [ks_name, erm] : ks_erms) {
                     auto& ks = _db.local().find_keyspace(ks_name);
                     const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
                     std::vector<table_info> table_infos;
@@ -1138,13 +1132,28 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                     for (const auto& [name, schema] : cf_meta_data) {
                         table_infos.emplace_back(table_info{name, schema->id()});
                     }
-
-                    tasks.push_back(do_cleanup_ks(std::move(ks_name), std::move(table_infos)));
+                    ks_tables.emplace(std::move(ks_name), std::move(table_infos));
                 };
             }
 
-            // Note that the guard is released while we are waiting for cleanup tasks to complete
-            co_await when_all_succeed(tasks.begin(), tasks.end()).discard_result();
+            {
+                rtlogger.info("cleanup: wait for pending writes");
+                co_await proxy.invoke_on_all([] (storage_proxy& sp) -> future<> {
+                    co_return co_await sp.await_pending_writes();
+                });
+
+                rtlogger.info("cleanup: flush_all_tables");
+                co_await _db.invoke_on_all([&] (replica::database& db) {
+                    return db.flush_all_tables();
+                });
+
+                std::vector<future<>> tasks;
+                tasks.reserve(ks_tables.size());
+                for (auto&& [ks, table_infos]: ks_tables) {
+                    tasks.push_back(do_cleanup_ks(std::move(ks), std::move(table_infos)));
+                }
+                co_await when_all_succeed(tasks.begin(), tasks.end()).discard_result();
+            }
 
             rtlogger.info("cleanup ended");
 
