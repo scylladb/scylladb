@@ -16,7 +16,7 @@ from botocore.exceptions import ClientError
 
 from test.alternator.util import unique_table_name, create_test_table, new_test_table, random_string, freeze, list_tables, get_region
 
-# All tests in this file are expected to fail with tablets due to #16317.
+# All tests in this file are expected to fail with tablets due to #23838.
 # To ensure that Alternator Streams is still being tested, instead of
 # xfailing these tests, we temporarily coerce the tests below to avoid
 # using default tablets setting, even if it's available. We do this by

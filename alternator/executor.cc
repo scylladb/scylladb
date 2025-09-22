@@ -1719,14 +1719,14 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
         auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features());
-        // Alternator Streams doesn't yet work when the table uses tablets (#16317)
+        // Alternator Streams doesn't yet work when the table uses tablets (#23838)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
                 locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets());
                 auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
                 if (rs->uses_tablets()) {
-                    co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
+                    co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
                     "If you want to use streams, create a table with vnodes by setting the tag 'experimental:initial_tablets' set to 'none'.");
                 }
             }
@@ -1874,12 +1874,12 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 if (add_stream_options(*stream_specification, builder, p.local())) {
                     validate_cdc_log_name_length(builder.cf_name());
                 }
-                // Alternator Streams doesn't yet work when the table uses tablets (#16317)
+                // Alternator Streams doesn't yet work when the table uses tablets (#23838)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
                     if (stream_enabled->GetBool()) {
                         if (p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
-                        co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
+                        co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
                             "If you want to enable streams, re-create this table with vnodes (with the tag 'experimental:initial_tablets' set to 'none').");
                         }
                         if (tab->cdc_options().enabled()) {

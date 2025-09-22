@@ -403,7 +403,7 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
     # latency metrics are only updated for *successful* operations so we
     # need to use a real Alternator Stream in this test.
     with new_test_table(dynamodb,
-        # Alternator Streams is expected to fail with tablets due to #16317.
+        # Alternator Streams is expected to fail with tablets due to #23838.
         # To ensure that this test still runs, instead of xfailing it, we
         # temporarily coerce Altenator to avoid using default tablets
         # setting, even if it's available. We do this by using the following
