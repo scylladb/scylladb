@@ -7,11 +7,11 @@ import asyncio
 import pytest
 import logging
 import time
-from test.pylib.manager_client import ManagerClient
+from test.pylib.manager_client import ManagerClient, wait_for_cql_and_get_hosts
 from test.pylib.tablets import get_tablet_replica
 from test.pylib.util import wait_for, wait_for_view
 from test.cluster.conftest import skip_mode
-from test.cluster.util import new_test_keyspace
+from test.cluster.util import new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)
 
@@ -145,3 +145,51 @@ async def test_view_building_during_drop_index(manager: ManagerClient):
     await manager.api.message_injection(server.ip_addr, "view_builder_consume_end_of_partition_delay")
 
     await cql.run_async("DROP TABLE ks.tab")
+
+# Start view building and interrupt it while some shards started and registered their
+# view building status and some shards didn't. Specifically, the last shard is paused.
+# We restart the node in this state and verify that when it comes up the view building
+# is completed eventually and is correct.
+# Reproduces #22989
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_interrupt_view_build_shard_registration(manager: ManagerClient):
+    cmdline = ['--smp=4']
+    cfg = {"commitlog_sync_period_in_ms": 1000}
+    servers = await manager.servers_add(1, cmdline=cmdline, config=cfg)
+    server = servers[0]
+
+    logger.info("Populate table")
+    cql = manager.get_cql()
+    n_partitions = 1000
+    ks = 'ks'
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets={{'enabled':false}}")
+    await cql.run_async(f"CREATE TABLE {ks}.test (p int, c int, PRIMARY KEY(p,c));")
+    await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (p, c) VALUES ({k}, {k+1});") for k in range(n_partitions)])
+
+    # pause the last shard so it won't be registered
+    await manager.api.enable_injection(server.ip_addr, "add_new_view_pause_last_shard", one_shot=True)
+
+    await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT p, c FROM {ks}.test WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p)")
+
+    # wait for some shards to register
+    async def some_registered():
+        rows = await cql.run_async(f"SELECT * FROM system.scylla_views_builds_in_progress WHERE keyspace_name = '{ks}' AND view_name = 'mv'")
+        if len(rows) > 0:
+            return True
+    await wait_for(some_registered, time.time() + 60)
+    await asyncio.sleep(2) # ensure commitlog sync
+
+    # restart while some shards registered but the last shard didn't
+    await manager.server_stop(server.server_id)
+
+    await manager.server_start(server.server_id)
+    cql = await reconnect_driver(manager)
+    await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 60)
+
+    await wait_for_view(cql, 'mv', 1, timeout = 60)
+
+    res = await cql.run_async(f"SELECT * FROM {ks}.test")
+    assert len(res) == n_partitions
+    res = await cql.run_async(f"SELECT * FROM {ks}.mv")
+    assert len(res) == n_partitions
