@@ -816,9 +816,6 @@ def test_view_permissions_from_base(cql, test_keyspace):
 # table instead of those on the CDC log table. To make a CDC log readable
 # you need to give read permissions on the base table.
 # Reproduces #19798 and #25800.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #16317")]), "vnodes"],
-                         indirect=True)
 def test_cdc_permissions_from_base(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, 'a int primary key', "with cdc={'enabled':true}") as table:
         cdc_log = table + '_scylla_cdc_log'
