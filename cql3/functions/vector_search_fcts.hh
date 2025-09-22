@@ -13,9 +13,10 @@
 namespace cql3 {
 namespace functions {
 
-class vector_similarity_fct: public native_scalar_function {
+class vector_similarity_fct : public native_scalar_function {
 private:
     schema_ptr _schema;
+
 public:
     vector_similarity_fct(schema_ptr s, const sstring& name)
         : native_scalar_function(name,
@@ -35,44 +36,39 @@ public:
         return false;
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
-        return std::nullopt; // Unimplemented
-    }
+
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override;
 };
 
-class similarity_cosine_fct: public vector_similarity_fct {
+class similarity_cosine_fct : public vector_similarity_fct {
 public:
     similarity_cosine_fct(schema_ptr s)
         : vector_similarity_fct(s, "similarity_cosine") {
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
-        return std::nullopt; // Unimplemented
-    }
+
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override;
 };
 
 
-class similarity_euclidean_fct: public vector_similarity_fct {
+class similarity_euclidean_fct : public vector_similarity_fct {
 public:
     similarity_euclidean_fct(schema_ptr s)
         : vector_similarity_fct(s, "similarity_euclidean") {
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
-        return std::nullopt; // Unimplemented
-    }
+
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override;
 };
 
-class similarity_dot_product_fct: public vector_similarity_fct {
+class similarity_dot_product_fct : public vector_similarity_fct {
 public:
     similarity_dot_product_fct(schema_ptr s)
         : vector_similarity_fct(s, "similarity_dot_product") {
     }
 
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
-        return std::nullopt; // Unimplemented
-    }
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override;
 };
 
-}
-}
+} // namespace functions
+} // namespace cql3
