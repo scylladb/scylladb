@@ -42,6 +42,19 @@ Which yields, for `/proc/sys/fs/aio-max-nr`:
 
     aio_max_nr >= aio_nr + 51026 * ncpus
 
+
+For example, to check the existing value and update it to 1048576: 
+
+```console
+ubuntu $ cat /proc/sys/fs/aio-max-nr
+65536
+ubuntu $ echo "fs.aio-max-nr = 1048576" >> /etc/sysctl.conf
+ubuntu $ sysctl -p /etc/sysctl.conf
+fs.inotify.max_user_watches = 524288
+fs.aio-max-nr = 1048576
+ubuntu $
+```
+
 ## How to use this image
 
 ### Start a `scylla` server instance
