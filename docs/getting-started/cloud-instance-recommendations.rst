@@ -208,8 +208,8 @@ Pick a zone where Haswell CPUs are found. Local SSD performance offers, accordin
 Image with NVMe disk interface is recommended.
 (`More info <https://cloud.google.com/compute/docs/disks/local-ssd>`_)
 
-Recommended instances types are `z3-highmem-highlssd and z3-highmem-standardlssd <https://cloud.google.com/compute/docs/storage-optimized-machines#z3_machine_types>`_,
-`n1-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n1_machines>`_, and `n2-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines>`_.
+Recommended instances types are `z3-highmem-highlssd, z3-highmem-standardlssd <https://cloud.google.com/compute/docs/storage-optimized-machines#z3_machine_types>`_,
+and `n2-highmem <https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines>`_.
 
 
 .. list-table::
@@ -273,39 +273,6 @@ Recommended instances types are `z3-highmem-highlssd and z3-highmem-standardlssd
      - 176
      - 1,406
      - 36,000 
-
-.. list-table::
-   :widths: 30 20 20 30
-   :header-rows: 1
-
-   * - Model
-     - vCPU
-     - Mem (GB)
-     - Storage (GB)
-   * - n1-highmem-2
-     - 2
-     - 13
-     - 375
-   * - n1-highmem-4
-     - 4
-     - 26
-     - 750
-   * - n1-highmem-8
-     - 8
-     - 52
-     - 1,500
-   * - n1-highmem-16
-     - 16
-     - 104
-     - 3,000
-   * - n1-highmem-32
-     - 32
-     - 208
-     - 6,000
-   * - n1-highmem-64
-     - 64
-     - 416
-     - 9,000
 
 .. list-table::
    :widths: 30 20 20 30
