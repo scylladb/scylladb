@@ -172,6 +172,7 @@ public:
     gms::feature repair_msg_split { *this, "REPAIR_MSG_SPLIT"sv };
     gms::feature view_building_coordinator { *this, "VIEW_BUILDING_COORDINATOR"sv };
     gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
+    gms::feature consistent_tablets { *this, "CONSISTENT_TABLETS"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;

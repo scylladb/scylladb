@@ -215,6 +215,7 @@ future<> service::create_legacy_keyspace_if_missing(::service::migration_manager
                     meta::legacy::AUTH_KS,
                     "org.apache.cassandra.locator.SimpleStrategy",
                     opts,
+                    std::nullopt,
                     std::nullopt);
 
             try {

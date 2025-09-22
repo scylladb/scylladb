@@ -547,6 +547,7 @@ public:
                                                                               "MockReplicationStrategy",
                                                                               locator::replication_strategy_config_options{},
                                                                               std::nullopt,
+                                                                              std::nullopt,
                                                                               false,
                                                                               std::vector<schema_ptr>({_table_schema}))) {}
 

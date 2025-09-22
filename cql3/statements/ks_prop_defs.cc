@@ -8,6 +8,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0 and Apache-2.0)
  */
 
+#include "seastar/core/sstring.hh"
 #include "utils/assert.hh"
 #include "cql3/statements/ks_prop_defs.hh"
 #include "cql3/statements/request_validations.hh"
@@ -97,7 +98,7 @@ static std::map<sstring, sstring> prepare_options(
 }
 
 ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
-    std::map<sstring, sstring> replication_opts, storage_opts, tablets_opts, durable_writes_opts;
+    std::map<sstring, sstring> replication_opts, storage_opts, tablets_opts, durable_writes_opts, consistency_opts;
 
     auto read_property_into = [] (auto& map, const sstring& name, const sstring& value, const sstring& tag) {
         map[name.substr(sstring(tag).size() + 1)] = value;
@@ -112,6 +113,8 @@ ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
             read_property_into(tablets_opts, name, value, KW_TABLETS);
         } else if (name.starts_with(KW_STORAGE)) {
             read_property_into(storage_opts, name, value, KW_STORAGE);
+        } else if (name.starts_with(KW_CONSISTENCY)) {
+            read_property_into(consistency_opts, name, value, KW_CONSISTENCY);
         }
     }
 
@@ -123,6 +126,9 @@ ks_prop_defs::ks_prop_defs(std::map<sstring, sstring> options) {
         add_property(KW_TABLETS, tablets_opts);
     if (!durable_writes_opts.empty())
         add_property(KW_DURABLE_WRITES, durable_writes_opts.begin()->second);
+    if (!consistency_opts.empty()) {
+        add_property(KW_CONSISTENCY, consistency_opts.begin()->second);
+    }
 }
 
 void ks_prop_defs::validate() {
@@ -132,7 +138,7 @@ void ks_prop_defs::validate() {
         return;
     }
 
-    static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION), sstring(KW_STORAGE), sstring(KW_TABLETS) });
+    static std::set<sstring> keywords({ sstring(KW_DURABLE_WRITES), sstring(KW_REPLICATION), sstring(KW_STORAGE), sstring(KW_TABLETS), sstring(KW_CONSISTENCY) });
     property_definitions::validate(keywords);
 
     auto replication_options = get_replication_options();
@@ -204,6 +210,15 @@ std::optional<unsigned> ks_prop_defs::get_initial_tablets(std::optional<unsigned
     return initial_count;
 }
 
+std::optional<data_dictionary::consistency_config_option> ks_prop_defs::get_consistency_option() const {
+    auto opt = get_string(KW_CONSISTENCY, "");
+    if (opt == "") {
+        return std::nullopt;
+    } else {
+        return data_dictionary::consistency_config_option_from_string(opt);
+    }
+}
+
 std::optional<sstring> ks_prop_defs::get_replication_strategy_class() const {
     return _strategy_class;
 }
@@ -230,7 +245,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(s
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     auto options = prepare_options(sc, tm, get_replication_options());
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
-            std::move(options), initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
+            std::move(options), initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_update(lw_shared_ptr<data_dictionary::keyspace_metadata> old, const locator::token_metadata& tm, const gms::feature_service& feat) {
@@ -245,7 +260,7 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata_u
     }
     // if tablets options have not been specified, inherit them if it's tablets-enabled KS
     auto initial_tablets = get_initial_tablets(old->initial_tablets());
-    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
+    return data_dictionary::keyspace_metadata::new_keyspace(old->name(), *sc, options, initial_tablets, get_consistency_option(), get_boolean(KW_DURABLE_WRITES, true), get_storage_options());
 }
 
 

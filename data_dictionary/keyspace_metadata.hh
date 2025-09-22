@@ -17,6 +17,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "data_dictionary/user_types_metadata.hh"
 #include "data_dictionary/storage_options.hh"
+#include "data_dictionary/consistency_config_options.hh"
 
 namespace gms {
 class feature_service;
@@ -33,11 +34,13 @@ class keyspace_metadata final {
     bool _durable_writes;
     user_types_metadata _user_types;
     lw_shared_ptr<const storage_options> _storage_options;
+    std::optional<consistency_config_option> _consistency_option;
 public:
     keyspace_metadata(std::string_view name,
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options strategy_options,
                  std::optional<unsigned> initial_tablets,
+                 std::optional<consistency_config_option> consistency_option,
                  bool durable_writes,
                  std::vector<schema_ptr> cf_defs = std::vector<schema_ptr>{},
                  user_types_metadata user_types = user_types_metadata{},
@@ -47,6 +50,7 @@ public:
                  std::string_view strategy_name,
                  locator::replication_strategy_config_options options,
                  std::optional<unsigned> initial_tablets,
+                 std::optional<consistency_config_option> consistency_option,
                  bool durables_writes = true,
                  storage_options storage_opts = {},
                  std::vector<schema_ptr> cf_defs = {});
@@ -64,6 +68,9 @@ public:
     }
     std::optional<unsigned> initial_tablets() const {
         return _initial_tablets;
+    }
+    std::optional<data_dictionary::consistency_config_option> consistency_option() const {
+        return _consistency_option;
     }
     bool uses_tablets() const noexcept {
         return _initial_tablets.has_value();
