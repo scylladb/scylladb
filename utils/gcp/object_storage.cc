@@ -743,7 +743,9 @@ future<> utils::gcp::storage::client::create_bucket(std::string_view project, st
     co_await create_bucket(project, std::move(meta));
 }
 
-future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket) {
+future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket_in) {
+    std::string bucket(bucket_in);
+
     gcp_storage.debug("Delete bucket {}", bucket);
 
     auto path = fmt::format("/storage/v1/b/{}", bucket);
@@ -770,7 +772,9 @@ future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket) {
 // read all data from network, etc. Thus there is not all that much
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix, bucket_paging& pager) {
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager) {
+    std::string bucket(bucket_in);
+
     gcp_storage.debug("List bucket {} (prefix={}, max_results={})", bucket, prefix, pager.max_results);
 
     auto path = fmt::format("/storage/v1/b/{}/o", bucket);
@@ -843,7 +847,9 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
 }
 
 // See https://cloud.google.com/storage/docs/deleting-objects
-future<> utils::gcp::storage::client::delete_object(std::string_view bucket, std::string_view object_name) {
+future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, std::string_view object_name_in) {
+    std::string bucket(bucket_in), object_name(object_name_in);
+
     gcp_storage.debug("Delete object {}:{}", bucket, object_name);
 
     auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, object_name);
@@ -860,6 +866,9 @@ future<> utils::gcp::storage::client::delete_object(std::string_view bucket, std
     case status_type::no_content:
         gcp_storage.debug("Deleted {}:{}", bucket, object_name);
         co_return; // done and happy
+    case status_type::not_found:
+        gcp_storage.debug("Could not delete {}:{} - no such object", bucket, object_name);
+        co_return; // ok...?
     default:
         throw failed_operation(fmt::format("Could not delete object {}:{}: {} ({})", bucket, object_name, res.result()
             , get_gcp_error_message(res.body())
@@ -875,7 +884,9 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std
 }
 
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
-future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_name) {
+future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_name_in) {
+    std::string bucket(bucket_in), object_name(object_name_in), new_name(new_name_in);
+
     gcp_storage.debug("Move object {}:{} -> {}", bucket, object_name, new_name);
 
     auto path = fmt::format("/storage/v1/b/{}/o/{}/moveTo/o/{}", bucket, object_name, new_name);
@@ -901,7 +912,9 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
 // Copying an object in GCP can only process a certain amount of data in one call
 // Must keep doing it until all data is copied, and check response.
-future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name) {
+future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in) {
+    std::string bucket(bucket_in), object_name(object_name_in), new_bucket(new_bucket_in), to_name(to_name_in);
+
     auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}", bucket, object_name, new_bucket, to_name);
     std::string body;
 
