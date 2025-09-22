@@ -1233,6 +1233,12 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
             pkeys.push_back(pk);
         }
 
+        std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(
+            std::make_unique<cql3::query_options>(options),
+            *_prepared_ann_ordering,
+            std::move(ann_results)
+        );
+
         // If there are no clustering columns, we have to convert the partition keys to partition ranges.
         if (_schema->clustering_key_size() == 0) {
             std::vector<dht::partition_range> partition_ranges;
@@ -1240,10 +1246,10 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
                     return dht::partition_range::make_singular(pkey.partition);
                 });
 
-            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, nullptr);
+            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, *internal_options, now, nullptr);
         }
 
-        co_return co_await this->execute_base_query(qp, std::move(pkeys), state, options, now, nullptr);
+        co_return co_await this->execute_base_query(qp, std::move(pkeys), state, *internal_options, now, nullptr);
     }
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
