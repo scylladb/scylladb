@@ -65,6 +65,10 @@ class TabularConsoleOutput:
 
     def __init__(self, verbose: bool, test_count: int) -> None:
         self.verbose = verbose
+
+        if not output_is_a_tty:
+            self.verbose = True
+
         self.test_count = test_count
         self.last_test_no = 0
 
@@ -250,9 +254,6 @@ def parse_cmd_line() -> argparse.Namespace:
         testmem = 6e9 if os.sysconf('SC_PAGE_SIZE') > 4096 else 2e9
         default_num_jobs_mem = ((sysmem - 4e9) // testmem)
         args.jobs = min(default_num_jobs_mem, nr_cpus // cpus_per_test_job)
-
-    if not output_is_a_tty:
-        args.verbose = True
 
     if not args.modes:
         try:
