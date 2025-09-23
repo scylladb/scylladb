@@ -238,7 +238,7 @@ future<> for_each_sstable_version(AsyncAction action) {
 } // namespace sstables
 
 using can_purge_tombstones = compaction::compaction_manager::can_purge_tombstones;
-future<> run_compaction_task(test_env&, sstables::run_id output_run_id, compaction_group_view& table_s, noncopyable_function<future<> (compaction::compaction_data&)> job);
+future<> run_compaction_task(test_env&, sstables::run_id output_run_id, compaction::compaction_group_view& table_s, noncopyable_function<future<> (compaction::compaction_data&)> job);
 future<compaction::compaction_result> compact_sstables(test_env& env, compaction::compaction_descriptor descriptor, table_for_tests t,
                  std::function<shared_sstable()> creator, compaction::compaction_sstable_replacer_fn replacer = sstables::replacer_fn_no_op(),
                  can_purge_tombstones can_purge = can_purge_tombstones::yes);

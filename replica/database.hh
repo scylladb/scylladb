@@ -728,8 +728,8 @@ private:
     // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
     void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
     void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
-    static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
-    static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
+    static void add_sstable_to_backlog_tracker(compaction::compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
+    static void remove_sstable_from_backlog_tracker(compaction::compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     lw_shared_ptr<memtable> new_memtable();
     future<> try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
@@ -1098,7 +1098,7 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction(tasks::task_info info);
-    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges,
+    future<> perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
                                         tasks::task_info info,
                                         do_flush = do_flush::yes);
     future<unsigned> estimate_pending_compactions() const;

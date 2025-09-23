@@ -101,7 +101,7 @@ distributed_loader::lock_table(global_table_ptr& table, sharded<sstables::sstabl
 future<>
 distributed_loader::reshard(sharded<sstables::sstable_directory>& dir, sharded<replica::database>& db, sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr) {
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-    auto task = co_await compaction_module.make_and_start_task<table_resharding_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, std::move(creator), std::move(owned_ranges_ptr));
+    auto task = co_await compaction_module.make_and_start_task<compaction::table_resharding_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, std::move(creator), std::move(owned_ranges_ptr));
     co_await task->done();
 }
 
@@ -118,7 +118,7 @@ distributed_loader::reshape(sharded<sstables::sstable_directory>& dir, sharded<r
         sstring ks_name, sstring table_name, compaction::compaction_sstable_creator_fn creator,
         std::function<bool (const sstables::shared_sstable&)> filter) {
     auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-    auto task = co_await compaction_module.make_and_start_task<table_reshaping_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, mode, std::move(creator), std::move(filter));
+    auto task = co_await compaction_module.make_and_start_task<compaction::table_reshaping_compaction_task_impl>({}, std::move(ks_name), std::move(table_name), dir, db, mode, std::move(creator), std::move(filter));
     co_await task->done();
 }
 

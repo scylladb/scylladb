@@ -44,25 +44,25 @@ static mutation_reader sstable_reader(reader_permit permit, shared_sstable sst, 
 
 }
 
-class strategy_control_for_test : public strategy_control {
+class strategy_control_for_test : public compaction::strategy_control {
     bool _has_ongoing_compaction;
 public:
     explicit strategy_control_for_test(bool has_ongoing_compaction) noexcept : _has_ongoing_compaction(has_ongoing_compaction) {}
 
-    bool has_ongoing_compaction(compaction_group_view& table_s) const noexcept override {
+    bool has_ongoing_compaction(compaction::compaction_group_view& table_s) const noexcept override {
         return _has_ongoing_compaction;
     }
-    virtual future<std::vector<sstables::shared_sstable>> candidates(compaction_group_view& t) const override {
+    virtual future<std::vector<sstables::shared_sstable>> candidates(compaction::compaction_group_view& t) const override {
         auto main_set = co_await t.main_sstable_set();
         co_return boost::copy_range<std::vector<sstables::shared_sstable>>(*main_set->all());
     }
-    virtual future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction_group_view& t) const override {
+    virtual future<std::vector<sstables::frozen_sstable_run>> candidates_as_runs(compaction::compaction_group_view& t) const override {
         auto main_set = co_await t.main_sstable_set();
         co_return main_set->all_sstable_runs();
     }
 };
 
-static std::unique_ptr<strategy_control> make_strategy_control_for_test(bool has_ongoing_compaction) {
+static std::unique_ptr<compaction::strategy_control> make_strategy_control_for_test(bool has_ongoing_compaction) {
     return std::make_unique<strategy_control_for_test>(has_ongoing_compaction);
 }
 
@@ -155,7 +155,7 @@ SEASTAR_TEST_CASE(incremental_compaction_test) {
                 | std::ranges::to<std::set>();
             auto expected_sst = sstable_run.begin();
             auto closed_sstables_tracker = sstable_run.begin();
-            auto replacer = [&] (compaction_completion_desc ccd) {
+            auto replacer = [&] (compaction::compaction_completion_desc ccd) {
                 BOOST_REQUIRE(expected_sst != sstable_run.end());
                 if (incremental_enabled) {
                     do_incremental_replace(std::move(ccd.old_sstables), std::move(ccd.new_sstables), expected_sst, closed_sstables_tracker);
@@ -204,14 +204,14 @@ SEASTAR_THREAD_TEST_CASE(incremental_compaction_sag_test) {
     struct sag_test {
         test_env& _env;
         mutable table_for_tests _cf;
-        incremental_compaction_strategy _ics;
+        compaction::incremental_compaction_strategy _ics;
         const unsigned min_threshold = 4;
         const size_t data_set_size = 1'000'000'000;
 
-        static incremental_compaction_strategy make_ics(double space_amplification_goal) {
+        static compaction::incremental_compaction_strategy make_ics(double space_amplification_goal) {
             std::map<sstring, sstring> options;
             options.emplace(sstring("space_amplification_goal"), sstring(std::to_string(space_amplification_goal)));
-            return incremental_compaction_strategy(options);
+            return compaction::incremental_compaction_strategy(options);
         }
         static replica::column_family::config make_table_config(test_env& env) {
             auto config = env.make_table_config();
@@ -448,7 +448,7 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            auto ret = cs.get_reshaping_job(sstables, s, reshape_config{.mode = reshape_mode::strict});
+            auto ret = cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict});
             BOOST_REQUIRE(ret.sstables.size() == unsigned(s->max_compaction_threshold()));
             BOOST_REQUIRE(ret.max_sstable_bytes == target_sstable_size_in_mb*1024*1024);
         }
@@ -463,7 +463,7 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, reshape_config{.mode = reshape_mode::strict}).sstables.size() == disjoint_sstable_count);
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict}).sstables.size() == disjoint_sstable_count);
         }
 
         {
@@ -478,7 +478,7 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, reshape_config{.mode = reshape_mode::strict}).sstables.size() == 0);
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict}).sstables.size() == 0);
         }
 
         {
@@ -491,7 +491,7 @@ SEASTAR_TEST_CASE(ics_reshape_test) {
                 sstables.push_back(std::move(sst));
             }
 
-            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, reshape_config{.mode = reshape_mode::strict}).sstables.size() == uint64_t(s->max_compaction_threshold()));
+            BOOST_REQUIRE(cs.get_reshaping_job(sstables, s, compaction::reshape_config{.mode = compaction::reshape_mode::strict}).sstables.size() == uint64_t(s->max_compaction_threshold()));
         }
     });
 }

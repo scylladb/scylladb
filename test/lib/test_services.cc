@@ -35,7 +35,7 @@ class table_for_tests::compaction_group_view : public compaction::compaction_gro
     sstables::sstables_manager& _sstables_manager;
     std::vector<sstables::shared_sstable> _compacted_undeleted;
     tombstone_gc_state _tombstone_gc_state;
-    mutable compaction_backlog_tracker _backlog_tracker;
+    mutable compaction::compaction_backlog_tracker _backlog_tracker;
     compaction::compaction_strategy_state _compaction_strategy_state;
     std::string _group_id;
     seastar::condition_variable _staging_condition;
@@ -119,7 +119,7 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
     }
-    compaction_backlog_tracker& get_backlog_tracker() override {
+    compaction::compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
     const std::string get_group_id() const noexcept override {
@@ -566,7 +566,7 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
             testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", task->compaction_data().compaction_uuid);
         }
         task->unlink();
-        task->switch_state(compaction_task_executor::state::none);
+        task->switch_state(compaction::compaction_task_executor::state::none);
     });
     co_await task->run_compaction();
 }

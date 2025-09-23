@@ -1096,8 +1096,8 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                 });
                 auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
                 // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
-                auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
-                    {}, ks_name, _db, table_infos, flush_mode::skip, tasks::is_user_task::no);
+                auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
+                    {}, ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
                 try {
                     co_return co_await task->done();
                 } catch (...) {

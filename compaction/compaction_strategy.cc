@@ -32,8 +32,6 @@
 #include "incremental_compaction_strategy.hh"
 #include "sstables/sstable_set_impl.hh"
 
-using namespace sstables;
-
 namespace compaction {
 
 logging::logger leveled_manifest::logger("LeveledManifest");
@@ -46,16 +44,16 @@ compaction_descriptor compaction_strategy_impl::make_major_compaction_job(std::v
     return compaction_descriptor(std::move(candidates), level, max_sstable_bytes);
 }
 
-std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
+std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const {
     // The default implementation is suboptimal and causes the writeamp problem described issue in #10097.
     // The compaction strategy relying on it should strive to implement its own method, to make cleanup bucket aware.
-    return candidates | std::views::transform([] (const shared_sstable& sst) {
+    return candidates | std::views::transform([] (const sstables::shared_sstable& sst) {
         return compaction_descriptor({ sst },
             sst->get_sstable_level(), compaction_descriptor::default_max_sstable_bytes, sst->run_identifier());
     }) | std::ranges::to<std::vector>();
 }
 
-bool compaction_strategy_impl::worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t) {
+bool compaction_strategy_impl::worth_dropping_tombstones(const sstables::shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t) {
     if (_disable_tombstone_compaction) {
         return false;
     }
@@ -82,7 +80,7 @@ mutation_reader_consumer compaction_strategy_impl::make_interposer_consumer(cons
 }
 
 compaction_descriptor
-compaction_strategy_impl::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
+compaction_strategy_impl::get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
     return compaction_descriptor();
 }
 
@@ -235,7 +233,6 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
     if (all.empty()) {
         return contrib;
     }
-    using namespace sstables;
 
     // Deduce threshold from the last SSTable added to the set
     // Low-efficiency jobs, which fan-in is smaller than min-threshold, will not have backlog accounted.
@@ -243,14 +240,14 @@ size_tiered_backlog_tracker::sstables_backlog_contribution size_tiered_backlog_t
     // in efficient jobs acting more aggressive than they really have to.
     // TODO: potentially switch to compaction manager's fan-in threshold, so to account for the dynamic
     //  fan-in threshold behavior.
-    const auto& newest_sst = std::ranges::max(all, std::less<generation_type>(), std::mem_fn(&sstable::generation));
+    const auto& newest_sst = std::ranges::max(all, std::less<sstables::generation_type>(), std::mem_fn(&sstables::sstable::generation));
     auto threshold = newest_sst->get_schema()->min_compaction_threshold();
 
     for (auto& bucket : size_tiered_compaction_strategy::get_buckets(all, stcs_options)) {
         if (!size_tiered_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
-        contrib.value += std::ranges::fold_left(bucket | std::views::transform([] (const shared_sstable& sst) -> double {
+        contrib.value += std::ranges::fold_left(bucket | std::views::transform([] (const sstables::shared_sstable& sst) -> double {
             return sst->data_size() * log4(sst->data_size());
         }), double(0.0f), std::plus{});
         // Controller is disabled if exception is caught during add / remove calls, so not making any effort to make this exception safe
@@ -700,11 +697,11 @@ compaction_descriptor compaction_strategy::get_major_compaction_job(compaction_g
     return _compaction_strategy_impl->get_major_compaction_job(table_s, std::move(candidates));
 }
 
-std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const {
+std::vector<compaction_descriptor> compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const {
     return _compaction_strategy_impl->get_cleanup_compaction_jobs(table_s, std::move(candidates));
 }
 
-void compaction_strategy::notify_completion(compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) {
+void compaction_strategy::notify_completion(compaction_group_view& table_s, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) {
     _compaction_strategy_impl->notify_completion(table_s, removed, added);
 }
 
@@ -725,7 +722,7 @@ compaction_backlog_tracker compaction_strategy::make_backlog_tracker() const {
 }
 
 compaction_descriptor
-compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
+compaction_strategy::get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
     return _compaction_strategy_impl->get_reshaping_job(std::move(input), schema, cfg);
 }
 
@@ -781,8 +778,8 @@ future<reshape_config> make_reshape_config(const sstables::storage& storage, res
     };
 }
 
-std::unique_ptr<sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
-    return std::make_unique<partitioned_sstable_set>(ts.schema(), ts.token_range());
+std::unique_ptr<sstables::sstable_set_impl> incremental_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
 }
