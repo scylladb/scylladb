@@ -129,7 +129,6 @@ public:
         : vs_ref(vs) {
         with_dns_refresh_interval(seconds(2));
         with_wait_for_client_timeout(milliseconds(100));
-        with_http_request_retries(3);
         with_dns_resolver([](auto const& host) -> future<std::optional<inet_address>> {
             co_return inet_address("127.0.0.1");
         });
@@ -142,11 +141,6 @@ public:
 
     configure& with_wait_for_client_timeout(milliseconds timeout) {
         vector_store_client_tester::set_wait_for_client_timeout(vs_ref.get(), timeout);
-        return *this;
-    }
-
-    configure& with_http_request_retries(int retries) {
-        vector_store_client_tester::set_http_request_retries(vs_ref.get(), retries);
         return *this;
     }
 

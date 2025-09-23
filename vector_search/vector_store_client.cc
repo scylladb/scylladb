@@ -56,8 +56,8 @@ using time_point = lowres_clock::time_point;
 /// Timeout for waiting for a new client to be available
 constexpr auto WAIT_FOR_CLIENT_TIMEOUT = std::chrono::seconds(5);
 
-/// How many retries to do for HTTP requests
-constexpr auto HTTP_REQUEST_RETRIES = 3;
+/// The number of times to retry an /ann request if all nodes fail with a system error.
+constexpr auto ANN_RETRIES = 3;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 logging::logger vslogger("vector_store_client");
@@ -237,9 +237,9 @@ public:
         return _addr == a && _host_port.port == p;
     }
 
-    seastar::future<> make_request(
-            operation_type method, http_path path, std::optional<json_content> content, http::experimental::client::reply_handler&& handle, abort_source* as) {
-        auto req = http::request::make(method, _host_port.host, std::move(path));
+    seastar::future<> make_request(operation_type method, const http_path& path, const std::optional<json_content>& content,
+            http::experimental::client::reply_handler&& handle, abort_source* as) {
+        auto req = http::request::make(method, _host_port.host, path);
         if (content) {
             req.write_body("json", *content);
         }
@@ -299,7 +299,6 @@ struct vector_store_client::impl {
     gate client_producer_gate;
     condition_variable refresh_client_cv;
     milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
-    unsigned http_request_retries = HTTP_REQUEST_RETRIES;
     sequential_producer<clients_type> clients_producer;
     dns dns;
 
@@ -430,7 +429,7 @@ struct vector_store_client::impl {
             -> future<std::expected<make_request_response, make_request_error>> {
         auto resp = make_request_response{.status = http::reply::status_type::ok, .content = std::vector<temporary_buffer<char>>()};
 
-        for (auto retries = 0; retries < HTTP_REQUEST_RETRIES; ++retries) {
+        for (auto retries = 0; retries < ANN_RETRIES; ++retries) {
             auto clients = co_await get_clients(as);
             if (!clients) {
                 co_return std::unexpected{std::visit(
@@ -539,10 +538,6 @@ void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& v
 
 void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout) {
     vsc._impl->wait_for_client_timeout = timeout;
-}
-
-void vector_store_client_tester::set_http_request_retries(vector_store_client& vsc, unsigned retries) {
-    vsc._impl->http_request_retries = retries;
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<inet_address>>(sstring const&)> resolver) {
