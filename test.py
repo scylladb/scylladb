@@ -65,6 +65,10 @@ class TabularConsoleOutput:
 
     def __init__(self, verbose: bool, test_count: int) -> None:
         self.verbose = verbose
+
+        if not output_is_a_tty:
+            self.verbose = True
+
         self.test_count = test_count
         self.last_test_no = 0
 
@@ -251,9 +255,6 @@ def parse_cmd_line() -> argparse.Namespace:
         default_num_jobs_mem = ((sysmem - 4e9) // testmem)
         args.jobs = min(default_num_jobs_mem, nr_cpus // cpus_per_test_job)
 
-    if not output_is_a_tty:
-        args.verbose = True
-
     if not args.modes:
         try:
             args.modes = get_configured_modes()
@@ -336,6 +337,8 @@ def run_pytest(options: argparse.Namespace) -> tuple[int, list[SimpleNamespace]]
     if options.quiet:
         args.append('--quiet')
         args.extend(['-p','no:sugar'])
+    else:
+        args.append('--force-sugar')
     if options.pytest_arg:
         # If pytest_arg is provided, it should be a string with arguments to pass to pytest
         args.extend(shlex.split(options.pytest_arg))
