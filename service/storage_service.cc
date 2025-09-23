@@ -1091,21 +1091,6 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                 return me && me->second.cleanup == cleanup_status::running;
             });
 
-            auto do_cleanup_ks = [this] (sstring ks_name, std::vector<table_info> table_infos) -> future<> {
-                auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
-                // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
-                auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
-                    {}, ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
-                try {
-                    rtlogger.info("cleanup {} started", ks_name);
-                    co_await task->done();
-                    rtlogger.info("cleanup {} finished", ks_name);
-                } catch (...) {
-                    rtlogger.error("cleanup failed keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
-                    throw;
-                }
-            };
-
             std::unordered_map<sstring, std::vector<table_info>> ks_tables;
             {
                 // The scope for the guard
@@ -1147,12 +1132,21 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                     return db.flush_all_tables();
                 });
 
-                std::vector<future<>> tasks;
-                tasks.reserve(ks_tables.size());
-                for (auto&& [ks, table_infos]: ks_tables) {
-                    tasks.push_back(do_cleanup_ks(std::move(ks), std::move(table_infos)));
-                }
-                co_await when_all_succeed(tasks.begin(), tasks.end()).discard_result();
+                co_await coroutine::parallel_for_each(ks_tables, [&](auto& item) -> future<> {
+                    auto& [ks_name, table_infos] = item;
+                    auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
+                    // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
+                    auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
+                        {}, ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
+                    try {
+                        rtlogger.info("cleanup {} started", ks_name);
+                        co_await task->done();
+                        rtlogger.info("cleanup {} finished", ks_name);
+                    } catch (...) {
+                        rtlogger.error("cleanup failed keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
+                        throw;
+                    }
+                });
             }
 
             rtlogger.info("cleanup ended");
