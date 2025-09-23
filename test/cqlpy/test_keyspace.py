@@ -10,16 +10,22 @@ import pytest
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException
 from threading import Thread
 
+from ..cluster.util import parse_replication_options
+
+
 # A basic tests for successful CREATE KEYSPACE and DROP KEYSPACE
 def test_create_and_drop_keyspace(cql, this_dc):
     cql.execute("CREATE KEYSPACE test_create_and_drop_keyspace WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }")
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
-def assert_keyspace(cql, keyspace, expected_class, rf_key):
+def get_replication(cql, keyspace):
     row = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
-    rep = row.replication
+    return parse_replication_options(row.replication)
+
+def assert_keyspace(cql, keyspace, expected_class, rf_key):
+    rep = get_replication(cql, keyspace)
     assert rep["class"] == expected_class
-    assert rep[rf_key] == "1"
+    assert rep[rf_key] == ["rack1"]
 
 # Trying to create a keyspace specifying replication options without replication strategy
 # should result in NetworkTopologyStrategy being set by default.
@@ -71,6 +77,27 @@ def test_create_keyspace_if_not_exists(cql, this_dc):
     # they are ignored.
     cql.execute("CREATE KEYSPACE IF NOT EXISTS test_create_keyspace_if_not_exists WITH REPLICATION = { 'class' : 'SimpleStrategy', 'replication_factor' : 2 }")
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
+
+# We treat ALTER to numeric RF of same count as no-op.
+def test_alter_rack_list_to_same_count_numeric_rf(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 1 }}")
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
+
+def test_empty_rack_list_is_accepted(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': [] }}")
+        assert this_dc not in get_replication(cql, keyspace)
+
+def test_can_alter_rack_list_to_0(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}")
+
+def test_can_alter_to_rack_list_from_0(cql, this_dc):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}") as keyspace:
+        cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
+        assert_keyspace(cql, keyspace, "org.apache.cassandra.locator.NetworkTopologyStrategy", this_dc)
 
 # The documentation states that "Keyspace names can have alpha-
 # numeric characters and contain underscores; only letters and numbers are
@@ -161,13 +188,13 @@ def test_alter_keyspace(cql, this_dc, scylla_only):
 # Test trying to ALTER RF of tablets-enabled KS by more than 1 at a time
 def test_alter_keyspace_rf_by_more_than_1(cql, this_dc):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', '" + this_dc + "' : 1 }") as keyspace:
-        with pytest.raises(InvalidRequest):
+        with pytest.raises((InvalidRequest, ConfigurationException)):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}' : 3 }} AND DURABLE_WRITES = false")
 
 # Test trying to ALTER a tablets-enabled KS by providing the 'replication_factor' tag
 def test_alter_keyspace_with_replication_factor_tag(cql):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }") as keyspace:
-        with pytest.raises(InvalidRequest):
+        with pytest.raises((InvalidRequest, ConfigurationException)):
             cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 2 }}")
 
 # Test trying to ALTER a keyspace with invalid options.

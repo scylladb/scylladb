@@ -25,6 +25,7 @@
 #include "test/lib/test_utils.hh"
 #include "test/lib/topology_builder.hh"
 #include "db/config.hh"
+#include "cql3/util.hh"
 #include "db/schema_tables.hh"
 #include "schema/schema_builder.hh"
 
@@ -114,17 +115,47 @@ future<table_id> add_table(cql_test_env& e, sstring test_ks_name = "", std::map<
 
 // Run in a seastar thread
 static
-sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
+sstring do_add_keyspace(cql_test_env& e, std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf, int initial_tablets = 0) {
     static std::atomic<int> ks_id = 0;
     auto ks_name = fmt::format("keyspace{}", ks_id.fetch_add(1));
+
     sstring rf_options;
     for (auto& [dc, rf] : dc_rf) {
-        rf_options += format(", '{}': {}", dc, rf);
+        auto rf_fmt = std::visit(overloaded_functor(
+            [] (int rf) { return fmt::format("{}", rf); },
+            [] (const std::vector<sstring>& racks) {
+                return fmt::format("[{}]", fmt::join(racks | std::views::transform(&cql3::util::single_quote), ", "));
+            }), rf);
+        rf_options += fmt::format(", '{}': {}", dc, rf_fmt);
     }
+
+    testlog.info("Adding keyspace {} with replication factor options: {}", ks_name, rf_options);
+
     e.execute_cql(fmt::format("create keyspace {} with replication = {{'class': 'NetworkTopologyStrategy'{}}}"
                               " and tablets = {{'enabled': true, 'initial': {}}}",
                               ks_name, rf_options, initial_tablets)).get();
+
     return ks_name;
+}
+
+// Run in a seastar thread
+static
+sstring add_keyspace(cql_test_env& e, std::unordered_map<sstring, int> dc_rf, int initial_tablets = 0) {
+    std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf_expanded;
+    for (auto& [dc, rf] : dc_rf) {
+        dc_rf_expanded[dc] = rf;
+    }
+    return do_add_keyspace(e, std::move(dc_rf_expanded), initial_tablets);
+}
+
+// Run in a seastar thread
+static
+sstring add_keyspace_racks(cql_test_env& e, std::unordered_map<sstring, std::vector<sstring>> dc_rf, int initial_tablets = 0) {
+    std::unordered_map<sstring, std::variant<int, std::vector<sstring>>> dc_rf_expanded;
+    for (auto& [dc, rf] : dc_rf) {
+        dc_rf_expanded[dc] = rf;
+    }
+    return do_add_keyspace(e, std::move(dc_rf_expanded), initial_tablets);
 }
 
 // Run in a seastar thread
@@ -1747,6 +1778,105 @@ void check_no_rack_overload(const token_metadata& tm) {
     }
 }
 
+void check_rack_list(const locator::topology& topo, const tablet_map& tmap, sstring dc, rack_list racks) {
+    std::sort(racks.begin(), racks.end());
+    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        std::unordered_map<sstring, std::unordered_set<sstring>> racks_by_dc;
+        auto replicas = tinfo.replicas;
+        rack_list actual_racks;
+        for (auto& r : tinfo.replicas) {
+            if (topo.get_datacenter(r.host) == dc) {
+                actual_racks.push_back(topo.get_rack(r.host));
+            }
+        }
+        std::sort(actual_racks.begin(), actual_racks.end());
+        if (actual_racks != racks) {
+            throw std::runtime_error(fmt::format("Bad racks for tablet {}: expected {}, got {}", tid, racks, actual_racks));
+        }
+        return make_ready_future<>();
+    }).get();
+}
+
+// Invokes tablet reallocation which is done on ALTER KEYSPACE.
+static
+tablet_map reallocate_tablets(cql_test_env& e, const sstring& ks, table_id table,
+                              std::function<void(replication_strategy_config_options&)> alter_options) {
+    auto& stm = e.shared_token_metadata().local();
+    auto tmptr = stm.get();
+    auto& old_tablets = tmptr->tablets().get_tablet_map(table);
+    auto& rs = e.local_db().find_keyspace(ks).get_replication_strategy();
+    auto options = rs.get_config_options();
+    alter_options(options);
+    testlog.info("Reallocating tablets of {}.{} from {} to {}", ks, table, rs.get_config_options(), options);
+    locator::replication_strategy_params params{std::move(options), old_tablets.tablet_count()};
+    auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy(
+            "NetworkTopologyStrategy", params, tmptr->get_topology());
+    auto s = e.local_db().find_schema(table);
+    return new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, tmptr, old_tablets.clone_gently().get()).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
+    cql_test_config cfg{};
+    cfg.db_config->rf_rack_valid_keyspaces.set(true);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        // dc1
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+
+        // dc2
+        auto rack4 = topo.start_new_dc();
+        auto rack5 = topo.start_new_rack();
+
+        auto dc1 = rack1.dc;
+        auto dc2 = rack4.dc;
+
+        // dc1
+        topo.add_node(node_state::normal, 1, rack1);
+        topo.add_node(node_state::normal, 1, rack2);
+        topo.add_node(node_state::normal, 1, rack3);
+        topo.add_node(node_state::normal, 1, rack3);
+        auto bad1 = topo.add_node(node_state::left, 1, rack3);
+
+        // dc2
+        topo.add_node(node_state::normal, 1, rack4);
+        auto bad2 = topo.add_node(node_state::decommissioning, 1, rack4);
+        topo.add_node(node_state::normal, 1, rack5);
+
+        auto test_alter = [&] (rack_list dc1_racks, rack_list dc2_racks,
+                                           rack_list dc1_new_racks, rack_list dc2_new_racks) {
+            auto ks1 = add_keyspace_racks(e, {{dc1, dc1_racks}, {dc2, dc2_racks}}, 3);
+            auto table1 = add_table(e, ks1).get();
+
+            rebalance_tablets(e);
+
+            auto& stm = e.shared_token_metadata().local();
+            auto tmptr = stm.get();
+            auto& tm_topo = tmptr->get_topology();
+
+            check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table1), dc1, dc1_racks);
+            check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table1), dc2, dc2_racks);
+
+            auto new_tablet_map = reallocate_tablets(e, ks1, table1, [&] (auto& options) {
+                options[dc1] = dc1_new_racks;
+                options[dc2] = dc2_new_racks;
+            });
+            check_rack_list(tm_topo, new_tablet_map, dc1, dc1_new_racks);
+            check_rack_list(tm_topo, new_tablet_map, dc2, dc2_new_racks);
+        };
+
+        test_alter({rack1.rack, rack2.rack}, {}, {rack1.rack, rack2.rack, rack3.rack}, {});
+        test_alter({rack1.rack, rack2.rack, rack3.rack}, {}, {rack1.rack, rack3.rack}, {});
+        test_alter({rack1.rack, rack2.rack}, {rack4.rack}, {rack2.rack}, {rack4.rack});
+        test_alter({rack2.rack}, {rack4.rack}, {}, {rack4.rack});
+        test_alter({rack2.rack}, {rack4.rack}, {rack2.rack}, {rack4.rack, rack5.rack});
+        test_alter({rack1.rack, rack2.rack, rack3.rack}, {}, {rack1.rack, rack2.rack, rack3.rack}, {rack4.rack});
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
     cql_test_config cfg{};
     // This test relies on the fact that we use an RF strictly smaller than the number of racks.
@@ -2176,12 +2306,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         auto host1 = topo.add_node(node_state::normal);
         auto host2 = topo.add_node(node_state::normal);
         auto host3 = topo.add_node(node_state::normal);
-        topo.start_new_rack();
+        auto rack2 = topo.start_new_rack();
         racks.push_back(topo.rack());
-        auto host4 = topo.add_node(node_state::decommissioning);
+        auto host4 = topo.add_node(node_state::normal);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto ks_name = add_keyspace_racks(e, {{rack2.dc, {rack2.rack}}}, 4);
         auto table1 = add_table(e, ks_name).get();
+
+        topo.set_node_state(host4, node_state::decommissioning);
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
             tablet_map tmap(4);
@@ -2977,32 +3109,27 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
 
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     cql_test_config cfg = tablet_cql_test_config();
-    // FIXME: This test creates two keyspaces with two different replication factors.
-    //        What's more, we distribute the nodes across only two racks. Because of that,
-    //        we won't be able to enable `rf_rack_valid_keyspaces`. That would require
-    //        increasing the number of racks to three, as well as implementing scylladb/scylladb#23426.
-    cfg.db_config->rf_rack_valid_keyspaces.set(false);
 
     do_with_cql_env_thread([] (auto& e) {
         auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
 
         topology_builder topo(e);
 
-        std::vector<endpoint_dc_rack> racks = {
-            topo.rack(),
-            topo.start_new_dc(),
-        };
-
         std::vector<host_id> hosts;
-        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
-        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
-        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
+        sstring dc1 = topo.dc();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
 
-        hosts.push_back(topo.add_node(node_state::normal, 1, racks[1]));
-        hosts.push_back(topo.add_node(node_state::normal, 1, racks[1]));
+        auto dc2 = topo.start_new_dc().dc;
+        hosts.push_back(topo.add_node(node_state::normal, 1));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 1));
 
-        auto ks_name1 = add_keyspace(e, {{racks[0].dc, 3}});
-        auto ks_name2 = add_keyspace(e, {{racks[1].dc, 2}});
+        auto ks_name1 = add_keyspace(e, {{dc1, 3}});
+        auto ks_name2 = add_keyspace(e, {{dc2, 2}});
 
         // table1 overflows per-shard goal in dc1, should be scaled down.
         // wants 400 tablets (3 nodes * 2 shards * 200 tablets/shard / rf=3 = 400 tablets)
@@ -3779,8 +3906,8 @@ struct calculate_tablet_replicas_for_new_rf_config
         host_id id = host_id::create_random_id();
     };
     std::vector<ring_point> ring_points;
-    std::map<sstring, sstring> options;
-    std::map<sstring, sstring> new_dc_rep_factor;
+    replication_strategy_config_options options;
+    replication_strategy_config_options new_dc_rep_factor;
     std::map<sstring, size_t> expected_rep_factor;
 };
 
@@ -3822,7 +3949,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     locator::replication_strategy_params params(test_config.options, tablet_count);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params);
+        "NetworkTopologyStrategy", params, stm.get()->get_topology());
 
     auto tablet_aware_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tablet_aware_ptr);
@@ -3862,7 +3989,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
 
     std::map<sstring, size_t> initial_rep_factor;
     for (auto const& [dc, shard_count] : test_config.options) {
-        initial_rep_factor[dc] = std::stoul(shard_count);
+        initial_rep_factor[dc] = locator::get_replication_factor(shard_count);
     }
 
     auto tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
@@ -3884,7 +4011,7 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     try {
         tablet_map old_tablets = stm.get()->tablets().get_tablet_map(s->id()).clone_gently().get();
         locator::replication_strategy_params params{test_config.new_dc_rep_factor, old_tablets.tablet_count()};
-        auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
+        auto new_strategy = abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, stm.get()->get_topology());
         auto tmap = new_strategy->maybe_as_tablet_aware()->reallocate_tablets(s, stm.get(), std::move(old_tablets)).get();
 
         auto const& ts = tmap.tablets();

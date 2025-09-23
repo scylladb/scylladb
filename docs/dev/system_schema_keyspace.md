@@ -2,6 +2,64 @@
 
 This section describes layouts and usage of system\_schema.* tables.
 
+## system\_schema.keyspaces
+
+This table contains one row per keyspaces.
+
+Schema:
+
+```
+CREATE TABLE system_schema.keyspaces (
+    keyspace_name text PRIMARY KEY,
+    durable_writes boolean,
+    replication frozen<map<text, text>>
+)
+```
+
+Columns:
+
+* `keyspace_name` - name of the keyspace
+* `durable_writes` - whether writes to the keyspace are using commitlog.
+* `replication` - replication settings for the keyspace. The value for the `"class"` key determines
+   replication strategy name. The structure of other options depends
+   on the replication strategy.
+
+   For `NetworkTopologyStrategy` the other options specify replication factors for datacenters,
+   stored as a flattened map of the extended options map (see below).
+
+   For `SimpleStrategy` there is a single option `"replication_factor"` specifying the replication factor.
+
+Extended options map used by NetworkTopologyStrategy is a map where values can be either strings or lists of strings.
+
+For example:
+
+
+```
+   {
+      'dc1': '3',
+      'dc2': ['rack1', 'rack2'],
+      'dc3': []
+   }
+```
+
+The options above mean that the replication factor for datacenter `dc1` is 3, for datacenter `dc2` it is 2,
+with replicas placed on racks `rack1` and `rack2`. For 'dc3' the replication factor is 0, expressed as an empty list of racks.
+
+The extended map is stored in the "replication" column in a flattened form, where values which are lists
+are represented as multiple entries in the map with the list index appended to the key, with `:` as the separator.
+The index can be negative, which is used to indicate that the list is empty.
+
+The example extended options map from above has a flattened representation of:
+
+```
+  {
+    'dc1': '3',
+    'dc2:0': 'rack1',
+    'dc2:1': 'rack2',
+    'dc3:-1': ''
+  }
+```
+
 ## system\_schema.computed\_columns
 
 Computed columns are a special kind of columns. Rather than having their value provided directly

@@ -668,7 +668,7 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
 @pytest.mark.parametrize("topology_rf_validity", [
         (topo(rf = 1, nodes = 3, racks = 1, dcs = 1), True),
         (topo(rf = 3, nodes = 5, racks = 1, dcs = 1), False),
-        (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), True),
+        (topo(rf = 1, nodes = 4, racks = 2, dcs = 1), False), # Test assumes that rf=1 uses both racks so need to inhibit rack-based RF
         (topo(rf = 3, nodes = 6, racks = 2, dcs = 1), False),
         (topo(rf = 3, nodes = 6, racks = 3, dcs = 1), True),
         (topo(rf = 2, nodes = 8, racks = 4, dcs = 2), True)

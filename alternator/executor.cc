@@ -16,6 +16,7 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -1724,7 +1725,8 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
                 locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets());
-                auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
+                const auto& topo = sp.local_db().get_token_metadata().get_topology();
+                auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
                 if (rs->uses_tablets()) {
                     co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
                     "If you want to use streams, create a table with vnodes by setting the tag 'experimental:initial_tablets' set to 'none'.");
@@ -5809,8 +5811,8 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     co_return rjson::print(std::move(response));
 }
 
-static std::map<sstring, sstring> get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
-    std::map<sstring, sstring> options;
+static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
+    locator::replication_strategy_config_options options;
     for (const auto& dc : sp.get_token_metadata_ptr()->get_topology().get_datacenters()) {
         options.emplace(dc, std::to_string(rf));
     }
@@ -5851,14 +5853,33 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
 static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
-    int endpoint_count = gossiper.num_endpoints();
-    int rf = 3;
-    if (endpoint_count < rf) {
-        rf = 1;
-        elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
-                keyspace_name, rf, endpoint_count);
+    auto& topo = sp.get_token_metadata_ptr()->get_topology();
+    locator::replication_strategy_config_options opts;
+    if (sp.local_db().get_config().rf_rack_valid_keyspaces()) {
+        for (const auto& [dc, hosts_by_rack] : topo.get_datacenter_racks()) {
+            auto racks = hosts_by_rack | std::views::keys | std::ranges::to<std::vector>();
+            if (racks.size() > 3) {
+                static thread_local std::default_random_engine rnd_engine{std::random_device{}()};
+                std::shuffle(racks.begin(), racks.end(), rnd_engine);
+                racks.resize(3);
+                elogger.warn("Creating keyspace '{}' for Alternator on a subset of racks in dc {} (has {} racks): {}",
+                             keyspace_name, dc, hosts_by_rack.size(), racks);
+            } else if (racks.size() < 3) {
+                elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} in dc {} because it has this many racks.",
+                             keyspace_name, racks.size(), dc);
+            }
+            opts.emplace(dc, std::move(racks));
+        }
+    } else {
+        int endpoint_count = gossiper.num_endpoints();
+        int rf = 3;
+        if (endpoint_count < rf) {
+            rf = 1;
+            elogger.warn("Creating keyspace '{}' for Alternator with unsafe RF={} because cluster only has {} nodes.",
+                         keyspace_name, rf, endpoint_count);
+        }
+        opts = get_network_topology_options(sp, gossiper, rf);
     }
-    auto opts = get_network_topology_options(sp, gossiper, rf);
 
     // Even if the "tablets" experimental feature is available, we currently
     // do not enable tablets by default on Alternator tables because LWT is
