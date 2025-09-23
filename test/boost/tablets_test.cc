@@ -3546,6 +3546,43 @@ static void execute_tablet_for_new_rf_test(calculate_tablet_replicas_for_new_rf_
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_ensure_node_for_load_sketch) {
+    // This tests reproduces the balancer crash when a node is drained and there are more then one
+    // empty destination nodes. If one of these destination nodes has a lower capacity then the other,
+    // and the initial target node selected is the one with lower capacity, pick_candidate() will then
+    // change the target node to the one with higher capacity. The problem is that
+    // load_sketch::get_least_loaded_shard() and consequently load_sketch::ensure_node() have not yet
+    // been called for the new, larger target (only for the initial, smaller one), and load_sketch will
+    // not have the larger node in its _nodes member hash map. This will cause an std::out_of_bounds
+    // exception when load_sketch::pick() is called with the host_id of the larger node.
+    do_with_cql_env_thread([] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+
+        auto host1 = topo.add_node(node_state::normal, 2);
+        const uint64_t node1_capacity = 50UL * 1024UL * 1024UL * 1024UL;
+        topo.get_shared_load_stats().set_capacity(host1, node1_capacity);
+
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        add_table(e, ks_name).get();
+
+        auto host2 = topo.add_node(node_state::normal, 2);
+        const uint64_t node2_capacity = 70UL * 1024UL * 1024UL * 1024UL;
+        topo.get_shared_load_stats().set_capacity(host2, node2_capacity);
+
+        auto host3 = topo.add_node(node_state::normal, 2);
+        const uint64_t node3_capacity = 60UL * 1024UL * 1024UL * 1024UL;
+        topo.get_shared_load_stats().set_capacity(host3, node3_capacity);
+
+        topo.set_node_state(host1, node_state::removing);
+
+        auto& talloc = e.get_tablet_allocator().local();
+        auto& stm = e.shared_token_metadata().local();
+        talloc.balance_tablets(stm.get(), topo.get_shared_load_stats().get()).get();
+    }).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_calculate_tablet_replicas_for_new_rf_upsize_one_dc) {
     calculate_tablet_replicas_for_new_rf_config config;
     config.ring_points = {
