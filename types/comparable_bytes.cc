@@ -1236,9 +1236,8 @@ struct to_comparable_bytes_visitor {
         serialized_bytes_view.remove_prefix(sizeof(db_clock::rep));
     }
 
-    void operator()(const abstract_type& type) {
-        // Unimplemented
-        on_internal_error(cblogger, fmt::format("byte comparable format not supported for type {}", type.name()));
+    void operator()(const counter_type_impl&) {
+        on_internal_error(cblogger, fmt::format("byte comparable format not supported for counter type"));
     }
 };
 
@@ -1363,9 +1362,8 @@ struct from_comparable_bytes_visitor {
         comparable_bytes_view.remove_prefix(sizeof(db_clock::rep));
     }
 
-    void operator()(const abstract_type& type) {
-        // Unimplemented
-        on_internal_error(cblogger, fmt::format("byte comparable format not supported for type {}", type.name()));
+    void operator()(const counter_type_impl&) {
+        on_internal_error(cblogger, fmt::format("byte comparable format not supported for counter type"));
     }
 };
 
