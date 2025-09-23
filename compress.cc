@@ -511,7 +511,7 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
         try {
             _crc_check_chance = std::stod(*v);
         } catch (const std::exception& e) {
-            throw exceptions::syntax_exception(sstring("Invalid double value ") + *v + "for " + CRC_CHECK_CHANCE);
+            throw exceptions::syntax_exception(sstring("Invalid double value ") + *v + " for " + CRC_CHECK_CHANCE);
         }
     }
 
