@@ -105,9 +105,10 @@ future<> audit_cf_storage_helper::start(const db::config &cfg) {
         if (ks = _qp.db().try_find_keyspace(KEYSPACE_NAME); !ks) {
             // releasing, because table_helper::setup_keyspace creates a raft guard of its own
             service::release_guard(std::move(group0_guard));
+            std::optional<unsigned int> init_tablets = 0; // 0 means let the system decide
             co_return co_await table_helper::setup_keyspace(_qp, _mm, KEYSPACE_NAME,
                                                             "org.apache.cassandra.locator.NetworkTopologyStrategy",
-                                                            "3", _dummy_query_state, {&_table});
+                                                            "3", _dummy_query_state, {&_table}, init_tablets);
         } else if (ks->metadata()->strategy_name() == "org.apache.cassandra.locator.SimpleStrategy") {
             // We want to migrate the old (pre-Scylla 6.0) SimpleStrategy to a newer one.
             // The migrate_audit_table() function will do nothing if it races with another strategy change:
