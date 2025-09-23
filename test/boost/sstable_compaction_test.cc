@@ -2364,7 +2364,11 @@ public:
 
         auto close_mr = deferred_close(mr);
 
-        auto sst = env.make_sstable(schema);
+        // The test violates key order on purpose.
+        // That's illegal with the index writer of version `ms`.
+        // So we can't use this test, as it is currently written, with `ms`.
+        auto version = sstable_version_types::me;
+        auto sst = env.make_sstable(schema, version);
         sstable_writer_config cfg = env.manager().configure_writer();
         cfg.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
 
@@ -2837,6 +2841,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_validate_mode_test_corrupted_file_digest_
 
 SEASTAR_TEST_CASE(sstable_validate_test) {
   return test_env::do_with_async([] (test_env& env) {
+   for (const auto sst_version : {sstable_version_types::me, sstable_version_types::ms}) {
     auto schema = schema_builder("ks", get_name())
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2882,7 +2887,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         auto rd = make_mutation_reader_from_fragments(schema, permit, std::move(frags));
         auto config = env.manager().configure_writer();
         config.validation_level = mutation_fragment_stream_validation_level::partition_region; // this test violates key order on purpose
-        return make_sstable_easy(env, std::move(rd), std::move(config), sstables::get_highest_sstable_version(), local_keys.size());
+        return make_sstable_easy(env, std::move(rd), std::move(config), sst_version, local_keys.size());
     };
 
     auto info = make_lw_shared<compaction_data>();
@@ -2912,8 +2917,9 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         BOOST_REQUIRE_EQUAL(errors, count);
     }
 
-    BOOST_TEST_MESSAGE("out-of-order clustering row");
-    {
+    // BTI index writers won't accept out-of-order keys.
+    if (has_summary_and_index(sst_version)) {
+        BOOST_TEST_MESSAGE("out-of-order clustering row");
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_clustering_row(1));
         frags.emplace_back(make_clustering_row(0));
@@ -2926,8 +2932,9 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         BOOST_REQUIRE_EQUAL(errors, count);
     }
 
-    BOOST_TEST_MESSAGE("out-of-order partition");
-    {
+    // BTI index writers won't accept out-of-order keys.
+    if (has_summary_and_index(sst_version)) {
+        BOOST_TEST_MESSAGE("out-of-order partition");
         frags.emplace_back(make_partition_start(0));
         frags.emplace_back(make_clustering_row(0));
         frags.emplace_back(make_partition_end());
@@ -2971,6 +2978,7 @@ SEASTAR_TEST_CASE(sstable_validate_test) {
         BOOST_REQUIRE_NE(errors, 0);
         BOOST_REQUIRE_EQUAL(errors, count);
     }
+   } 
   });
 }
 
