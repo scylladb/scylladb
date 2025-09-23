@@ -12,7 +12,7 @@ from test.pylib.repair import create_table_insert_data_for_repair
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.pylib.util import unique_name, wait_for
+from test.pylib.util import unique_name, wait_for, wait_for_first_completed
 from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, create_new_test_keyspace, new_test_keyspace, reconnect_driver, get_topology_coordinator
 from contextlib import nullcontext as does_not_raise
@@ -1171,27 +1171,26 @@ async def test_tablet_split_finalization_with_migrations(manager: ManagerClient)
     await log.wait_for("Tablet load balancer did not make any plan", from_mark=migration_mark)
 
 @pytest.mark.asyncio
-@pytest.mark.nightly
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(manager: ManagerClient):
     injection = "repair_writer_impl_create_writer_wait"
     cmdline = [
         '--logger-log-level', 'repair=debug',
+        '--hinted-handoff-enabled', '0',
     ]
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager, cmdline=cmdline)
+
+    await cql.run_async(f"CREATE TABLE {ks}.test2 (pk int PRIMARY KEY, c int) WITH tombstone_gc = {{'mode':'repair'}};")
+
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
     async def insert_with_down(down_server):
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k + 1});") for k in range(10)])
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test2 (pk, c) VALUES ({k}, {k + 1});") for k in range(10)])
 
     cql = await safe_rolling_restart(manager, [servers[0]], with_down=insert_with_down)
 
-    await wait_for_cql_and_get_hosts(manager.get_cql(), servers, time.time() + 30)
-
     all_replicas = await get_all_tablet_replicas(manager, servers[1], ks, "test")
-    all_replicas.sort(key=lambda x: x.last_token)
-    assert len(all_replicas) >= 3
-    repair_replicas = all_replicas[1]
     migration_replicas = all_replicas[0]
 
     logs = [await manager.server_open_log(s.server_id) for s in servers]
@@ -1199,12 +1198,10 @@ async def test_two_tablets_concurrent_repair_and_migration_repair_writer_level(m
 
     async def repair_task():
         [await manager.api.enable_injection(s.ip_addr, injection, one_shot=True) for s in servers]
-        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", repair_replicas.last_token)
+        await manager.api.tablet_repair(servers[0].ip_addr, ks, "test2", token="all")
 
     async def migration_task():
-        done, pending = await asyncio.wait([asyncio.create_task(log.wait_for(f'repair_writer: keyspace={ks}', from_mark=mark)) for log, mark in zip(logs, marks)], return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
+        await wait_for_first_completed([log.wait_for(f'repair_writer: keyspace={ks}', from_mark=mark) for log, mark in zip(logs, marks)])
         await manager.api.move_tablet(servers[0].ip_addr, ks, "test", migration_replicas.replicas[0][0], migration_replicas.replicas[0][1], migration_replicas.replicas[0][0], 0 if migration_replicas.replicas[0][1] != 0 else 1, migration_replicas.last_token)
         [await manager.api.message_injection(s.ip_addr, injection) for s in servers]
         [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
