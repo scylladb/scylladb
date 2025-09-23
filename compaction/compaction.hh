@@ -20,8 +20,6 @@
 #include <seastar/core/abort_source.hh>
 #include "sstables/basic_info.hh"
 
-using namespace compaction;
-
 namespace compaction {
 
 bool is_eligible_for_compaction(const sstables::shared_sstable& sst) noexcept;

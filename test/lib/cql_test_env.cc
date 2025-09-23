@@ -157,7 +157,7 @@ private:
     sharded<service::tablet_allocator> _tablet_allocator;
     sharded<db::system_distributed_keyspace> _sys_dist_ks;
     sharded<locator::snitch_ptr> _snitch;
-    sharded<compaction_manager> _cm;
+    sharded<compaction::compaction_manager> _cm;
     sharded<tasks::task_manager> _task_manager;
     sharded<netw::messaging_service> _ms;
     sharded<service::storage_service> _ss;
@@ -638,9 +638,9 @@ private:
             // get_cm_cfg is called on each shard when starting a sharded<compaction_manager>
             // we need the getter since updateable_value is not shard-safe (#7316)
             auto get_cm_cfg = sharded_parameter([&] {
-                return compaction_manager::config {
-                    .compaction_sched_group = compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
-                    .maintenance_sched_group = compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
+                return compaction::compaction_manager::config {
+                    .compaction_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.compaction_scheduling_group},
+                    .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
@@ -649,7 +649,7 @@ private:
             });
             _cm.start(std::move(get_cm_cfg), std::ref(abort_sources), std::ref(_task_manager)).get();
             auto stop_cm = deferred_stop(_cm);
-            _cm.invoke_on_all(&compaction_manager::start, std::ref(*cfg), only_on_shard0(&*_disk_space_monitor_shard0)).get();
+            _cm.invoke_on_all(&compaction::compaction_manager::start, std::ref(*cfg), only_on_shard0(&*_disk_space_monitor_shard0)).get();
 
             _sstm.start(std::ref(*cfg), sstables::storage_manager::config{}).get();
             auto stop_sstm = deferred_stop(_sstm);
@@ -974,7 +974,7 @@ private:
                 _qp.invoke_on_all(&cql3::query_processor::stop_remote).get();
             });
 
-            _cm.invoke_on_all([&](compaction_manager& cm) {
+            _cm.invoke_on_all([&](compaction::compaction_manager& cm) {
                 auto cl = _db.local().commitlog();
                 auto scl = _db.local().schema_commitlog();
                 if (cl && scl) {

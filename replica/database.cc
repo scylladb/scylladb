@@ -368,7 +368,7 @@ database::view_update_read_concurrency_sem() {
 }
 
 database::database(const db::config& cfg, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
-        compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
+        compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory& scf, const abort_source& abort, utils::cross_shard_barrier barrier)
     : _stats(make_lw_shared<db_stats>())
     , _user_types(std::make_shared<db_user_types_storage>(*this))
     , _cl_stats(std::make_unique<cell_locker_stats>())
@@ -528,7 +528,6 @@ float backlog_controller::backlog_of_shares(float shares) const {
 void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
 }
-
 
 namespace replica {
 
@@ -2742,7 +2741,7 @@ struct database::table_truncate_state {
     // This RP mark accounts for all data (includes memtable) generated until truncated_at.
     db::replay_position low_mark;
     db_clock::time_point truncated_at;
-    std::vector<compaction_reenabler> cres;
+    std::vector<compaction::compaction_reenabler> cres;
     bool did_flush;
 };
 

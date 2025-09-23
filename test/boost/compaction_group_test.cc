@@ -63,9 +63,9 @@ private:
     sstables::sstable_set _maintenance_set;
     std::vector<sstables::shared_sstable> _compacted_undeleted_sstables;
     mutable compaction::compaction_strategy _compaction_strategy;
-    compaction_strategy_state _compaction_strategy_state;
+    compaction::compaction_strategy_state _compaction_strategy_state;
     tombstone_gc_state _tombstone_gc_state;
-    compaction_backlog_tracker _backlog_tracker;
+    compaction::compaction_backlog_tracker _backlog_tracker;
     condition_variable _staging_done_condition;
     std::function<shared_sstable()> _sstable_factory;
     mutable tests::reader_concurrency_semaphore_wrapper _semaphore;
@@ -107,7 +107,7 @@ public:
     virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const override { return {}; }
     virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override { return _compacted_undeleted_sstables; }
     virtual compaction::compaction_strategy& get_compaction_strategy() const noexcept override { return _compaction_strategy; }
-    virtual compaction_strategy_state& get_compaction_strategy_state() noexcept override { return _compaction_strategy_state; }
+    virtual compaction::compaction_strategy_state& get_compaction_strategy_state() noexcept override { return _compaction_strategy_state; }
     virtual reader_permit make_compaction_reader_permit() const override { return _semaphore.make_permit(); }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
     virtual sstables::shared_sstable make_sstable() const override { return _sstable_factory(); }
@@ -124,7 +124,7 @@ public:
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
-    virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
+    virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return "0"; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }

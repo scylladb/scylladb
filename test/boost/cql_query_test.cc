@@ -6098,7 +6098,7 @@ SEASTAR_TEST_CASE(test_sstable_load_mixed_generation_type) {
         // Run major compaction to ensure that the mixed generation types are handled correctly
         auto& compaction_module = e.local_db().get_compaction_manager().get_task_manager_module();
         std::vector<table_info> table_infos({{"test", tbl.schema()->id()}});
-        auto task = compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, "ks", tasks::task_id::create_null_id(), e.db(), table_infos, flush_mode::skip, false).get();
+        auto task = compaction_module.make_and_start_task<compaction::major_keyspace_compaction_task_impl>({}, "ks", tasks::task_id::create_null_id(), e.db(), table_infos, compaction::flush_mode::skip, false).get();
         task->done().get();
 
         // Verify the expected data again

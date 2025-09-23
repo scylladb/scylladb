@@ -25,13 +25,13 @@ class sstable_run_based_compaction_strategy_for_tests : public compaction::compa
 public:
     sstable_run_based_compaction_strategy_for_tests();
 
-    virtual future<compaction::compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
+    virtual future<compaction::compaction_descriptor> get_sstables_for_compaction(compaction::compaction_group_view& table_s, compaction::strategy_control& control) override;
 
-    virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const override;
+    virtual future<int64_t> estimated_pending_compactions(compaction::compaction_group_view& table_s) const override;
 
-    virtual compaction_strategy_type type() const override;
+    virtual compaction::compaction_strategy_type type() const override;
 
-    virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
+    virtual std::unique_ptr<compaction::compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 };
 
 }

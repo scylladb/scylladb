@@ -719,9 +719,9 @@ void consume_sstables(schema_ptr schema, reader_permit permit, std::vector<sstab
 }
 
 class scylla_sstable_compaction_group_view : public compaction::compaction_group_view {
-    struct dummy_compaction_backlog_tracker : public compaction_backlog_tracker::impl {
+    struct dummy_compaction_backlog_tracker : public compaction::compaction_backlog_tracker::impl {
         virtual void replace_sstables(const std::vector<sstables::shared_sstable>& old_ssts, const std::vector<sstables::shared_sstable>& new_ssts) override { }
-        virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override { return 0.0; }
+        virtual double backlog(const compaction::compaction_backlog_tracker::ongoing_writes& ow, const compaction::compaction_backlog_tracker::ongoing_compactions& oc) const override { return 0.0; }
     };
 
 private:
@@ -733,9 +733,9 @@ private:
     sstables::sstable_set _maintenance_set;
     std::vector<sstables::shared_sstable> _compacted_undeleted_sstables;
     mutable compaction::compaction_strategy _compaction_strategy;
-    compaction_strategy_state _compaction_strategy_state;
+    compaction::compaction_strategy_state _compaction_strategy_state;
     tombstone_gc_state _tombstone_gc_state;
-    compaction_backlog_tracker _backlog_tracker;
+    compaction::compaction_backlog_tracker _backlog_tracker;
     std::string _group_id;
     condition_variable _staging_done_condition;
     mutable sstable_generation_generator _generation_generator;
@@ -781,7 +781,7 @@ public:
     virtual std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point compaction_time) const override { return {}; }
     virtual const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override { return _compacted_undeleted_sstables; }
     virtual compaction::compaction_strategy& get_compaction_strategy() const noexcept override { return _compaction_strategy; }
-    virtual compaction_strategy_state& get_compaction_strategy_state() noexcept override { return _compaction_strategy_state; }
+    virtual compaction::compaction_strategy_state& get_compaction_strategy_state() noexcept override { return _compaction_strategy_state; }
     virtual reader_permit make_compaction_reader_permit() const override { return _permit; }
     virtual sstables::sstables_manager& get_sstables_manager() noexcept override { return _sst_man; }
     virtual sstables::shared_sstable make_sstable() const override { return do_make_sstable(); }
@@ -794,7 +794,7 @@ public:
     virtual bool is_auto_compaction_disabled_by_user() const noexcept override { return false; }
     virtual bool tombstone_gc_enabled() const noexcept override { return false; }
     virtual const tombstone_gc_state& get_tombstone_gc_state() const noexcept override { return _tombstone_gc_state; }
-    virtual compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
+    virtual compaction::compaction_backlog_tracker& get_backlog_tracker() override { return _backlog_tracker; }
     virtual const std::string get_group_id() const noexcept override { return _group_id; }
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
@@ -841,17 +841,17 @@ void validate_operation(schema_ptr schema, reader_permit permit, const std::vect
 
 void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sst_man, const bpo::variables_map& vm) {
-    static const std::vector<std::pair<std::string, compaction_type_options::scrub::mode>> scrub_modes{
-        {"abort", compaction_type_options::scrub::mode::abort},
-        {"skip", compaction_type_options::scrub::mode::skip},
-        {"segregate", compaction_type_options::scrub::mode::segregate},
-        {"validate", compaction_type_options::scrub::mode::validate},
+    static const std::vector<std::pair<std::string, compaction::compaction_type_options::scrub::mode>> scrub_modes{
+        {"abort", compaction::compaction_type_options::scrub::mode::abort},
+        {"skip", compaction::compaction_type_options::scrub::mode::skip},
+        {"segregate", compaction::compaction_type_options::scrub::mode::segregate},
+        {"validate", compaction::compaction_type_options::scrub::mode::validate},
     };
 
     if (sstables.empty()) {
         throw std::invalid_argument("no sstables specified on the command line");
     }
-    compaction_type_options::scrub::mode scrub_mode;
+    compaction::compaction_type_options::scrub::mode scrub_mode;
     {
         if (!vm.count("scrub-mode")) {
             throw std::invalid_argument("missing mandatory command-line argument --scrub-mode");
@@ -879,7 +879,7 @@ void scrub_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     auto compaction_data = compaction::compaction_data{};
 
-    compaction_progress_monitor progress_monitor;
+    compaction::compaction_progress_monitor progress_monitor;
     compaction::compact_sstables(std::move(compaction_descriptor), compaction_data, compaction_group_view, progress_monitor).get();
 }
 

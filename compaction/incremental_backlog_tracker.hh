@@ -11,8 +11,6 @@
 #include "compaction_backlog_manager.hh"
 #include "incremental_compaction_strategy.hh"
 
-using namespace sstables;
-
 namespace compaction {
 
 // The only difference to size tiered backlog tracker is that it will calculate
@@ -25,7 +23,7 @@ class incremental_backlog_tracker final : public compaction_backlog_tracker::imp
     unsigned _threshold = 0;
     double _sstables_backlog_contribution = 0.0f;
     std::unordered_set<sstables::run_id> _sstable_runs_contributing_backlog;
-    std::unordered_map<sstables::run_id, sstable_run> _all;
+    std::unordered_map<sstables::run_id, sstables::sstable_run> _all;
 
     struct inflight_component {
         int64_t total_bytes = 0;
@@ -46,7 +44,7 @@ public:
         return log(x) * inv_log_4;
     }
 
-    static backlog_calculation_result calculate_sstables_backlog_contribution(const std::unordered_map<sstables::run_id, sstable_run>& all,
+    static backlog_calculation_result calculate_sstables_backlog_contribution(const std::unordered_map<sstables::run_id, sstables::sstable_run>& all,
             const incremental_compaction_strategy_options& options,  unsigned threshold);
 
     incremental_backlog_tracker(incremental_compaction_strategy_options options);
