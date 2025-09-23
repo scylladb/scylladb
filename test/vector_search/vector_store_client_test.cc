@@ -344,36 +344,19 @@ auto make_vs_mock_server(Args&&... args) -> future<std::unique_ptr<vs_mock_serve
 } // namespace
 
 BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
-    {
-        auto cfg = config();
-        auto vs = vector_store_client{cfg};
-        BOOST_CHECK(vs.is_disabled());
-        BOOST_CHECK(!vs.host());
-        BOOST_CHECK(!vs.port());
-    }
-    {
-        auto cfg = config();
-        cfg.vector_store_primary_uri.set("http://good.authority.com:6080");
-        auto vs = vector_store_client{cfg};
-        BOOST_CHECK(!vs.is_disabled());
-        BOOST_CHECK_EQUAL(*vs.host(), "good.authority.com");
-        BOOST_CHECK_EQUAL(*vs.port(), 6080);
-    }
-    {
-        auto cfg = config();
-        cfg.vector_store_primary_uri.set("http://bad,authority.com:6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("bad-schema://authority.com:6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://bad.port.com:a6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://bad.port.com:60806080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://bad.format.com:60:80");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://authority.com:6080/bad/path");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-    }
+    auto cfg = config();
+    cfg.vector_store_primary_uri.set("http://bad,authority.com:6080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("bad-schema://authority.com:6080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://bad.port.com:a6080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://bad.port.com:60806080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://bad.format.com:60:80");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://authority.com:6080/bad/path");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
 }
 
 /// Resolving of the hostname is started in start_background_tasks()

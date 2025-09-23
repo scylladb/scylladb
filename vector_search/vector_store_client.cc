@@ -350,20 +350,6 @@ struct vector_store_client::impl {
         return !bool{_host_port};
     }
 
-    auto host() const -> std::expected<host_name, disabled> {
-        if (is_disabled()) {
-            return std::unexpected{disabled{}};
-        }
-        return _host_port->host;
-    }
-
-    auto port() const -> std::expected<port_number, disabled> {
-        if (is_disabled()) {
-            return std::unexpected{disabled{}};
-        }
-        return _host_port->port;
-    }
-
     void clear_current_clients() {
         old_clients.insert(old_clients.end(), std::make_move_iterator(current_clients.begin()), std::make_move_iterator(current_clients.end()));
         current_clients.clear();
@@ -493,14 +479,6 @@ auto vector_store_client::stop() -> future<> {
 
 auto vector_store_client::is_disabled() const -> bool {
     return _impl->is_disabled();
-}
-
-auto vector_store_client::host() const -> std::expected<host_name, disabled> {
-    return _impl->host();
-}
-
-auto vector_store_client::port() const -> std::expected<port_number, disabled> {
-    return _impl->port();
 }
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
