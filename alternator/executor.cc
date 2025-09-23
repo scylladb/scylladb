@@ -105,6 +105,12 @@ extern const sstring TTL_TAG_KEY("system:ttl_attribute");
 // base table's keys were added as range keys. In all other cases either the first key is the user specified key,
 // following ones are base table's keys added as needed or range key list will be empty.
 static const sstring SPURIOUS_RANGE_KEY_ADDED_TO_GSI_AND_USER_DIDNT_SPECIFY_RANGE_KEY_TAG_KEY("system:spurious_range_key_added_to_gsi_and_user_didnt_specify_range_key");
+// Setting the tag with a numeric value will enable a specific initial number
+// of tablets (setting the value to 0 means enabling tablets with
+// an automatic selection of the best number of tablets).
+// Setting this tag to any non-numeric value (e.g., an empty string or the
+// word "none") will ask to disable tablets.
+static constexpr auto INITIAL_TABLETS_TAG_KEY = "system:initial_tablets";
 
 
 enum class table_status {
@@ -128,7 +134,8 @@ static std::string_view table_status_to_sstring(table_status tbl_status) {
     return "UNKNOWN";
 }
 
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat);
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type,
+        const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const enum_option<db::tablets_mode_t>&& tablets_mode);
 
 static map_type attrs_type() {
     static thread_local auto t = map_type_impl::get_instance(utf8_type, bytes_type, true);
@@ -1202,8 +1209,9 @@ void rmw_operation::set_default_write_isolation(std::string_view value) {
 // are deliberately intended to be set and read by the user, so are not
 // considered "internal".
 static bool tag_key_is_internal(std::string_view tag_key) {
-    return tag_key.starts_with("system:") &&
-        tag_key != rmw_operation::WRITE_ISOLATION_TAG_KEY;
+    return tag_key.starts_with("system:")
+        && tag_key != rmw_operation::WRITE_ISOLATION_TAG_KEY
+        && tag_key != INITIAL_TABLETS_TAG_KEY;
 }
 
 enum class update_tags_action { add_tags, delete_tags };
@@ -1491,7 +1499,8 @@ bytes extract_from_attrs_column_computation::compute_value(const schema&, const 
 }
 
 
-static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization) {
+static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request,
+            service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization, const enum_option<db::tablets_mode_t>&& tablets_mode) {
     SCYLLA_ASSERT(this_shard_id() == 0);
 
     // We begin by parsing and validating the content of the CreateTable
@@ -1718,7 +1727,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
         auto group0_guard = co_await mm.start_group0_operation();
         auto ts = group0_guard.write_timestamp();
         utils::chunked_vector<mutation> schema_mutations;
-        auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features());
+        auto ksm = create_keyspace_metadata(keyspace_name, sp, gossiper, ts, tags_map, sp.features(), std::move(tablets_mode));
         // Alternator Streams doesn't yet work when the table uses tablets (#23838)
         if (stream_specification && stream_specification->IsObject()) {
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
@@ -1796,7 +1805,8 @@ future<executor::request_return_type> executor::create_table(client_state& clien
 
     co_return co_await _mm.container().invoke_on(0, [&, tr = tracing::global_trace_state_ptr(trace_state), request = std::move(request), &sp = _proxy.container(), &g = _gossiper.container(), client_state_other_shard = client_state.move_to_other_shard(), enforce_authorization = bool(_enforce_authorization)]
                                         (service::migration_manager& mm) mutable -> future<executor::request_return_type> {
-        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local(), enforce_authorization);
+        const auto tablets_mode = _proxy.data_dictionary().get_config().tablets_mode_for_new_keyspaces();
+        co_return co_await create_table_on_shard0(client_state_other_shard.get(), tr, std::move(request), sp.local(), mm, g.local(), enforce_authorization, std::move(tablets_mode));
     });
 }
 
@@ -1874,12 +1884,12 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                 if (add_stream_options(*stream_specification, builder, p.local())) {
                     validate_cdc_log_name_length(builder.cf_name());
                 }
-                // Alternator Streams doesn't yet work when the table uses tablets (#23838)
+                // Alternator Streams doesn't yet work when the table uses tablets (#16317)
                 auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
                 if (stream_enabled && stream_enabled->IsBool()) {
                     if (stream_enabled->GetBool()) {
                         if (p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
-                        co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
+                        co_return api_error::validation("Streams not yet supported on a table using tablets (issue #16317). "
                             "If you want to enable streams, re-create this table with vnodes (with the tag 'experimental:initial_tablets' set to 'none').");
                         }
                         if (tab->cdc_options().enabled()) {
@@ -5850,7 +5860,8 @@ future<executor::request_return_type> executor::describe_continuous_backups(clie
 // of nodes in the cluster: A cluster with 3 or more live nodes, gets RF=3.
 // A smaller cluster (presumably, a test only), gets RF=1. The user may
 // manually create the keyspace to override this predefined behavior.
-static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts, const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat) {
+static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_view keyspace_name, service::storage_proxy& sp, gms::gossiper& gossiper, api::timestamp_type ts,
+            const std::map<sstring, sstring>& tags_map, const gms::feature_service& feat, const enum_option<db::tablets_mode_t>&& tablets_mode) {
     int endpoint_count = gossiper.num_endpoints();
     int rf = 3;
     if (endpoint_count < rf) {
@@ -5860,32 +5871,43 @@ static lw_shared_ptr<keyspace_metadata> create_keyspace_metadata(std::string_vie
     }
     auto opts = get_network_topology_options(sp, gossiper, rf);
 
-    // Even if the "tablets" experimental feature is available, we currently
-    // do not enable tablets by default on Alternator tables because LWT is
-    // not yet fully supported with tablets.
-    // The user can override the choice of whether or not to use tablets at
-    // table-creation time by supplying the following tag with a numeric value
-    // (setting the value to 0 means enabling tablets with automatic selection
-    // of the best number of tablets).
+    // Whether to use tablets for the table (actually for the keyspace
+    // of the table) is determined by the parameter `tablets_mode` (which is
+    // determined by `tablets_mode_for_new_keyspaces` config flag), as well as
+    // the presence and the value of a per-table tag below.
+    // Setting the tag with a numeric value will enable a specific initial number
+    // of tablets (setting the value to 0 means enabling tablets with
+    // an automatic selection of the best number of tablets).
     // Setting this tag to any non-numeric value (e.g., an empty string or the
     // word "none") will ask to disable tablets.
-    // If we make this tag a permanent feature, it will get a "system:" prefix -
-    // until then we give it the "experimental:" prefix to not commit to it.
-    static constexpr auto INITIAL_TABLETS_TAG_KEY = "experimental:initial_tablets";
-    // initial_tablets currently defaults to unset, so tablets will not be
-    // used by default on new Alternator tables. Change this initialization
-    // to 0 enable tablets by default, with automatic number of tablets.
+    // When vnodes are asked for by the tag value, but tablets are enforced by config,
+    // throw an exception to the client.
     std::optional<unsigned> initial_tablets;
     if (feat.tablets) {
         auto it = tags_map.find(INITIAL_TABLETS_TAG_KEY);
         if (it != tags_map.end()) {
-            // Tag set. If it's a valid number, use it. If not - e.g., it's
-            // empty or a word like "none", disable tablets by setting
-            // initial_tablets to a disengaged optional.
+            // The per-table tag is set.
             try {
-                initial_tablets = std::stol(tags_map.at(INITIAL_TABLETS_TAG_KEY));
+                // If the tag is a valid number, use it.
+                initial_tablets = std::stol(it->second);
+                elogger.info("Following {} tag, Alternator will attempt to create a keyspace {} with tablets, initially {} of them (0 means default number).", INITIAL_TABLETS_TAG_KEY, keyspace_name, initial_tablets.value());
             } catch(...) {
+                // If the tag is not a number - e.g., it's empty or is a word like "none",
+                // disable tablets and use vnodes by setting initial_tablets to a disengaged optional.
+                // When vnodes are asked for but tablets are enforced by config, throw.
+                if(tablets_mode == db::tablets_mode_t::mode::enforced) {
+                    throw api_error::validation(fmt::format("Creating keyspace {} with vnodes forbidden - tablets are enforced in configuration.", keyspace_name));
+                }
                 initial_tablets = std::nullopt;
+                elogger.info("Following {} tag containing non-numerical value, Alternator will attempt to create a keyspace {} with vnodes.", INITIAL_TABLETS_TAG_KEY, keyspace_name);
+            }
+        } else {
+            // No per-table tag present, use the value from config
+            if(tablets_mode == db::tablets_mode_t::mode::enabled || tablets_mode == db::tablets_mode_t::mode::enforced) {
+                initial_tablets = 0;
+                elogger.info("Following the `tablets_mode_for_new_keyspaces` flag from the settings, Alternator will attempt to create a keyspace {} with tablets.", keyspace_name);
+            } else {
+                elogger.info("Following the `tablets_mode_for_new_keyspaces` flag from the settings, Alternator will attempt to create a keyspace {} with vnodes.", keyspace_name);
             }
         }
     }
