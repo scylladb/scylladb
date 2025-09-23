@@ -347,7 +347,7 @@ async def test_node_restart_while_tablet_split(manager: ManagerClient, volumes_f
         mark = await log.mark()
 
         logger.info("Create and populate test table")
-        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 1}") as ks:
+        async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3} AND tablets = {'initial': 1}") as ks:
             async with new_test_table(manager, ks, "pk int PRIMARY KEY, t text") as cf:
                 table = cf.split('.')[-1]
                 table_id = (await cql.run_async(f"SELECT id FROM system_schema.tables WHERE keyspace_name = '{ks}' AND table_name = '{table}'"))[0].id
