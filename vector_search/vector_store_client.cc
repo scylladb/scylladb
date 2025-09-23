@@ -75,16 +75,16 @@ auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     return port;
 }
 
-struct host_port {
+struct uri {
     host_name host;
     port_number port;
 };
 
-auto parse_service_uri(std::string_view uri) -> std::optional<host_port> {
+auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
     constexpr auto URI_REGEX = R"(^http:\/\/([a-z0-9._-]+):([0-9]+)$)";
     auto const uri_regex = std::regex(URI_REGEX);
     auto uri_match = std::smatch{};
-    auto uri_txt = std::string(uri);
+    auto uri_txt = std::string(uri_);
 
     if (!std::regex_match(uri_txt, uri_match, uri_regex) || uri_match.size() != 3) {
         return {};
@@ -225,25 +225,25 @@ public:
 
 class http_client {
 
-    host_port _host_port;
+    uri _uri;
     inet_address _addr;
 
     http::experimental::client impl;
 
 public:
-    http_client(host_port host_port_, inet_address addr)
-        : _host_port(std::move(host_port_))
+    http_client(uri host_port_, inet_address addr)
+        : _uri(std::move(host_port_))
         , _addr(std::move(addr))
-        , impl(std::make_unique<client_connection_factory>(socket_address(addr, _host_port.port))) {
+        , impl(std::make_unique<client_connection_factory>(socket_address(addr, _uri.port))) {
     }
 
     bool connects_to(inet_address const& a, port_number p) const {
-        return _addr == a && _host_port.port == p;
+        return _addr == a && _uri.port == p;
     }
 
     seastar::future<> make_request(operation_type method, const http_path& path, const std::optional<json_content>& content,
             http::experimental::client::reply_handler&& handle, abort_source* as) {
-        auto req = http::request::make(method, _host_port.host, path);
+        auto req = http::request::make(method, _uri.host, path);
         if (content) {
             req.write_body("json", *content);
         }
@@ -263,8 +263,8 @@ bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
     return uris.empty() || uris[0].empty();
 }
 
-auto parse_uris(std::string_view uris_csv) -> std::vector<host_port> {
-    std::vector<host_port> ret;
+auto parse_uris(std::string_view uris_csv) -> std::vector<uri> {
+    std::vector<uri> ret;
     auto uris = utils::split_comma_separated_list(uris_csv);
     if (should_vector_store_service_be_disabled(uris)) {
         vslogger.info("Vector Store service URIs are empty, disabling Vector Store service");
@@ -291,7 +291,7 @@ sstring response_content_to_sstring(const std::vector<temporary_buffer<char>>& b
     return result;
 }
 
-std::vector<sstring> get_hosts(const std::vector<host_port>& uris) {
+std::vector<sstring> get_hosts(const std::vector<uri>& uris) {
     std::vector<sstring> ret;
     for (const auto& uri : uris) {
         ret.push_back(uri.host);
@@ -310,7 +310,7 @@ struct vector_store_client::impl {
     utils::observer<sstring> uri_observer;
     clients_type current_clients;
     clients_type old_clients;
-    std::vector<host_port> _uris;
+    std::vector<uri> _uris;
     gate client_producer_gate;
     condition_variable refresh_client_cv;
     milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
@@ -339,7 +339,7 @@ struct vector_store_client::impl {
         }) {
     }
 
-    void handle_uris_changed(std::vector<host_port> uris) {
+    void handle_uris_changed(std::vector<uri> uris) {
         clear_current_clients();
         _uris = std::move(uris);
         dns.hosts(get_hosts(_uris));
