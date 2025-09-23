@@ -102,6 +102,7 @@ Additional Information
 
 To learn more about TTL, and see a hands-on example, check out `this lesson <https://university.scylladb.com/courses/data-modeling/lessons/advanced-data-modeling/topic/expiring-data-with-ttl-time-to-live/>`_ on ScyllaDB University.
 
+* `Video: Managing data expiration with Time-To-live <https://www.youtube.com/watch?v=SXkbu7mFHeA>`_
 * :doc:`Apache Cassandra Query Language (CQL) Reference </cql/index>`
 * :doc:`KB Article:How to Change gc_grace_seconds for a Table </kb/gc-grace-seconds/>`
 * :doc:`KB Article:Time to Live (TTL) and Compaction </kb/ttl-facts/>`
