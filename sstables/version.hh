@@ -17,24 +17,20 @@ namespace sstables {
 enum class sstable_version_types { ka, la, mc, md, me, ms };
 enum class sstable_format_types { big };
 
-constexpr std::array<sstable_version_types, 5> all_sstable_versions = {
+constexpr std::array<sstable_version_types, 6> all_sstable_versions = {
     sstable_version_types::ka,
     sstable_version_types::la,
     sstable_version_types::mc,
     sstable_version_types::md,
     sstable_version_types::me,
-    // FIXME: Uncomment after tests are prepared for the new
-    // version. This will happen in the same series.
-    // sstable_version_types::ms,
+    sstable_version_types::ms,
 };
 
-constexpr std::array<sstable_version_types, 3> writable_sstable_versions = {
+constexpr std::array<sstable_version_types, 4> writable_sstable_versions = {
     sstable_version_types::mc,
     sstable_version_types::md,
     sstable_version_types::me,
-    // FIXME: Uncomment after tests are prepared for the new
-    // version. This will happen in the same series.
-    // sstable_version_types::ms,
+    sstable_version_types::ms,
 };
 
 constexpr sstable_version_types oldest_writable_sstable_format = sstable_version_types::mc;
