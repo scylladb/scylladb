@@ -488,6 +488,8 @@ compression_parameters::compression_parameters(const std::map<sstring, sstring>&
 
     if (auto v = get_option(SSTABLE_COMPRESSION)) {
         _algorithm = name_to_algorithm(*v);
+    } else if (!options.empty()) {
+        throw exceptions::configuration_exception(seastar::format("Missing compression option '{}'", SSTABLE_COMPRESSION));
     } else {
         _algorithm = algorithm::none;
     }
