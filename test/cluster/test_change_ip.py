@@ -121,7 +121,7 @@ async def test_change_two(manager, random_tables, build_mode):
         await manager.server_update_config(servers[1].server_id, "error_injections_at_startup", ['sleep_before_start_gossiping'])
         await manager.server_update_config(servers[2].server_id, "error_injections_at_startup", ['sleep_before_start_gossiping'])
     await manager.server_start(servers[1].server_id)
-    servers[1] = ServerInfo(servers[1].server_id, s1_new_ip, s1_new_ip, servers[1].datacenter, servers[1].rack)
+    servers[1] = servers[1]._replace(ip_addr=s1_new_ip, rpc_address=s1_new_ip)
     if build_mode != 'release':
         s0_logs = await manager.server_open_log(servers[0].server_id)
         await s0_logs.wait_for('crash-before-prev-ip-removed hit, killing the node')
@@ -132,7 +132,7 @@ async def test_change_two(manager, random_tables, build_mode):
     await wait_proper_ips([servers[0], servers[1]])
 
     await manager.server_start(servers[2].server_id)
-    servers[2] = ServerInfo(servers[2].server_id, s2_new_ip, s2_new_ip, servers[2].datacenter, servers[2].rack)
+    servers[2] = servers[2]._replace(ip_addr=s2_new_ip, rpc_address=s2_new_ip)
     await reconnect_driver(manager)
     await wait_proper_ips([servers[0], servers[1], servers[2]])
 

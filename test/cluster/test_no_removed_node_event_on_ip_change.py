@@ -48,7 +48,7 @@ async def test_no_removed_node_event_on_ip_change(manager: ManagerClient, caplog
         with test_cluster.connect() as test_cql:
             logger.info(f"starting the follower node {servers[1]}")
             await manager.server_start(servers[1].server_id)
-            servers[1] = ServerInfo(servers[1].server_id, s1_new_ip, s1_new_ip, servers[1].datacenter, servers[1].rack)
+            servers[1] = servers[1]._replace(ip_addr=s1_new_ip, rpc_address=s1_new_ip)
 
             logger.info("waiting for cql and hosts")
             await wait_for_cql_and_get_hosts(test_cql, servers, time.time() + 30)
