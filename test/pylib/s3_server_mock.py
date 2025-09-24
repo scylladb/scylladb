@@ -87,11 +87,7 @@ class InjectingHandler(BaseHTTPRequestHandler):
 
     def parsed_qs(self):
         parsed_url = urlparse(self.path)
-        query_components = parse_qs(parsed_url.query)
-        for key in parsed_url.query.split('&'):
-            if '=' not in key:
-                query_components[key] = ['']
-        return query_components
+        return parse_qs(parsed_url.query, keep_blank_values=True)
 
     def do_GET(self):
         content_length = self.headers['Content-Length']
@@ -250,6 +246,8 @@ class InjectingHandler(BaseHTTPRequestHandler):
                                 </Error>"""
                 case _:
                     raise ValueError("Unknown policy")
+
+        raise ValueError(f"No matching response for POST request: path={path}, query={query}")
 
 
 # Mock server to setup `ThreadingHTTPServer` instance with custom request handler (see above), managing requests state
