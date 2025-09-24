@@ -8,7 +8,7 @@
 # old vnodes), that the DynamoDB API user would not even be aware
 # of. So there should be very few, if any, tests in this file.
 # However, temporarily - while the tablets feature is only partially
-# working and turned off by default (see issue #21989) - it is useful
+# working, it is useful
 # to have here a few tests that clarify the situation and how to
 # override it. Most of these tests, or perhaps even this entire file,
 # will probably go away eventually.
@@ -17,7 +17,7 @@ import pytest
 import boto3
 from botocore.exceptions import ClientError
 
-from .util import new_test_table
+from .util import new_test_table, scylla_config_read, scylla_config_temporary
 
 # All tests in this file are scylla-only
 @pytest.fixture(scope="function", autouse=True)
@@ -45,21 +45,28 @@ def uses_tablets(dynamodb, table):
         return True
     return False
 
-# Right now, new Alternator tables are created *without* tablets.
-# This test should be changed if this default ever changes.
+# Utility function for checking whether using tablets by a given table
+# is in-line with the global Scylla configuration flag regarding tablets.
+def assert_when_tablets_usage_contradicts_config(dynamodb, table):
+    tablets_default = scylla_config_read(dynamodb, 'tablets_mode_for_new_keyspaces')
+    if(tablets_default == 'enabled' or tablets_default == 'enforced'):
+        assert uses_tablets(dynamodb, table)
+    else:
+        assert not uses_tablets(dynamodb, table)
+
+# New Alternator tables are created with tablets or vnodes, according to the
+# "tablets_mode_for_new_keyspaces" configuration flag.
 def test_default_tablets(dynamodb):
     schema = {
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
     with new_test_table(dynamodb, **schema) as table:
-        # Change this assertion if Alternator's default changes!
-        assert not uses_tablets(dynamodb, table)
+        assert_when_tablets_usage_contradicts_config(dynamodb, table)
 
-# Tests for the initial_tablets tag. Currently, it is considered
-# experimental, and named "experimental:initial_tablets", but perhaps
-# in the future it will graduate out of experimental status and
-# the prefix will be replaced by "system:".
-initial_tablets_tag = 'experimental:initial_tablets'
+# Tests for the initial_tablets tag named "system:initial_tablets".
+# This tag was earlier called "experimental:initial_tablets".
+# Ref. #26211
+initial_tablets_tag = 'system:initial_tablets'
 
 # Check that a table created with a number as initial_tablets will use 
 # tablets. Different numbers have different meanings (0 asked to use
@@ -84,6 +91,37 @@ def test_initial_tablets_number(dynamodb):
     with new_test_table(dynamodb, **schema) as table:
         assert not uses_tablets(dynamodb, table)
 
+# Usage of tablets is determined by the configuration flag
+# "tablets_mode_for_new_keyspaces", as well as by the per-table
+# "system:initial_tablets" tag. The tag overrides the configuration,
+# except when the configuration flag's value is "enforced" -
+# then if the tag asks for vnodes, an exception is thrown.
+# The test checks only 2 of the values of the config flag
+# "tablets_mode_for_new_keyspaces": "enabled" and "enforced". The value
+# "disabled" is likely never to be used in the wild and additionally
+# can impact other tests running in parallel.
+def test_tablets_tag_vs_config(dynamodb):
+    # Begin with the per-table tag asking for tablets
+    schema = {
+        'Tags': [{'Key': initial_tablets_tag, 'Value': '0'}],
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
+        'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled'):
+        with new_test_table(dynamodb, **schema) as table:
+            assert uses_tablets(dynamodb, table)
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enforced'):
+        with new_test_table(dynamodb, **schema) as table:
+            assert uses_tablets(dynamodb, table)
+    # Now change the per-table tag to ask for vnodes.
+    schema = {**schema, 'Tags': [{'Key': initial_tablets_tag, 'Value': 'none'}]}
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enabled'):
+        with new_test_table(dynamodb, **schema) as table:
+            assert uses_tablets(dynamodb, table)
+    with scylla_config_temporary(dynamodb, 'tablets_mode_for_new_keyspaces', 'enforced'):
+        with pytest.raises(ClientError, match='ValidationException.*tablets'):
+            with new_test_table(dynamodb, **schema) as table:
+                pass
+
 # Before Alternator Streams is supported with tablets (#23838), let's verify
 # that enabling Streams results in an orderly error. This test should be
 # deleted when #23838 is fixed.
@@ -107,7 +145,7 @@ def test_streams_enable_error_with_tablets(dynamodb):
 # For a while (see #18068) it was possible to create an Alternator table with
 # tablets enabled and choose LWT for write isolation (always_use_lwt)
 # but the writes themselves failed. This test verifies that this is no longer
-# the case, and the LWT writes succeed even when tables are used.
+# the case, and the LWT writes succeed even when tablets are used.
 def test_alternator_tablets_and_lwt(dynamodb):
     schema = {
         'Tags': [
@@ -116,12 +154,12 @@ def test_alternator_tablets_and_lwt(dynamodb):
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
     with new_test_table(dynamodb, **schema) as table:
-        assert uses_tablets(dynamodb, table)
+        assert_when_tablets_usage_contradicts_config(dynamodb, table)
         # This put_item() failed before #18068 was fixed:
         table.put_item(Item={'p': 'hello'})
         assert table.get_item(Key={'p': 'hello'}, ConsistentRead=True)['Item'] == {'p': 'hello'}
 
-# An Alternator table created tablets and with a write isolation
+# An Alternator table created with tablets and with a write isolation
 # mode that doesn't use LWT ("forbid_rmw") works normally, even
 # before #18068 is fixed.
 def test_alternator_tablets_without_lwt(dynamodb):
@@ -132,6 +170,6 @@ def test_alternator_tablets_without_lwt(dynamodb):
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
         'AttributeDefinitions': [ { 'AttributeName': 'p', 'AttributeType': 'S' }]}
     with new_test_table(dynamodb, **schema) as table:
-        assert uses_tablets(dynamodb, table)
+        assert_when_tablets_usage_contradicts_config(dynamodb, table)
         table.put_item(Item={'p': 'hello'})
         assert table.get_item(Key={'p': 'hello'})['Item'] == {'p': 'hello'}
