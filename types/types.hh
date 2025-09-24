@@ -18,7 +18,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include "utils/UUID.hh"
 #include <seastar/net/byteorder.hh>
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "bytes.hh"
 #include "duration.hh"
 #include "marshal_exception.hh"

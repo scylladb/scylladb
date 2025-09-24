@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "tasks/task_handler.hh"
 #include "tasks/virtual_task_hint.hh"
 #include "utils/overloaded_functor.hh"

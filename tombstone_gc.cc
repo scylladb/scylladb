@@ -9,7 +9,7 @@
 #include <chrono>
 #include <boost/icl/interval.hpp>
 #include "schema/schema.hh"
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "tombstone_gc.hh"
 #include "tombstone_gc-internals.hh"
 #include "locator/token_metadata.hh"

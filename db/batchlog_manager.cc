@@ -24,7 +24,7 @@
 #include "system_keyspace.hh"
 #include "utils/rate_limiter.hh"
 #include "utils/log.hh"
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "unimplemented.hh"
 #include "idl/frozen_schema.dist.hh"
 #include "idl/frozen_schema.dist.impl.hh"

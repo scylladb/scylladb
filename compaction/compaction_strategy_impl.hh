@@ -10,7 +10,7 @@
 
 #include "compaction_backlog_manager.hh"
 #include "compaction_strategy.hh"
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "compaction_descriptor.hh"
 
 namespace sstables {

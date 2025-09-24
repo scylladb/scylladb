@@ -19,7 +19,7 @@
 
 #include "UUID.hh"
 #include "on_internal_error.hh"
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 
 namespace utils {
 
