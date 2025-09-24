@@ -2251,7 +2251,10 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
 storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
-    co_return (co_await locator::get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens())) |
+    std::vector<token> tokens;
+    const auto& tm = *erm->get_token_metadata_ptr();
+    tokens = tm.sorted_tokens();
+    co_return (co_await locator::get_range_to_address_map(erm, std::move(tokens))) |
         std::views::transform([&] (auto tid) { return std::make_pair(tid.first,
                 tid.second | std::views::transform([&] (auto id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>()); }) |
         std::ranges::to<std::unordered_map>();
