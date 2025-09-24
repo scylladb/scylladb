@@ -233,6 +233,16 @@ std::unique_ptr<unavailable_server> make_unavailable_server(uint16_t port = 0) {
     return ret;
 }
 
+auto make_vs_server(status_type status) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    return new_http_server([status](routes& r) {
+        auto ann = [status](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+            rep->set_status(status);
+            co_return rep;
+        };
+        r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
+    });
+};
+
 } // namespace
 
 BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
@@ -670,15 +680,6 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
     // Test verifies that when vector store uri is update, the client
     // will switch to the new uri within the DNS refresh interval.
     // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
-    auto make_vs_server = [](status_type status) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-        return new_http_server([status](routes& r) {
-            auto ann = [status](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-                rep->set_status(status);
-                co_return rep;
-            };
-            r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
-        });
-    };
     auto [s1, addr_s1] = co_await make_vs_server(status_type::not_found);
     auto [s2, addr_s2] = co_await make_vs_server(status_type::service_unavailable);
 
