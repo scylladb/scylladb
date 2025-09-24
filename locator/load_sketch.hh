@@ -119,6 +119,16 @@ public:
                       std::optional<sstring> only_dc = std::nullopt) {
         co_await utils::clear_gently(_nodes);
 
+        if (host) {
+            ensure_node(*host);
+        } else {
+            _tm->for_each_token_owner([&] (const node& n) {
+                if (!only_dc || *only_dc == n.dc_rack().dc) {
+                    ensure_node(n.host_id());
+                }
+            });
+        }
+
         if (only_table) {
             if (_tm->tablets().has_tablet_map(*only_table)) {
                 auto& tmap = _tm->tablets().get_tablet_map(*only_table);
