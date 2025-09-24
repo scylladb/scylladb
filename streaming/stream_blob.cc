@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "db/view/view_building_worker.hh"
 #include "message/messaging_service.hh"
 #include "streaming/stream_blob.hh"
 #include "streaming/stream_plan.hh"
@@ -44,8 +45,9 @@ static sstables::sstable_state sstable_state(const streaming::stream_blob_meta& 
     return meta.sstable_state.value_or(sstables::sstable_state::normal);
 }
 
-static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::database& db, table_id id, sstables::sstable_state state, sstables::entry_descriptor desc, seastar::shard_id shard) {
-    co_await db.container().invoke_on(shard, [id, desc, state, ops_id] (replica::database& db) -> future<> {
+static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::database& db, db::view::view_building_worker& vbw, table_id id, sstables::sstable_state state, sstables::entry_descriptor desc, seastar::shard_id shard) {
+    auto& sharded_vbw = vbw.container();
+    co_await db.container().invoke_on(shard, [&sharded_vbw, id, desc, state, ops_id] (replica::database& db) -> future<> {
         replica::table& t = db.find_column_family(id);
         auto erm = t.get_effective_replication_map();
         auto& sstm = t.get_sstables_manager();
@@ -53,6 +55,17 @@ static future<> load_sstable_for_tablet(const file_stream_id& ops_id, replica::d
         co_await sst->load(erm->get_sharder(*t.schema()));
         co_await t.add_sstable_and_update_cache(sst);
         blogger.info("stream_sstables[{}] Loaded sstable {} successfully", ops_id, sst->toc_filename());
+
+        if (state == sstables::sstable_state::staging) {
+            // If the sstable is in staging state, register it to view building worker
+            // to generate view updates from it.
+            // But because the tablet is still in migration process, register the sstable
+            // to the view building worker, which will create a view building task for it,
+            // so then, the view building coordinator can decide to process it once the migration
+            // is finished.
+            // (Instead of registering the sstable to view update generator which may process it immediately.)
+            co_await sharded_vbw.local().register_staging_sstable_tasks({sst}, t.schema()->id());
+        }
     });
 }
 
@@ -313,13 +326,13 @@ future<> stream_blob_handler(replica::database& db,
 }
 
 
-future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms,
+future<> stream_blob_handler(replica::database& db, db::view::view_building_worker& vbw, netw::messaging_service& ms,
         locator::host_id from,
         streaming::stream_blob_meta meta,
         rpc::sink<streaming::stream_blob_cmd_data> sink,
         rpc::source<streaming::stream_blob_cmd_data> source) {
 
-    co_await stream_blob_handler(db, ms, std::move(from), meta, std::move(sink), std::move(source), [](replica::database& db, const streaming::stream_blob_meta& meta) -> future<output_result> {
+    co_await stream_blob_handler(db, ms, std::move(from), meta, std::move(sink), std::move(source), [&vbw] (replica::database& db, const streaming::stream_blob_meta& meta) -> future<output_result> {
         auto foptions = file_open_options();
         foptions.sloppy_size = true;
         foptions.extent_allocation_size_hint = 32 << 20;
@@ -333,7 +346,7 @@ future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms,
         auto sstable_sink = sstables::create_stream_sink(table.schema(), sstm, table.get_storage_options(), sstable_state(meta), meta.filename, meta.fops == file_ops::load_sstables);
         auto out = co_await sstable_sink->output(foptions, stream_options);
         co_return output_result{
-            [sstable_sink = std::move(sstable_sink), &meta, &db](store_result res) -> future<> {
+            [sstable_sink = std::move(sstable_sink), &meta, &db, &vbw](store_result res) -> future<> {
                 if (res != store_result::ok) {
                     co_await sstable_sink->abort();
                     co_return;
@@ -343,7 +356,7 @@ future<> stream_blob_handler(replica::database& db, netw::messaging_service& ms,
                     blogger.debug("stream_sstables[{}] Loading sstable {} on shard {}", meta.ops_id, sst->toc_filename(), meta.dst_shard_id);
                     auto desc = sst->get_descriptor(sstables::component_type::TOC);
                     sst = {};
-                    co_await load_sstable_for_tablet(meta.ops_id, db, meta.table, sstable_state(meta), std::move(desc), meta.dst_shard_id);
+                    co_await load_sstable_for_tablet(meta.ops_id, db, vbw, meta.table, sstable_state(meta), std::move(desc), meta.dst_shard_id);
                 }
             },
             std::move(out)
