@@ -121,10 +121,9 @@ private:
 struct vector_store_client_tester {
     static void set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval);
     static void set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout);
-    static void set_http_request_retries(vector_store_client& vsc, unsigned retries);
-    static void set_dns_resolver(vector_store_client& vsc, std::function<future<std::optional<net::inet_address>>(sstring const&)> resolver);
+    static void set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<net::inet_address>>(sstring const&)> resolver);
     static void trigger_dns_resolver(vector_store_client& vsc);
-    static auto resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::optional<net::inet_address>>;
+    static auto resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::vector<net::inet_address>>;
 };
 
 } // namespace vector_search
