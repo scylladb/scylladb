@@ -643,21 +643,16 @@ future<json::json_return_type>
 rest_get_range_to_endpoint_map(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto keyspace = validate_keyspace(ctx, req);
         auto table = req->get_query_param("cf");
+        std::optional<table_id> table_id;
 
-        auto erm = std::invoke([&]() -> locator::effective_replication_map_ptr {
-            auto& ks = ctx.db.local().find_keyspace(keyspace);
             if (table.empty()) {
                 ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
-                return ks.get_vnode_effective_replication_map();
             } else {
-                auto table_id = validate_table(ctx.db.local(), keyspace, table);
-                auto& cf = ctx.db.local().find_column_family(table_id);
-                return cf.get_effective_replication_map();
+                table_id = validate_table(ctx.db.local(), keyspace, table);
             }
-        });
 
         std::vector<ss::maplist_mapper> res;
-        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(erm),
+        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace, table_id),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
             if (entry.first.start()) {
