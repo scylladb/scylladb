@@ -72,7 +72,7 @@ initial_tablets_tag = 'system:initial_tablets'
 # tablets. Different numbers have different meanings (0 asked to use
 # default number, any other number overrides the default) but they
 # all enable tablets.
-def test_initial_tablets_number(dynamodb):
+def test_initial_tablets_int(dynamodb):
     for value in ['0', '4']:
         schema = {
             'Tags': [{'Key': initial_tablets_tag, 'Value': value}],
@@ -83,7 +83,7 @@ def test_initial_tablets_number(dynamodb):
 
 # Check that a table created with a non-number (e.g., the string "none")
 # as initial_tablets, will not use tablets.
-def test_initial_tablets_number(dynamodb):
+def test_initial_tablets_not_int(dynamodb):
     schema = {
         'Tags': [{'Key': initial_tablets_tag, 'Value': 'none'}],
         'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' } ],
