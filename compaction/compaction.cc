@@ -1633,6 +1633,31 @@ private:
             report_fn("Rectifying by adding missing partition-end to the end of the stream");
         }
 
+        void on_malformed_sstable_exception(std::exception_ptr e) {
+            if (_scrub_mode != compaction_type_options::scrub::mode::skip) {
+                throw compaction_aborted_exception(
+                        _schema->ks_name(),
+                        _schema->cf_name(),
+                        format("scrub compaction failed due to unrecoverable error: {}", e));
+            }
+
+            // Closes the active range tombstone if needed, before emitting partition end.
+            if (auto current_tombstone = _validator.current_tombstone(); current_tombstone) {
+                const auto& last_pos = _validator.previous_position();
+                auto after_last_pos = position_in_partition::after_key(*_schema, last_pos.key());
+                auto rtc = range_tombstone_change(std::move(after_last_pos), tombstone{});
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, std::move(rtc)));
+            }
+
+            // Emit partition end if needed.
+            if (_validator.previous_mutation_fragment_kind() != mutation_fragment_v2::kind::partition_end) {
+                push_mutation_fragment(mutation_fragment_v2(*_schema, _permit, partition_end{}));
+            }
+
+            // Report the end of stream.
+            _end_of_stream = true;
+        }
+
         void fill_buffer_from_underlying() {
             utils::get_local_injector().inject("rest_api_keyspace_scrub_abort", [] { throw compaction_aborted_exception("", "", "scrub compaction found invalid data"); });
             while (!_reader.is_buffer_empty() && !is_buffer_full()) {
@@ -1705,6 +1730,8 @@ private:
                 } catch (const storage_io_error&) {
                     // Propagate these unchanged.
                     throw;
+                } catch (const malformed_sstable_exception& e) {
+                    on_malformed_sstable_exception(std::current_exception());
                 } catch (...) {
                     // We don't want failed scrubs to be retried.
                     throw compaction_aborted_exception(
