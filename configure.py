@@ -1808,7 +1808,7 @@ for mode in modes:
     # Those flags are passed not only to Scylla objects, but also to libraries
     # that we compile ourselves.
     modes[mode]['lib_cflags'] = user_cflags
-    modes[mode]['lib_ldflags'] = user_ldflags + linker_flags
+    modes[mode]['lib_ldflags'] = user_ldflags + ' ' + linker_flags
 
 
 def prepare_advanced_optimizations(*, modes, build_modes, args):
