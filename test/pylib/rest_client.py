@@ -458,6 +458,58 @@ class ScyllaRESTAPIClient():
     async def abort_task(self, node_ip: str, task_id: str):
         await self.client.post(f'/task_manager/abort_task/{task_id}', host=node_ip)
 
+<<<<<<< HEAD
+||||||| parent of b85673e9b0 (test,lib: Add range_to_endpoint_map() method to rest client)
+    async def get_config(self, node_ip: str, id: str):
+        return await self.client.get_json(f'/v2/config/{id}', host=node_ip)
+
+    async def set_trace_probability(self, node_ip: str, probability: float) -> None:
+        await self.client.post(
+            resource_uri="/storage_service/trace_probability",
+            host=node_ip,
+            params={"probability": probability},
+        )
+
+    async def describe_ring(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> Any:
+        params = None
+        if (table):
+            params = {"table": table}
+        return await self.client.get_json(f'/storage_service/describe_ring/{keyspace}', host=node_ip, params=params)
+
+    async def natural_endpoints(self, node_ip: str, keyspace: str, table: str, key: str) -> Any:
+        params = {"cf": table, "key": key}
+        return await self.client.get_json(f'/storage_service/natural_endpoints/{keyspace}', host=node_ip, params=params)
+
+
+=======
+    async def get_config(self, node_ip: str, id: str):
+        return await self.client.get_json(f'/v2/config/{id}', host=node_ip)
+
+    async def set_trace_probability(self, node_ip: str, probability: float) -> None:
+        await self.client.post(
+            resource_uri="/storage_service/trace_probability",
+            host=node_ip,
+            params={"probability": probability},
+        )
+
+    async def describe_ring(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> Any:
+        params = None
+        if (table):
+            params = {"table": table}
+        return await self.client.get_json(f'/storage_service/describe_ring/{keyspace}', host=node_ip, params=params)
+
+    async def range_to_endpoint_map(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> Any:
+        params = None
+        if (table):
+            params = {"cf": table}
+        return await self.client.get_json(f'/storage_service/range_to_endpoint_map/{keyspace}', host=node_ip, params=params)
+
+    async def natural_endpoints(self, node_ip: str, keyspace: str, table: str, key: str) -> Any:
+        params = {"cf": table, "key": key}
+        return await self.client.get_json(f'/storage_service/natural_endpoints/{keyspace}', host=node_ip, params=params)
+
+
+>>>>>>> b85673e9b0 (test,lib: Add range_to_endpoint_map() method to rest client)
 class ScyllaMetricsLine:
     def __init__(self, name: str, labels: dict, value: float):
         self.name = name
