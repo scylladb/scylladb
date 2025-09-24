@@ -22,6 +22,7 @@
 #include <fmt/ranges.h>
 #include <regex>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/http/client.hh>
@@ -301,6 +302,9 @@ struct vector_store_client::impl {
     milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
     sequential_producer<clients_type> clients_producer;
     dns dns;
+    uint64_t dns_refreshes = 0;
+    seastar::metrics::metric_groups _metrics;
+
 
     impl(utils::config_file::named_value<sstring> cfg)
         : uri_observer(cfg.observe([this](seastar::sstring uri) {
@@ -321,7 +325,10 @@ struct vector_store_client::impl {
         })
         , dns(vslogger, _host_port ? std::optional<seastar::sstring>{_host_port->host} : std::nullopt, [this](auto const& addr) -> future<> {
             co_await handle_address_changed(addr);
-        }) {
+        }, dns_refreshes) {
+        _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
+            return dns_refreshes;
+        }).aggregate({seastar::metrics::shard_label})});
     }
 
     void handle_uri_changed(std::optional<host_port> uri) {

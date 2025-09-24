@@ -29,7 +29,7 @@ public:
     using resolver_type = std::function<seastar::future<address_type>(seastar::sstring const&)>;
     using listener_type = std::function<seastar::future<>(address_type const&)>;
 
-    explicit dns(logging::logger& logger, std::optional<seastar::sstring> host, listener_type listener);
+    explicit dns(logging::logger& logger, std::optional<seastar::sstring> host, listener_type listener, uint64_t& refreshes_counter);
 
     void start_background_tasks();
 
