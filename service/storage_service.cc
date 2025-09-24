@@ -2303,7 +2303,13 @@ storage_service::get_range_to_address_map(sstring keyspace, std::optional<table_
     }
 
     const auto& tm = *erm->get_token_metadata_ptr();
-    tokens = tm.sorted_tokens();
+    if (erm->get_replication_strategy().uses_tablets()) {
+        const auto& tablets = tm.tablets().get_tablet_map(*table_id);
+        tokens = co_await tablets.get_sorted_tokens();
+    } else {
+        tokens = tm.sorted_tokens();
+    }
+
     co_return (co_await locator::get_range_to_address_map(erm, std::move(tokens))) |
         std::views::transform([&] (auto tid) { return std::make_pair(tid.first,
                 tid.second | std::views::transform([&] (auto id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>()); }) |
