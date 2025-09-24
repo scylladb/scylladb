@@ -990,7 +990,11 @@ public:
     future<> add_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> del_tablet_replica(table_id, dht::token, locator::tablet_replica dst, loosen_constraints force = loosen_constraints::no);
     future<> set_tablet_balancing_enabled(bool);
+
     future<> await_topology_quiesced();
+    // Verifies topology is not busy, and also that topology version hasn't changed since the one provided
+    // by the caller.
+    future<bool> verify_topology_quiesced(token_metadata::version_t expected_version);
 
     // In the maintenance mode, other nodes won't be available thus we disabled joining
     // the token ring and the token metadata won't be populated with the local node's endpoint.
