@@ -216,6 +216,45 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
                 await cql.run_async(f"SELECT partition_region FROM MUTATION_FRAGMENTS({ks}.test) WHERE pk={k}", host=host[0])
 
 
+# The test checks that describe_ring and range_to_address_map API return
+# information that's consistent with system.tablets contents
+@pytest.mark.parametrize("endpoint", ["describe_ring", "range_to_endpoint"])
+@pytest.mark.asyncio
+async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
+    servers = []
+    servers += await manager.servers_add(2, property_file={'dc': f'dc1', 'rack': 'rack1'})
+    servers += await manager.servers_add(2, property_file={'dc': f'dc1', 'rack': 'rack2'})
+    servers += await manager.servers_add(2, property_file={'dc': f'dc1', 'rack': 'rack3'})
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+    hosts = { await manager.get_host_id(s.server_id): s.ip_addr for s in servers }
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH TABLETS = {{'min_tablet_count': 4}};")
+
+        def columnar(lst):
+            return f"\n    {'\n    '.join([f'{x}' for x in lst])}"
+
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, "test")
+        logger.info(f'system.tablets: {columnar(replicas)}')
+
+        if endpoint == 'describe_ring':
+            ring_info = await manager.api.describe_ring(servers[0].ip_addr, ks, "test")
+            logger.info(f'api.describe_ring: {columnar(ring_info)}')
+            api_data = [ { 'token': x['end_token'], 'nodes': set(x['endpoints']) } for x in ring_info ]
+        elif endpoint == 'range_to_endpoint':
+            rte_info = await manager.api.range_to_endpoint_map(servers[0].ip_addr, ks, "test")
+            rte_info.sort(key = lambda x: int(x['key'][1])) # sort by end token
+            logger.info(f'api.range_to_endpoint_map: {columnar(rte_info)}')
+            api_data = [ { 'token': x['key'][1], 'nodes': set(x['value']) } for x in rte_info ]
+        else:
+            raise RuntimeError('invalid endpoint parameter')
+
+        assert len(replicas) == len(api_data), f"{endpoint} returned wrong number of ranges"
+        for x, rep in zip(api_data, replicas):
+            assert x['token'] == f'{rep.last_token}'
+            assert x['nodes'] == set([hosts[r[0]] for r in rep.replicas])
+
+
 # ALTER KEYSPACE cannot change the replication factor by more than 1 at a time.
 # That provides us with a guarantee that the old and the new QUORUM overlap.
 # In this test, we verify that in a simple scenario with one DC. We explicitly disable
