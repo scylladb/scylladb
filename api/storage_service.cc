@@ -649,6 +649,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
         auto table = req->get_query_param("cf");
         std::optional<table_id> table_id;
 
+<<<<<<< HEAD
             if (table.empty()) {
                 ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
 <<<<<<< HEAD
@@ -671,6 +672,19 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
                 table_id = validate_table(ctx.db.local(), keyspace, table);
 >>>>>>> bac9f200b3 (storage_service,api: Get e.r.m. inside get_range_to_address_map())
             }
+||||||| parent of 5746e61a60 (api: Indentation fix after previous patches)
+            if (table.empty()) {
+                ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
+            } else {
+                table_id = validate_table(ctx.db.local(), keyspace, table);
+            }
+=======
+        if (table.empty()) {
+            ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
+        } else {
+            table_id = validate_table(ctx.db.local(), keyspace, table);
+        }
+>>>>>>> 5746e61a60 (api: Indentation fix after previous patches)
 
         std::vector<ss::maplist_mapper> res;
         co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace, table_id),
