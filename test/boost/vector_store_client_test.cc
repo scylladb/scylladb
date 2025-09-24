@@ -151,18 +151,35 @@ public:
     }
 
     configure& with_dns(std::map<std::string, std::optional<std::string>> dns_) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns_)](auto const& host) -> future<std::optional<inet_address>> {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns_)](auto const& host) -> future<std::vector<inet_address>> {
             auto value = dns.at(host);
             if (value) {
-                co_return inet_address(*value);
+                co_return std::vector<inet_address>{inet_address(*value)};
             }
-            co_return std::nullopt;
+            co_return std::vector<inet_address>{};
+        });
+        return *this;
+    }
+
+    configure& with_dns(std::map<std::string, std::vector<std::string>> dns) {
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [dns = std::move(dns)](auto const& host) -> future<std::vector<inet_address>> {
+            std::vector<inet_address> ret;
+            for (auto const& ip : dns.at(host)) {
+                ret.push_back(inet_address(ip));
+            }
+            co_return ret;
         });
         return *this;
     }
 
     configure& with_dns_resolver(std::function<future<std::optional<inet_address>>(sstring const&)> resolver) {
-        vector_store_client_tester::set_dns_resolver(vs_ref.get(), std::move(resolver));
+        vector_store_client_tester::set_dns_resolver(vs_ref.get(), [r = std::move(resolver)](auto host) -> future<std::vector<inet_address>> {
+            auto addr = co_await r(host);
+            if (addr) {
+                co_return std::vector<inet_address>{*addr};
+            }
+            co_return std::vector<inet_address>{};
+        });
         return *this;
     }
 };
@@ -193,6 +210,10 @@ public:
         return _port;
     }
 
+    size_t connections() const {
+        return _connections;
+    }
+
 private:
     void listen() {
         for (size_t i = 1; i < 20; i++) {
@@ -212,6 +233,7 @@ private:
         while (true) {
             try {
                 auto s = co_await _socket.accept();
+                _connections++;
                 s.connection.shutdown_output();
                 s.connection.shutdown_input();
                 co_await s.connection.wait_input_shutdown();
@@ -225,6 +247,7 @@ private:
     seastar::gate _gate;
     uint16_t _port;
     sstring _host;
+    size_t _connections = 0;
 };
 
 std::unique_ptr<unavailable_server> make_unavailable_server(uint16_t port = 0) {
@@ -233,10 +256,11 @@ std::unique_ptr<unavailable_server> make_unavailable_server(uint16_t port = 0) {
     return ret;
 }
 
-auto make_vs_server(status_type status) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-    return new_http_server([status](routes& r) {
-        auto ann = [status](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+auto make_vs_server(status_type status, sstring body = "") -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    return new_http_server([status, body = std::move(body)](routes& r) {
+        auto ann = [status, body = std::move(body)](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
             rep->set_status(status);
+            rep->write_body("json", body);
             co_return rep;
         };
         r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
@@ -289,8 +313,8 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
 
     auto as = abort_source_timeout();
     auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
+    BOOST_REQUIRE(!addr.empty());
+    BOOST_CHECK_EQUAL(print_addr(addr[0]), "127.0.0.1");
 
     co_await vs.stop();
 }
@@ -305,7 +329,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
     vs.start_background_tasks();
 
     auto as = abort_source_timeout();
-    BOOST_CHECK(!co_await vector_store_client_tester::resolve_hostname(vs, as.as));
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+
+    BOOST_CHECK(addrs.empty());
 
     co_await vs.stop();
 }
@@ -332,30 +358,34 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
 
     auto as = abort_source_timeout();
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        co_return co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        co_return addrs.size() == 1;
     }));
     BOOST_CHECK_EQUAL(count, 3);
     as.reset();
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.3");
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    BOOST_REQUIRE_EQUAL(addrs.size(), 1);
+    BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.3");
 
     vector_store_client_tester::trigger_dns_resolver(vs);
 
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
         as.reset();
-        co_return !co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        co_return addrs.empty();
     }));
 
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
         as.reset();
-        co_return co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        co_return addrs.size() == 1;
     }));
     BOOST_CHECK_EQUAL(count, 6);
     as.reset();
-    addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.6");
+    addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+
+    BOOST_REQUIRE_EQUAL(addrs.size(), 1);
+    BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.6");
 
     co_await vs.stop();
 }
@@ -376,9 +406,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
     co_await sleep(milliseconds(20)); // wait for the first DNS refresh
 
     auto as = abort_source_timeout();
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    BOOST_REQUIRE_EQUAL(addrs.size(), 1);
+    BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.1");
     BOOST_CHECK_EQUAL(count, 1);
     count = 0;
     vector_store_client_tester::trigger_dns_resolver(vs);
@@ -389,9 +419,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
     co_await sleep(milliseconds(100)); // wait for the next DNS refresh
 
     as.reset();
-    addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_REQUIRE(addr);
-    BOOST_CHECK_EQUAL(print_addr(*addr), "127.0.0.1");
+    addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    BOOST_REQUIRE_EQUAL(addrs.size(), 1);
+    BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.1");
     BOOST_CHECK_GE(count, 1);
     BOOST_CHECK_LE(count, 2);
 
@@ -412,8 +442,8 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
     vs.start_background_tasks();
 
     auto as = abort_source_timeout(milliseconds(10));
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
-    BOOST_CHECK(!addr);
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    BOOST_CHECK(addrs.empty());
 
     co_await vs.stop();
 }
@@ -712,5 +742,35 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
             .finally(seastar::coroutine::lambda([&s1, &s2] -> future<> {
                 co_await s1->stop();
                 co_await s2->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_high_availability_host_resolved_to_multiple_ips) {
+
+    auto [responding_s, addr] =
+            co_await make_vs_server(status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})");
+    auto unavail_s = make_unavailable_server(addr.port());
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", addr.port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{unavail_s->host(), LOCALHOST}}});
+                vs.start_background_tasks();
+
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+
+                // tried to connect to the unavailable server as it is first in the list of resolved addresses
+                BOOST_CHECK_EQUAL(unavail_s->connections(), 1);
+                // successfully got keys from the responding server
+                BOOST_CHECK(keys);
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&responding_s, &unavail_s] -> future<> {
+                co_await responding_s->stop();
+                co_await unavail_s->stop();
             }));
 }

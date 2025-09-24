@@ -45,15 +45,17 @@ dns::dns(logging::logger& logger, std::optional<seastar::sstring> host, listener
     : vslogger(logger)
     , _refresh_interval(DNS_REFRESH_INTERVAL)
     , _resolver([](auto const& host) -> future<address_type> {
-        auto addr = co_await coroutine::as_future(net::dns::resolve_name(host));
-        if (addr.failed()) {
-            auto err = addr.get_exception();
+        auto f = co_await coroutine::as_future(net::dns::get_host_by_name(host));
+
+        if (f.failed()) {
+            auto err = f.get_exception();
             if (try_catch<std::system_error>(err) != nullptr) {
-                co_return std::nullopt;
+                co_return address_type{};
             }
             co_await coroutine::return_exception_ptr(std::move(err));
         }
-        co_return co_await std::move(addr);
+        auto addr = co_await std::move(f);
+        co_return addr.addr_list;
     })
     , _host(std::move(host))
     , _listener(std::move(listener)) {
@@ -113,15 +115,15 @@ seastar::future<> dns::refresh_addr_task() {
 
 seastar::future<> dns::refresh_addr() {
     if (_host) {
-        auto new_addr = co_await _resolver(*_host);
-        if (new_addr != current_addr) {
-            current_addr = new_addr;
-            co_await _listener(current_addr);
+        auto new_addrs = co_await _resolver(*_host);
+        if (new_addrs != current_addrs) {
+            current_addrs = new_addrs;
+            co_await _listener(current_addrs);
         }
     } else {
-        if (current_addr) {
-            current_addr = std::nullopt;
-            co_await _listener(current_addr);
+        if (!current_addrs.empty()) {
+            current_addrs.clear();
+            co_await _listener(current_addrs);
         }
     }
 }
