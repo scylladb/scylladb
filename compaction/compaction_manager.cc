@@ -2294,8 +2294,10 @@ compaction_manager::maybe_split_sstable(sstables::shared_sstable sst, compaction
     if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
         co_return std::vector<sstables::shared_sstable>{sst};
     }
-    if (!can_proceed(&t)) {
-        co_return std::vector<sstables::shared_sstable>{sst};
+    // This procedure can bypass check if view has compaction disabled, since this operation is offline,
+    // meaning the sstable is not loaded into any sstable set yet. And it's required for correctness.
+    if (is_disabled()) {
+        throw std::runtime_error(format("Unable to split SSTable {} because compaction manager is disabled", sst->get_filename()));
     }
     std::vector<sstables::shared_sstable> ret;
 
