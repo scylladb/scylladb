@@ -27,6 +27,7 @@
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "message/messaging_service.hh"
+#include "service/storage_service.hh"
 
 #include <cfloat>
 #include <algorithm>
@@ -142,11 +143,12 @@ protected:
     const unlink_sstables _unlink_sstables;
     const stream_scope _stream_scope;
 public:
-    sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
+    sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
+                     std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
             : _ms(ms)
             , _db(db)
             , _table(db.find_column_family(table_id))
-            , _erm(_table.get_effective_replication_map())
+            , _erm(std::move(erm))
             , _sstables(std::move(sstables))
             , _primary_replica_only(primary)
             , _unlink_sstables(unlink)
@@ -181,8 +183,9 @@ private:
 class tablet_sstable_streamer : public sstable_streamer {
     const locator::tablet_map& _tablet_map;
 public:
-    tablet_sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
-        : sstable_streamer(ms, db, table_id, std::move(sstables), primary, unlink, scope)
+    tablet_sstable_streamer(netw::messaging_service& ms, replica::database& db, ::table_id table_id, locator::effective_replication_map_ptr erm,
+                            std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, unlink_sstables unlink, stream_scope scope)
+        : sstable_streamer(ms, db, table_id, std::move(erm), std::move(sstables), primary, unlink, scope)
         , _tablet_map(_erm->get_token_metadata().tablets().get_tablet_map(table_id)) {
     }
 
@@ -526,13 +529,42 @@ static std::unique_ptr<sstable_streamer> make_sstable_streamer(bool uses_tablets
     return std::make_unique<sstable_streamer>(std::forward<Args>(args)...);
 }
 
+future<locator::effective_replication_map_ptr> sstables_loader::await_topology_quiesced_and_get_erm(::table_id table_id) {
+    // By waiting for topology to quiesce, we guarantee load-and-stream will not start in the middle
+    // of a topology operation that changes the token range boundaries, e.g. split or merge.
+    // Split, for example, first executes the barrier and then splits the tablets.
+    // So it can happen a sstable is generated between those steps and will incorrectly span two
+    // tablets. We want to serialize load-and-stream and split finalization (a topology op).
+
+    locator::effective_replication_map_ptr erm;
+    while (true) {
+        auto& t = _db.local().find_column_family(table_id);
+        erm = t.get_effective_replication_map();
+        auto expected_topology_version = erm->get_token_metadata().get_version();
+        auto& ss = _ss.local();
+
+        // optimistically attempt to grab an erm on quiesced topology
+        // The awaiting is only needed with tablet over raft, so we're bypassing the check
+        // when raft is disabled.
+        if (!ss.raft_topology_change_enabled() || co_await ss.verify_topology_quiesced(expected_topology_version)) {
+            break;
+        }
+        erm = nullptr;
+        co_await _ss.local().await_topology_quiesced();
+    }
+
+    co_return std::move(erm);
+}
+
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
     // streamer guarantees topology stability, for correctness, by holding effective_replication_map
     // throughout its lifetime.
+    auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
+
     auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
-                                          _messaging, _db.local(), table_id, std::move(sstables),
+                                          _messaging, _db.local(), table_id, std::move(erm), std::move(sstables),
                                           primary_replica_only(primary), unlink_sstables(unlink), scope);
 
     co_await streamer->stream(progress);
@@ -749,12 +781,14 @@ future<> sstables_loader::download_task_impl::run() {
 }
 
 sstables_loader::sstables_loader(sharded<replica::database>& db,
+        sharded<service::storage_service>& ss,
         netw::messaging_service& messaging,
         sharded<db::view::view_builder>& vb,
         tasks::task_manager& tm,
         sstables::storage_manager& sstm,
         seastar::scheduling_group sg)
     : _db(db)
+    , _ss(ss)
     , _messaging(messaging)
     , _view_builder(vb)
     , _task_manager_module(make_shared<task_manager_module>(tm))
