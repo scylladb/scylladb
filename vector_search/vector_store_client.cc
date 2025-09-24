@@ -441,25 +441,25 @@ struct vector_store_client::impl {
             }
 
             for (const auto& client : *clients) {
-            auto result = co_await coroutine::as_future(client->make_request(
-                    method, path, content,
-                    [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
-                        resp.status = reply._status;
-                        resp.content = co_await util::read_entire_stream(body);
-                    },
-                    &as));
-            if (result.failed()) {
-                auto err = result.get_exception();
-                if (as.abort_requested()) {
-                    co_return std::unexpected{aborted{}};
+                auto result = co_await coroutine::as_future(client->make_request(
+                        method, path, content,
+                        [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
+                            resp.status = reply._status;
+                            resp.content = co_await util::read_entire_stream(body);
+                        },
+                        &as));
+                if (result.failed()) {
+                    auto err = result.get_exception();
+                    if (as.abort_requested()) {
+                        co_return std::unexpected{aborted{}};
+                    }
+                    if (try_catch<std::system_error>(err) == nullptr) {
+                        co_await coroutine::return_exception_ptr(std::move(err));
+                    }
+                    // std::system_error means that the server is unavailable, so we retry
+                } else {
+                    co_return resp;
                 }
-                if (try_catch<std::system_error>(err) == nullptr) {
-                    co_await coroutine::return_exception_ptr(std::move(err));
-                }
-                // std::system_error means that the server is unavailable, so we retry
-            } else {
-                co_return resp;
-            }
             }
 
             dns.trigger_refresh();
