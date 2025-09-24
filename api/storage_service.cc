@@ -647,22 +647,33 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::get_range_to_endpoint_map.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto keyspace = validate_keyspace(ctx, req);
         auto table = req->get_query_param("cf");
+        std::optional<table_id> table_id;
 
-        auto erm = std::invoke([&]() -> locator::effective_replication_map_ptr {
-            auto& ks = ctx.db.local().find_keyspace(keyspace);
             if (table.empty()) {
                 ensure_tablets_disabled(ctx, keyspace, "storage_service/range_to_endpoint_map");
+<<<<<<< HEAD
                 return ks.get_vnode_effective_replication_map();
+||||||| parent of bac9f200b3 (storage_service,api: Get e.r.m. inside get_range_to_address_map())
+                return ks.get_static_effective_replication_map();
+=======
+>>>>>>> bac9f200b3 (storage_service,api: Get e.r.m. inside get_range_to_address_map())
             } else {
+<<<<<<< HEAD
                 validate_table(ctx, keyspace, table);
 
                 auto& cf = ctx.db.local().find_column_family(keyspace, table);
                 return cf.get_effective_replication_map();
+||||||| parent of bac9f200b3 (storage_service,api: Get e.r.m. inside get_range_to_address_map())
+                auto table_id = validate_table(ctx.db.local(), keyspace, table);
+                auto& cf = ctx.db.local().find_column_family(table_id);
+                return cf.get_effective_replication_map();
+=======
+                table_id = validate_table(ctx.db.local(), keyspace, table);
+>>>>>>> bac9f200b3 (storage_service,api: Get e.r.m. inside get_range_to_address_map())
             }
-        });
 
         std::vector<ss::maplist_mapper> res;
-        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(erm),
+        co_return stream_range_as_array(co_await ss.local().get_range_to_address_map(keyspace, table_id),
                 [](const std::pair<dht::token_range, inet_address_vector_replica_set>& entry){
             ss::maplist_mapper m;
             if (entry.first.start()) {
