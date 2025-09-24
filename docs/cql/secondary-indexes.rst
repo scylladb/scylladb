@@ -40,7 +40,7 @@ Creating a secondary index on a table uses the ``CREATE INDEX`` statement:
 
 .. code-block::
    
-   create_index_statement: CREATE INDEX [IF NOT EXISTS] [ `index_name` ]
+   create_index_statement: CREATE [ CUSTOM ] INDEX [ IF NOT EXISTS ] [ `index_name` ]
                          :     ON `table_name` '(' `index_identifier` ')'
                          :     [ USING `string` [ WITH OPTIONS = `map_literal` ] ]
    index_identifier: `column_name`
@@ -86,6 +86,55 @@ More on :doc:`Local Secondary Indexes </features/local-secondary-indexes>`
 .. ``WHERE`` clauses. Otherwise, the index will be on the map values.
 
 .. _drop-index-statement:
+
+Vector Index :label-caution:`Experimental` :label-note:`ScyllaDB Cloud`
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. note::
+
+   Vector indexes are supported in ScyllaDB Cloud only in the clusters that have the vector search feature enabled.
+   Moreover, vector indexes are an experimental feature that:
+   
+     * is not suitable for production use,
+     * does not guarantee backward compatibility between ScyllaDB versions,
+     * does not support all the features of ScyllaDB (e.g., tracing, filtering, TTL).
+
+ScyllaDB supports creating vector indexes on tables, allowing queries on the table to use those indexes for efficient
+similarity search on vector data. 
+
+The vector index is the only custom type index supported in ScyllaDB. It is created using
+the ``CUSTOM`` keyword and specifying the index type as ``vector_index``. Example:
+
+.. code-block:: cql
+
+      CREATE CUSTOM INDEX vectorIndex ON ImageEmbeddings (embedding) 
+      USING 'vector_index' 
+      WITH OPTIONS = {'similarity_function': 'COSINE', 'maximum_node_connections': '16'};
+
+The following options are supported for vector indexes. All of them are optional.
+
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| Option Name                  | Description                                                                                              | Default Value |
++==============================+==========================================================================================================+===============+
+| ``similarity_function``      | The similarity function to use for vector comparisons. Supported values are:                             | ``COSINE``    |
+|                              | ``COSINE``, ``EUCLIDEAN``, and ``DOT_PRODUCT``. ``DOT_PRODUCT`` requires vectors to be                   |               |
+|                              | normalized, meaning each vector should have unit length (L2 norm = 1). For more information, see         |               |
+|                              | `Vector normalization <https://en.wikipedia.org/wiki/Normalization_(statistics)#Vector_normalization>`_. |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| ``maximum_node_connections`` | The maximum number of connections per node in the HNSW graph. In other HNSW implementations              | ``16``        |
+|                              | it is often denoted as ``m``. Higher values lead to better recall (i.e., more relevant                   |               |
+|                              | results are found) but increase memory usage and index size. Supported values are integers               |               |
+|                              | between 1 and 512.                                                                                       |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| ``construction_beam_width``  | The beam width to use during index **construction**. In other HNSW implementations it is often           | ``128``       |
+|                              | denoted as ``efConstruction``. Higher values lead to better recall (i.e., more relevant                  |               |
+|                              | results are found) but increase index creation time and memory usage. Supported values are               |               |
+|                              | integers between 1 and 4096.                                                                             |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+| ``search_beam_width``        | The beam width to use during index **search**. In other HNSW implementations it is often denoted         | ``64``        |
+|                              | as ``efSearch``. Higher values lead to better recall (i.e., more relevant results are found)             |               |
+|                              | but increase query latency. Supported values are integers between 1 and 4096.                            |               |
++------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
 
 DROP INDEX
 ^^^^^^^^^^
