@@ -456,9 +456,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
             },
-            cfg);
-
-    co_await server->stop();
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
 }
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
@@ -482,9 +483,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(keys.error()));
             },
-            cfg);
-
-    co_await server->stop();
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
 }
 
 
@@ -594,8 +596,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).partition.key().explode()), "[06, 08]");
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).clustering.explode()), "[01, 03]");
             },
-            cfg);
-    co_await server->stop();
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
 }
 
 SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
@@ -703,7 +707,9 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
                     co_return is_s2_response(co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as));
                 }));
             },
-            cfg);
-    co_await s1->stop();
-    co_await s2->stop();
+            cfg)
+            .finally(seastar::coroutine::lambda([&s1, &s2] -> future<> {
+                co_await s1->stop();
+                co_await s2->stop();
+            }));
 }
