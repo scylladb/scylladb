@@ -743,7 +743,7 @@ private:
 private:
     sstables::shared_sstable do_make_sstable() const {
         const auto format = sstables::sstable_format_types::big;
-        const auto version = sstables::get_highest_sstable_version();
+        const auto version = _sst_man.get_preferred_sstable_version();
         auto generation = _generation_generator();
         auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, format, component_type::Data);
         if (file_exists(sst_name).get()) {
@@ -1578,7 +1578,7 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto output_dir = vm["output-dir"].as<std::string>();
     auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
     auto format = sstables::sstable_format_types::big;
-    auto version = sstables::get_highest_sstable_version();
+    auto version = manager.get_preferred_sstable_version();
 
     {
         auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
