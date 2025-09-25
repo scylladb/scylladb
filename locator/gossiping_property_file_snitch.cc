@@ -18,20 +18,20 @@
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
-        try {
-            auto f = co_await open_file_dma(_prop_file_name, open_flags::ro);
-            auto st = co_await f.stat();
-            if (!_last_file_mod ||
-                _last_file_mod->tv_sec != st.st_mtim.tv_sec) {
-                _last_file_mod = st.st_mtim;
-                co_return true;
-            } else {
-                co_return false;
-            }
-        } catch (...) {
-            logger().error("Failed to open {} for read or to get stats", _prop_file_name);
-            throw;
+    try {
+        auto f = co_await open_file_dma(_prop_file_name, open_flags::ro);
+        auto st = co_await f.stat();
+        if (!_last_file_mod ||
+            _last_file_mod->tv_sec != st.st_mtim.tv_sec) {
+            _last_file_mod = st.st_mtim;
+            co_return true;
+        } else {
+            co_return false;
         }
+    } catch (...) {
+        logger().error("Failed to open {} for read or to get stats", _prop_file_name);
+        throw;
+    }
 }
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg)
@@ -65,7 +65,7 @@ future<> gossiping_property_file_snitch::start() {
         });
 
         co_await read_property_file();
-            start_io();
+        start_io();
     }
 
     set_snitch_ready();
@@ -78,17 +78,17 @@ future<> gossiping_property_file_snitch::periodic_reader_callback() {
         if (was_modified) {
             co_await read_property_file();
         }
-        } catch (...) {
-            logger().error("Exception has been thrown when parsing the property file.");
-        }
+    } catch (...) {
+        logger().error("Exception has been thrown when parsing the property file.");
+    }
 
-        if (_state == snitch_state::stopping || _state == snitch_state::io_pausing) {
-            this->set_stopped();
-        } else if (_state != snitch_state::stopped) {
-            _file_reader.arm(reload_property_file_period());
-        }
+    if (_state == snitch_state::stopping || _state == snitch_state::io_pausing) {
+        this->set_stopped();
+    } else if (_state != snitch_state::stopped) {
+        _file_reader.arm(reload_property_file_period());
+    }
 
-        _file_reader_runs = false;
+    _file_reader_runs = false;
 }
 
 gms::application_state_map gossiping_property_file_snitch::get_app_states() const {
@@ -112,17 +112,17 @@ future<> gossiping_property_file_snitch::read_property_file() {
         ex = std::current_exception();
     }
     if (ex) {
-            //
-            // In case of an error:
-            //    - Halt if in the constructor.
-            //    - Print an error when reloading.
-            //
-            if (_state == snitch_state::initializing) {
-                logger().error("Failed to parse a properties file ({}). Halting...", _prop_file_name);
-                co_await coroutine::return_exception_ptr(std::move(ex));
-            } else {
-                logger().warn("Failed to reload a properties file ({}). Using previous values.", _prop_file_name);
-            }
+        //
+        // In case of an error:
+        //    - Halt if in the constructor.
+        //    - Print an error when reloading.
+        //
+        if (_state == snitch_state::initializing) {
+            logger().error("Failed to parse a properties file ({}). Halting...", _prop_file_name);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        } else {
+            logger().warn("Failed to reload a properties file ({}). Using previous values.", _prop_file_name);
+        }
     }
 }
 
@@ -155,9 +155,9 @@ future<> gossiping_property_file_snitch::reload_configuration() {
             local_s->set_my_dc_and_rack(new_dc, new_rack);
             local_s->set_prefer_local(new_prefer_local);
         });
-            co_await seastar::async([this] {
-                _reconfigured();
-            });
+        co_await seastar::async([this] {
+            _reconfigured();
+        });
     }
 }
 
