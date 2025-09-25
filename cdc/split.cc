@@ -481,10 +481,12 @@ struct should_split_visitor {
     // Otherwise we store the change's ttl.
     std::optional<gc_clock::duration> _ttl = std::nullopt;
 
+    virtual ~should_split_visitor() = default;
+
     inline bool finished() const { return _result; }
     inline void stop() { _result = true; }
 
-    void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
+    virtual void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
         if (_ts != api::missing_timestamp && _ts != ts) {
             return stop();
         }
@@ -503,7 +505,7 @@ struct should_split_visitor {
 
     void collection_tombstone(const tombstone& t) { visit(t.timestamp + 1); }
 
-    void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
+    virtual void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
         if (_had_row_marker) {
             // nonatomic updates cannot be expressed with an INSERT.
             return stop();
@@ -513,7 +515,7 @@ struct should_split_visitor {
     void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
     void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
 
-    void marker(const row_marker& rm) {
+    virtual void marker(const row_marker& rm) {
         _had_row_marker = true;
         visit(rm.timestamp(), get_ttl(rm));
     }
@@ -554,7 +556,29 @@ struct should_split_visitor {
     }
 };
 
-bool should_split(const mutation& m) {
+// This is the same as the above, but it doesn't split a row marker away from
+// an update. As a result, updates that create an item appear as a single log
+// row.
+class alternator_should_split_visitor : public should_split_visitor {
+public:
+    ~alternator_should_split_visitor() override = default;
+
+    void live_collection_cell(bytes_view, const atomic_cell_view& cell) override {
+        visit(cell.timestamp());
+    }
+
+    void marker(const row_marker& rm) override {
+        visit(rm.timestamp());
+    }
+};
+
+bool should_split(const mutation& m, const per_request_options& options) {
+    if (options.alternator) {
+        alternator_should_split_visitor v;
+        cdc::inspect_mutation(m, v);
+        return v._result || v._ts == api::missing_timestamp;
+    }
+
     should_split_visitor v;
 
     cdc::inspect_mutation(m, v);

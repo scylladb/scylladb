@@ -68,6 +68,8 @@ struct per_request_options {
     lw_shared_ptr<cql3::untyped_result_set> preimage;
     // Don't generate log rows for this mutation.
     bool skip_cdc = false;
+    // True if this mutation was emitted by Alternator.
+    const bool alternator = false;
 };
 
 struct operation_result_tracker;
