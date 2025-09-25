@@ -1808,7 +1808,7 @@ for mode in modes:
     # Those flags are passed not only to Scylla objects, but also to libraries
     # that we compile ourselves.
     modes[mode]['lib_cflags'] = user_cflags
-    modes[mode]['lib_ldflags'] = user_ldflags + linker_flags
+    modes[mode]['lib_ldflags'] = user_ldflags + ' ' + linker_flags
 
 
 def prepare_advanced_optimizations(*, modes, build_modes, args):
@@ -2920,7 +2920,7 @@ def configure_using_cmake(args):
         'CMAKE_C_COMPILER': args.cc,
         'CMAKE_CXX_COMPILER': args.cxx,
         'CMAKE_CXX_FLAGS': args.user_cflags,
-        'CMAKE_EXE_LINKER_FLAGS': semicolon_separated(args.user_ldflags),
+        'CMAKE_EXE_LINKER_FLAGS': args.user_ldflags,
         'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON',
         'Scylla_CHECK_HEADERS': 'ON',
         'Scylla_DIST': 'ON' if args.enable_dist in (None, True) else 'OFF',
