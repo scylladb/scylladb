@@ -318,20 +318,18 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_generation_sanity) {
 }
 
 future<> verify_that_all_sstables_are_local(sharded<sstable_directory>& sstdir, unsigned expected_sstables) {
-    return do_with(std::make_unique<std::atomic<unsigned>>(0), [&sstdir, expected_sstables] (std::unique_ptr<std::atomic<unsigned>>& count) {
-        return sstdir.invoke_on_all([count = count.get()] (sstable_directory& d) {
-            return d.do_for_each_sstable([count] (sstables::shared_sstable sst) {
-                count->fetch_add(1, std::memory_order_relaxed);
+        unsigned count = co_await sstdir.map_reduce0([] (sstable_directory& d) -> future<unsigned> {
+            unsigned ret = 0;
+            co_await d.do_for_each_sstable([&ret] (sstables::shared_sstable sst) {
+                ret++;
                 auto shards = sst->get_shards_for_this_sstable();
                 THREADSAFE_BOOST_REQUIRE_EQUAL(shards.size(), 1);
                 THREADSAFE_BOOST_REQUIRE_EQUAL(shards[0], this_shard_id());
                 return make_ready_future<>();
             });
-         }).then([count = count.get(), expected_sstables] {
-            THREADSAFE_BOOST_REQUIRE_EQUAL(count->load(std::memory_order_relaxed), expected_sstables);
-            return make_ready_future<>();
-        });
-    });
+            co_return ret;
+        }, 0, std::plus<unsigned>());
+        THREADSAFE_BOOST_REQUIRE_EQUAL(count, expected_sstables);
 }
 
 // Test that all SSTables are seen as unshared, if the generation numbers match what their
