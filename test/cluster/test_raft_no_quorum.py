@@ -65,6 +65,7 @@ async def test_cannot_add_new_node(manager: ManagerClient, raft_op_timeout: int)
                          manager.server_stop_gracefully(servers[4].server_id))
 
     logger.info("starting a sixth node with no quorum")
+    manager.ignore_log_patterns.append(r"raft operation \[read_barrier\] timed out, there is no raft quorum")
     await manager.server_add(expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
                              timeout=60)
 
@@ -94,6 +95,7 @@ async def test_quorum_lost_during_node_join(manager: ManagerClient, raft_op_time
     injection_handler = await inject_error_one_shot(manager.api, servers[0].ip_addr, 'join-node-before-add-entry')
 
     logger.info("starting a fourth node")
+    manager.ignore_log_patterns.append(r"raft operation \[add_entry\] timed out, there is no raft quorum")
     fourth_node_future = asyncio.create_task(manager.server_add(
         seeds=[servers[0].ip_addr],
         expected_error="raft operation [add_entry] timed out, there is no raft quorum",
@@ -139,6 +141,7 @@ async def test_quorum_lost_during_node_join_response_handler(manager: ManagerCli
     }, start=False)]
 
     logger.info("starting a fourth node")
+    manager.ignore_log_patterns.append(r"raft operation \[read_barrier\] timed out, there is no raft quorum")
     fourth_node_future = asyncio.create_task(
         manager.server_start(servers[3].server_id,
                              expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
@@ -190,6 +193,7 @@ async def test_cannot_run_operations(manager: ManagerClient, raft_op_timeout: in
                          manager.server_stop_gracefully(servers[2].server_id))
 
     logger.info("attempting removenode for the second node")
+    manager.ignore_log_patterns.append(r"raft operation \[read_barrier\] timed out, there is no raft quorum")
     await manager.remove_node(servers[0].server_id, servers[1].server_id,
                             expected_error="raft operation [read_barrier] timed out, there is no raft quorum",
                             timeout=60)

@@ -44,6 +44,10 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     8. Remove nodes 3-6 from topology using the standard removenode procedure.
     9. Add a new node (a sanity check verifying that the cluster is functioning properly).
     """
+    manager.ignore_log_patterns.extend([
+        r"raft .* Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        r"raft - apply_snapshot.* ignore outdated snapshot"
+    ])
     logging.info('Adding the first server')
     coordinator = await manager.server_add()
 

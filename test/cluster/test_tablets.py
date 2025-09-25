@@ -95,6 +95,7 @@ async def test_tablet_cannot_decommision_below_replication_factor(manager: Manag
         logger.info("Decommission some node")
         await manager.decommission_node(servers[0].server_id)
 
+        manager.ignore_log_patterns.append("There are nodes with tablets to drain")
         with pytest.raises(HTTPError, match="Decommission failed"):
             logger.info("Decommission another node")
             await manager.decommission_node(servers[1].server_id)
@@ -635,6 +636,7 @@ async def test_keyspace_creation_cql_vs_config_sanity(manager: ManagerClient, wi
 @pytest.mark.asyncio
 async def test_tablets_and_gossip_topology_changes_are_incompatible(manager: ManagerClient):
     cfg = {"tablets_mode_for_new_keyspaces": "enabled", "force_gossip_topology_changes": True}
+    manager.ignore_log_patterns.append("Tablets cannot be enabled with gossip topology changes")
     with pytest.raises(Exception, match="Failed to add server"):
         await manager.server_add(config=cfg)
 
@@ -859,6 +861,7 @@ async def test_orphaned_sstables_on_startup(manager: ManagerClient):
     # try starting the server again
     logger.info("Start node1 with the orphaned sstables and expect it to fail")
     # Error thrown is of format : "Unable to load SSTable {sstable_name} : Storage wasn't found for tablet {tablet_id} of table {ks}.test"
+    manager.ignore_cores_log_patterns.append("Storage wasn't found for tablet")
     await manager.server_start(servers[0].server_id, expected_error="Storage wasn't found for tablet")
 
 @pytest.mark.asyncio
@@ -896,6 +899,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
         await manager.server_stop_gracefully(node_to_replace.server_id)
 
         logger.info("Attempting removenode - expected to fail")
+        manager.ignore_log_patterns.append("There are nodes with tablets to drain")
         await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id],
                                 expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (There are nodes with tablets to drain")
 
@@ -931,6 +935,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
         await manager.server_stop_gracefully(node_to_remove.server_id)
 
         logger.info("Attempting removenode - expected to fail")
+        manager.ignore_log_patterns.append("There are nodes with tablets to drain")
         await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id,
                                 expected_error="Removenode failed")
 

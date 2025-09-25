@@ -299,6 +299,7 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
 async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     # the error injection will halt view updates from staging, allowing migration to transfer the view update backlog.
+    manager.ignore_log_patterns.append(r"view_building_coordinator - view building coordinator got error: seastar::internal::backtraced<locator::no_such_tablet_map>")
     cfg = {'enable_user_defined_functions': False, 'tablets_mode_for_new_keyspaces': 'enabled',
            'error_injections_at_startup': ['view_update_generator_consume_staging_sstable']}
     servers = [await manager.server_add(config=cfg)]

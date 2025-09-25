@@ -1348,11 +1348,13 @@ class TestCQLAudit(AuditTester):
                 session.execute(auditted_query)
 
             # Conifg modified with invalid categories: audit works, because previous audit configuration is used
+            self.ignore_log_patterns.append(r"audit - Audit configuration update failed because cannot parse value=\"INVALID_CATEGORIES\"")
             config_changer.change_config(self, {"audit_categories": "INVALID_CATEGORIES"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNPARSABLE_VALUE)
             with self.assert_entries_were_added(session, expected_new_entries, merge_duplicate_rows=False):
                 session.execute(auditted_query)
 
             # Conifg modified with valid categories but invalid tables and and non-existing keyspaces: no auditing
+            self.ignore_log_patterns.append(r"audit - Audit configuration update failed because cannot parse value=\"invalid.table.twodots\"")
             config_changer.change_config(
                 self, {"audit_categories": default_categories, "audit_tables": "invalid.table.twodots", "audit_keyspaces": "non-existing"}, expected_result=self.AuditConfigChanger.ExpectedResult.FAILURE_UNPARSABLE_VALUE
             )

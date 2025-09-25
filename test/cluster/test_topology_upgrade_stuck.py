@@ -60,6 +60,7 @@ async def test_topology_upgrade_stuck(request, manager: ManagerClient):
         assert status == "not_upgraded"
 
     logging.info("Enabling error injection which will cause the topology coordinator to get stuck")
+    manager.ignore_log_patterns.append("failed to build topology coordinator state due to error injection")
     await gather_safely(*(manager.api.enable_injection(s.ip_addr, "topology_coordinator_fail_to_build_state_during_upgrade", one_shot=False) for s in servers))
 
     logging.info("Triggering upgrade to raft topology")

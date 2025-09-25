@@ -159,6 +159,7 @@ async def test_truncate_while_node_restart(manager: ManagerClient):
         # Shutdown the node containing a replica
         await manager.server_stop_gracefully(restart_node.server_id)
         # Start truncating in the background
+        manager.ignore_log_patterns.append(r'raft_topology - topology change coordinator fiber got error std::runtime_error \(Cannot perform TRUNCATE on table .* because host .* is down\)')
         trunc_future = cql.run_async(f'TRUNCATE TABLE {ks}.test', host=hosts[0])
         # Restart the node
         await manager.server_start(restart_node.server_id)

@@ -64,6 +64,11 @@ async def safe_rolling_restart(manager, servers, with_down):
 async def test_tablet_metadata_propagates_with_schema_changes_in_snapshot_mode(manager: ManagerClient):
     """Test that you can create a table and insert and query data"""
 
+    manager.ignore_log_patterns.extend([
+        r"raft .* Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        r"raft - apply_snapshot.* ignore outdated snapshot"
+    ])
+
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_proxy=trace',
@@ -260,6 +265,7 @@ async def test_streaming_rx_error_no_failed_message_with_fail_stream_plan(manage
     await manager.api.enable_injection(servers[0].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
     await manager.api.enable_injection(servers[1].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
     await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments_rx_error", one_shot=True)
+    manager.ignore_log_patterns.append('stream_mutation_fragments_rx_error')
 
     s1_log = await manager.server_open_log(servers[1].server_id)
     s1_mark = await s1_log.mark()
@@ -301,6 +307,7 @@ async def test_streaming_rx_error_no_failed_message_no_fail_stream_plan_hang(man
     await manager.api.enable_injection(servers[0].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
     await manager.api.enable_injection(servers[1].ip_addr, "stream_session_ignore_failed_message", one_shot=True)
     await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments_rx_error", one_shot=True)
+    manager.ignore_log_patterns.append('stream_mutation_fragments_rx_error')
 
     await manager.api.enable_injection(servers[0].ip_addr, "stream_mutation_fragments_skip_fail_stream_plan", one_shot=True)
     await manager.api.enable_injection(servers[1].ip_addr, "stream_mutation_fragments_skip_fail_stream_plan", one_shot=True)
@@ -382,6 +389,7 @@ async def test_streaming_is_guarded_by_topology_guard(manager: ManagerClient):
         # Release abandoned streaming
         await manager.api.message_injection(servers[1].ip_addr, "stream_mutation_fragments")
         await s1_log.wait_for('stream_mutation_fragments: done', from_mark=s1_mark)
+        manager.ignore_log_patterns.append("Failed to handle STREAM_MUTATION_FRAGMENTS .* seastar::abort_requested_exception")
 
         # Verify that there is no data resurrection
         rows = await cql.run_async(f"SELECT pk from {ks}.test")
@@ -616,6 +624,10 @@ async def test_tablet_resharding(manager: ManagerClient):
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_split(manager: ManagerClient, injection_error: str):
+    manager.ignore_log_patterns.extend([
+        r"raft_topology - topology change coordinator fiber got error data_dictionary::no_such_column_family",
+        r"std::runtime_error \(Dangling queue_reader_handle\)",
+    ])
     logger.info("Bootstrapping cluster")
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
@@ -741,6 +753,7 @@ async def test_correctness_of_tablet_split_finalization_after_restart(manager: M
         time.sleep(1)
         await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
+        manager.ignore_log_patterns.append(r"table - Compacted SSTables deletion failed: seastar::named_gate_closed_exception .* Ignored")
         await manager.server_stop_gracefully(servers[1].server_id, timeout=120)
         await manager.server_start(servers[1].server_id)
         await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
@@ -1235,6 +1248,10 @@ async def test_tombstone_gc_correctness_during_tablet_split(manager: ManagerClie
 
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_load_stats_refresh_before_rebalancing", one_shot=False)
         await manager.api.enable_injection(servers[0].ip_addr, "tablet_split_finalization_postpone", one_shot=False)
+        manager.ignore_log_patterns.extend(
+            [r"storage_service - Failed to complete splitting of table .* due to sstables::compaction_stopped_exception",
+             r"storage_service - Failed to complete splitting of table .* was stopped due to: user request"
+        ])
 
         s1_log = await manager.server_open_log(servers[0].server_id)
         s1_mark = await s1_log.mark()
@@ -1449,6 +1466,8 @@ async def test_decommission_not_enough_racks(manager: ManagerClient):
     num_racks = 3
     nodes_per_rack = 2
     rf = num_racks
+
+    manager.ignore_log_patterns.append("raft_topology - tablets draining failed with std::runtime_error .* Consider adding new nodes or reducing replication factor")
 
     all_servers = await create_cluster(manager, 1, num_racks, nodes_per_rack)
     async with create_and_populate_table(manager, rf=rf) as ctx:
