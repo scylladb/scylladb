@@ -740,8 +740,10 @@ future<page_consume_result<ResultBuilder>> read_page(
             ResultBuilder::maybe_set_last_position(result, compaction_state->current_full_position());
         }
         const auto& cstats = compaction_state->stats();
-        tracing::trace(trace_state, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
-                cstats.partitions,
+        tracing::trace(trace_state, "Page stats: {} partition(s) ({} live, {} dead), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead) and {} range tombstone(s)",
+                cstats.total_partitions,
+                cstats.live_partitions,
+                cstats.dead_partitions(),
                 cstats.static_rows.total(),
                 cstats.static_rows.live,
                 cstats.static_rows.dead,
