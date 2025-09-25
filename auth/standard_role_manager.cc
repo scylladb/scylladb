@@ -668,11 +668,20 @@ future<role_to_directly_granted_map> standard_role_manager::query_all_directly_g
             get_auth_ks_name(_qp),
             meta::role_members_table::name);
 
+    const auto results = co_await _qp.execute_internal(
+            query,
+            db::consistency_level::ONE,
+            internal_distributed_query_state(),
+            cql3::query_processor::cache_internal::yes);
+
     role_to_directly_granted_map roles_map;
-    co_await _qp.query_internal(query, [&roles_map] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-        roles_map.insert({row.get_as<sstring>("member"), row.get_as<sstring>("role")});
-        co_return stop_iteration::no;
-    });
+    std::transform(
+            results->begin(),
+            results->end(),
+            std::inserter(roles_map, roles_map.begin()),
+            [] (const cql3::untyped_result_set_row& row) {
+                return std::make_pair(row.get_as<sstring>("member"), row.get_as<sstring>("role")); }
+    );
 
     co_return roles_map;
 }
