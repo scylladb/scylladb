@@ -111,13 +111,14 @@ gms::application_state_map gossiping_property_file_snitch::get_app_states() cons
 }
 
 future<> gossiping_property_file_snitch::read_property_file() {
-    return load_property_file().then([this] {
-        return reload_configuration();
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            return make_ready_future<>();
-        } catch (...) {
+    std::exception_ptr ex;
+    try {
+        co_await load_property_file();
+        co_await reload_configuration();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
             //
             // In case of an error:
             //    - Halt if in the constructor.
@@ -125,13 +126,11 @@ future<> gossiping_property_file_snitch::read_property_file() {
             //
             if (_state == snitch_state::initializing) {
                 logger().error("Failed to parse a properties file ({}). Halting...", _prop_file_name);
-                throw;
+                co_await coroutine::return_exception_ptr(std::move(ex));
             } else {
                 logger().warn("Failed to reload a properties file ({}). Using previous values.", _prop_file_name);
-                return make_ready_future<>();
             }
-        }
-    });
+    }
 }
 
 future<> gossiping_property_file_snitch::reload_configuration() {
