@@ -305,6 +305,10 @@ future<> standard_role_manager::start() {
             const bool legacy = legacy_mode(_qp);
             if (legacy) {
                 if (!_superuser_created_promise.available()) {
+                    // Counterintuitively, we mark promise as ready before any startup work
+                    // because wait_for_schema_agreement() below will block indefinitely
+                    // without cluster majority. In that case, blocking node startup
+                    // would lead to a cluster deadlock.
                     _superuser_created_promise.set_value();
                 }
                 co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
