@@ -353,6 +353,8 @@ public:
     version_t get_version() const;
     void set_version(version_t version);
 
+    shared_token_metadata& get_shared_token_metadata();
+
     friend class token_metadata_impl;
     friend class shared_token_metadata;
 private:
@@ -488,6 +490,15 @@ private:
     void mutate_token_metadata_for_test(seastar::noncopyable_function<void (token_metadata&)> func);
 
     friend struct ::sort_by_proximity_topology;
+};
+
+class pending_token_metadata {
+    std::vector<locator::mutable_token_metadata_ptr> _shards{smp::count};
+public:
+    future<> assign(locator::mutable_token_metadata_ptr new_token_metadata);
+    locator::mutable_token_metadata_ptr& local();
+    locator::token_metadata_ptr local() const;
+    future<> destroy();
 };
 
 }
