@@ -2638,6 +2638,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         uint64_t& wcu_total) {
     std::optional cdc_opts = cdc::per_request_options{
         .fill_preimage = schema()->cdc_options().enabled(),
+        .alternator = true,
     };
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
@@ -2991,6 +2992,7 @@ static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, serv
     auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     std::optional cdc_opts = cdc::per_request_options{
+        .alternator = true,
     };
     return proxy.cas(schema, std::move(cas_shard), op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -3051,7 +3053,9 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 std::move(permit),
                 db::allow_per_partition_rate_limit::yes,
                 false,
-                cdc::per_request_options{});
+                cdc::per_request_options{
+                    .alternator = true,
+                });
     } else {
         // Do the write via LWT:
         // Multiple mutations may be destined for the same partition, adding

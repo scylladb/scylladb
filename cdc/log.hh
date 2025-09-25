@@ -71,6 +71,8 @@ struct per_request_options {
     bool fill_preimage = false;
     // Don't generate log rows for this mutation.
     bool skip_cdc = false;
+    // True if this mutation was emitted by Alternator.
+    const bool alternator = false;
 };
 
 struct operation_result_tracker;
