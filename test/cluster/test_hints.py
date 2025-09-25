@@ -93,11 +93,11 @@ async def test_limited_concurrency_of_writes(manager: ManagerClient):
     """
     node1 = await manager.server_add(config={
         "error_injections_at_startup": ["decrease_max_size_of_hints_in_progress"]
-    })
-    node2 = await manager.server_add()
+    }, property_file = {"dc":"dc1", "rack":"rack1"})
+    node2 = await manager.server_add(property_file = {"dc":"dc1", "rack":"rack2"})
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 2}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 2}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
 
@@ -124,10 +124,10 @@ async def test_sync_point(manager: ManagerClient):
     live nodes.
     """
     node_count = 3
-    [node1, node2, node3] = await manager.servers_add(node_count)
+    [node1, node2, node3] = await manager.servers_add(node_count, auto_rack_dc="dc1")
 
     cql = manager.get_cql()
-    async with new_test_keyspace(manager, "WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 3}") as ks:
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
         table = f"{ks}.t"
         await cql.run_async(f"CREATE TABLE {table} (pk int primary key, v int)")
 
@@ -291,7 +291,7 @@ async def test_draining_hints(manager: ManagerClient):
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
 
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s2.server_id)
@@ -326,7 +326,7 @@ async def test_canceling_hint_draining(manager: ManagerClient):
 
     await manager.api.set_logger_level(s1.ip_addr, "hints_manager", "trace")
 
-    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3}")
+    await cql.run_async("CREATE KEYSPACE ks WITH REPLICATION = {'class': 'SimpleStrategy', 'replication_factor': 3} AND tablets = {'enabled': false}")
     await cql.run_async("CREATE TABLE ks.t (pk int PRIMARY KEY, v int)")
 
     await manager.server_stop_gracefully(s2.server_id)
