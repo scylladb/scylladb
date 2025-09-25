@@ -1127,7 +1127,7 @@ public:
 
     // The tablet filter is used to not double account migrating tablets, so it's important that
     // only one of pending or leaving replica is accounted based on current migration stage.
-    locator::table_load_stats table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept;
+    std::pair<locator::table_load_stats, locator::tablet_load_stats> table_load_stats(std::function<bool(const locator::tablet_map&, locator::global_tablet_id)> tablet_filter) const noexcept;
 
     const db::view::stats& get_view_stats() const {
         return _view_stats;
