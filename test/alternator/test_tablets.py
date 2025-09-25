@@ -84,9 +84,9 @@ def test_initial_tablets_number(dynamodb):
     with new_test_table(dynamodb, **schema) as table:
         assert not uses_tablets(dynamodb, table)
 
-# Before Alternator Streams is supported with tablets (#16317), let's verify
+# Before Alternator Streams is supported with tablets (#23838), let's verify
 # that enabling Streams results in an orderly error. This test should be
-# deleted when #16317 is fixed.
+# deleted when #23838 is fixed.
 def test_streams_enable_error_with_tablets(dynamodb):
     # Test attempting to create a table already with streams
     with pytest.raises(ClientError, match='ValidationException.*tablets'):

@@ -209,4 +209,4 @@ Alternator table, the following features will not work for this table:
 
 * Enabling Streams with CreateTable or UpdateTable doesn't work
   (results in an error).
-  See <https://github.com/scylladb/scylla/issues/16317>.
+  See <https://github.com/scylladb/scylla/issues/23838>.
