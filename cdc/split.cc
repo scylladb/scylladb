@@ -462,13 +462,14 @@ api::timestamp_type find_timestamp(const mutation& m) {
  * Was there a clustered row update? Was there a clustered row delete? Was there a TTL?)
  * and tells the caller to stop on the first occurrence of a second timestamp/ttl/type of change.
  */
-struct should_split_visitor {
+class should_split_visitor {
     bool _had_static_row = false;
     bool _had_clustered_row = false;
     bool _had_upsert = false;
     bool _had_row_marker = false;
     bool _had_range_delete = false;
 
+public:
     bool _result = false;
 
     // This becomes a valid (non-missing) timestamp after visiting the first change.
@@ -484,7 +485,7 @@ struct should_split_visitor {
     inline bool finished() const { return _result; }
     inline void stop() { _result = true; }
 
-    void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
+    virtual void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
         if (_ts != api::missing_timestamp && _ts != ts) {
             return stop();
         }
@@ -503,7 +504,7 @@ struct should_split_visitor {
 
     void collection_tombstone(const tombstone& t) { visit(t.timestamp + 1); }
 
-    void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
+    virtual void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
         if (_had_row_marker) {
             // nonatomic updates cannot be expressed with an INSERT.
             return stop();
@@ -513,7 +514,7 @@ struct should_split_visitor {
     void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
     void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
 
-    void marker(const row_marker& rm) {
+    virtual void marker(const row_marker& rm) {
         _had_row_marker = true;
         visit(rm.timestamp(), get_ttl(rm));
     }
@@ -554,7 +555,32 @@ struct should_split_visitor {
     }
 };
 
-bool should_split(const mutation& m) {
+// This is the same as the above, but it ignores TTL and doesn't split row
+// marker from update.
+class alternator_should_split_visitor : public should_split_visitor {
+    void visit(api::timestamp_type ts, gc_clock::duration = gc_clock::duration(0)) override {
+        if (_ts != api::missing_timestamp && _ts != ts) {
+            return stop();
+        }
+        _ts = ts;
+    }
+
+    void live_collection_cell(bytes_view, const atomic_cell_view& cell) override {
+        visit(cell.timestamp());
+    }
+
+    void marker(const row_marker& rm) override {
+        visit(rm.timestamp(), get_ttl(rm));
+    }
+};
+
+bool should_split(const mutation& m, const std::optional<per_request_options>& options) {
+    if (options && options->alternator) {
+        alternator_should_split_visitor v;
+        cdc::inspect_mutation(m, v);
+        return v._result || v._ts == api::missing_timestamp;
+    }
+
     should_split_visitor v;
 
     cdc::inspect_mutation(m, v);

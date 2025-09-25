@@ -1952,7 +1952,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 details.had_preimage |= preimage;
                 details.had_postimage |= postimage;
                 tracing::trace(tr_state, "CDC: Generating log mutations for {}", m.decorated_key());
-                if (should_split(m)) {
+                if (should_split(m, options)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
                     process_changes_with_splitting(m, trans, preimage, postimage);
