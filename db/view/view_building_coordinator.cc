@@ -104,7 +104,11 @@ future<> view_building_coordinator::run() {
 
     while (!_as.abort_requested()) {
         co_await utils::get_local_injector().inject("view_building_coordinator_pause_main_loop", utils::wait_for_message(std::chrono::minutes(2)));
-        
+        if (utils::get_local_injector().enter("view_building_coordinator_skip_main_loop")) {
+            co_await seastar::sleep_abortable(std::chrono::seconds(1), _as);
+            continue;
+        }
+
         bool sleep = false;
         try {
             auto guard_opt = co_await update_state(co_await start_operation());

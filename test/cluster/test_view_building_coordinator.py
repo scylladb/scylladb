@@ -15,7 +15,7 @@ import re
 from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for_first_completed, gather_safely, wait_for
 from test.pylib.internal_types import ServerInfo, HostID
-from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replica, get_tablet_replicas
+from test.pylib.tablets import get_all_tablet_replicas, get_tablet_replica, get_tablet_replicas, get_tablet_count
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
 from test.cluster.util import new_test_keyspace, get_topology_coordinator, trigger_stepdown, wait_for_cql_and_get_hosts
 from test.pylib.scylla_cluster import ReplaceConfig
@@ -38,6 +38,7 @@ cmdline_loggers = [
     '--logger-log-level', 'raft_topology=debug',
     '--logger-log-level', 'view_building_coordinator=debug',
     '--logger-log-level', 'view_building_worker=debug',
+    '--logger-log-level', 'load_balancer=debug',
 ]
 
 async def mark_all_servers(manager: ManagerClient) -> list[int]:
@@ -733,5 +734,147 @@ async def test_file_streaming(manager: ManagerClient):
         # Start node0 here because view replica might not be migrated to the new node, since they are not colocated
         await manager.server_start(servers[0].server_id)
         # ... this check fails because the mv has 0 rows on the new host
+        await assert_row_count_on_host(cql, new_hosts[0], ks, "mv", 1000)
+        await manager.server_start(servers[1].server_id)
+
+# Reproducer for issue scylladb#26244
+# Purpose of this test is to check if staging sstables managed by `view_building_worker`
+# correctly reacts to tablet merge.
+#
+# This test starts with 2 node cluster, a table (RF=2) with tablet count = 2 and a view.
+# Scenario:
+# - create staging sstables by removing sstables on node0
+#   but prevent its processing by view update generator using error injection
+# - suspend view building coordinator using error injection
+# - create a new node 2, migrate both tablet replicas from node0 to node2
+#   - at this point both staging sstables are migrated to the new node
+#     and view building tasks are created for them
+# - trigger tablet merge on the base table (from 2 to 1)
+# - restore view building coordinator by disabling error injection
+# - staging sstables should be processed now
+# - the view should be consistent with the base table
+#
+# This test fails because of 2 reasons:
+# - #1 (no support for tablet migration in staging sstables)
+#   When staging sstables are migrated to node2,
+#   sstable for tablet1 is on shard1 (in the view building worker) and sstable for tablet2 in on shard2.
+#   When tablet merge is starting, firstly the tablet2 is migrated to shard1,
+#   but its sstable stays on shard2 in the worker.
+# - #2 (no support for tablet merge in staging sstables)
+#   Even if both staging sstables would be on the same shard, the sstables are stored in a map indexed by
+#   tablet's last token. So when there are 2 tablets, the map is
+#   [last token of tablet1] -> [sstable for tablet1]
+#   [last token of tablet2] -> [sstable for tablet2]
+#   However after tablet merge, view building tasks of those sstables are merged into one task,
+#   but the map stays the same, so one sstable won't be processed
+#   because last token after tablet merge = last token of tablet2 before merge
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.xfail(reason="#26244")
+async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
+    node_count = 2
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+    ], config={
+        'tablet_load_stats_refresh_interval_in_seconds': 1,
+        'error_injections_at_startup': ['allow_tablet_merge_with_views'],
+    })
+    cql, hosts = await manager.get_ready_cql(servers)
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}} AND tablets = {{'enabled': true}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key)) WITH tablets = {{'min_tablet_count': 2}}")
+
+        assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
+        # Populate the base table
+        rows = 1000
+        for i in range(rows):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, 1)")
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT * FROM {ks}.tab "
+                        "WHERE key IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, key)")
+        await wait_for_view(cql, 'mv', node_count)
+        assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
+
+        # Flush on node0
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "tab")
+        await manager.api.keyspace_flush(servers[0].ip_addr, ks, "mv")
+
+        # Delete sstables
+        await delete_table_sstables(manager, servers[0], ks, "tab")
+        await delete_table_sstables(manager, servers[0], ks, "mv")
+
+        # Restart node0
+        await manager.server_stop_gracefully(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+
+        # Assert that node0 has no data for base table and MV
+        hosts = await wait_for_cql_and_get_hosts(cql, [servers[0]], time.time() + 30)
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", 0)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
+        await manager.server_start(servers[1].server_id)
+
+        # Repair the base table
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        await manager.api.enable_injection(servers[0].ip_addr, "view_update_generator_consume_staging_sstable", one_shot=False)
+        await manager.api.repair(servers[0].ip_addr, ks, "tab")
+        await s0_log.wait_for(f"Processing {ks} failed for table tab", from_mark=s0_mark, timeout=60)
+        await s0_log.wait_for(f"Finished user-requested repair for tablet keyspace={ks}", from_mark=s0_mark, timeout=60)
+
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await assert_row_count_on_host(cql, hosts[0], ks, "tab", 1000)
+        await assert_row_count_on_host(cql, hosts[0], ks, "mv", 0)
+        await manager.server_start(servers[1].server_id)
+
+        # Add node3
+        await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+        new_server = await manager.server_add(cmdline=cmdline_loggers + ['--logger-log-level', 'view_update_generator=trace'], property_file={"dc": "dc1", "rack": "r1"}, config={
+            'tablet_load_stats_refresh_interval_in_seconds': 1,
+            'error_injections_at_startup': ['allow_tablet_merge_with_views'],
+        })
+
+        await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "view_building_coordinator_skip_main_loop", one_shot=False) for s in servers + [new_server]))
+        s3_log = await manager.server_open_log(new_server.server_id)
+        s3_mark = await s3_log.mark()
+
+        s0_host_id = await manager.get_host_id(servers[0].server_id)
+        replicas = await get_all_tablet_replicas(manager, servers[0], ks, "tab")
+        for tablet_replica in replicas:
+            def get_tablet_replica_for_s0():
+                for r in tablet_replica.replicas:
+                    if r[0] == s0_host_id:
+                        return r
+                return None
+            src_replica = get_tablet_replica_for_s0()
+
+            if not src_replica:
+                assert False, "no replica"
+
+            s3_host_id = await manager.get_host_id(new_server.server_id)
+            await manager.api.move_tablet(servers[0].ip_addr, ks, "tab", src_replica[0], src_replica[1], s3_host_id, src_replica[1], tablet_replica.last_token)
+
+        async def tablet_count_is(expected_tablet_count):
+            new_tablet_count = await get_tablet_count(manager, servers[0], ks, 'tab')
+            if new_tablet_count == expected_tablet_count:
+                return True
+
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
+        await cql.run_async(f"ALTER TABLE {ks}.tab WITH tablets = {{'min_tablet_count': 1}}")
+        await wait_for(lambda: tablet_count_is(1), time.time() + 60)
+
+        await asyncio.gather(*(manager.api.disable_injection(s.ip_addr, "view_building_coordinator_skip_main_loop") for s in servers + [new_server]))
+        # The test fails here because of no support for tablet migration for staging sstables stored in view_building_worker. (#1)
+        await s3_log.wait_for(f"Processed {ks}.tab:", from_mark=s3_mark, timeout=60)
+        await asyncio.sleep(1)
+
+        new_hosts = await wait_for_cql_and_get_hosts(cql, [new_server], time.time() + 30)
+        await asyncio.gather(*(manager.server_stop_gracefully(s.server_id) for s in servers))
+        await assert_row_count_on_host(cql, new_hosts[0], ks, "tab", 1000)
+        await manager.server_start(servers[0].server_id)
+        # And also fails here because not all staging sstables are processed after tablet merge. (#2)
         await assert_row_count_on_host(cql, new_hosts[0], ks, "mv", 1000)
         await manager.server_start(servers[1].server_id)

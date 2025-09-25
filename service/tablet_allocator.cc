@@ -990,7 +990,8 @@ public:
 
         auto can_proceed_with_colocation = [this] (table_id tid, const locator::tablet_map& tmap) {
             // FIXME: tables with views aren't supported yet. See: https://github.com/scylladb/scylladb/issues/17265.
-            return tmap.needs_merge() && _db.column_family_exists(tid) && _db.find_column_family(tid).views().empty();
+            // Issue https://github.com/scylladb/scylladb/issues/26244 needs to be fixed before enabling tablet merge with views.
+            return tmap.needs_merge() && _db.column_family_exists(tid) && (_db.find_column_family(tid).views().empty() || utils::get_local_injector().enter("allow_tablet_merge_with_views"));
         };
 
         for (auto&& [table, tables] : _tm->tablets().all_table_groups()) {
