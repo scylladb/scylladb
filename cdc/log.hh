@@ -62,6 +62,8 @@ enum class operation : int8_t {
 };
 
 struct per_request_options {
+    // Don't generate log rows for this mutation.
+    bool skip_cdc = false;
 };
 
 struct operation_result_tracker;
