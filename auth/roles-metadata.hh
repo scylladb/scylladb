@@ -27,15 +27,15 @@ namespace meta {
 
 namespace roles_table {
 
-std::string_view creation_query();
-
 constexpr std::string_view name{"roles", 5};
 
 constexpr std::string_view role_col_name{"role", 4};
 
-}
+} // namespace roles_table
 
-}
+} // namespace meta
+
+namespace legacy {
 
 ///
 /// Check that the default role satisfies a predicate, or `false` if the default role does not exist.
@@ -55,4 +55,6 @@ future<bool> any_nondefault_role_row_satisfies(
         std::optional<std::string> rolename = {}
         );
 
-}
+} // namespace legacy
+
+} // namespace auth

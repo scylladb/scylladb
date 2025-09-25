@@ -18,43 +18,21 @@
 
 namespace auth {
 
-namespace meta {
-
-namespace roles_table {
-
-std::string_view creation_query() {
-    static const sstring instance = fmt::format(
-            "CREATE TABLE {}.{} ("
-            "  {} text PRIMARY KEY,"
-            "  can_login boolean,"
-            "  is_superuser boolean,"
-            "  member_of set<text>,"
-            "  salted_hash text"
-            ")",
-            meta::legacy::AUTH_KS,
-            name,
-            role_col_name);
-
-    return instance;
-}
-
-} // namespace roles_table
-
-} // namespace meta
+namespace legacy {
 
 future<bool> default_role_row_satisfies(
         cql3::query_processor& qp,
         std::function<bool(const cql3::untyped_result_set_row&)> p,
         std::optional<std::string> rolename) {
     const sstring query = seastar::format("SELECT * FROM {}.{} WHERE {} = ?",
-            meta::legacy::AUTH_KS,
+            auth::meta::legacy::AUTH_KS,
             meta::roles_table::name,
             meta::roles_table::role_col_name);
 
     for (auto cl : { db::consistency_level::ONE, db::consistency_level::QUORUM }) {
         auto results = co_await qp.execute_internal(query, cl
             , internal_distributed_query_state()
-            , {rolename.value_or(std::string(meta::DEFAULT_SUPERUSER_NAME))}
+            , {rolename.value_or(std::string(auth::meta::DEFAULT_SUPERUSER_NAME))}
             , cql3::query_processor::cache_internal::yes
             );
         if (!results->empty()) {
@@ -68,7 +46,7 @@ future<bool> any_nondefault_role_row_satisfies(
         cql3::query_processor& qp,
         std::function<bool(const cql3::untyped_result_set_row&)> p,
         std::optional<std::string> rolename) {
-    const sstring query = seastar::format("SELECT * FROM {}.{}", meta::legacy::AUTH_KS, meta::roles_table::name);
+    const sstring query = seastar::format("SELECT * FROM {}.{}", auth::meta::legacy::AUTH_KS, meta::roles_table::name);
 
     auto results = co_await qp.execute_internal(query, db::consistency_level::QUORUM
         , internal_distributed_query_state(), cql3::query_processor::cache_internal::no
@@ -85,4 +63,6 @@ future<bool> any_nondefault_role_row_satisfies(
     });
 }
 
-}
+} // namespace legacy
+
+} // namespace auth
