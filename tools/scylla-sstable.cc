@@ -1320,6 +1320,7 @@ const char* to_string(sstables::scylla_metadata_type t) {
         case sstables::scylla_metadata_type::ScyllaBuildId: return "scylla_build_id";
         case sstables::scylla_metadata_type::ExtTimestampStats: return "ext_timestamp_stats";
         case sstables::scylla_metadata_type::SSTableIdentifier: return "sstable_identifier";
+        case sstables::scylla_metadata_type::Schema: return "schema";
     }
     std::abort();
 }
@@ -1442,8 +1443,53 @@ public:
         (*this)(m.value);
     }
 
+    template <typename Size, typename Members>
+    void operator()(const sstables::disk_array<Size, Members>& a) const {
+        _writer.StartArray();
+        for (const auto& element : a.elements) {
+            (*this)(element);
+        }
+        _writer.EndArray();
+    }
+
     void operator()(const sstables::scylla_metadata::sstable_identifier& sid) const {
         _writer.AsString(sid.value);
+    }
+
+    void operator()(const sstables::sstable_column_description& cd) const {
+        _writer.StartObject();
+
+        _writer.Key("kind");
+        _writer.Int64(static_cast<uint32_t>(cd.kind));
+
+        _writer.Key("name");
+        _writer.String(disk_string_to_string(cd.name));
+
+        _writer.Key("type");
+        _writer.String(disk_string_to_string(cd.type));
+
+        _writer.EndObject();
+    }
+
+    void operator()(const sstables::scylla_metadata::sstable_schema& s) const {
+        _writer.StartObject();
+
+        _writer.Key("id");
+        _writer.String(fmt::to_string(s.id));
+
+        _writer.Key("version");
+        _writer.String(fmt::to_string(s.version));
+
+        _writer.Key("keyspace_name");
+        _writer.String(disk_string_to_string(s.keyspace_name));
+
+        _writer.Key("table_name");
+        _writer.String(disk_string_to_string(s.table_name));
+
+        _writer.Key("columns");
+        (*this)(s.columns);
+
+        _writer.EndObject();
     }
 };
 
