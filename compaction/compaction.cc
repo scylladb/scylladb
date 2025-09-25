@@ -1635,7 +1635,7 @@ private:
 
         void on_malformed_sstable_exception(std::exception_ptr e) {
             if (_scrub_mode != compaction_type_options::scrub::mode::skip) {
-                throw compaction_aborted_exception(
+                throw sstables::compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
                         format("scrub compaction failed due to unrecoverable error: {}", e));
@@ -1730,7 +1730,7 @@ private:
                 } catch (const storage_io_error&) {
                     // Propagate these unchanged.
                     throw;
-                } catch (const malformed_sstable_exception& e) {
+                } catch (const sstables::malformed_sstable_exception& e) {
                     on_malformed_sstable_exception(std::current_exception());
                 } catch (...) {
                     // We don't want failed scrubs to be retried.
