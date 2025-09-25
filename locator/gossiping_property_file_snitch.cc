@@ -18,27 +18,20 @@
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
-    return open_file_dma(_prop_file_name, open_flags::ro)
-    .then([](file f) {
-        return do_with(std::move(f), [] (file& f) {
-            return f.stat();
-        });
-    }).then_wrapped([this] (auto&& f) {
         try {
-            auto st = f.get();
-
+            auto f = co_await open_file_dma(_prop_file_name, open_flags::ro);
+            auto st = co_await f.stat();
             if (!_last_file_mod ||
                 _last_file_mod->tv_sec != st.st_mtim.tv_sec) {
                 _last_file_mod = st.st_mtim;
-                return true;
+                co_return true;
             } else {
-                return false;
+                co_return false;
             }
         } catch (...) {
             logger().error("Failed to open {} for read or to get stats", _prop_file_name);
             throw;
         }
-    });
 }
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg)
