@@ -25,6 +25,7 @@
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/topology.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "gms/feature_service.hh"
 #include "schema/schema.hh"
@@ -1385,6 +1386,8 @@ struct process_change_visitor {
     row_states_map& _clustering_row_states;
     cell_map& _static_row_state;
 
+    const bool _is_update = false;
+
     const bool _generate_delta_values = true;
 
     void static_row_cells(auto&& visit_row_cells) {
@@ -1408,12 +1411,13 @@ struct process_change_visitor {
 
         struct clustering_row_cells_visitor : public process_row_visitor {
             operation _cdc_op = operation::update;
+            operation _marker_op = operation::insert;
 
             using process_row_visitor::process_row_visitor;
 
             void marker(const row_marker& rm) {
                 _ttl_column = get_ttl(rm);
-                _cdc_op = operation::insert;
+                _cdc_op = _marker_op;
             }
         };
 
@@ -1421,6 +1425,9 @@ struct process_change_visitor {
                 log_ck, _touched_parts, _builder,
                 _enable_updating_state, &ckey, get_row_state(_clustering_row_states, ckey),
                 _clustering_row_states, _generate_delta_values);
+        if (_is_update && _request_options.alternator) {
+            v._marker_op = operation::update;
+        }
         visit_row_cells(v);
 
         if (_enable_updating_state) {
@@ -1574,6 +1581,11 @@ private:
 
     row_states_map _clustering_row_states;
     cell_map _static_row_state;
+    // True if the mutated row existed before applying the mutation. In other
+    // words, if the preimage is enabled and it isn't empty (otherwise, we
+    // assume that the row is non-existent). Used for Alternator Streams (see
+    // #6918).
+    bool _is_update = false;
 
     const bool _uses_tablets;
 
@@ -1700,6 +1712,7 @@ public:
             ._enable_updating_state = _enable_updating_state,
             ._clustering_row_states = _clustering_row_states,
             ._static_row_state = _static_row_state,
+            ._is_update = _is_update,
             ._generate_delta_values = generate_delta_values(_builder->base_schema())
         };
         cdc::inspect_mutation(m, v);
@@ -1833,6 +1846,7 @@ public:
                     _static_row_state[&c] = std::move(*maybe_cell_view);
                 }
             }
+            _is_update = true;
         }
 
         if (static_only) {
@@ -1920,6 +1934,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 return make_ready_future<>();
             }
 
+            const bool alternator_increased_compatibility = options.alternator && options.alternator_streams_increased_compatibility;
             transformer trans(_ctxt, s, m.decorated_key(), options);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
@@ -1927,7 +1942,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // Preimage has been fetched by upper layers.
                 tracing::trace(tr_state, "CDC: Using a prefetched preimage");
                 f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(options.preimage);
-            } else if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
+            } else if (s->cdc_options().preimage() || s->cdc_options().postimage() || alternator_increased_compatibility) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // if a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
@@ -1944,7 +1959,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state, &details, &options] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+            return f.then([alternator_increased_compatibility, trans = std::move(trans), &mutations, idx, tr_state, &details, &options] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
                 auto& m = mutations[idx];
                 auto& s = m.schema();
 
@@ -1962,10 +1977,10 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 if (should_split(m, options)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
-                    process_changes_with_splitting(m, trans, preimage, postimage);
+                    process_changes_with_splitting(m, trans, preimage, postimage, alternator_increased_compatibility);
                 } else {
                     tracing::trace(tr_state, "CDC: No need to split {}", m.decorated_key());
-                    process_changes_without_splitting(m, trans, preimage, postimage);
+                    process_changes_without_splitting(m, trans, preimage, postimage, alternator_increased_compatibility);
                 }
                 auto [log_mut, touched_parts] = std::move(trans).finish();
                 const int generated_count = log_mut.size();

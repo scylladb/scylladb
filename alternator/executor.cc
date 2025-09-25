@@ -2655,6 +2655,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         uint64_t& wcu_total) {
     auto cdc_opts = cdc::per_request_options{
         .alternator = true,
+        .alternator_streams_increased_compatibility = schema()->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
@@ -3014,6 +3015,8 @@ static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, serv
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     auto cdc_opts = cdc::per_request_options{
         .alternator = true,
+        .alternator_streams_increased_compatibility =
+                schema->cdc_options().enabled() && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
     };
     return proxy.cas(schema, std::move(cas_shard), op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -3064,8 +3067,10 @@ static future<> do_batch_write(service::storage_proxy& proxy,
         utils::chunked_vector<mutation> mutations;
         mutations.reserve(mutation_builders.size());
         api::timestamp_type now = api::new_timestamp();
+        bool any_cdc_enabled = false;
         for (auto& b : mutation_builders) {
             mutations.push_back(b.second.build(b.first, now));
+            any_cdc_enabled |= b.first->cdc_options().enabled();
         }
         return proxy.mutate(std::move(mutations),
                 db::consistency_level::LOCAL_QUORUM,
@@ -3076,6 +3081,7 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 false,
                 cdc::per_request_options{
                     .alternator = true,
+                    .alternator_streams_increased_compatibility = any_cdc_enabled && proxy.data_dictionary().get_config().alternator_streams_increased_compatibility(),
                 });
     } else {
         // Do the write via LWT:

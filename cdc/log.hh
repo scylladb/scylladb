@@ -75,6 +75,12 @@ struct per_request_options {
     const bool is_system_originated = false;
     // True if this mutation was emitted by Alternator.
     const bool alternator = false;
+    // Sacrifice performance for the sake of better compatibility with DynamoDB
+    // Streams. It's important for correctness that
+    // alternator_streams_increased_compatibility config flag be read once per
+    // request, because it's live-updateable. As a result, the flag may change
+    // between reads.
+    const bool alternator_streams_increased_compatibility = false;
 };
 
 struct operation_result_tracker;
