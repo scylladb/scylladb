@@ -54,9 +54,9 @@ using url = httpd::url;
 
 constexpr auto const* LOCALHOST = "127.0.0.1";
 
-auto listen_on_ephemeral_port(std::unique_ptr<http_server> server) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-    auto inaddr = net::inet_address(LOCALHOST);
-    auto const addr = socket_address(inaddr, 0);
+auto listen_on_port(std::unique_ptr<http_server> server, sstring host, uint16_t port) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    auto inaddr = net::inet_address(host);
+    auto const addr = socket_address(inaddr, port);
     ::listen_options opts;
     opts.set_fixed_cpu(this_shard_id());
     co_await server->listen(addr, opts);
@@ -65,12 +65,13 @@ auto listen_on_ephemeral_port(std::unique_ptr<http_server> server) -> future<std
     co_return std::make_tuple(std::move(server), listeners[0].local_address().port());
 }
 
-auto new_http_server(std::function<void(routes& r)> set_routes) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
+        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
     static unsigned id = 0;
     auto server = std::make_unique<http_server>(fmt::format("test_vector_store_client_{}", id++));
     set_routes(server->_routes);
     server->set_content_streaming(true);
-    co_return co_await listen_on_ephemeral_port(std::move(server));
+    co_return co_await listen_on_port(std::move(server), std::move(host), port);
 }
 
 auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> future<bool> {
@@ -108,6 +109,16 @@ auto print_addr(const inet_address& addr) -> sstring {
     return format("{}", addr);
 }
 
+// A sample correct ANN response for the test table created in create_test_table().
+constexpr auto CORRECT_RESPONSE_FOR_TEST_TABLE = R"({
+    "primary_keys": {
+        "pk1": [5, 6],
+        "pk2": [7, 8],
+        "ck1": [9, 1],
+        "ck2": [2, 3]
+    },
+    "distances": [0.1, 0.2]
+})";
 
 auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) -> future<schema_ptr> {
     co_await env.execute_cql(fmt::format(R"(
@@ -119,6 +130,19 @@ auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) 
     )",
             ks, cf));
     co_return env.local_db().find_schema(ks, cf);
+}
+
+future<> try_on_loopback_address(std::function<future<>(sstring)> func) {
+    constexpr size_t MAX_ADDR = 20;
+    for (size_t i = 1; i < MAX_ADDR; i++) {
+        auto host = fmt::format("127.0.0.{}", i);
+        try {
+            co_await func(std::move(host));
+            co_return;
+        } catch (...) {
+        }
+    }
+    throw std::runtime_error("unable to perform action on any 127.0.0.x address");
 }
 
 class configure {
@@ -184,8 +208,8 @@ public:
         : _port(port) {
     }
 
-    void start() {
-        listen();
+    future<> start() {
+        co_await listen();
         (void)try_with_gate(_gate, [this] {
             return run();
         });
@@ -209,18 +233,15 @@ public:
     }
 
 private:
-    void listen() {
-        for (size_t i = 1; i < 20; i++) {
-            auto host = fmt::format("127.0.0.{}", i);
-            try {
-                _socket = seastar::listen(socket_address(net::inet_address(host), _port));
-                _port = _socket.local_address().port();
-                _host = host;
-                return;
-            } catch (...) {
-            }
-        }
-        throw std::runtime_error(fmt::format("unable to listen on any 127.0.0.x address on port {}", _port));
+    future<> listen() {
+        co_await try_on_loopback_address([this](auto host) -> future<> {
+            ::listen_options opts;
+            opts.set_fixed_cpu(this_shard_id());
+            _socket = seastar::listen(socket_address(net::inet_address(host), _port), opts);
+            _port = _socket.local_address().port();
+            _host = std::move(host);
+            return make_ready_future<>();
+        });
     }
 
     future<> run() {
@@ -244,22 +265,81 @@ private:
     size_t _connections = 0;
 };
 
-std::unique_ptr<unavailable_server> make_unavailable_server(uint16_t port = 0) {
+auto make_unavailable_server(uint16_t port = 0) -> future<std::unique_ptr<unavailable_server>> {
     auto ret = std::make_unique<unavailable_server>(port);
-    ret->start();
-    return ret;
+    co_await ret->start();
+    co_return ret;
 }
 
-auto make_vs_server(status_type status, sstring body = "") -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
-    return new_http_server([status, body = std::move(body)](routes& r) {
-        auto ann = [status, body = std::move(body)](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-            rep->set_status(status);
-            rep->write_body("json", body);
-            co_return rep;
-        };
-        r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
-    });
+class vs_mock_server {
+public:
+    explicit vs_mock_server(uint16_t port)
+        : _port(port) {
+    }
+
+    explicit vs_mock_server(status_type status)
+        : _status(status) {
+    }
+
+    vs_mock_server() = default;
+
+    future<> start() {
+        co_await listen();
+    }
+
+    future<> stop() {
+        co_await _http_server->stop();
+    }
+
+    sstring host() const {
+        return _host;
+    }
+
+    uint16_t port() const {
+        return _port;
+    }
+
+    size_t requests() const {
+        return _requests;
+    }
+
+private:
+    future<> listen() {
+        co_await try_on_loopback_address([this](auto host) -> future<> {
+            auto [s, addr] = co_await new_http_server(
+                    [this](routes& r) {
+                        auto ann = [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                            return handle_request(std::move(req), std::move(rep));
+                        };
+                        r.add(operation_type::POST, url("/api/v1/indexes/ks/idx").remainder("ann"), new function_handler(ann, "json"));
+                    },
+                    host.c_str(), _port);
+            _http_server = std::move(s);
+            _port = addr.port();
+            _host = std::move(host);
+        });
+    }
+
+    future<std::unique_ptr<reply>> handle_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        _requests++;
+        rep->write_body("json", CORRECT_RESPONSE_FOR_TEST_TABLE);
+        rep->set_status(_status);
+        co_return rep;
+    }
+
+    uint16_t _port = 0;
+    sstring _host;
+    size_t _requests = 0;
+    std::unique_ptr<http_server> _http_server;
+    status_type _status = status_type::ok;
 };
+
+template <typename... Args>
+auto make_vs_mock_server(Args&&... args) -> future<std::unique_ptr<vs_mock_server>> {
+    auto server = std::make_unique<vs_mock_server>(std::forward<Args>(args)...);
+    co_await server->start();
+    co_return server;
+}
 
 } // namespace
 
@@ -475,7 +555,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
     auto cfg = cql_test_config();
-    auto server = make_unavailable_server();
+    auto server = co_await make_unavailable_server();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
     co_await do_with_cql_env(
             [&server](cql_test_env& env) -> future<> {
@@ -498,7 +578,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
 
 SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
     auto cfg = cql_test_config();
-    auto server = make_unavailable_server();
+    auto server = co_await make_unavailable_server();
     cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", server->port()));
     co_await do_with_cql_env(
             [&server](cql_test_env& env) -> future<> {
@@ -704,8 +784,8 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
     // Test verifies that when vector store uri is update, the client
     // will switch to the new uri within the DNS refresh interval.
     // To avoid race condition we wait twice long as DNS refresh interval before checking the result.
-    auto [s1, addr_s1] = co_await make_vs_server(status_type::not_found);
-    auto [s2, addr_s2] = co_await make_vs_server(status_type::service_unavailable);
+    auto s1 = co_await make_vs_mock_server(status_type::not_found);
+    auto s2 = co_await make_vs_mock_server(status_type::service_unavailable);
 
     constexpr auto is_s2_response = [](const auto& keys) -> bool {
         return !keys && std::holds_alternative<vector_store_client::service_error>(keys.error()) &&
@@ -713,7 +793,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
     };
 
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", addr_s1.port()));
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", s1->port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
@@ -724,7 +804,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
 
                 vs.start_background_tasks();
 
-                env.db_config().vector_store_primary_uri.set(format("http://good.authority.here:{}", addr_s2.port()));
+                env.db_config().vector_store_primary_uri.set(format("http://good.authority.here:{}", s2->port()));
 
                 // Wait until requests are handled by s2
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
@@ -741,12 +821,11 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
 
 SEASTAR_TEST_CASE(vector_store_client_high_availability_host_resolved_to_multiple_ips) {
 
-    auto [responding_s, addr] =
-            co_await make_vs_server(status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})");
-    auto unavail_s = make_unavailable_server(addr.port());
+    auto responding_s = co_await make_vs_mock_server();
+    auto unavail_s = co_await make_unavailable_server(responding_s->port());
 
     auto cfg = cql_test_config();
-    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", addr.port()));
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", responding_s->port()));
     co_await do_with_cql_env(
             [&](cql_test_env& env) -> future<> {
                 auto as = abort_source_timeout();
