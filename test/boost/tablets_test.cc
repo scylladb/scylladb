@@ -2921,9 +2921,10 @@ SEASTAR_THREAD_TEST_CASE(test_load_balancing_with_asymmetric_node_capacity) {
             return !plan.has_nodes_to_drain();
         };
 
-        rebalance_tablets(e, &topo.get_shared_load_stats(), {}, until_nodes_drained);
-
         auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+
+        rebalance_tablets(e, &topo.get_shared_load_stats(), {}, until_nodes_drained);
 
         {
           load_sketch load(stm.get());
@@ -3456,6 +3457,135 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
             BOOST_REQUIRE_LT(node_utilization.max() - node_utilization.min(), 0.13);
         }
     }).get();
+}
+
+static table_id create_table_and_set_tablet_sizes(cql_test_env& e, topology_builder& topo, sstring ks_name, size_t tablet_count, uint64_t table_size_bytes) {
+    const uint64_t tablet_size = table_size_bytes / tablet_count;
+
+    std::map<sstring, sstring> tablet_options = {{"min_tablet_count", to_sstring(tablet_count)}};
+    auto table = add_table(e, ks_name, tablet_options).get();
+
+    auto& load_stats = topo.get_shared_load_stats();
+    load_stats.set_size(table, table_size_bytes);
+
+    auto& stm = e.shared_token_metadata().local();
+    auto& tmap = stm.get()->tablets().get_tablet_map(table);
+    tmap.for_each_tablet([&] (tablet_id tid, const tablet_info& tinfo) {
+        auto replicas = tinfo.replicas;
+        for (auto& r : tinfo.replicas) {
+            locator::range_based_tablet_id rb_tid {table, tmap.get_token_range(tid)};
+            load_stats.set_tablet_size(r.host, rb_tid, tablet_size);
+        }
+        return make_ready_future<>();
+    }).get();
+
+    testlog.info("Created table {} of size {:i} with {} tablets and tablet size of {:i}",
+                table, utils::pretty_printed_data_size(table_size_bytes), tablet_count, utils::pretty_printed_data_size(tablet_size));
+
+    return table;
+}
+
+SEASTAR_THREAD_TEST_CASE(test_size_based_load_balancing_table_load) {
+    // This test validates the table balance in size based load balancing.
+    // The initial tablet allocation during table creation is non-deterministic because of
+    // shuffle in network_topology_strategy.cc. This means that the tablet balancer will work on a different
+    // initial setup on every run, and that the final tablet distribution will also be different.
+    // With max_imbalance_threshold set to 1.4 and running the test 10000 times there were no failures.
+    // 1.5 was selected as a safety buffer to avoid flakyness.
+    //
+    // The following is a table of max_imbalance_threshold and failure rates for 10000 runs:
+    //
+    // threshold | # runs | # failures
+    // ----------+--------+------------
+    //     1.4   |  10000 |          0
+    //     1.3   |  10000 |          57
+    //     1.2   |  10000 |          539
+    auto cfg = tablet_cql_test_config();
+    do_with_cql_env_thread([&] (auto& e) {
+        logging::logger_registry().set_logger_level("load_balancer", logging::log_level::debug);
+
+        topology_builder topo(e);
+
+        endpoint_dc_rack dc_rack;
+        const uint64_t shard_capacity = 250UL * 1024UL * 1024UL * 1024UL;
+        const size_t tablet_count = 512;
+        const double max_imbalance_threshold = 1.5;
+        const double min_imbalance_threshold = 1 / max_imbalance_threshold;
+        uint64_t total_capacity = 0;
+
+        std::vector<host_id> hosts;
+
+        // Add disk capacity for the default node. Add all subsequent nodes to the same DC/rack
+        e.shared_token_metadata().local().get()->get_topology().for_each_node([&] (const auto& node) {
+            dc_rack = node.dc_rack();
+            auto host = node.host_id();
+            auto num_shards = node.get_shard_count();
+            auto node_capacity = shard_capacity * num_shards;
+            topo.get_shared_load_stats().set_capacity(host, node_capacity);
+            total_capacity += node_capacity;
+            testlog.info("Default node {} has {} shards and {:i} disk capacity", host, num_shards, utils::pretty_printed_data_size(node_capacity));
+            hosts.push_back(host);
+        });
+
+        auto create_node = [&] (size_t num_shards) {
+            auto host = topo.add_node(node_state::normal, num_shards, dc_rack);
+            auto node_capacity = shard_capacity * num_shards;
+            topo.get_shared_load_stats().set_capacity(host, node_capacity);
+            total_capacity += node_capacity;
+            testlog.info("Added node {} with {} shards and {:i} disk capacity", host, num_shards, utils::pretty_printed_data_size(node_capacity));
+            hosts.push_back(host);
+        };
+
+        create_node(10);
+        create_node(8);
+
+        auto ks_name = add_keyspace(e, {{dc_rack.dc, 1}});
+
+        // Add 3 tables: 0.5 of the current total storage, 0.25 of the total storage and 0.125 of the total storage
+        std::map<table_id, uint64_t> table_sizes;
+        uint64_t table_size = total_capacity / 2;
+        for (int c = 0; c < 3; c++) {
+            auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
+            table_sizes[table_id] = table_size;
+            table_size /= 2;
+        }
+        // Add another table with 1 byte per tablet
+        table_size = tablet_count;
+        auto table_id = create_table_and_set_tablet_sizes(e, topo, ks_name, tablet_count, table_size);
+        table_sizes[table_id] = table_size;
+
+        auto& stm = e.shared_token_metadata().local();
+
+        auto check_balance = [&] {
+            for (auto& [table, table_size] : table_sizes) {
+                load_sketch load(stm.get(), topo.get_shared_load_stats().get());
+                load.populate(std::nullopt, table).get();
+
+                const double ideal_table_load = double(table_size) / total_capacity;
+                min_max_tracker<double> table_load;
+                for (auto h : hosts) {
+                    auto shard_minmax_load = load.get_shard_minmax(h);
+                    table_load.update(shard_minmax_load);
+                    testlog.info("Table: {} ideal_load: {} host: {} load: {} min_shard_load: {} max_shard_load: {}",
+                                    table, ideal_table_load, h, load.get_load(h), shard_minmax_load.min(), shard_minmax_load.max());
+
+                    BOOST_REQUIRE_LT(min_imbalance_threshold, shard_minmax_load.min() / ideal_table_load);
+                    BOOST_REQUIRE_GT(max_imbalance_threshold, shard_minmax_load.max() / ideal_table_load);
+                }
+            }
+        };
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        check_balance();
+
+        create_node(8);
+
+        rebalance_tablets(e, &topo.get_shared_load_stats());
+
+        check_balance();
+
+    }, std::move(cfg)).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
@@ -4245,10 +4375,12 @@ SEASTAR_THREAD_TEST_CASE(test_drain_node_without_capacity) {
 
         topo.set_node_state(host2, node_state::removing);
 
+        auto& stm = e.shared_token_metadata().local();
+        topo.get_shared_load_stats().set_default_tablet_sizes(stm.get());
+
         rebalance_tablets(e, &topo.get_shared_load_stats());
 
         // check that all tablets have been migrated from host2 to host1
-        auto& stm = e.shared_token_metadata().local();
         auto& tmap = stm.get()->tablets().get_tablet_map(table);
         tmap.for_each_tablet([&](auto tid, auto& tinfo) {
             for (auto& replica : tinfo.replicas) {
