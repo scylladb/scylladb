@@ -22,8 +22,8 @@ from .util import new_test_table, random_string, full_query, unique_table_name, 
 # both values. Thanks to this, the tests will run for both vnodes and tables without the need to change
 # their argument list.
 @pytest.fixture(params=[
-    [{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
-    [{'Key': 'experimental:initial_tablets', 'Value': '0'}],
+    [{'Key': 'system:initial_tablets', 'Value': 'none'}],
+    [{'Key': 'system:initial_tablets', 'Value': '0'}],
 ], ids=["using vnodes", "using tablets"], autouse=True)
 def tags_param(request):
     # Set TAGS in the global namespace of this module
