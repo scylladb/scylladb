@@ -100,7 +100,7 @@ private:
     future<> maybe_create_default_role();
     future<> maybe_create_default_role_with_retries();
 
-    future<> create_or_replace(std::string_view role_name, const role_config&, ::service::group0_batch&);
+    future<> create_or_replace(std::string_view auth_ks_name, std::string_view role_name, const role_config&, ::service::group0_batch&);
 
     future<> legacy_modify_membership(std::string_view role_name, std::string_view grantee_name, membership_change);
 
