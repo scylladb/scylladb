@@ -143,7 +143,11 @@ future<> sstable_dict_autotrainer::run() {
                 co_await tick();
             }
         } catch (const abort_requested_exception&) {
-            alogger.debug("sstable_dict_autotrainer::run(): exiting");
+            alogger.debug("sstable_dict_autotrainer::run(): exiting via abort_requested_exception");
+        } catch (const gate_closed_exception&) {
+            alogger.debug("sstable_dict_autotrainer::run(): exiting via gate_closed_exception");
+        } catch (const raft::stopped_error&) {
+            alogger.debug("sstable_dict_autotrainer::run(): exiting via raft::stopped_error");
         } catch (...) {
             alogger.debug("sstable_dict_autotrainer::run(): tick() failed with: {}", std::current_exception());
         }
