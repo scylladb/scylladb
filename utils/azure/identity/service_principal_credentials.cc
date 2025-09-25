@@ -164,7 +164,7 @@ future<sstring> service_principal_credentials::post(const sstring& body) {
 
     if (_is_secured) {
         creds = co_await make_creds(_truststore, _priority_string);
-        options = { .wait_for_eof_on_shutdown = false, .server_name = _host };
+        options = { .server_name = _host, .bye_timeout = std::chrono::seconds(0) };
     }
 
     rest::httpclient client{_host, _port, std::move(creds), options};
