@@ -64,15 +64,11 @@ future<> gossiping_property_file_snitch::start() {
             periodic_reader_callback();
         });
 
-        return read_property_file().then([this] {
+        co_await read_property_file();
             start_io();
-            set_snitch_ready();
-            return make_ready_future<>();
-        });
     }
 
     set_snitch_ready();
-    return make_ready_future<>();
 }
 
 void gossiping_property_file_snitch::periodic_reader_callback() {
