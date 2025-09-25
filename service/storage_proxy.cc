@@ -2540,7 +2540,7 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
         utils::chunked_vector<mutation> update_mut_vec{std::move(update_mut)};
 
         auto cdc = _proxy->get_cdc_service();
-        if (cdc && cdc->needs_cdc_augmentation(update_mut_vec)) {
+        if (cdc && cdc->needs_cdc_augmentation(update_mut_vec, cdc_opts)) {
             auto cdc_shared = cdc->shared_from_this(); // keep CDC service alive
             auto [all_mutations, tracker] =
                     co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn, std::move(cdc_opts));
@@ -3961,7 +3961,7 @@ future<> storage_proxy::mutate(utils::chunked_vector<mutation> mutations, db::co
 }
 
 future<result<>> storage_proxy::mutate_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
-    if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
+    if (_cdc && _cdc->needs_cdc_augmentation(mutations, options.cdc_options)) {
         return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl, std::move(options.cdc_options)).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit, options = std::move(options)](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
@@ -4251,7 +4251,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
         return p->mutate_end(std::move(f), lc, p->get_stats(), std::move(tr_state));
     };
 
-    if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
+    if (_cdc && _cdc->needs_cdc_augmentation(mutations, options.cdc_options)) {
         return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), cl, std::move(options.cdc_options)).then([mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup), cdc = _cdc->shared_from_this()](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));

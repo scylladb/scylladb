@@ -66,6 +66,8 @@ struct per_request_options {
     // layers than CDC. We assume that CDC could have seen the row in this
     // state, i.e. the value isn't 'stale'/'too recent'.
     lw_shared_ptr<cql3::untyped_result_set> preimage;
+    // Don't generate log rows for this mutation.
+    bool skip_cdc = false;
 };
 
 struct operation_result_tracker;
@@ -100,7 +102,7 @@ public:
         db::consistency_level write_cl,
         per_request_options options = {}
     );
-    bool needs_cdc_augmentation(const utils::chunked_vector<mutation>&) const;
+    bool needs_cdc_augmentation(const utils::chunked_vector<mutation>&, const per_request_options&) const;
 };
 
 struct db_context final {
