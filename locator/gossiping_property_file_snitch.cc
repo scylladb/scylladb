@@ -158,17 +158,14 @@ future<> gossiping_property_file_snitch::reload_configuration() {
     }
 
     if (_state == snitch_state::initializing || _my_dc != new_dc || _my_rack != new_rack || _prefer_local != new_prefer_local) {
-        return container().invoke_on_all([new_dc, new_rack, new_prefer_local] (snitch_ptr& local_s) {
+        co_await container().invoke_on_all([new_dc, new_rack, new_prefer_local] (snitch_ptr& local_s) {
             local_s->set_my_dc_and_rack(new_dc, new_rack);
             local_s->set_prefer_local(new_prefer_local);
-        }).then([this] {
-            return seastar::async([this] {
+        });
+            co_await seastar::async([this] {
                 _reconfigured();
             });
-        });
     }
-
-    return make_ready_future<>();
 }
 
 void gossiping_property_file_snitch::set_stopped() {
