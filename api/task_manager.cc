@@ -107,11 +107,11 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
                 throw bad_param_exception(fmt::format("{}", std::current_exception()));
             }
 
-            if (auto it = req->query_parameters.find("keyspace"); it != req->query_parameters.end()) {
-                keyspace = it->second;
+            if (auto param = req->get_query_param("keyspace"); !param.empty()) {
+                keyspace = param;
             }
-            if (auto it = req->query_parameters.find("table"); it != req->query_parameters.end()) {
-                table = it->second;
+            if (auto param = req->get_query_param("table"); !param.empty()) {
+                table = param;
             }
 
             return module->get_stats(internal, [keyspace = std::move(keyspace), table = std::move(table)] (std::string& ks, std::string& t) {
@@ -175,8 +175,8 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
         auto id = tasks::task_id{utils::UUID{req->get_path_param("task_id")}};
         tasks::task_status status;
         std::optional<std::chrono::seconds> timeout = std::nullopt;
-        if (auto it = req->query_parameters.find("timeout"); it != req->query_parameters.end()) {
-            timeout = std::chrono::seconds(boost::lexical_cast<uint32_t>(it->second));
+        if (auto param = req->get_query_param("timeout"); !param.empty()) {
+            timeout = std::chrono::seconds(boost::lexical_cast<uint32_t>(param));
         }
         try {
             auto task = tasks::task_handler{tm.local(), id};
@@ -217,7 +217,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     tm::get_and_update_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         uint32_t ttl = cfg.task_ttl_seconds();
         try {
-            co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->query_parameters["ttl"], utils::config_file::config_source::API);
+            co_await cfg.task_ttl_seconds.set_value_on_all_shards(req->get_query_param("ttl"), utils::config_file::config_source::API);
         } catch (...) {
             throw bad_param_exception(fmt::format("{}", std::current_exception()));
         }
@@ -232,7 +232,7 @@ void set_task_manager(http_context& ctx, routes& r, sharded<tasks::task_manager>
     tm::get_and_update_user_ttl.set(r, [&cfg] (std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         uint32_t user_ttl = cfg.user_task_ttl_seconds();
         try {
-            co_await cfg.user_task_ttl_seconds.set_value_on_all_shards(req->query_parameters["user_ttl"], utils::config_file::config_source::API);
+            co_await cfg.user_task_ttl_seconds.set_value_on_all_shards(req->get_query_param("user_ttl"), utils::config_file::config_source::API);
         } catch (...) {
             throw bad_param_exception(fmt::format("{}", std::current_exception()));
         }
