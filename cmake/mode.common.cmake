@@ -135,6 +135,8 @@ function(maybe_limit_stack_usage_in_KB stack_usage_threshold_in_KB config)
   endif()
 endfunction()
 
+option(Scylla_WITH_DEBUG_INFO "Enable debug info" OFF)
+
 macro(update_build_flags config)
   cmake_parse_arguments (
     parsed_args
@@ -150,7 +152,7 @@ macro(update_build_flags config)
   set(linker_flags "CMAKE_EXE_LINKER_FLAGS_${CONFIG}")
   string(APPEND ${cxx_flags}
     " -O${parsed_args_OPTIMIZATION_LEVEL}")
-  if(parsed_args_WITH_DEBUG_INFO)
+  if(parsed_args_WITH_DEBUG_INFO OR ${Scylla_WITH_DEBUG_INFO})
     string(APPEND ${cxx_flags} " -g -gz")
   else()
     # If Scylla is compiled without debug info, strip the debug symbols from
