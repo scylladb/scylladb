@@ -406,10 +406,10 @@ def test_streams_latency(dynamodb, dynamodbstreams, metrics):
     with new_test_table(dynamodb,
         # Alternator Streams is expected to fail with tablets due to #23838.
         # To ensure that this test still runs, instead of xfailing it, we
-        # temporarily coerce Altenator to avoid using default tablets
+        # temporarily coerce Alternator to avoid using default tablets
         # setting, even if it's available. We do this by using the following
         # tags when creating the table:
-        Tags=[{'Key': 'experimental:initial_tablets', 'Value': 'none'}],
+        Tags=[{'Key': 'system:initial_tablets', 'Value': 'none'}],
         KeySchema=[{ 'AttributeName': 'p', 'KeyType': 'HASH' }],
         AttributeDefinitions=[{ 'AttributeName': 'p', 'AttributeType': 'S' }],
         StreamSpecification={ 'StreamEnabled': True, 'StreamViewType': 'NEW_AND_OLD_IMAGES'}
@@ -486,7 +486,7 @@ def alternator_ttl_period_in_seconds(dynamodb, request):
 # This test fails with tablets due to #16567, so to temporarily ensure that
 # Alternator TTL is still being tested, we use the following TAGS to
 # coerce Alternator to create the test table without tablets.
-TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+TAGS = [{'Key': 'system:initial_tablets', 'Value': 'none'}]
 def test_ttl_stats(dynamodb, metrics, alternator_ttl_period_in_seconds):
     print(alternator_ttl_period_in_seconds)
     with check_increases_metric(metrics, ['scylla_expiration_scan_passes', 'scylla_expiration_scan_table', 'scylla_expiration_items_deleted']):

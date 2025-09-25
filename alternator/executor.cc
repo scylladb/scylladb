@@ -1788,7 +1788,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
                 auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
                 if (rs->uses_tablets()) {
                     co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                    "If you want to use streams, create a table with vnodes by setting the tag 'experimental:initial_tablets' set to 'none'.");
+                    "If you want to use streams, create a table with vnodes by setting the tag 'system:initial_tablets' set to 'none'.");
                 }
             }
         }
@@ -1945,7 +1945,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
                     if (stream_enabled->GetBool()) {
                         if (p.local().local_db().find_keyspace(tab->ks_name()).get_replication_strategy().uses_tablets()) {
                         co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
-                            "If you want to enable streams, re-create this table with vnodes (with the tag 'experimental:initial_tablets' set to 'none').");
+                            "If you want to enable streams, re-create this table with vnodes (with the tag 'system:initial_tablets' set to 'none').");
                         }
                         if (tab->cdc_options().enabled()) {
                             co_return api_error::validation("Table already has an enabled stream: TableName: " + tab->cf_name());
