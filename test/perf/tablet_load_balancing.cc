@@ -359,7 +359,7 @@ future<results> test_load_balancing_with_many_tables(params p, bool tablet_aware
                 for (auto [h, _] : hosts) {
                     auto minmax = load.get_shard_minmax(h);
                     auto node_load = load.get_load(h);
-                    auto avg_shard_load = load.get_real_avg_shard_load(h);
+                    auto avg_shard_load = load.get_real_avg_tablet_count(h);
                     auto overcommit = double(minmax.max()) / avg_shard_load;
                     shard_load_minmax.update(minmax.max());
                     shard_count += load.get_shard_count(h);

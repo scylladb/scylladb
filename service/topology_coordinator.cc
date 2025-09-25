@@ -1625,6 +1625,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case locator::tablet_transition_stage::end_migration: {
+                    // Move the tablet size in load_stats
+                    auto leaving = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                    auto pending = trinfo.pending_replica;
+                    locator::range_based_tablet_id rb_tid {gid.table, tmap.get_token_range(gid.tablet)};
+                    handle_tablet_size_migration(leaving->host, pending->host, rb_tid);
+
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.
                     bool defer_transition = utils::get_local_injector().enter("handle_tablet_migration_end_migration");
@@ -1844,6 +1850,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
     }
 
+    void handle_tablet_size_migration(locator::host_id leaving, locator::host_id pending, locator::range_based_tablet_id rb_tid) {
+        if (leaving != pending) {
+            auto old_load_stats = _tablet_allocator.get_load_stats();
+            if (old_load_stats) {
+                const locator::load_stats& stats = *old_load_stats;
+                auto leaving_i = stats.tablet_stats.find(leaving);
+                auto pending_i = stats.tablet_stats.find(pending);
+                if (leaving_i != stats.tablet_stats.end() && pending_i != stats.tablet_stats.end()) {
+                    auto& leaving_ts = leaving_i->second.tablet_sizes;
+                    auto& pending_ts = pending_i->second.tablet_sizes;
+                    if (leaving_ts.contains(rb_tid) && !pending_ts.contains(rb_tid)) {
+                        rtlogger.debug("Moving tablet size for: {} from: {} to: {}", rb_tid, leaving, pending);
+                        auto new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
+                        auto& new_leaving_ts = new_load_stats->tablet_stats.at(leaving);
+                        auto& new_pending_ts = new_load_stats->tablet_stats.at(pending);
+                        auto map_node = new_leaving_ts.tablet_sizes.extract(rb_tid);
+                        new_pending_ts.tablet_sizes.insert(std::move(map_node));
+                        _tablet_allocator.set_load_stats(std::move(new_load_stats));
+                    }
+                }
+            }
+        }
+    }
+
     future<> handle_tablet_resize_finalization(group0_guard g) {
         co_await utils::get_local_injector().inject("handle_tablet_resize_finalization_wait", [] (auto& handler) -> future<> {
             rtlogger.info("handle_tablet_resize_finalization: waiting");
@@ -1908,6 +1938,15 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .set_version(_topo_sm._topology.version + 1)
                 .build());
         co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet split finalization"));
+
+        // Reconcile tablet sizes
+        auto old_load_stats = _tablet_allocator.get_load_stats();
+        if (old_load_stats) {
+            rtlogger.debug("Reconciling tablet sizes after resize");
+            lw_shared_ptr<locator::load_stats> new_load_stats { make_lw_shared<locator::load_stats>(*old_load_stats) };
+            new_load_stats->reconcile_tablets_resize(tm);
+            _tablet_allocator.set_load_stats(std::move(new_load_stats));
+        }
     }
 
     future<> handle_truncate_table(group0_guard guard) {
