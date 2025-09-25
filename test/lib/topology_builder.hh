@@ -63,6 +63,7 @@ struct shared_load_stats {
                 if (dst_table_i == dst_sizes.end() || !dst_table_i->second.contains(rb_tid.range)) {
                     auto tablet_size = src_sizes.at(rb_tid.table).at(rb_tid.range);
                     dst_sizes[rb_tid.table][rb_tid.range] = tablet_size;
+
                     if (src_sizes.at(rb_tid.table).empty()) {
                         src_sizes.erase(rb_tid.table);
                     }
