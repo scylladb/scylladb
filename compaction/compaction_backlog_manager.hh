@@ -13,8 +13,11 @@
 #include "sstables/shared_sstable.hh"
 #include "mutation/timestamp.hh"
 
-class compaction_backlog_manager;
 class compaction_controller;
+
+namespace compaction {
+
+class compaction_backlog_manager;
 
 // Read and write progress are provided by structures present in progress_manager.hh
 // However, we don't want to be tied to their lifetimes and for that reason we will not
@@ -119,3 +122,5 @@ public:
     double backlog() const;
     void register_backlog_tracker(compaction_backlog_tracker& tracker);
 };
+
+}

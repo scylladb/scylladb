@@ -39,12 +39,12 @@ public:
             return _cf->add_sstable_and_update_cache(sstable, offstrategy);
         }
         auto new_sstables = { sstable };
-        return _cf->try_get_compaction_group_view_with_static_sharding().on_compaction_completion(sstables::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
+        return _cf->try_get_compaction_group_view_with_static_sharding().on_compaction_completion(compaction::compaction_completion_desc{ .new_sstables = new_sstables }, sstables::offstrategy::no);
     }
 
     future<> rebuild_sstable_list(compaction::compaction_group_view& table_s, const std::vector<sstables::shared_sstable>& new_sstables,
             const std::vector<sstables::shared_sstable>& sstables_to_remove, sstables::offstrategy offstrategy = sstables::offstrategy::no) {
-        return table_s.on_compaction_completion(sstables::compaction_completion_desc{ .old_sstables = sstables_to_remove, .new_sstables = new_sstables }, offstrategy);
+        return table_s.on_compaction_completion(compaction::compaction_completion_desc{ .old_sstables = sstables_to_remove, .new_sstables = new_sstables }, offstrategy);
     }
 
     static sstables::generation_type calculate_generation_for_new_table(replica::column_family& cf) {

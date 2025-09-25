@@ -1639,7 +1639,7 @@ static void add_table_params_to_mutations(mutation& m, const clustering_key& cke
 
     {
         auto map = table->compaction_strategy_options();
-        map["class"] = sstables::compaction_strategy::name(table->configured_compaction_strategy());
+        map["class"] = compaction::compaction_strategy::name(table->configured_compaction_strategy());
         store_map(m, ckey, "compaction", timestamp, map);
     }
 
@@ -2155,12 +2155,12 @@ static void prepare_builder_from_table_row(const schema_ctxt& ctxt, schema_build
         auto i = map.find("class");
         if (i != map.end()) {
             try {
-                builder.set_compaction_strategy(sstables::compaction_strategy::type(i->second));
+                builder.set_compaction_strategy(compaction::compaction_strategy::type(i->second));
                 map.erase(i);
             } catch (const exceptions::configuration_exception& e) {
                 // If compaction strategy class isn't supported, fallback to incremental.
                 slogger.warn("Falling back to incremental compaction strategy after the problem: {}", e.what());
-                builder.set_compaction_strategy(sstables::compaction_strategy_type::incremental);
+                builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
             }
         }
         if (map.contains("max_threshold")) {

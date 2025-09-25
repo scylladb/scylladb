@@ -831,7 +831,7 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, "]");
 
     out = fmt::format_to(out, ",compactionStrategyClass=class org.apache.cassandra.db.compaction.{}",
-                         sstables::compaction_strategy::name(s._raw._compaction_strategy));
+                         compaction::compaction_strategy::name(s._raw._compaction_strategy));
 
     out = fmt::format_to(out, ",compactionStrategyOptions={{");
     n = 0;
@@ -1169,7 +1169,7 @@ fragmented_ostringstream& schema::schema_properties(const schema_describe_helper
     map_as_cql_param(os, caching_options().to_map());
     os << "}";
     os << "\n    AND comment = " << cql3::util::single_quote(comment());
-    os << "\n    AND compaction = {'class': '" <<  sstables::compaction_strategy::name(compaction_strategy()) << "'";
+    os << "\n    AND compaction = {'class': '" <<  compaction::compaction_strategy::name(compaction_strategy()) << "'";
     map_as_cql_param(os, compaction_strategy_options(), false) << "}";
     os << "\n    AND compression = {";
     map_as_cql_param(os,  get_compressor_params().get_options());

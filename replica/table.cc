@@ -283,7 +283,7 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
     return newtab;
 }
 
-static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction_manager& cm,
+static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction::compaction_manager& cm,
         gc_clock::time_point compaction_time, bool compaction_enabled, bool compaction_can_gc) {
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_enabled", fmt::to_string(compaction_enabled));
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_can_gc", fmt::to_string(compaction_can_gc));
@@ -513,11 +513,11 @@ void table::notify_bootstrap_or_replace_end() {
     trigger_offstrategy_compaction();
 }
 
-inline void table::add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
+inline void table::add_sstable_to_backlog_tracker(compaction::compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
     tracker.replace_sstables({}, {std::move(sstable)});
 }
 
-inline void table::remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
+inline void table::remove_sstable_from_backlog_tracker(compaction::compaction_backlog_tracker& tracker, sstables::shared_sstable sstable) {
     tracker.replace_sstables({std::move(sstable)}, {});
 }
 
@@ -771,7 +771,7 @@ class tablet_storage_group_manager final : public storage_group_manager {
     future<> _merge_completion_fiber;
     condition_variable _merge_completion_event;
     // Holds compaction reenabler which disables compaction temporarily during tablet merge
-    std::vector<compaction_reenabler> _compaction_reenablers_for_merging;
+    std::vector<compaction::compaction_reenabler> _compaction_reenablers_for_merging;
 private:
     const schema_ptr& schema() const {
         return _t.schema();
@@ -785,7 +785,7 @@ private:
         return tablet_map().tablet_count();
     }
 
-    future<sstables::compaction_type_options::split> split_compaction_options() const noexcept;
+    future<compaction::compaction_type_options::split> split_compaction_options() const noexcept;
 
     // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
     // each tablet split into two, so this replica will remap all of its compaction groups
@@ -1029,7 +1029,7 @@ future<> storage_group::remove_empty_merging_groups() {
     std::erase_if(_merging_groups, std::mem_fn(&compaction_group::empty));
 }
 
-future<> compaction_group::split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
+future<> compaction_group::split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
     auto& cm = get_compaction_manager();
 
     for (auto view : all_views()) {
@@ -1040,7 +1040,7 @@ future<> compaction_group::split(sstables::compaction_type_options::split opt, t
     }
 }
 
-future<> storage_group::split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
+future<> storage_group::split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info) {
     if (set_split_mode()) {
         co_return;
     }
@@ -1109,13 +1109,13 @@ bool table::all_storage_groups_split() {
     return _sg_manager->all_storage_groups_split();
 }
 
-future<sstables::compaction_type_options::split> tablet_storage_group_manager::split_compaction_options() const noexcept {
+future<compaction::compaction_type_options::split> tablet_storage_group_manager::split_compaction_options() const noexcept {
     // Split must work with a snapshot of tablet map, since it expects stability
     // throughout its execution.
     auto erm = _t.get_effective_replication_map();
     auto tablet_map_ptr = co_await erm->get_token_metadata().tablets().get_tablet_map_ptr(schema()->id());
 
-    co_return sstables::compaction_type_options::split([tablet_map_ptr = make_lw_shared(std::move(tablet_map_ptr))] (dht::token t) {
+    co_return compaction::compaction_type_options::split([tablet_map_ptr = make_lw_shared(std::move(tablet_map_ptr))] (dht::token t) {
         // Classifies the input stream into either left or right side.
         auto [_, side] = (*tablet_map_ptr)->get_tablet_id_and_range_side(t);
         return mutation_writer::token_group_id(side);
@@ -1123,7 +1123,7 @@ future<sstables::compaction_type_options::split> tablet_storage_group_manager::s
 }
 
 future<> tablet_storage_group_manager::split_all_storage_groups(tasks::task_info tablet_split_task_info) {
-    sstables::compaction_type_options::split opt = co_await split_compaction_options();
+    compaction::compaction_type_options::split opt = co_await split_compaction_options();
 
     co_await utils::get_local_injector().inject("split_storage_groups_wait", [] (auto& handler) -> future<> {
         dblog.info("split_storage_groups_wait: waiting");
@@ -1476,7 +1476,7 @@ public:
 };
 
 // Handles all tasks related to sstable writing: permit management, compaction backlog updates, etc
-class database_sstable_write_monitor : public permit_monitor, public backlog_write_progress_manager {
+class database_sstable_write_monitor : public permit_monitor, public compaction::backlog_write_progress_manager {
     sstables::shared_sstable _sst;
     compaction_group& _cg;
     const sstables::writer_offset_tracker* _tracker = nullptr;
@@ -1990,7 +1990,7 @@ table::sstable_list_builder::delete_sstables_atomically(std::vector<sstables::sh
 }
 
 std::vector<sstables::shared_sstable>
-compaction_group::unused_sstables_for_deletion(sstables::compaction_completion_desc desc) const {
+compaction_group::unused_sstables_for_deletion(compaction::compaction_completion_desc desc) const {
     std::unordered_set<sstables::shared_sstable> output(desc.new_sstables.begin(), desc.new_sstables.end());
 
     return std::ranges::to<std::vector<sstables::shared_sstable>>(desc.old_sstables
@@ -2051,7 +2051,7 @@ future<compaction_reenablers_and_lock_holders> table::get_compaction_reenablers_
     for (auto view : views) {
         auto cre = co_await db.get_compaction_manager().await_and_disable_compaction(*view);
         tlogger.info("Disabled compaction for range={} session_id={} for incremental repair", range, guard);
-        ret.cres.push_back(std::make_unique<compaction_reenabler>(std::move(cre)));
+        ret.cres.push_back(std::make_unique<compaction::compaction_reenabler>(std::move(cre)));
 
         // This lock prevents the unrepaired compaction started by major compaction to run in parallel with repair.
         // The unrepaired compaction started by minor compaction does not need to take the lock since it ignores
@@ -2099,7 +2099,7 @@ compaction_group::merge_sstables_from(compaction_group& group) {
 }
 
 future<>
-compaction_group::update_sstable_sets_on_compaction_completion(sstables::compaction_completion_desc desc) {
+compaction_group::update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc) {
     // Build a new list of _sstables: We remove from the existing list the
     // tables we compacted (by now, there might be more sstables flushed
     // later), and we add the new tables generated by the compaction.
@@ -2149,15 +2149,15 @@ compaction_group::update_sstable_sets_on_compaction_completion(sstables::compact
         table& _t;
         compaction_group& _cg;
         table::sstable_list_builder& _builder;
-        const sstables::compaction_completion_desc& _desc;
+        const compaction::compaction_completion_desc& _desc;
         struct replacement_desc {
-            sstables::compaction_completion_desc desc;
+            compaction::compaction_completion_desc desc;
             table::sstable_list_builder::result main_sstable_set_builder_result;
             std::optional<lw_shared_ptr<sstables::sstable_set>> new_maintenance_sstables;
         };
         std::unordered_map<compaction_group*, replacement_desc> _cg_desc;
     public:
-        explicit sstable_list_updater(compaction_group& cg, table::sstable_list_builder& builder, sstables::compaction_completion_desc& d)
+        explicit sstable_list_updater(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d)
             : _t(cg._t), _cg(cg), _builder(builder), _desc(d) {}
         virtual future<> prepare() override {
             // Segregate output sstables according to their owner compaction group.
@@ -2199,7 +2199,7 @@ compaction_group::update_sstable_sets_on_compaction_completion(sstables::compact
                 cg->backlog_tracker_adjust_charges(d.main_sstable_set_builder_result.removed_sstables, d.desc.new_sstables);
             }
         }
-        static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder& builder, sstables::compaction_completion_desc& d) {
+        static std::unique_ptr<row_cache::external_updater_impl> make(compaction_group& cg, table::sstable_list_builder& builder, compaction::compaction_completion_desc& d) {
             return std::make_unique<sstable_list_updater>(cg, builder, d);
         }
     };
@@ -2320,24 +2320,24 @@ void compaction_group::set_compaction_strategy_state(compaction::compaction_stra
     _compaction_strategy_state = std::move(compaction_strategy_state);
 }
 
-void table::set_compaction_strategy(sstables::compaction_strategy_type strategy) {
-    tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), sstables::compaction_strategy::name(strategy));
+void table::set_compaction_strategy(compaction::compaction_strategy_type strategy) {
+    tlogger.debug("Setting compaction strategy of {}.{} to {}", _schema->ks_name(), _schema->cf_name(), compaction::compaction_strategy::name(strategy));
     auto new_cs = make_compaction_strategy(strategy, _schema->compaction_strategy_options());
 
     struct compaction_group_strategy_updater {
         table& t;
         compaction_group& cg;
-        compaction_backlog_tracker new_bt;
+        compaction::compaction_backlog_tracker new_bt;
         compaction::compaction_strategy_state new_cs_state;
 
-        compaction_group_strategy_updater(table& t, compaction_group& cg, sstables::compaction_strategy& new_cs)
+        compaction_group_strategy_updater(table& t, compaction_group& cg, compaction::compaction_strategy& new_cs)
             : t(t)
             , cg(cg)
             , new_bt(new_cs.make_backlog_tracker())
             , new_cs_state(compaction::compaction_strategy_state::make(new_cs)) {
         }
 
-        void prepare(sstables::compaction_strategy& new_cs) {
+        void prepare(compaction::compaction_strategy& new_cs) {
             auto move_read_charges = new_cs.type() == t._compaction_strategy.type();
             cg.get_backlog_tracker().copy_ongoing_charges(new_bt, move_read_charges);
 
@@ -2561,7 +2561,7 @@ class compaction_group::compaction_group_view : public compaction::compaction_gr
     table& _t;
     compaction_group& _cg;
     // When engaged, compaction is disabled altogether on this view.
-    std::optional<compaction_reenabler> _compaction_reenabler;
+    std::optional<compaction::compaction_reenabler> _compaction_reenabler;
 private:
     bool belongs_to_this_view(const sstables::shared_sstable& sst) const {
         return &_cg.view_for_sstable(sst) == this;
@@ -2612,12 +2612,12 @@ public:
         return _t.sstable_set_for_tombstone_gc(_cg);
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
-        return sstables::get_fully_expired_sstables(*this, sstables, query_time);
+        return compaction::get_fully_expired_sstables(*this, sstables, query_time);
     }
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
         return _cg.compacted_undeleted_sstables();
     }
-    sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
+    compaction::compaction_strategy& get_compaction_strategy() const noexcept override {
         return _t.get_compaction_strategy();
     }
     compaction::compaction_strategy_state& get_compaction_strategy_state() noexcept override {
@@ -2648,7 +2648,7 @@ public:
     bool memtable_has_key(const dht::decorated_key& key) const override {
         return _cg.memtable_has_key(key);
     }
-    future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
+    future<> on_compaction_completion(compaction::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         co_await _cg.update_sstable_sets_on_compaction_completion(std::move(desc));
         if (offstrategy) {
             _cg.trigger_compaction();
@@ -2663,7 +2663,7 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _t.get_compaction_manager().get_tombstone_gc_state();
     }
-    compaction_backlog_tracker& get_backlog_tracker() override {
+    compaction::compaction_backlog_tracker& get_backlog_tracker() override {
         return _cg.get_backlog_tracker();
     }
     const std::string get_group_id() const noexcept override {
@@ -2779,7 +2779,7 @@ void storage_group::clear_sstables() {
     }
 }
 
-table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction_manager& compaction_manager,
+table::table(schema_ptr schema, config config, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& compaction_manager,
         sstables::sstables_manager& sst_manager, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker,
         locator::effective_replication_map_ptr erm)
     : _schema(std::move(schema))
@@ -4090,7 +4090,7 @@ table::disable_auto_compaction() {
     _compaction_disabled_by_user = true;
     return with_gate(_async_gate, [this] {
         return parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
-            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, sstables::compaction_type::Compaction);
+            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
         });
     });
 }
@@ -4292,20 +4292,20 @@ std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::to
     return mss;
 }
 
-compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
+compaction::compaction_backlog_tracker& compaction_group::get_backlog_tracker() {
     return *_backlog_tracker;
 }
 
-void compaction_group::register_backlog_tracker(compaction_backlog_tracker new_backlog_tracker) {
+void compaction_group::register_backlog_tracker(compaction::compaction_backlog_tracker new_backlog_tracker) {
     _backlog_tracker.emplace(std::move(new_backlog_tracker));
     get_compaction_manager().register_backlog_tracker(*_backlog_tracker);
 }
 
-compaction_manager& compaction_group::get_compaction_manager() noexcept {
+compaction::compaction_manager& compaction_group::get_compaction_manager() noexcept {
     return _t.get_compaction_manager();
 }
 
-const compaction_manager& compaction_group::get_compaction_manager() const noexcept {
+const compaction::compaction_manager& compaction_group::get_compaction_manager() const noexcept {
     return _t.get_compaction_manager();
 }
 
@@ -4349,7 +4349,7 @@ compaction::compaction_group_view& table::try_get_compaction_group_view_with_sta
     return cg->as_view_for_static_sharding();
 }
 
-future<> table::parallel_foreach_compaction_group_view(std::function<future<>(compaction_group_view&)> action) {
+future<> table::parallel_foreach_compaction_group_view(std::function<future<>(compaction::compaction_group_view&)> action) {
     return parallel_foreach_compaction_group([action = std::move(action)] (compaction_group& cg) -> future<> {
        for (auto view : cg.all_views()) {
            co_await action(*view);

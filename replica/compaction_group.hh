@@ -23,7 +23,9 @@
 
 #pragma once
 
+namespace compaction {
 class compaction_manager;
+}
 
 namespace locator {
 class effective_replication_map;
@@ -56,7 +58,7 @@ class compaction_group {
     // together.
     class compaction_group_view;
     // This is held throughout group lifetime, in order to have compaction disabled on non-compacting views.
-    std::vector<compaction_reenabler> _compaction_disabler_for_views;
+    std::vector<compaction::compaction_reenabler> _compaction_disabler_for_views;
     // Logical compaction group representing the unrepaired sstables.
     std::unique_ptr<compaction_group_view> _unrepaired_view;
     // Logical compaction group representing the repairing sstables. Compaction disabled altogether on it.
@@ -83,7 +85,7 @@ class compaction_group {
     // Gates flushes.
     seastar::named_gate _flush_gate;
     bool _tombstone_gc_enabled = true;
-    std::optional<compaction_backlog_tracker> _backlog_tracker;
+    std::optional<compaction::compaction_backlog_tracker> _backlog_tracker;
     repair_classifier_func _repair_sstable_classifier;
 private:
     std::unique_ptr<compaction_group_view> make_compacting_view();
@@ -104,7 +106,7 @@ private:
     // Input SSTables that weren't added to any SSTable set, are considered unused and can be unlinked.
     // An input SSTable remains linked if it wasn't actually compacted, yet compaction manager wants
     // it to be moved from its original sstable set (e.g. maintenance) into a new one (e.g. main).
-    std::vector<sstables::shared_sstable> unused_sstables_for_deletion(sstables::compaction_completion_desc desc) const;
+    std::vector<sstables::shared_sstable> unused_sstables_for_deletion(compaction::compaction_completion_desc desc) const;
     // Tracks the maximum timestamp observed across all SSTables in this group.
     // This is used by the compacting reader to determine if a memtable contains entries
     // with timestamps that overlap with those in the SSTables of the compaction group.
@@ -194,7 +196,7 @@ public:
     // Update main and/or maintenance sstable sets based in info in completion descriptor,
     // where input sstables will be replaced by output ones, row cache ranges are possibly
     // invalidated and statistics are updated.
-    future<> update_sstable_sets_on_compaction_completion(sstables::compaction_completion_desc desc);
+    future<> update_sstable_sets_on_compaction_completion(compaction::compaction_completion_desc desc);
 
     // Merges all sstables from another group into this one.
     future<> merge_sstables_from(compaction_group& group);
@@ -217,8 +219,8 @@ public:
     bool compaction_disabled() const;
     future<unsigned> estimate_pending_compactions() const;
 
-    compaction_backlog_tracker& get_backlog_tracker();
-    void register_backlog_tracker(compaction_backlog_tracker new_backlog_tracker);
+    compaction::compaction_backlog_tracker& get_backlog_tracker();
+    void register_backlog_tracker(compaction::compaction_backlog_tracker new_backlog_tracker);
 
     size_t live_sstable_count() const noexcept;
     uint64_t live_disk_space_used() const noexcept;
@@ -244,10 +246,10 @@ public:
         return _flush_gate;
     }
 
-    compaction_manager& get_compaction_manager() noexcept;
-    const compaction_manager& get_compaction_manager() const noexcept;
+    compaction::compaction_manager& get_compaction_manager() noexcept;
+    const compaction::compaction_manager& get_compaction_manager() const noexcept;
 
-    future<> split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
+    future<> split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
 
     void set_repair_sstable_classifier(repair_classifier_func repair_sstable_classifier) {
         _repair_sstable_classifier = std::move(repair_sstable_classifier);
@@ -324,7 +326,7 @@ public:
     //  1) Flushes all memtables which were created in non-split mode, and waits for that to complete.
     //  2) Compacts all sstables which overlap with the split point
     // Returns a future which resolves when this process is complete.
-    future<> split(sstables::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
+    future<> split(compaction::compaction_type_options::split opt, tasks::task_info tablet_split_task_info);
 
     // Make an sstable set spanning all sstables in the storage_group
     lw_shared_ptr<const sstables::sstable_set> make_sstable_set() const;

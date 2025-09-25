@@ -105,8 +105,8 @@ shared_sstable make_sstable_easy(test_env& env, lw_shared_ptr<replica::memtable>
     return make_sstable_easy(env, mt->make_mutation_reader(mt->schema(), env.make_reader_permit()), std::move(cfg), gen, v, estimated_partitions, query_time);
 }
 
-future<compaction_result> compact_sstables(test_env& env, sstables::compaction_descriptor descriptor, table_for_tests t,
-                 std::function<shared_sstable()> creator, sstables::compaction_sstable_replacer_fn replacer, can_purge_tombstones can_purge) {
+future<compaction::compaction_result> compact_sstables(test_env& env, compaction::compaction_descriptor descriptor, table_for_tests t,
+                 std::function<shared_sstable()> creator, compaction::compaction_sstable_replacer_fn replacer, can_purge_tombstones can_purge) {
     auto& table_s = t.as_compaction_group_view();
     descriptor.creator = [creator = std::move(creator)] (shard_id dummy) mutable {
         return creator();
@@ -115,10 +115,10 @@ future<compaction_result> compact_sstables(test_env& env, sstables::compaction_d
     if (can_purge) {
         descriptor.enable_garbage_collection(*co_await table_s.main_sstable_set());
     }
-    sstables::compaction_result ret;
-    co_await run_compaction_task(env, descriptor.run_identifier, table_s, [&] (sstables::compaction_data& cdata) {
-        return do_with(compaction_progress_monitor{}, [&] (compaction_progress_monitor& progress_monitor) {
-            return sstables::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (sstables::compaction_result res) {
+    compaction::compaction_result ret;
+    co_await run_compaction_task(env, descriptor.run_identifier, table_s, [&] (compaction::compaction_data& cdata) {
+        return do_with(compaction::compaction_progress_monitor{}, [&] (compaction::compaction_progress_monitor& progress_monitor) {
+                return ::compaction::compact_sstables(std::move(descriptor), cdata, table_s, progress_monitor).then([&] (compaction::compaction_result res) {
                 ret = std::move(res);
             });
         });
@@ -128,27 +128,27 @@ future<compaction_result> compact_sstables(test_env& env, sstables::compaction_d
 
 class compaction_manager_test_task : public compaction::compaction_task_executor {
     sstables::run_id _run_id;
-    noncopyable_function<future<> (sstables::compaction_data&)> _job;
+    noncopyable_function<future<> (compaction::compaction_data&)> _job;
     gate::holder _hold;
 
 public:
-    compaction_manager_test_task(compaction_manager& cm, compaction_group_view& table_s, sstables::run_id run_id, noncopyable_function<future<> (sstables::compaction_data&)> job)
-        : compaction::compaction_task_executor(cm, throw_if_stopping::no, &table_s, sstables::compaction_type::Compaction, "Test compaction")
+    compaction_manager_test_task(compaction::compaction_manager& cm, compaction::compaction_group_view& table_s, sstables::run_id run_id, noncopyable_function<future<> (compaction::compaction_data&)> job)
+        : compaction::compaction_task_executor(cm, compaction::throw_if_stopping::no, &table_s, compaction::compaction_type::Compaction, "Test compaction")
         , _run_id(run_id)
         , _job(std::move(job))
         , _hold(_compaction_state.gate.hold())
     { }
 
 protected:
-    virtual future<compaction_manager::compaction_stats_opt> do_run() override {
+    virtual future<compaction::compaction_manager::compaction_stats_opt> do_run() override {
         setup_new_compaction(_run_id);
         return _job(_compaction_data).then([] {
-            return make_ready_future<compaction_manager::compaction_stats_opt>(std::nullopt);
+            return make_ready_future<compaction::compaction_manager::compaction_stats_opt>(std::nullopt);
         });
     }
 };
 
-future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, compaction_group_view& table_s, noncopyable_function<future<> (sstables::compaction_data&)> job) {
+future<> run_compaction_task(test_env& env, sstables::run_id output_run_id, compaction::compaction_group_view& table_s, noncopyable_function<future<> (compaction::compaction_data&)> job) {
     auto& tcm = env.test_compaction_manager();
     auto task = make_shared<compaction_manager_test_task>(tcm.get_compaction_manager(), table_s, output_run_id, std::move(job));
     co_await tcm.perform_compaction(std::move(task));

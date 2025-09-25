@@ -103,7 +103,7 @@ with_column_family(schema_ptr s, replica::column_family::config cfg, sstables::s
         auto dir = tmpdir();
         cfg.x_log2_compaction_groups = x_log2_compaction_groups;
         tasks::task_manager tm;
-        auto cm = make_lw_shared<compaction_manager>(tm, compaction_manager::for_testing_tag{});
+        auto cm = make_lw_shared<compaction::compaction_manager>(tm, compaction::compaction_manager::for_testing_tag{});
         auto cl_stats = make_lw_shared<cell_locker_stats>();
         auto s_opts = make_lw_shared<replica::storage_options>(data_dictionary::make_local_options(dir.path()));
         auto cf = make_lw_shared<replica::column_family>(s, cfg, s_opts, *cm, sm, *cl_stats, *tracker, nullptr);

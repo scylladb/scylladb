@@ -13,7 +13,7 @@
 #include "incremental_backlog_tracker.hh"
 #include <ranges>
 
-namespace sstables {
+namespace compaction {
 
 extern logging::logger clogger;
 
@@ -245,7 +245,7 @@ incremental_compaction_strategy::most_interesting_bucket(std::vector<std::vector
 
 compaction_descriptor
 incremental_compaction_strategy::find_garbage_collection_job(const compaction::compaction_group_view& t, std::vector<size_bucket_t>& buckets) {
-    auto worth_dropping_tombstones = [this, &t, now = db_clock::now()] (const sstable_run& run, gc_clock::time_point compaction_time) {
+    auto worth_dropping_tombstones = [this, &t, now = db_clock::now()] (const sstables::sstable_run& run, gc_clock::time_point compaction_time) {
         if (run.all().empty()) {
             return false;
         }
@@ -261,7 +261,7 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::c
         if (_unchecked_tombstone_compaction) {
             return true;
         }
-        auto run_max_timestamp = std::ranges::max(run.all() | std::views::transform([] (const shared_sstable& sstable) {
+        auto run_max_timestamp = std::ranges::max(run.all() | std::views::transform([] (const sstables::shared_sstable& sstable) {
             return sstable->get_stats_metadata().max_timestamp;
         }));
         bool satisfy_staleness = (now - _tombstone_compaction_interval) > run_write_time;
@@ -278,7 +278,7 @@ incremental_compaction_strategy::find_garbage_collection_job(const compaction::c
     };
     auto compaction_time = gc_clock::now();
     auto can_garbage_collect = [&] (const size_bucket_t& bucket) {
-        return std::ranges::any_of(bucket, [&] (const frozen_sstable_run& r) {
+        return std::ranges::any_of(bucket, [&] (const sstables::frozen_sstable_run& r) {
             return worth_dropping_tombstones(*r, compaction_time);
         });
     };
@@ -330,18 +330,18 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (is_any_bucket_interesting(buckets, min_threshold)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), min_threshold, max_threshold);
-        co_return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
     }
     // If we are not enforcing min_threshold explicitly, try any pair of sstable runs in the same tier.
     if (!t.compaction_enforce_min_threshold() && is_any_bucket_interesting(buckets, 2)) {
         std::vector<sstables::frozen_sstable_run> most_interesting = most_interesting_bucket(std::move(buckets), 2, max_threshold);
-        co_return sstables::compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
+        co_return compaction_descriptor(runs_to_sstables(std::move(most_interesting)), 0, _fragment_size);
     }
 
     // The cross-tier behavior is only triggered once we're done with all the pending same-tier compaction to
     // increase overall efficiency.
     if (control.has_ongoing_compaction(t)) {
-        co_return sstables::compaction_descriptor();
+        co_return compaction_descriptor();
     }
 
     auto desc = find_garbage_collection_job(t, buckets);
@@ -351,7 +351,7 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
 
     if (_space_amplification_goal) {
         if (buckets.size() < 2) {
-            co_return sstables::compaction_descriptor();
+            co_return compaction_descriptor();
         }
         // Let S0 be the size of largest tier
         // Let S1 be the size of second-largest tier,
@@ -368,7 +368,7 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         };
 
         auto total_size = [] (const size_bucket_t& bucket) -> uint64_t {
-            return std::ranges::fold_left(bucket | std::views::transform(std::mem_fn(&sstable_run::data_size)), uint64_t(0), std::plus{});
+            return std::ranges::fold_left(bucket | std::views::transform(std::mem_fn(&sstables::sstable_run::data_size)), uint64_t(0), std::plus{});
         };
 
         auto [s0, s1] = find_two_largest_tiers(std::move(buckets));
@@ -383,12 +383,12 @@ incremental_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
             cross_tier_input.reserve(cross_tier_input.size() + s1.size());
             std::move(s1.begin(), s1.end(), std::back_inserter(cross_tier_input));
 
-            co_return sstables::compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
+            co_return compaction_descriptor(runs_to_sstables(std::move(cross_tier_input)),
                                                    0, _fragment_size);
         }
     }
 
-    co_return sstables::compaction_descriptor();
+    co_return compaction_descriptor();
 }
 
 compaction_descriptor
@@ -413,28 +413,28 @@ future<int64_t> incremental_compaction_strategy::estimated_pending_compactions(c
     co_return n;
 }
 
-std::vector<shared_sstable>
-incremental_compaction_strategy::runs_to_sstables(std::vector<frozen_sstable_run> runs) {
+std::vector<sstables::shared_sstable>
+incremental_compaction_strategy::runs_to_sstables(std::vector<sstables::frozen_sstable_run> runs) {
     return runs
         | std::views::transform([] (auto& run) -> auto& { return run->all(); })
         | std::views::join
         | std::ranges::to<std::vector>();
 }
 
-std::vector<frozen_sstable_run>
-incremental_compaction_strategy::sstables_to_runs(std::vector<shared_sstable> sstables) {
-    std::unordered_map<sstables::run_id, sstable_run> runs;
+std::vector<sstables::frozen_sstable_run>
+incremental_compaction_strategy::sstables_to_runs(std::vector<sstables::shared_sstable> sstables) {
+    std::unordered_map<sstables::run_id, sstables::sstable_run> runs;
     for (auto&& sst : sstables) {
         // okay to ignore duplicates
         (void)runs[sst->run_identifier()].insert(std::move(sst));
     }
-    auto freeze = [] (const sstable_run& run) { return make_lw_shared<const sstable_run>(run); };
+    auto freeze = [] (const sstables::sstable_run& run) { return make_lw_shared<const sstables::sstable_run>(run); };
     return runs | std::views::values | std::views::transform(freeze) | std::ranges::to<std::vector>();
 }
 
 void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t& bucket, size_t max_elements, const schema_ptr& schema) {
-    std::partial_sort(bucket.begin(), bucket.begin() + max_elements, bucket.end(), [&schema](const frozen_sstable_run& a, const frozen_sstable_run& b) {
-        auto sst_first_key_less = [&schema] (const shared_sstable& sst_a, const shared_sstable& sst_b) {
+    std::partial_sort(bucket.begin(), bucket.begin() + max_elements, bucket.end(), [&schema](const sstables::frozen_sstable_run& a, const sstables::frozen_sstable_run& b) {
+        auto sst_first_key_less = [&schema] (const sstables::shared_sstable& sst_a, const sstables::shared_sstable& sst_b) {
             return sst_a->get_first_decorated_key().tri_compare(*schema, sst_b->get_first_decorated_key()) <= 0;
         };
         auto& a_first = *std::ranges::min_element(a->all(), sst_first_key_less);
@@ -444,7 +444,7 @@ void incremental_compaction_strategy::sort_run_bucket_by_first_key(size_bucket_t
 }
 
 compaction_descriptor
-incremental_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
+incremental_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const {
     auto mode = cfg.mode;
     size_t offstrategy_threshold = std::max(schema->min_compaction_threshold(), 4);
     size_t max_sstables = std::max(schema->max_compaction_threshold(), int(offstrategy_threshold));
@@ -453,9 +453,9 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
         offstrategy_threshold = max_sstables;
     }
 
-    auto run_count = std::ranges::size(input | std::views::transform(std::mem_fn(&sstable::run_identifier)) | std::ranges::to<std::unordered_set>());
+    auto run_count = std::ranges::size(input | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier)) | std::ranges::to<std::unordered_set>());
     if (run_count >= offstrategy_threshold && mode == reshape_mode::strict) {
-        std::sort(input.begin(), input.end(), [&schema] (const shared_sstable& a, const shared_sstable& b) {
+        std::sort(input.begin(), input.end(), [&schema] (const sstables::shared_sstable& a, const sstables::shared_sstable& b) {
             return dht::ring_position(a->get_first_decorated_key()).less_compare(*schema, dht::ring_position(b->get_first_decorated_key()));
         });
         // All sstables can be reshaped at once if the amount of overlapping will not cause memory usage to be high,
@@ -484,7 +484,7 @@ incremental_compaction_strategy::get_reshaping_job(std::vector<shared_sstable> i
 }
 
 std::vector<compaction_descriptor>
-incremental_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<shared_sstable> candidates) const {
+incremental_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_view& t, std::vector<sstables::shared_sstable> candidates) const {
     std::vector<compaction_descriptor> ret;
     const auto& schema = t.schema();
     unsigned max_threshold = schema->max_compaction_threshold();
@@ -498,7 +498,7 @@ incremental_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_vi
         while (it != bucket.end()) {
             unsigned remaining = std::distance(it, bucket.end());
             unsigned needed = std::min(remaining, max_threshold);
-            std::vector<frozen_sstable_run> runs;
+            std::vector<sstables::frozen_sstable_run> runs;
             std::move(it, it + needed, std::back_inserter(runs));
             ret.push_back(compaction_descriptor(runs_to_sstables(std::move(runs)), 0/* level */, _fragment_size));
             std::advance(it, needed);

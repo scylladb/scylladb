@@ -1003,7 +1003,7 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         sstring strategy = req->get_query_param("class_name");
         apilog.info("column_family/set_compaction_strategy_class: name={} strategy={}", req->get_path_param("name"), strategy);
         return for_tables_on_all_shards(db, {std::move(ti)}, [strategy] (replica::table& cf) {
-            cf.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
+            cf.set_compaction_strategy(compaction::compaction_strategy::type(strategy));
             return make_ready_future<>();
         });
     });
@@ -1081,11 +1081,11 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         }};
 
         auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
+        std::optional<compaction::flush_mode> fmopt;
         if (!flush && !consider_only_existing_data) {
-            fmopt = flush_mode::skip;
+            fmopt = compaction::flush_mode::skip;
         }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, std::move(table_infos), fmopt, consider_only_existing_data);
+        auto task = co_await compaction_module.make_and_start_task<compaction::major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, std::move(table_infos), fmopt, consider_only_existing_data);
         co_await task->done();
         co_return json_void();
     });

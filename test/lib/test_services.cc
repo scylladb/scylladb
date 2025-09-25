@@ -35,7 +35,7 @@ class table_for_tests::compaction_group_view : public compaction::compaction_gro
     sstables::sstables_manager& _sstables_manager;
     std::vector<sstables::shared_sstable> _compacted_undeleted;
     tombstone_gc_state _tombstone_gc_state;
-    mutable compaction_backlog_tracker _backlog_tracker;
+    mutable compaction::compaction_backlog_tracker _backlog_tracker;
     compaction::compaction_strategy_state _compaction_strategy_state;
     std::string _group_id;
     seastar::condition_variable _staging_condition;
@@ -73,12 +73,12 @@ public:
         return table().try_get_compaction_group_with_static_sharding()->main_sstables();
     }
     std::unordered_set<sstables::shared_sstable> fully_expired_sstables(const std::vector<sstables::shared_sstable>& sstables, gc_clock::time_point query_time) const override {
-        return sstables::get_fully_expired_sstables(*this, sstables, query_time);
+        return compaction::get_fully_expired_sstables(*this, sstables, query_time);
     }
     const std::vector<sstables::shared_sstable>& compacted_undeleted_sstables() const noexcept override {
         return _compacted_undeleted;
     }
-    sstables::compaction_strategy& get_compaction_strategy() const noexcept override {
+    compaction::compaction_strategy& get_compaction_strategy() const noexcept override {
         return table().get_compaction_strategy();
     }
     compaction::compaction_strategy_state& get_compaction_strategy_state() noexcept override {
@@ -107,7 +107,7 @@ public:
         return table().min_memtable_live_row_marker_timestamp();
     }
     bool memtable_has_key(const dht::decorated_key& key) const override { return false; }
-    future<> on_compaction_completion(sstables::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
+    future<> on_compaction_completion(compaction::compaction_completion_desc desc, sstables::offstrategy offstrategy) override {
         return table().try_get_compaction_group_view_with_static_sharding().on_compaction_completion(std::move(desc), offstrategy);
     }
     bool is_auto_compaction_disabled_by_user() const noexcept override {
@@ -119,7 +119,7 @@ public:
     const tombstone_gc_state& get_tombstone_gc_state() const noexcept override {
         return _tombstone_gc_state;
     }
-    compaction_backlog_tracker& get_backlog_tracker() override {
+    compaction::compaction_backlog_tracker& get_backlog_tracker() override {
         return _backlog_tracker;
     }
     const std::string get_group_id() const noexcept override {
@@ -145,7 +145,7 @@ schema_ptr table_for_tests::make_default_schema() {
         .build();
 }
 
-table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, compaction_manager& cm, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage)
+table_for_tests::table_for_tests(sstables::sstables_manager& sstables_manager, compaction::compaction_manager& cm, schema_ptr s, replica::table::config cfg, data_dictionary::storage_options storage)
     : _data(make_lw_shared<data>())
 {
     cfg.cf_stats = &_data->cf_stats;
@@ -521,7 +521,7 @@ test_env::make_table_for_tests(schema_ptr s) {
     return make_table_for_tests(std::move(s), _impl->dir.path().native());
 }
 
-sstables::sstable_set test_env::make_sstable_set(sstables::compaction_strategy& cs, schema_ptr s) {
+sstables::sstable_set test_env::make_sstable_set(compaction::compaction_strategy& cs, schema_ptr s) {
     auto t = make_table_for_tests(s);
     auto close_t = deferred_stop(t);
     return cs.make_sstable_set(t.as_compaction_group_view());
@@ -566,7 +566,7 @@ future<> test_env_compaction_manager::perform_compaction(shared_ptr<compaction::
             testlog.error("compaction_manager_test: deregister_compaction uuid={}: task not found", task->compaction_data().compaction_uuid);
         }
         task->unlink();
-        task->switch_state(compaction_task_executor::state::none);
+        task->switch_state(compaction::compaction_task_executor::state::none);
     });
     co_await task->run_compaction();
 }

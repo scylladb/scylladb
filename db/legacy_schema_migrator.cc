@@ -383,11 +383,11 @@ public:
             if (td.has("compaction_strategy_class")) {
                 auto strategy = td.get_as<sstring>("compaction_strategy_class");
                 try {
-                    builder.set_compaction_strategy(sstables::compaction_strategy::type(strategy));
+                    builder.set_compaction_strategy(compaction::compaction_strategy::type(strategy));
                 } catch (const exceptions::configuration_exception& e) {
                     // If compaction strategy class isn't supported, fallback to incremental.
                     mlogger.warn("Falling back to incremental compaction strategy after the problem: {}", e.what());
-                    builder.set_compaction_strategy(sstables::compaction_strategy_type::incremental);
+                    builder.set_compaction_strategy(compaction::compaction_strategy_type::incremental);
                 }
             }
             if (td.has("compaction_strategy_options")) {

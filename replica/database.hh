@@ -79,8 +79,14 @@ class cell_locker_stats;
 class locked_cell;
 class mutation;
 
+namespace compaction {
+class compaction_completion_desc;
+class compaction_data;
+class compaction_descriptor;
 class compaction_manager;
 class compaction_reenabler;
+class compaction_task_impl;
+}
 
 class frozen_mutation;
 class reconcilable_result;
@@ -110,11 +116,8 @@ namespace sstables {
 
 enum class sstable_state;
 class sstable;
-class compaction_descriptor;
-class compaction_completion_desc;
 class storage_manager;
 class sstables_manager;
-class compaction_data;
 class sstable_set;
 class directory_semaphore;
 struct sstable_files_snapshot;
@@ -135,10 +138,6 @@ class gossiper;
 
 namespace api {
 class autocompaction_toggle_guard;
-}
-
-namespace compaction {
-class compaction_task_impl;
 }
 
 namespace db {
@@ -176,7 +175,7 @@ extern logging::logger dblog;
 namespace replica {
 
 struct compaction_reenablers_and_lock_holders {
-    std::vector<std::unique_ptr<compaction_reenabler>> cres;
+    std::vector<std::unique_ptr<compaction::compaction_reenabler>> cres;
     std::vector<seastar::rwlock::holder> lock_holders;
 };
 
@@ -503,8 +502,8 @@ private:
     lw_shared_ptr<memtable_list> make_memory_only_memtable_list();
     lw_shared_ptr<memtable_list> make_memtable_list(compaction_group& cg);
 
-    compaction_manager& _compaction_manager;
-    sstables::compaction_strategy _compaction_strategy;
+    compaction::compaction_manager& _compaction_manager;
+    compaction::compaction_strategy _compaction_strategy;
     // The storage_group_manager manages either a single storage_group for vnodes or per-tablet storage_group for tablets.
     // It contains and manages both the compaction_groups list and the storage_groups vector.
     std::unique_ptr<storage_group_manager> _sg_manager;
@@ -729,8 +728,8 @@ private:
     // Helpers which add sstable on behalf of a compaction group and refreshes compound set.
     void add_sstable(compaction_group& cg, sstables::shared_sstable sstable);
     void add_maintenance_sstable(compaction_group& cg, sstables::shared_sstable sst);
-    static void add_sstable_to_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
-    static void remove_sstable_from_backlog_tracker(compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
+    static void add_sstable_to_backlog_tracker(compaction::compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
+    static void remove_sstable_from_backlog_tracker(compaction::compaction_backlog_tracker& tracker, sstables::shared_sstable sstable);
     lw_shared_ptr<memtable> new_memtable();
     future<> try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtable> memt, sstable_write_permit&& permit);
     // Caller must keep m alive.
@@ -929,7 +928,7 @@ public:
 
     logalloc::occupancy_stats occupancy() const;
 public:
-    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
+    table(schema_ptr schema, config cfg, lw_shared_ptr<const storage_options> sopts, compaction::compaction_manager& cm, sstables::sstables_manager& sm, cell_locker_stats& cl_stats, cache_tracker& row_cache_tracker, locator::effective_replication_map_ptr erm);
 
     table(column_family&&) = delete; // 'this' is being captured during construction
     ~table();
@@ -1099,25 +1098,25 @@ public:
     // a future<bool> that is resolved when offstrategy_compaction completes.
     // The future value is true iff offstrategy compaction was required.
     future<bool> perform_offstrategy_compaction(tasks::task_info info);
-    future<> perform_cleanup_compaction(owned_ranges_ptr sorted_owned_ranges,
+    future<> perform_cleanup_compaction(compaction::owned_ranges_ptr sorted_owned_ranges,
                                         tasks::task_info info,
                                         do_flush = do_flush::yes);
     future<unsigned> estimate_pending_compactions() const;
 
-    void set_compaction_strategy(sstables::compaction_strategy_type strategy);
-    const sstables::compaction_strategy& get_compaction_strategy() const {
+    void set_compaction_strategy(compaction::compaction_strategy_type strategy);
+    const compaction::compaction_strategy& get_compaction_strategy() const {
         return _compaction_strategy;
     }
 
-    sstables::compaction_strategy& get_compaction_strategy() {
+    compaction::compaction_strategy& get_compaction_strategy() {
         return _compaction_strategy;
     }
 
-    const compaction_manager& get_compaction_manager() const noexcept {
+    const compaction::compaction_manager& get_compaction_manager() const noexcept {
         return _compaction_manager;
     }
 
-    compaction_manager& get_compaction_manager() noexcept {
+    compaction::compaction_manager& get_compaction_manager() noexcept {
         return _compaction_manager;
     }
 
@@ -1640,7 +1639,7 @@ private:
     utils::updateable_value_source<table_schema_version> _version;
     uint32_t _schema_change_count = 0;
     // compaction_manager object is referenced by all column families of a database.
-    compaction_manager& _compaction_manager;
+    compaction::compaction_manager& _compaction_manager;
     seastar::metrics::metric_groups _metrics;
     bool _enable_incremental_backups = false;
     uint32_t _critical_disk_utilization_mode_count = 0;
@@ -1761,7 +1760,7 @@ public:
     future<> parse_system_tables(sharded<service::storage_proxy>&, sharded<db::system_keyspace>&);
 
     database(const db::config&, database_config dbcfg, service::migration_notifier& mn, gms::feature_service& feat, locator::shared_token_metadata& stm,
-            compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&,
+            compaction::compaction_manager& cm, sstables::storage_manager& sstm, lang::manager& langm, sstables::directory_semaphore& sst_dir_sem, sstable_compressor_factory&,
             const abort_source& abort, utils::cross_shard_barrier barrier = utils::cross_shard_barrier(utils::cross_shard_barrier::solo{}) /* for single-shard usage */);
     database(database&&) = delete;
     ~database();
@@ -1788,10 +1787,10 @@ public:
 
     seastar::scheduling_group get_gossip_scheduling_group() const { return _dbcfg.gossip_scheduling_group; }
 
-    compaction_manager& get_compaction_manager() {
+    compaction::compaction_manager& get_compaction_manager() {
         return _compaction_manager;
     }
-    const compaction_manager& get_compaction_manager() const {
+    const compaction::compaction_manager& get_compaction_manager() const {
         return _compaction_manager;
     }
 

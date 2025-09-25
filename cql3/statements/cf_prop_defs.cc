@@ -121,7 +121,7 @@ void cf_prop_defs::validate(const data_dictionary::database db, sstring ks_name,
         if (strategy == compaction_type_options.end()) {
             throw exceptions::configuration_exception(sstring("Missing sub-option '") + COMPACTION_STRATEGY_CLASS_KEY + "' for the '" + KW_COMPACTION + "' option.");
         }
-        _compaction_strategy_class = sstables::compaction_strategy::type(strategy->second);
+        _compaction_strategy_class = compaction::compaction_strategy::type(strategy->second);
         remove_from_map_if_exists(KW_COMPACTION, COMPACTION_STRATEGY_CLASS_KEY);
 
 #if 0
@@ -400,7 +400,7 @@ void cf_prop_defs::validate_minimum_int(const sstring& field, int32_t minimum_va
     }
 }
 
-std::optional<sstables::compaction_strategy_type> cf_prop_defs::get_compaction_strategy_class() const {
+std::optional<compaction::compaction_strategy_type> cf_prop_defs::get_compaction_strategy_class() const {
     // Unfortunately, in our implementation, the compaction strategy begins
     // stored in the compaction strategy options, and then the validate()
     // functions moves it into _compaction_strategy_class... If we want a
@@ -412,7 +412,7 @@ std::optional<sstables::compaction_strategy_type> cf_prop_defs::get_compaction_s
     auto compaction_type_options = get_compaction_type_options();
     auto strategy = compaction_type_options.find(COMPACTION_STRATEGY_CLASS_KEY);
     if (strategy != compaction_type_options.end()) {
-        return sstables::compaction_strategy::type(strategy->second);
+        return compaction::compaction_strategy::type(strategy->second);
     }
     return std::nullopt;
 }

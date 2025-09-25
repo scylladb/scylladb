@@ -14,8 +14,10 @@
 #include "compaction_descriptor.hh"
 
 namespace sstables {
-
 class sstable_set_impl;
+}
+
+namespace compaction {
 
 class compaction_strategy_impl {
 public:
@@ -35,7 +37,7 @@ protected:
 public:
     static std::optional<sstring> get_value(const std::map<sstring, sstring>& options, const sstring& name);
     static void validate_min_max_threshold(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
-    static void validate_options_for_strategy_type(const std::map<sstring, sstring>& options, sstables::compaction_strategy_type type);
+    static void validate_options_for_strategy_type(const std::map<sstring, sstring>& options, compaction_strategy_type type);
 protected:
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
     compaction_strategy_impl() = default;
@@ -49,14 +51,14 @@ public:
     virtual compaction_descriptor get_major_compaction_job(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) {
         return make_major_compaction_job(std::move(candidates));
     }
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const;
-    virtual void notify_completion(compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added) { }
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const;
+    virtual void notify_completion(compaction_group_view& table_s, const std::vector<sstables::shared_sstable>& removed, const std::vector<sstables::shared_sstable>& added) { }
     virtual compaction_strategy_type type() const = 0;
     virtual bool parallel_compaction() const {
         return true;
     }
     virtual future<int64_t> estimated_pending_compactions(compaction_group_view& table_s) const = 0;
-    virtual std::unique_ptr<sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const;
+    virtual std::unique_ptr<sstables::sstable_set_impl> make_sstable_set(const compaction_group_view& ts) const;
 
     bool use_clustering_key_filter() const {
         return _use_clustering_key_filter;
@@ -64,7 +66,7 @@ public:
 
     // Check if a given sstable is entitled for tombstone compaction based on its
     // droppable tombstone histogram and gc_before.
-    bool worth_dropping_tombstones(const shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t);
+    bool worth_dropping_tombstones(const sstables::shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t);
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const = 0;
 
@@ -88,6 +90,6 @@ public:
         return false;
     }
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
+    virtual compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const;
 };
 }

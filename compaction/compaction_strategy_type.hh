@@ -10,7 +10,7 @@
 
 #include <cstdint>
 
-namespace sstables {
+namespace compaction {
 
 enum class compaction_strategy_type {
     null,

@@ -460,7 +460,7 @@ std::optional<sstring> check_restricted_table_properties(
     // function before cfprops.validate() (there, validate() is only called
     // in prepare_schema_mutations(), in the middle of execute).
     auto strategy = cfprops.get_compaction_strategy_class();
-    sstables::compaction_strategy_type current_strategy = sstables::compaction_strategy_type::null;
+    compaction::compaction_strategy_type current_strategy = compaction::compaction_strategy_type::null;
     gc_clock::duration current_ttl = gc_clock::duration::zero();
     // cfprops doesn't return any of the table attributes unless the attribute
     // has been specified in the CQL statement. If a schema is defined, then
@@ -471,18 +471,18 @@ std::optional<sstring> check_restricted_table_properties(
     }
 
     if (strategy) {
-        sstables::compaction_strategy_impl::validate_options_for_strategy_type(cfprops.get_compaction_type_options(), strategy.value());
+        compaction::compaction_strategy_impl::validate_options_for_strategy_type(cfprops.get_compaction_type_options(), strategy.value());
     }
 
     // Evaluate whether the strategy to evaluate was explicitly passed
     auto cs = (strategy) ? strategy : current_strategy;
 
-    if (cs == sstables::compaction_strategy_type::in_memory) {
-        throw exceptions::configuration_exception(format("{} has been deprecated.", sstables::compaction_strategy::name(*cs)));
+    if (cs == compaction::compaction_strategy_type::in_memory) {
+        throw exceptions::configuration_exception(format("{} has been deprecated.", compaction::compaction_strategy::name(*cs)));
     }
-    if (cs == sstables::compaction_strategy_type::time_window) {
+    if (cs == compaction::compaction_strategy_type::time_window) {
         std::map<sstring, sstring> options = (strategy) ? cfprops.get_compaction_type_options() : (*schema)->compaction_strategy_options();
-        sstables::time_window_compaction_strategy_options twcs_options(options);
+        compaction::time_window_compaction_strategy_options twcs_options(options);
         long ttl = (cfprops.has_property(cf_prop_defs::KW_DEFAULT_TIME_TO_LIVE)) ? cfprops.get_default_time_to_live() : current_ttl.count();
         auto max_windows = db.get_config().twcs_max_window_count();
 

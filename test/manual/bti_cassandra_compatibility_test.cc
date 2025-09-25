@@ -366,7 +366,7 @@ void do_test(const test_config& cfg) {
     SCYLLA_ASSERT(!mutations.empty());
     auto schema = mutations.front().schema();
     auto adjusted_schema = schema_builder(schema)
-        .set_compaction_strategy(sstables::compaction_strategy_type::size_tiered)
+        .set_compaction_strategy(compaction::compaction_strategy_type::size_tiered)
         .build();
     auto schema_description = adjusted_schema->describe(
         schema_describe_helper{.type = schema_describe_helper::type::table},

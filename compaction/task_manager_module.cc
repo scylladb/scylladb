@@ -42,6 +42,8 @@ struct reshard_shard_descriptor {
 
 } // namespace replica
 
+namespace compaction {
+
 // Collects shared SSTables from all shards and sstables that require cleanup and returns a vector containing them all.
 // This function assumes that the list of SSTables can be fairly big so it is careful to
 // manipulate it in a do_for_each loop (which yields) instead of using standard accumulators.
@@ -130,7 +132,7 @@ distribute_reshard_jobs(sstables::sstable_directory::sstable_open_info_vector so
 // A creator function must be passed that will create an SSTable object in the correct shard,
 // and an I/O priority must be specified.
 future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::sstable_open_info_vector shared_info, replica::table& table,
-                           sstables::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, tasks::task_info parent_info)
+                           compaction::compaction_sstable_creator_fn creator, compaction::owned_ranges_ptr owned_ranges_ptr, tasks::task_info parent_info)
 {
     // Resharding doesn't like empty sstable sets, so bail early. There is nothing
     // to reshard in this shard.
@@ -160,24 +162,22 @@ future<> reshard(sstables::sstable_directory& dir, sstables::sstable_directory::
     // jobs. But only one will run in parallel at a time
     auto& t = table.try_get_compaction_group_view_with_static_sharding();
     co_await coroutine::parallel_for_each(buckets, [&] (std::vector<sstables::shared_sstable>& sstlist) mutable {
-        return table.get_compaction_manager().run_custom_job(t, sstables::compaction_type::Reshard, "Reshard compaction", [&] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) -> future<> {
+        return table.get_compaction_manager().run_custom_job(t, compaction_type::Reshard, "Reshard compaction", [&] (compaction_data& info, compaction_progress_monitor& progress_monitor) -> future<> {
             auto erm = table.get_effective_replication_map(); // keep alive around compaction.
 
-            sstables::compaction_descriptor desc(sstlist);
-            desc.options = sstables::compaction_type_options::make_reshard();
+            compaction_descriptor desc(sstlist);
+            desc.options = compaction_type_options::make_reshard();
             desc.creator = creator;
             desc.sharder = &erm->get_sharder(*table.schema());
             desc.owned_ranges = owned_ranges_ptr;
 
-            auto result = co_await sstables::compact_sstables(std::move(desc), info, t, progress_monitor);
+            auto result = co_await compact_sstables(std::move(desc), info, t, progress_monitor);
             // input sstables are moved, to guarantee their resources are released once we're done
             // resharding them.
             co_await when_all_succeed(dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::yes), dir.remove_sstables(std::move(sstlist))).discard_result();
         }, parent_info, throw_if_stopping::no);
     });
 }
-
-namespace compaction {
 
 struct table_tasks_info {
     current_task_type task;
@@ -314,7 +314,7 @@ future<> run_keyspace_tasks(replica::database& db, std::vector<keyspace_tasks_in
     }
 }
 
-future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const sstables::compaction_data& cdata, const sstables::compaction_progress_monitor& progress_monitor) const {
+future<tasks::task_manager::task::progress> compaction_task_impl::get_progress(const compaction_data& cdata, const compaction_progress_monitor& progress_monitor) const {
     if (cdata.compaction_size == 0) {
         co_return tasks::task_manager::task::progress{};
     }
@@ -704,14 +704,14 @@ tasks::is_user_task scrub_sstables_compaction_task_impl::is_user_task() const no
 }
 
 future<> scrub_sstables_compaction_task_impl::run() {
-    auto res = co_await _db.map_reduce0([&] (replica::database& db) -> future<sstables::compaction_stats> {
-        sstables::compaction_stats stats;
+    auto res = co_await _db.map_reduce0([&] (replica::database& db) -> future<compaction_stats> {
+        compaction_stats stats;
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = db.get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<shard_scrub_sstables_compaction_task_impl>(parent_info, _status.keyspace, _status.id, db, _column_families, _opts, stats);
         co_await task->done();
         co_return stats;
-    }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+    }, compaction_stats{}, std::plus<compaction_stats>());
     if (_stats) {
         *_stats = res;
     }
@@ -736,14 +736,14 @@ future<std::optional<double>> scrub_sstables_compaction_task_impl::expected_tota
 }
 
 future<> shard_scrub_sstables_compaction_task_impl::run() {
-    _stats = co_await map_reduce(_column_families, [&] (sstring cfname) -> future<sstables::compaction_stats> {
-        sstables::compaction_stats stats{};
+    _stats = co_await map_reduce(_column_families, [&] (sstring cfname) -> future<compaction_stats> {
+        compaction_stats stats{};
         tasks::task_info parent_info{_status.id, _status.shard};
         auto& compaction_module = _db.get_compaction_manager().get_task_manager_module();
         auto task = co_await compaction_module.make_and_start_task<table_scrub_sstables_compaction_task_impl>(parent_info, _status.keyspace, cfname, _status.id, _db, _opts, stats);
         co_await task->done();
         co_return stats;
-    }, sstables::compaction_stats{}, std::plus<sstables::compaction_stats>());
+    }, compaction_stats{}, std::plus<compaction_stats>());
 }
 
 future<std::optional<double>> shard_scrub_sstables_compaction_task_impl::expected_total_workload() const {
@@ -771,7 +771,7 @@ future<> table_scrub_sstables_compaction_task_impl::run() {
     co_await cf.parallel_foreach_compaction_group_view([&] (compaction::compaction_group_view& ts) mutable -> future<> {
         auto lock_holder = co_await cm.get_incremental_repair_read_lock(ts, "scrub_sstables_compaction");
         auto r = co_await cm.perform_sstable_scrub(ts, _opts, info);
-        _stats += r.value_or(sstables::compaction_stats{});
+        _stats += r.value_or(compaction_stats{});
     });
 }
 
@@ -839,7 +839,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
         }
         // all sstables were found in the same sstable_directory instance, so they share the same underlying storage.
         auto& storage = reshape_candidates.front()->get_storage();
-        auto cfg = co_await sstables::make_reshape_config(storage, _mode);
+        auto cfg = co_await make_reshape_config(storage, _mode);
         auto desc = table.get_compaction_strategy().get_reshaping_job(std::move(reshape_candidates), table.schema(), cfg);
         if (desc.sstables.empty()) {
             break;
@@ -859,8 +859,8 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
         desc.creator = _creator;
 
         try {
-            co_await table.get_compaction_manager().run_custom_job(t, sstables::compaction_type::Reshape, "Reshape compaction", [&dir = _dir, sstlist = std::move(sstlist), desc = std::move(desc), &sstables_in_cg, &t] (sstables::compaction_data& info, sstables::compaction_progress_monitor& progress_monitor) mutable -> future<> {
-                sstables::compaction_result result = co_await sstables::compact_sstables(std::move(desc), info, t, progress_monitor);
+            co_await table.get_compaction_manager().run_custom_job(t, compaction_type::Reshape, "Reshape compaction", [&dir = _dir, sstlist = std::move(sstlist), desc = std::move(desc), &sstables_in_cg, &t] (compaction_data& info, compaction_progress_monitor& progress_monitor) mutable -> future<> {
+                compaction_result result = co_await compact_sstables(std::move(desc), info, t, progress_monitor);
                 // update the sstables_in_cg set with new sstables and remove the reshaped ones
                 for (auto& sst : sstlist) {
                     sstables_in_cg.erase(sst);
@@ -924,7 +924,7 @@ shard_resharding_compaction_task_impl::shard_resharding_compaction_task_impl(tas
         tasks::task_id parent_id,
         sharded<sstables::sstable_directory>& dir,
         replica::database& db,
-        sstables::compaction_sstable_creator_fn creator,
+        compaction_sstable_creator_fn creator,
         compaction::owned_ranges_ptr local_owned_ranges_ptr,
         std::vector<replica::reshard_shard_descriptor>& destinations) noexcept
     : resharding_compaction_task_impl(module, tasks::task_id::create_random_id(), 0, "shard", std::move(keyspace), std::move(table), "", parent_id)

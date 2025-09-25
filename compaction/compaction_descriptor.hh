@@ -17,7 +17,7 @@
 #include "compaction_fwd.hh"
 #include "mutation_writer/token_group_based_splitting_writer.hh"
 
-namespace sstables {
+namespace compaction {
 
 enum class compaction_type {
     Compaction = 0,
@@ -33,15 +33,15 @@ enum class compaction_type {
 
 struct compaction_completion_desc {
     // Old, existing SSTables that should be deleted and removed from the SSTable set.
-    std::vector<shared_sstable> old_sstables;
+    std::vector<sstables::shared_sstable> old_sstables;
     // New, fresh SSTables that should be added to SSTable set, replacing the old ones.
-    std::vector<shared_sstable> new_sstables;
+    std::vector<sstables::shared_sstable> new_sstables;
     // Set of compacted partition ranges that should be invalidated in the cache.
     dht::partition_range_vector ranges_for_cache_invalidation;
 };
 
 // creates a new SSTable for a given shard
-using compaction_sstable_creator_fn = std::function<shared_sstable(shard_id shard)>;
+using compaction_sstable_creator_fn = std::function<sstables::shared_sstable(shard_id shard)>;
 // Replaces old sstable(s) by new one(s) which contain all non-expired data.
 using compaction_sstable_replacer_fn = std::function<void(compaction_completion_desc)>;
 
@@ -169,7 +169,7 @@ struct compaction_descriptor {
     compaction_sstable_replacer_fn replacer;
 
     // Denotes if this compaction task is comprised solely of completely expired SSTables
-    sstables::has_only_fully_expired has_only_fully_expired = has_only_fully_expired::no;
+    has_only_fully_expired has_only_fully_expired = has_only_fully_expired::no;
 
     // If set to true, gc will check only the compacting sstables to collect tombstones.
     // If set to false, gc will check the memtables, commit log and other uncompacting
@@ -189,7 +189,7 @@ struct compaction_descriptor {
     explicit compaction_descriptor(std::vector<sstables::shared_sstable> sstables,
                                    int level = default_level,
                                    uint64_t max_sstable_bytes = default_max_sstable_bytes,
-                                   run_id run_identifier = run_id::create_random_id(),
+                                   sstables::run_id run_identifier = sstables::run_id::create_random_id(),
                                    compaction_type_options options = compaction_type_options::make_regular(),
                                    compaction::owned_ranges_ptr owned_ranges_ = {})
         : sstables(std::move(sstables))
@@ -200,12 +200,12 @@ struct compaction_descriptor {
         , owned_ranges(std::move(owned_ranges_))
     {}
 
-    explicit compaction_descriptor(sstables::has_only_fully_expired has_only_fully_expired,
+    explicit compaction_descriptor(::compaction::has_only_fully_expired has_only_fully_expired,
                                    std::vector<sstables::shared_sstable> sstables)
         : sstables(std::move(sstables))
         , level(default_level)
         , max_sstable_bytes(default_max_sstable_bytes)
-        , run_identifier(run_id::create_random_id())
+        , run_identifier(sstables::run_id::create_random_id())
         , options(compaction_type_options::make_regular())
         , has_only_fully_expired(has_only_fully_expired)
     {}
@@ -221,14 +221,14 @@ struct compaction_descriptor {
 }
 
 template <>
-struct fmt::formatter<sstables::compaction_type> : fmt::formatter<string_view> {
-    auto format(sstables::compaction_type, fmt::format_context& ctx) const -> decltype(ctx.out());
+struct fmt::formatter<compaction::compaction_type> : fmt::formatter<string_view> {
+    auto format(compaction::compaction_type, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 template <>
-struct fmt::formatter<sstables::compaction_type_options::scrub::mode> : fmt::formatter<string_view> {
-    auto format(sstables::compaction_type_options::scrub::mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+struct fmt::formatter<compaction::compaction_type_options::scrub::mode> : fmt::formatter<string_view> {
+    auto format(compaction::compaction_type_options::scrub::mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 template <>
-struct fmt::formatter<sstables::compaction_type_options::scrub::quarantine_mode> : fmt::formatter<string_view> {
-    auto format(sstables::compaction_type_options::scrub::quarantine_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
+struct fmt::formatter<compaction::compaction_type_options::scrub::quarantine_mode> : fmt::formatter<string_view> {
+    auto format(compaction::compaction_type_options::scrub::quarantine_mode, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
