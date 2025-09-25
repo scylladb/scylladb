@@ -61,7 +61,7 @@ future<> gossiping_property_file_snitch::start() {
         // minute and load its contents into the gossiper.endpoint_state_map
         //
         _file_reader.set_callback([this] {
-            periodic_reader_callback();
+            (void)periodic_reader_callback();
         });
 
         co_await read_property_file();
@@ -71,19 +71,13 @@ future<> gossiping_property_file_snitch::start() {
     set_snitch_ready();
 }
 
-void gossiping_property_file_snitch::periodic_reader_callback() {
+future<> gossiping_property_file_snitch::periodic_reader_callback() {
     _file_reader_runs = true;
-    //FIXME: discarded future.
-    (void)property_file_was_modified().then([this] (bool was_modified) {
-
+    try {
+        bool was_modified = co_await property_file_was_modified();
         if (was_modified) {
-            return read_property_file();
+            co_await read_property_file();
         }
-
-        return make_ready_future<>();
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
         } catch (...) {
             logger().error("Exception has been thrown when parsing the property file.");
         }
@@ -95,7 +89,6 @@ void gossiping_property_file_snitch::periodic_reader_callback() {
         }
 
         _file_reader_runs = false;
-    });
 }
 
 gms::application_state_map gossiping_property_file_snitch::get_app_states() const {
