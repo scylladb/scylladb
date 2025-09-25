@@ -144,14 +144,19 @@ struct compaction_stats {
         return static_rows.cell_stats.dead_cells + clustering_rows.cell_stats.dead_cells +
             static_rows.cell_stats.collection_tombstones + clustering_rows.cell_stats.collection_tombstones;
     }
+    uint64_t dead_partitions() const {
+        return total_partitions - live_partitions;
+    }
 
-    uint64_t partitions = 0;
+    uint64_t total_partitions = 0;
+    uint64_t live_partitions = 0;
     row_stats static_rows;
     row_stats clustering_rows;
     uint64_t range_tombstones = 0;
 
     compaction_stats& operator+=(const compaction_stats& other) {
-        partitions += other.partitions;
+        total_partitions += other.total_partitions;
+        live_partitions += other.live_partitions;
         static_rows += other.static_rows;
         clustering_rows += other.clustering_rows;
         range_tombstones += other.range_tombstones;
@@ -254,7 +259,7 @@ private:
     void partition_is_not_empty(Consumer& consumer) {
         if (_empty_partition) {
             _empty_partition = false;
-            ++_stats.partitions;
+            ++_stats.live_partitions;
             consumer.consume_new_partition(*_dk);
             auto pt = _partition_tombstone;
             if (pt && !can_purge_tombstone(pt)) {
@@ -406,6 +411,8 @@ public:
         _effective_tombstone = {};
         _current_emitted_tombstone = {};
         _current_emitted_gc_tombstone = {};
+
+        ++_stats.total_partitions;
     }
 
     template <typename Consumer, typename GCConsumer>
