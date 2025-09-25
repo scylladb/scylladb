@@ -123,7 +123,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 }
 
 future<> password_authenticator::legacy_create_default_if_missing() {
-    const auto exists = co_await default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
+    const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
     if (exists) {
         co_return;
     }
@@ -226,7 +226,7 @@ future<> password_authenticator::start() {
                     }
                     _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
-                    if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
+                    if (legacy::any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
                         if (legacy_metadata_exists()) {
                             plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
                         }
@@ -251,10 +251,21 @@ future<> password_authenticator::start() {
         });
 
         if (legacy_mode(_qp)) {
+            static const sstring create_roles_query = fmt::format(
+                    "CREATE TABLE {}.{} ("
+                    "  {} text PRIMARY KEY,"
+                    "  can_login boolean,"
+                    "  is_superuser boolean,"
+                    "  member_of set<text>,"
+                    "  salted_hash text"
+                    ")",
+                    meta::legacy::AUTH_KS,
+                    meta::roles_table::name,
+                    meta::roles_table::role_col_name);
             return create_legacy_metadata_table_if_missing(
                     meta::roles_table::name,
                     _qp,
-                    meta::roles_table::creation_query(),
+                    create_roles_query,
                     _migration_manager);
         }
         return make_ready_future<>();
