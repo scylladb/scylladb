@@ -211,6 +211,35 @@ def test_content_type(dynamodb, test_table):
     response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
     assert response.headers['Content-Type'] == 'application/x-amz-json-1.0'
 
+# Alternator implements long responses using a different code path - using a
+# streaming body writer instead of a contiguous string object. So we want to
+# verify that we got the right Content-type in the streaming-respose code
+# path as well.
+def test_content_type_long(dynamodb, test_table):
+    # Alternator currently defines a "long" response as being over 100KB
+    # (see executor.hh, is_big()). So we'll do a Query returning 200 KB.
+    p = random_string()
+    with test_table.batch_writer() as batch:
+        for i in range(20):
+            batch.put_item({'p': p, 'c': str(i), 'x': 'x'*10000})
+    payload = '{"TableName": "' + test_table.name + '", "KeyConditions":  {"p": {"AttributeValueList": [{"S": "' + p + '"}], "ComparisonOperator": "EQ"}}}'
+    req = get_signed_request(dynamodb, 'Query', payload)
+    response = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert response.status_code == 200
+    assert len(response.text) > 200000
+    assert response.headers['Content-Type'] == 'application/x-amz-json-1.0'
+
+# Error messages also have a Content-Type, and those too have separate code
+# generating them, so let's test this case as well.
+def test_content_type_error(dynamodb, test_table):
+    # PutItem without a TableName will generate an error:
+    payload = '{"Item": {"p": {"S": "x"}, "c": {"S": "x"}}}'
+    req = get_signed_request(dynamodb, 'PutItem', payload)
+    r = requests.post(req.url, headers=req.headers, data=req.body, verify=False)
+    assert r.status_code == 400 and 'ValidationException' in r.text
+    assert r.headers['Content-Type'] == 'application/x-amz-json-1.0'
+
+
 # An unknown operation should result with an UnknownOperationException:
 def test_unknown_operation(dynamodb):
     req = get_signed_request(dynamodb, 'BoguousOperationName', '{}')

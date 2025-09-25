@@ -100,6 +100,13 @@ static void handle_CORS(const request& req, reply& rep, bool preflight) {
 // the user directly. Other exceptions are unexpected, and reported as
 // Internal Server Error.
 class api_handler : public handler_base {
+    // Although the the DynamoDB API responses are JSON, additional
+    // conventions apply to these responses. For this reason, DynamoDB uses
+    // the content type "application/x-amz-json-1.0" instead of the standard
+    // "application/json". Some other AWS services use later versions instead
+    // of "1.0", but DynamoDB currently uses "1.0". Note that this content
+    // type applies to all replies, both success and error.
+    static constexpr const char* REPLY_CONTENT_TYPE = "application/x-amz-json-1.0";
 public:
     api_handler(const std::function<future<executor::request_return_type>(std::unique_ptr<request> req)>& _handle) : _f_handle(
          [this, _handle](std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
@@ -128,13 +135,10 @@ public:
                     // Note that despite the move, there is a copy here -
                     // as str is std::string and rep->_content is sstring.
                     rep->_content = std::move(str);
+                    rep->set_content_type(REPLY_CONTENT_TYPE);
                 },
                 [&] (executor::body_writer&& body_writer) {
-                    // Unfortunately, write_body() forces us to choose
-                    // from a fixed and irrelevant list of "mime-types"
-                    // at this point. But we'll override it with the
-                    // correct one (application/x-amz-json-1.0) below.
-                    rep->write_body("json", std::move(body_writer));
+                    rep->write_body(REPLY_CONTENT_TYPE, std::move(body_writer));
                 },
                 [&] (const api_error& err) {
                     generate_error_reply(*rep, err);
@@ -151,7 +155,6 @@ public:
         handle_CORS(*req, *rep, false);
         return _f_handle(std::move(req), std::move(rep)).then(
                 [](std::unique_ptr<reply> rep) {
-                    rep->set_mime_type("application/x-amz-json-1.0");
                     rep->done();
                     return make_ready_future<std::unique_ptr<reply>>(std::move(rep));
                 });
@@ -167,6 +170,7 @@ protected:
         rjson::add(results, "message", err._msg);
         rep._content = rjson::print(std::move(results));
         rep._status = err._http_code;
+        rep.set_content_type(REPLY_CONTENT_TYPE);
         slogger.trace("api_handler error case: {}", rep._content);
     }
 
