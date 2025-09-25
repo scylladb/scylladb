@@ -300,6 +300,11 @@ public:
     // unless it is moved back to enabled state.
     future<> drain();
 
+    // Check if compaction manager is running, i.e. it was enabled or drained
+    bool is_running() const noexcept {
+        return _state == state::enabled || _state == state::disabled;
+    }
+
     using compaction_history_consumer = noncopyable_function<future<>(const db::compaction_history_entry&)>;
     future<> get_compaction_history(compaction_history_consumer&& f);
 
