@@ -13,12 +13,9 @@ import pytest
 from dtest_class import Tester, create_cf, create_ks
 
 
-# pylint:disable=too-few-public-methods
-@pytest.mark.dtest_full
 @pytest.mark.single_node
 class TestCFID(Tester):
-    @pytest.mark.next_gating
-    @pytest.mark.dtest_debug
+    @pytest.mark.cluster_options(auto_snapshot=True)
     def test_cfid(self):
         """
         Test through adding/dropping cf's that the path to sstables for each cf are unique and formatted correctly
