@@ -10,6 +10,8 @@
 #include "size_tiered_compaction_strategy.hh"
 #include <cmath>
 
+namespace compaction {
+
 // Backlog for one SSTable under STCS:
 //
 //   (1) Bi = Ei * log4 (T / Si),
@@ -68,7 +70,7 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
         std::unordered_set<sstables::shared_sstable> sstables;
     };
 
-    sstables::size_tiered_compaction_strategy_options _stcs_options;
+    size_tiered_compaction_strategy_options _stcs_options;
     int64_t _total_bytes = 0;
     sstables_backlog_contribution _contrib;
     std::unordered_set<sstables::shared_sstable> _all;
@@ -85,9 +87,9 @@ class size_tiered_backlog_tracker final : public compaction_backlog_tracker::imp
         return log(x) * inv_log_4;
     }
 
-    static sstables_backlog_contribution calculate_sstables_backlog_contribution(const std::vector<sstables::shared_sstable>& all, const sstables::size_tiered_compaction_strategy_options& stcs_options);
+    static sstables_backlog_contribution calculate_sstables_backlog_contribution(const std::vector<sstables::shared_sstable>& all, const size_tiered_compaction_strategy_options& stcs_options);
 public:
-    size_tiered_backlog_tracker(sstables::size_tiered_compaction_strategy_options stcs_options) : _stcs_options(stcs_options) {}
+    size_tiered_backlog_tracker(size_tiered_compaction_strategy_options stcs_options) : _stcs_options(stcs_options) {}
 
     virtual double backlog(const compaction_backlog_tracker::ongoing_writes& ow, const compaction_backlog_tracker::ongoing_compactions& oc) const override;
 
@@ -100,3 +102,5 @@ public:
         return _total_bytes;
     }
 };
+
+}

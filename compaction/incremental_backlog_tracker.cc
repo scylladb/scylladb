@@ -7,7 +7,7 @@
 #include "incremental_backlog_tracker.hh"
 #include "sstables/sstables.hh"
 
-using namespace sstables;
+namespace compaction {
 
 incremental_backlog_tracker::inflight_component incremental_backlog_tracker::compacted_backlog(const compaction_backlog_tracker::ongoing_compactions& ongoing_compactions) const {
     inflight_component in;
@@ -23,18 +23,18 @@ incremental_backlog_tracker::inflight_component incremental_backlog_tracker::com
 }
 
 incremental_backlog_tracker::backlog_calculation_result
-incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::unordered_map<sstables::run_id, sstable_run>& all, const incremental_compaction_strategy_options& options,  unsigned threshold) {
+incremental_backlog_tracker::calculate_sstables_backlog_contribution(const std::unordered_map<sstables::run_id, sstables::sstable_run>& all, const incremental_compaction_strategy_options& options,  unsigned threshold) {
     int64_t total_backlog_bytes = 0;
     float sstables_backlog_contribution = 0.0f;
     std::unordered_set<sstables::run_id> sstable_runs_contributing_backlog = {};
 
     if (!all.empty()) {
-      auto freeze = [] (const sstable_run& run) { return make_lw_shared<const sstable_run>(run); };
+      auto freeze = [] (const sstables::sstable_run& run) { return make_lw_shared<const sstables::sstable_run>(run); };
       for (auto& bucket : incremental_compaction_strategy::get_buckets(all | std::views::values | std::views::transform(freeze) | std::ranges::to<std::vector>(), options)) {
         if (!incremental_compaction_strategy::is_bucket_interesting(bucket, threshold)) {
             continue;
         }
-        for (const frozen_sstable_run& run_ptr : bucket) {
+        for (const sstables::frozen_sstable_run& run_ptr : bucket) {
             auto& run = *run_ptr;
             auto data_size = run.data_size();
             if (data_size > 0) {
@@ -125,4 +125,6 @@ void incremental_backlog_tracker::replace_sstables(const std::vector<sstables::s
             _sstable_runs_contributing_backlog = std::move(backlog_calculation_result.sstable_runs_contributing_backlog);
         }
     });
+}
+
 }

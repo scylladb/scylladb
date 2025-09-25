@@ -58,7 +58,7 @@ std::vector<table_info> parse_table_infos(const sstring& ks_name, const http_con
 std::pair<sstring, std::vector<table_info>> parse_table_infos(const http_context& ctx, const http::request& req, sstring cf_param_name = "cf");
 
 struct scrub_info {
-    sstables::compaction_type_options::scrub opts;
+    compaction::compaction_type_options::scrub opts;
     sstring keyspace;
     std::vector<sstring> column_families;
     sstring snapshot_tag;

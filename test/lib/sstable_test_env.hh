@@ -80,14 +80,14 @@ public:
 
 class test_env_compaction_manager {
     tasks::task_manager _tm;
-    compaction_manager _cm;
+    compaction::compaction_manager _cm;
 
 public:
     test_env_compaction_manager()
-        : _cm(_tm, compaction_manager::for_testing_tag{})
+        : _cm(_tm, compaction::compaction_manager::for_testing_tag{})
     {}
 
-    compaction_manager& get_compaction_manager() { return _cm; }
+    compaction::compaction_manager& get_compaction_manager() { return _cm; }
 
     void propagate_replacement(compaction::compaction_group_view& table_s, const std::vector<shared_sstable>& removed, const std::vector<shared_sstable>& added);
 
@@ -196,7 +196,7 @@ public:
     table_for_tests make_table_for_tests(schema_ptr s = nullptr);
 
     // Must run in a thread.
-    sstables::sstable_set make_sstable_set(sstables::compaction_strategy& cs, schema_ptr s);
+    sstables::sstable_set make_sstable_set(compaction::compaction_strategy& cs, schema_ptr s);
 
     void request_abort();
 };

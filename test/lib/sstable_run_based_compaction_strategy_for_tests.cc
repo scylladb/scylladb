@@ -14,8 +14,8 @@ namespace sstables {
 
 sstable_run_based_compaction_strategy_for_tests::sstable_run_based_compaction_strategy_for_tests() = default;
 
-future<compaction_descriptor>
-sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
+future<compaction::compaction_descriptor>
+sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(compaction::compaction_group_view& table_s, compaction::strategy_control& control) {
     // Get unique runs from all uncompacting sstables
     auto main_set = co_await table_s.main_sstable_set();
     std::vector<frozen_sstable_run> runs = main_set->all_sstable_runs();
@@ -45,20 +45,20 @@ sstable_run_based_compaction_strategy_for_tests::get_sstables_for_compaction(com
             | std::views::transform([] (auto& run) -> auto& { return run->all(); })
             | std::views::join
             | std::ranges::to<std::vector>();
-        co_return sstables::compaction_descriptor(std::move(all), 0, static_fragment_size_for_run);
+        co_return compaction::compaction_descriptor(std::move(all), 0, static_fragment_size_for_run);
     }
-    co_return sstables::compaction_descriptor();
+    co_return compaction::compaction_descriptor();
 }
 
-future<int64_t> sstable_run_based_compaction_strategy_for_tests::estimated_pending_compactions(compaction_group_view& table_s) const {
+future<int64_t> sstable_run_based_compaction_strategy_for_tests::estimated_pending_compactions(compaction::compaction_group_view& table_s) const {
     throw std::runtime_error("unimplemented");
 }
 
-compaction_strategy_type sstable_run_based_compaction_strategy_for_tests::type() const {
+compaction::compaction_strategy_type sstable_run_based_compaction_strategy_for_tests::type() const {
     throw std::runtime_error("unimplemented");
 }
 
-std::unique_ptr<compaction_backlog_tracker::impl> sstable_run_based_compaction_strategy_for_tests::make_backlog_tracker() const {
+std::unique_ptr<compaction::compaction_backlog_tracker::impl> sstable_run_based_compaction_strategy_for_tests::make_backlog_tracker() const {
     throw std::runtime_error("unimplemented");
 }
 

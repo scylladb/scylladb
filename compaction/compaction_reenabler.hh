@@ -10,12 +10,10 @@
 
 #include <seastar/core/gate.hh>
 
-class compaction_manager;
-
 namespace compaction {
+    class compaction_manager;
     class compaction_group_view;
     class compaction_state;
-}
 
 class compaction_reenabler {
     compaction_manager& _cm;
@@ -38,3 +36,4 @@ public:
     }
 };
 
+}

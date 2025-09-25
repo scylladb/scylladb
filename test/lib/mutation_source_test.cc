@@ -974,7 +974,7 @@ static void test_time_window_clustering_slicing(tests::reader_concurrency_semaph
     simple_schema ss;
 
     auto s = schema_builder(ss.schema())
-        .set_compaction_strategy(sstables::compaction_strategy_type::time_window)
+        .set_compaction_strategy(compaction::compaction_strategy_type::time_window)
         .build();
 
     auto pkey = ss.make_pkey();

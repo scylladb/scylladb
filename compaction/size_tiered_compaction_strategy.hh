@@ -11,9 +11,9 @@
 #include "compaction_strategy_impl.hh"
 #include "sstables/shared_sstable.hh"
 
-class size_tiered_backlog_tracker;
+namespace compaction {
 
-namespace sstables {
+class size_tiered_backlog_tracker;
 
 class size_tiered_compaction_strategy_options {
 public:
@@ -77,7 +77,7 @@ public:
 
     virtual future<compaction_descriptor> get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) override;
 
-    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<shared_sstable> candidates) const override;
+    virtual std::vector<compaction_descriptor> get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const override;
 
     static int64_t estimated_pending_compactions(const std::vector<sstables::shared_sstable>& sstables,
         int min_threshold, int max_threshold, size_tiered_compaction_strategy_options options);
@@ -94,9 +94,9 @@ public:
 
     virtual std::unique_ptr<compaction_backlog_tracker::impl> make_backlog_tracker() const override;
 
-    virtual compaction_descriptor get_reshaping_job(std::vector<shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
+    virtual compaction_descriptor get_reshaping_job(std::vector<sstables::shared_sstable> input, schema_ptr schema, reshape_config cfg) const override;
 
-    friend class ::size_tiered_backlog_tracker;
+    friend class ::compaction::size_tiered_backlog_tracker;
 };
 
 }

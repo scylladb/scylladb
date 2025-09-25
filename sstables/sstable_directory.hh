@@ -27,7 +27,7 @@
 #include "sstables/generation_type.hh"
 #include "sstables/sstables_registry.hh"
 
-class compaction_manager;
+namespace compaction { class compaction_manager; }
 namespace s3 { class client; }
 
 namespace sstables {
