@@ -208,12 +208,12 @@ void gossiping_property_file_snitch::start_io() {
 
 future<> gossiping_property_file_snitch::stop() {
     if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
-        return make_ready_future<>();
+        co_return;
     }
 
     _state = snitch_state::stopping;
 
-    return stop_io();
+    co_await stop_io();
 }
 
 future<> gossiping_property_file_snitch::pause_io() {
