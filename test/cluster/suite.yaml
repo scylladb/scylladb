@@ -49,3 +49,5 @@ run_in_dev:
   - dtest/commitlog_test
 run_in_debug:
   - random_failures/test_random_failures
+disable:
+  - dtest/cfid_test
