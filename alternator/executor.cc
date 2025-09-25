@@ -2875,6 +2875,17 @@ public:
             // efficient than throwing an exception.
             return {};
         }
+
+        // Strict compatibility guarantees that single-item operations will
+        // read the item and store it in previous_item. If it is empty, we may
+        // skip CDC. This is safe as long as the assumptions of this 
+        // operation's write isolation are not violated.
+        //
+        // CAS may call apply multiple times. It may happen that the condition
+        // was met in the previous call, but now it isn't (e.g. the item was
+        // deleted), so we overwrite this option in each call.
+        cdc_opts.skip_cdc = cdc_opts.alternator_streams_strict_compatibility && !previous_item;
+
         if (_returnvalues == returnvalues::ALL_OLD && previous_item) {
             _return_attributes = std::move(*previous_item);
         } else {

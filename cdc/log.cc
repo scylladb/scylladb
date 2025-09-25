@@ -1970,8 +1970,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
     });
 }
 
-bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations) const {
-    return std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
+bool cdc::cdc_service::needs_cdc_augmentation(const utils::chunked_vector<mutation>& mutations, const per_request_options& opts) const {
+    return !opts.skip_cdc && std::any_of(mutations.begin(), mutations.end(), [](const mutation& m) {
         return cdc_enabled(*m.schema());
     });
 }
