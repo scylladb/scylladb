@@ -2927,6 +2927,7 @@ def configure_using_cmake(args):
         'Scylla_TEST_TIMEOUT': args.test_timeout,
         'Scylla_TEST_REPEAT': args.test_repeat,
         'Scylla_ENABLE_LTO': 'ON' if args.lto else 'OFF',
+        'Scylla_WITH_DEBUG_INFO' : 'ON' if args.debuginfo else 'OFF',
     }
     if args.date_stamp:
         settings['Scylla_DATE_STAMP'] = args.date_stamp
