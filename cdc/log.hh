@@ -66,6 +66,10 @@ struct per_request_options {
     // layers than CDC. We assume that CDC could have seen the row in this
     // state, i.e. the value isn't 'stale'/'too recent'.
     lw_shared_ptr<cql3::untyped_result_set> preimage;
+    // Don't generate log rows for this mutation.
+    bool skip_cdc = false;
+    // True if this mutation was emitted by Alternator.
+    const bool alternator = false;
 };
 
 struct operation_result_tracker;
