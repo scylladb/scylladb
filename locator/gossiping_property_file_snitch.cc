@@ -218,12 +218,12 @@ future<> gossiping_property_file_snitch::stop() {
 
 future<> gossiping_property_file_snitch::pause_io() {
     if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
-        return make_ready_future<>();
+        co_return;
     }
 
     _state = snitch_state::io_pausing;
 
-    return stop_io();
+    co_await stop_io();
 }
 
 using registry_default = class_registrator<i_endpoint_snitch, gossiping_property_file_snitch, const snitch_config&>;
