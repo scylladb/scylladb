@@ -21,7 +21,7 @@ from test.alternator.util import unique_table_name, create_test_table, new_test_
 # xfailing these tests, we temporarily coerce the tests below to avoid
 # using default tablets setting, even if it's available. We do this by
 # using the following tags when creating each table below:
-TAGS = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+TAGS = [{'Key': 'system:initial_tablets', 'Value': 'none'}]
 
 stream_types = [ 'OLD_IMAGE', 'NEW_IMAGE', 'KEYS_ONLY', 'NEW_AND_OLD_IMAGES']
 
