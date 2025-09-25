@@ -1379,6 +1379,8 @@ struct process_change_visitor {
     row_states_map& _clustering_row_states;
     cell_map& _static_row_state;
 
+    const bool _is_update = false;
+
     const bool _generate_delta_values = true;
 
     void static_row_cells(auto&& visit_row_cells) {
@@ -1402,12 +1404,13 @@ struct process_change_visitor {
 
         struct clustering_row_cells_visitor : public process_row_visitor {
             operation _cdc_op = operation::update;
+            operation _marker_op = operation::insert;
 
             using process_row_visitor::process_row_visitor;
 
             void marker(const row_marker& rm) {
                 _ttl_column = get_ttl(rm);
-                _cdc_op = operation::insert;
+                _cdc_op = _marker_op;
             }
         };
 
@@ -1415,6 +1418,9 @@ struct process_change_visitor {
                 log_ck, _touched_parts, _builder,
                 _enable_updating_state, &ckey, get_row_state(_clustering_row_states, ckey),
                 _clustering_row_states, _generate_delta_values);
+        if (_request_options->alternator && _is_update) {
+            v._marker_op = operation::update;
+        }
         visit_row_cells(v);
 
         if (_enable_updating_state) {
@@ -1568,6 +1574,11 @@ private:
 
     row_states_map _clustering_row_states;
     cell_map _static_row_state;
+    // True if the mutated row existed before applying the mutation. In other
+    // words, if the preimage is enabled and it isn't empty (otherwise, we
+    // assume that the row is non-existent). Used for Alternator Streams (see
+    // #6918).
+    bool _is_update = false;
 
     const bool _uses_tablets;
 
@@ -1692,6 +1703,7 @@ public:
             ._enable_updating_state = _enable_updating_state,
             ._clustering_row_states = _clustering_row_states,
             ._static_row_state = _static_row_state,
+            ._is_update = _is_update,
             ._generate_delta_values = generate_delta_values(_builder->base_schema())
         };
         cdc::inspect_mutation(m, v);
@@ -1824,6 +1836,7 @@ public:
                     _static_row_state[&c] = std::move(*maybe_cell_view);
                 }
             }
+            _is_update = true;
         }
 
         if (static_only) {
@@ -1860,6 +1873,10 @@ public:
 
             _clustering_row_states.insert_or_assign(std::move(ck), std::move(cells));
         }
+    }
+
+    inline void is_update(bool value) {
+        _is_update = value;
     }
 
     /** For preimage query use the same CL as for base write, except for CLs ANY and ALL. */
@@ -1914,7 +1931,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             transformer trans(_ctxt, s, m.decorated_key(), options);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
-            if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
+            if (s->cdc_options().preimage() || s->cdc_options().postimage() || options->alternator) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
