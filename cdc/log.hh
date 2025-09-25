@@ -69,6 +69,8 @@ struct per_request_options {
     // CAS may optionally read the db before it commits an operation. This
     // option controls if CAS should fill the preimage.
     bool fill_preimage = false;
+    // Don't generate log rows for this mutation.
+    bool skip_cdc = false;
 };
 
 struct operation_result_tracker;
