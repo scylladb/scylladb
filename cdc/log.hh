@@ -73,6 +73,8 @@ struct per_request_options {
     // Scylla. Currently, only TTL expiration implementation for Alternator
     // uses this.
     const bool is_system_originated = false;
+    // True if this mutation was emitted by Alternator.
+    const bool alternator = false;
 };
 
 struct operation_result_tracker;

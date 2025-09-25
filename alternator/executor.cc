@@ -2653,7 +2653,9 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         stats& global_stats,
         stats& per_table_stats,
         uint64_t& wcu_total) {
-    auto cdc_opts = cdc::per_request_options{};
+    auto cdc_opts = cdc::per_request_options{
+        .alternator = true,
+    };
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
             throw api_error::validation("Read-modify-write operations are disabled by 'forbid_rmw' write isolation policy. Refer to https://github.com/scylladb/scylla/blob/master/docs/alternator/alternator.md#write-isolation-policies for more information.");
@@ -3011,6 +3013,7 @@ static future<> cas_write(service::storage_proxy& proxy, schema_ptr schema, serv
     auto timeout = executor::default_timeout();
     auto op = seastar::make_shared<put_or_delete_item_cas_request>(schema, std::move(mutation_builders));
     auto cdc_opts = cdc::per_request_options{
+        .alternator = true,
     };
     return proxy.cas(schema, std::move(cas_shard), op, nullptr, to_partition_ranges(dk),
             {timeout, std::move(permit), client_state, trace_state},
@@ -3071,7 +3074,9 @@ static future<> do_batch_write(service::storage_proxy& proxy,
                 std::move(permit),
                 db::allow_per_partition_rate_limit::yes,
                 false,
-                cdc::per_request_options{});
+                cdc::per_request_options{
+                    .alternator = true,
+                });
     } else {
         // Do the write via LWT:
         // Multiple mutations may be destined for the same partition, adding
