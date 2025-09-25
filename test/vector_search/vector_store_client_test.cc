@@ -133,8 +133,8 @@ auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) 
 }
 
 future<> try_on_loopback_address(std::function<future<>(sstring)> func) {
-    constexpr size_t MAX_ADDR = 20;
-    for (size_t i = 1; i < MAX_ADDR; i++) {
+    constexpr size_t MAX_LOCALHOST_ADDR_TO_TRY = 127;
+    for (size_t i = 1; i < MAX_LOCALHOST_ADDR_TO_TRY; i++) {
         auto host = fmt::format("127.0.0.{}", i);
         try {
             co_await func(std::move(host));
@@ -833,17 +833,52 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_host_resolved_to_multipl
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{unavail_s->host(), LOCALHOST}}});
                 vs.start_background_tasks();
+                std::expected<vector_store_client::primary_keys, vector_store_client::ann_error> keys;
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                // Because requests are distributed in random order due to load balancing,
+                // repeat the ANN query until the unavailable server is queried.
+                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    co_return unavail_s->connections() > 1;
+                }));
 
-                // tried to connect to the unavailable server as it is first in the list of resolved addresses
-                BOOST_CHECK_EQUAL(unavail_s->connections(), 1);
-                // successfully got keys from the responding server
+                // The query is successful because the client falls back to the available server
+                // when the attempt to connect to the unavailable one fails.
                 BOOST_CHECK(keys);
             },
             cfg)
             .finally(seastar::coroutine::lambda([&responding_s, &unavail_s] -> future<> {
                 co_await responding_s->stop();
                 co_await unavail_s->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_load_balancing) {
+
+    auto s1 = co_await make_vs_mock_server();
+    auto s2 = co_await make_vs_mock_server(s1->port());
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://good.authority.here:{}", s1->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{s1->host(), s2->host()}}});
+                vs.start_background_tasks();
+
+                // Wait until requests are handled by both servers.
+                // The load balancing algorithm is random, so we send requests in a loop
+                // until both servers have received at least one, verifying that load is distributed.
+                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    co_return s1->requests() > 0 && s2->requests() > 0;
+                }));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&s1, &s2] -> future<> {
+                co_await s1->stop();
+                co_await s2->stop();
             }));
 }
