@@ -182,14 +182,13 @@ future<> standard_role_manager::create_legacy_metadata_tables_if_missing() const
 }
 
 future<> standard_role_manager::legacy_create_default_role_if_missing() {
-    SCYLLA_ASSERT(legacy_mode(_qp));
     try {
         const auto exists = co_await default_role_row_satisfies(_qp, &has_can_login, _superuser);
         if (exists) {
             co_return;
         }
         const sstring query = seastar::format("INSERT INTO {}.{} ({}, is_superuser, can_login) VALUES (?, true, true)",
-                get_auth_ks_name(_qp),
+                meta::legacy::AUTH_KS,
                 meta::roles_table::name,
                 meta::roles_table::role_col_name);
         co_await _qp.execute_internal(
@@ -284,7 +283,7 @@ future<> standard_role_manager::migrate_legacy_metadata() {
                     std::move(config),
                     ::service::group0_batch::unused(),
                     [this](const auto& name, const auto& config, auto& mc) {
-                return create_or_replace(name, config, mc);
+                return create_or_replace(meta::legacy::AUTH_KS, name, config, mc);
             });
         }).finally([results] {});
     }).then([] {
@@ -349,12 +348,12 @@ future<> standard_role_manager::ensure_superuser_is_created() {
     return _superuser_created_promise.get_shared_future();
 }
 
-future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
+future<> standard_role_manager::create_or_replace(std::string_view auth_ks_name, std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
     const sstring query = seastar::format("INSERT INTO {}.{} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
-            get_auth_ks_name(_qp),
+            auth_ks_name,
             meta::roles_table::name,
             meta::roles_table::role_col_name);
-    if (legacy_mode(_qp)) {
+    if (auth_ks_name == meta::legacy::AUTH_KS) {
         co_await _qp.execute_internal(
                 query,
                 consistency_for_role(role_name),
@@ -373,7 +372,7 @@ standard_role_manager::create(std::string_view role_name, const role_config& c, 
             throw role_already_exists(role_name);
         }
 
-        return create_or_replace(role_name, c, mc);
+        return create_or_replace(get_auth_ks_name(_qp), role_name, c, mc);
     });
 }
 

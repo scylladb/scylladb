@@ -102,7 +102,11 @@ future<> password_authenticator::migrate_legacy_metadata() const {
         return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
             auto username = row.get_as<sstring>("username");
             auto salted_hash = row.get_as<sstring>(SALTED_HASH);
-            static const auto query = update_row_query();
+            static const auto query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+                    meta::legacy::AUTH_KS,
+                    meta::roles_table::name,
+                    SALTED_HASH,
+                    meta::roles_table::role_col_name);
             return _qp.execute_internal(
                     query,
                     consistency_for_user(username),
@@ -119,7 +123,6 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 }
 
 future<> password_authenticator::legacy_create_default_if_missing() {
-    SCYLLA_ASSERT(legacy_mode(_qp));
     const auto exists = co_await default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
     if (exists) {
         co_return;
@@ -128,7 +131,11 @@ future<> password_authenticator::legacy_create_default_if_missing() {
     if (salted_pwd.empty()) {
         salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
     }
-    const auto query = update_row_query();
+    const auto query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+            meta::legacy::AUTH_KS,
+            meta::roles_table::name,
+            SALTED_HASH,
+            meta::roles_table::role_col_name);
     co_await _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
