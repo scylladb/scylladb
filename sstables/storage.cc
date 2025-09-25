@@ -280,31 +280,24 @@ future<> idempotent_link_file(sstring oldpath, sstring newpath) noexcept {
 // We end up in two valid sstables in this case, so make create_links idempotent.
 future<> filesystem_storage::check_create_links_replay(const sstable& sst, const sstring& dst_dir, generation_type dst_gen,
         const std::vector<std::pair<sstables::component_type, sstring>>& comps) const {
-    return parallel_for_each(comps, [this, &sst, &dst_dir, dst_gen] (const auto& p) mutable {
+    return parallel_for_each(comps, [this, &sst, &dst_dir, dst_gen] (const auto& p) mutable -> future<> {
         auto comp = p.second;
         auto src = filename(sst, _dir.native(), sst._generation, comp);
         auto dst = filename(sst, dst_dir, dst_gen, comp);
-        return do_with(std::move(src), std::move(dst), [] (const sstring& src, const sstring& dst) mutable {
-            return file_exists(dst).then([&] (bool exists) mutable {
-                if (!exists) {
-                    return make_ready_future<>();
-                }
-                return same_file(src, dst).then_wrapped([&] (future<bool> fut) {
-                    if (fut.failed()) {
-                        auto eptr = fut.get_exception();
-                        sstlog.error("Error while linking SSTable: {} to {}: {}", src, dst, eptr);
-                        return make_exception_future<>(eptr);
-                    }
-                    auto same = fut.get();
-                    if (!same) {
-                        auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
-                        sstlog.error("{}", msg);
-                        return make_exception_future<>(malformed_sstable_exception(msg));
-                    }
-                    return make_ready_future<>();
-                });
-            });
-        });
+        if (co_await file_exists(dst)) {
+            future<bool> fut = co_await coroutine::as_future(same_file(src, dst));
+            if (fut.failed()) {
+                auto eptr = fut.get_exception();
+                sstlog.error("Error while linking SSTable: {} to {}: {}", src, dst, eptr);
+                co_await coroutine::return_exception_ptr(std::move(eptr));
+            }
+            auto same = fut.get();
+            if (!same) {
+                auto msg = format("Error while linking SSTable: {} to {}: File exists", src, dst);
+                sstlog.error("{}", msg);
+                co_await coroutine::return_exception(malformed_sstable_exception(msg));
+            }
+        }
     });
 }
 
