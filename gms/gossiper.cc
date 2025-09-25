@@ -789,6 +789,7 @@ future<> gossiper::do_status_check() {
 
         // check for dead state removal
         auto expire_time = get_expire_time_for_endpoint(endpoint);
+
         if (!is_alive && (now > expire_time)) {
             const auto host_id = eps->get_host_id();
             if (!host_id) {
@@ -1819,7 +1820,13 @@ future<> gossiper::mark_dead(inet_address addr, endpoint_state_ptr state, permit
         data.unreachable[addr] = now();
     });
     logger.info("InetAddress {}/{} is now DOWN, status = {}", state->get_host_id(), addr, get_gossip_status(*state));
+    const auto host_id = state->get_host_id();
     co_await do_on_dead_notifications(addr, std::move(state), pid);
+
+    if (utils::get_local_injector().is_enabled("gossiper_immediately_remove_dead_node")) {
+        co_await evict_from_membership(addr, pid);
+        logger.info("InetAddress {}/{} is removed from gossiper", host_id, addr);
+    }
 }
 
 future<> gossiper::handle_major_state_change(inet_address ep, endpoint_state eps, permit_id pid, bool shadow_round) {
