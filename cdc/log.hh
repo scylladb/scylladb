@@ -21,6 +21,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 
+#include "cql3/untyped_result_set.hh"
 #include "mutation/timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
