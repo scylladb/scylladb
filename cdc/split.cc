@@ -554,7 +554,86 @@ struct should_split_visitor {
     }
 };
 
-bool should_split(const mutation& m) {
+// This is the same as the above, but it ignores TTL and doesn't split row
+// marker from update.
+struct alternator_should_split_visitor {
+    bool _had_static_row = false;
+    bool _had_clustered_row = false;
+    bool _had_upsert = false;
+    bool _had_range_delete = false;
+
+    bool _result = false;
+
+    // This becomes a valid (non-missing) timestamp after visiting the first change.
+    // Then, if we encounter any different timestamp, it means that we should split.
+    api::timestamp_type _ts = api::missing_timestamp;
+
+    inline bool finished() const { return _result; }
+    inline void stop() { _result = true; }
+
+    void visit(api::timestamp_type ts) {
+        if (_ts != api::missing_timestamp && _ts != ts) {
+            return stop();
+        }
+        _ts = ts;
+    }
+
+    void visit(const atomic_cell_view& cell) { visit(cell.timestamp()); }
+
+    void live_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
+    void dead_atomic_cell(const column_definition&, const atomic_cell_view& cell) { visit(cell); }
+
+    void collection_tombstone(const tombstone& t) { visit(t.timestamp + 1); }
+
+    void live_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
+    void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
+    void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
+
+    void marker(const row_marker& rm) { visit(rm.timestamp()); }
+
+    void static_row_cells(auto&& visit_row_cells) {
+        _had_static_row = true;
+        visit_row_cells(*this);
+    }
+
+    void clustered_row_cells(const clustering_key&, auto&& visit_row_cells) {
+        if (_had_static_row) {
+            return stop();
+        }
+        _had_clustered_row = _had_upsert = true;
+        visit_row_cells(*this);
+    }
+
+    void clustered_row_delete(const clustering_key&, const tombstone& t) {
+        if (_had_static_row || _had_upsert) {
+            return stop();
+        }
+        _had_clustered_row = true;
+        visit(t.timestamp);
+    }
+
+    void range_delete(const range_tombstone& t) {
+        if (_had_static_row || _had_clustered_row) {
+            return stop();
+        }
+        _had_range_delete = true;
+        visit(t.tomb.timestamp);
+    }
+
+    void partition_delete(const tombstone&) {
+        if (_had_range_delete || _had_static_row || _had_clustered_row) {
+            return stop();
+        }
+    }
+};
+
+bool should_split(const mutation& m, const std::optional<per_request_options>& options) {
+    if (options && options->alternator) {
+        alternator_should_split_visitor v;
+        cdc::inspect_mutation(m, v);
+        return v._result || v._ts == api::missing_timestamp;
+    }
+
     should_split_visitor v;
 
     cdc::inspect_mutation(m, v);
