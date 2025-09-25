@@ -23,6 +23,7 @@ async def test_broken_bootstrap(manager: ManagerClient):
         await manager.cql.run_async(f"CREATE TABLE {table} (a int PRIMARY KEY, b int)")
         for i in range(100):
             await manager.cql.run_async(f"INSERT INTO {table} (a, b) VALUES ({i}, {i})")
+        manager.ignore_log_patterns.append("crash-before-bootstrapping-node-added")
         await inject_error_one_shot(manager.api, server_a.ip_addr, "crash-before-bootstrapping-node-added")
         try:
             # Timeout fast since we do not expect the operation to complete
