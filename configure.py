@@ -575,7 +575,6 @@ scylla_tests = set([
     'test/boost/symmetric_key_test',
     'test/boost/types_test',
     'test/boost/utf8_test',
-    'test/boost/vector_store_client_test',
     'test/boost/vint_serialization_test',
     'test/boost/virtual_table_mutation_source_test',
     'test/boost/wasm_alloc_test',
@@ -638,6 +637,10 @@ raft_tests = set([
     'test/raft/failure_detector_test',
 ])
 
+vector_search_tests = set([
+    'test/vector_search/vector_store_client_test'
+])
+
 wasms = set([
     'wasm/return_input.wat',
     'wasm/test_complex_null_values.wat',
@@ -665,7 +668,7 @@ lto_binaries = set([
     'scylla'
 ])
 
-tests = scylla_tests | perf_tests | perf_standalone_tests | raft_tests
+tests = scylla_tests | perf_tests | perf_standalone_tests | raft_tests | vector_search_tests
 
 other = set([
     'iotune',
@@ -1647,6 +1650,8 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/raft/helpers.cc',
                                      'test/lib/log.cc',
                                      'service/raft/discovery.cc'] + scylla_raft_dependencies
+
+deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc'] + scylla_tests_dependencies
 
 wasm_deps = {}
 
