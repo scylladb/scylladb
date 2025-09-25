@@ -5251,7 +5251,13 @@ future<> run_controller_test(sstables::compaction_strategy_type compaction_strat
             .available_memory = available_memory,
         };
         auto manager = compaction_manager(std::move(cfg), as, task_manager);
-        auto stop_manager = deferred_stop(manager);
+        auto stop_manager = defer([&] {
+            if (manager.is_running()) {
+                manager.stop().get();
+            } else {
+                manager.get_task_manager_module().stop().get();
+            }
+        });
 
         auto add_sstable = [&env] (table_for_tests& t, uint64_t data_size, int level) {
             auto sst = env.make_sstable(t.schema());
