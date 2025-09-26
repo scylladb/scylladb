@@ -31,6 +31,8 @@
 #include "db/config.hh"
 #include "compaction/time_window_compaction_strategy.hh"
 
+bool is_internal_keyspace(std::string_view name);
+
 namespace cql3 {
 
 namespace statements {
@@ -121,6 +123,10 @@ void create_table_statement::apply_properties_to(schema_builder& builder, const 
     if (valueAlias != null)
         addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
 #endif
+
+    if (!_properties->get_compression_options() && !is_internal_keyspace(keyspace())) {
+        builder.set_compressor_params(db.get_config().sstable_compression_user_table_options());
+    }
 
     _properties->apply_to_builder(builder, _properties->make_schema_extensions(db.extensions()), db, keyspace());
 }

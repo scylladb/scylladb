@@ -32,11 +32,15 @@
 #include "db/tags/extension.hh"
 #include "config.hh"
 #include "extensions.hh"
+#include "sstables/compressor.hh"
 #include "utils/log.hh"
 #include "service/tablet_allocator_fwd.hh"
 #include "utils/config_file_impl.hh"
+#include "exceptions/exceptions.hh"
 #include <seastar/core/metrics_api.hh>
 #include <seastar/core/relabel_config.hh>
+
+static logging::logger cfglogger("config");
 #include <seastar/util/file.hh>
 
 namespace utils {
@@ -115,6 +119,12 @@ static
 json::json_return_type
 error_injection_list_to_json(const std::vector<db::config::error_injection_at_startup>& eil) {
     return value_to_json("error_injection_list");
+}
+
+static
+json::json_return_type
+compression_parameters_to_json(const compression_parameters& cp) {
+    return value_to_json(cp.get_options());
 }
 
 template <>
@@ -303,6 +313,12 @@ const config_type& config_type_for<std::vector<db::object_storage_endpoint_param
 template <>
 const config_type& config_type_for<db::config::UUID>() {
     static config_type ct("UUID", uuid_to_json);
+    return ct;
+}
+
+template <>
+const config_type& config_type_for<compression_parameters>() {
+    static config_type ct("compression parameters", compression_parameters_to_json);
     return ct;
 }
 
@@ -516,6 +532,34 @@ struct convert<utils::UUID> {
             return false;
         }
         return true;
+    }
+};
+
+template<>
+struct convert<compression_parameters> {
+    static bool decode(const Node& node, compression_parameters& cp) {
+        if (!node.IsMap()) {
+            return false;
+        }
+
+        std::map<sstring, sstring> options;
+        for (const auto& kv : node) {
+            options[kv.first.as<sstring>()] = kv.second.as<sstring>();
+        }
+
+        try {
+            cp = compression_parameters(options);
+            return true;
+        } catch (const exceptions::syntax_exception& e) {
+            cfglogger.error("Invalid compression parameters syntax: {}", e.what());
+            return false;
+        } catch (const exceptions::configuration_exception& e) {
+            cfglogger.error("Invalid compression parameters configuration: {}", e.what());
+            return false;
+        } catch (const std::runtime_error& e) {
+            cfglogger.error("Error parsing compression parameters: {}", e.what());
+            return false;
+        }
     }
 };
 
@@ -1274,6 +1318,14 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , enable_sstables_mc_format(this, "enable_sstables_mc_format", value_status::Unused, true, "Enable SSTables 'mc' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , enable_sstables_md_format(this, "enable_sstables_md_format", value_status::Unused, true, "Enable SSTables 'md' format to be used as the default file format.  Deprecated, please use \"sstable_format\" instead.")
     , sstable_format(this, "sstable_format", liveness::LiveUpdate, value_status::Used, "me", "Default sstable file format", {"md", "me"})
+    , sstable_compression_user_table_options(this, "sstable_compression_user_table_options", value_status::Used, compression_parameters{},
+        "Server-global user table compression options. If enabled, all user tables"
+        "will be compressed using the provided options, unless overridden"
+        "by compression options in the table schema. The available options are:\n"
+        "* sstable_compression: The compression algorithm to use. Supported values: LZ4Compressor (default), LZ4WithDictsCompressor, SnappyCompressor, DeflateCompressor, ZstdCompressor, ZstdWithDictsCompressor, '' (empty string; disables compression).\n"
+        "* chunk_length_in_kb: (Default: 4) The size of chunks to compress in kilobytes. Allowed values are powers of two between 1 and 128.\n"
+        "* crc_check_chance: (Default: 1.0) Not implemented (option value is ignored).\n"
+        "* compression_level: (Default: 3) Compression level for ZstdCompressor and ZstdWithDictsCompressor. Higher levels provide better compression ratios at the cost of speed. Allowed values are integers between 1 and 22.")
     , sstable_compression_dictionaries_allow_in_ddl(this, "sstable_compression_dictionaries_allow_in_ddl", liveness::LiveUpdate, value_status::Used, true,
         "Allows for configuring tables to use SSTable compression with shared dictionaries. "
         "If the option is disabled, Scylla will reject CREATE and ALTER statements which try to set dictionary-based sstable compressors.\n"

@@ -107,7 +107,7 @@ public:
 
     using dicts_feature_enabled = bool_class<struct dicts_feature_enabled_tag>;
     using dicts_usage_allowed = bool_class<struct dicts_usage_allowed_tag>;
-    void validate(dicts_feature_enabled, dicts_usage_allowed);
+    void validate(dicts_feature_enabled, dicts_usage_allowed) const;
 
     std::map<sstring, sstring> get_options() const;
 
@@ -123,4 +123,14 @@ public:
 private:
     static void validate_options(const std::map<sstring, sstring>&);
     static algorithm name_to_algorithm(std::string_view name);
+};
+
+// Stream operator for boost::program_options support
+std::istream& operator>>(std::istream& is, compression_parameters& cp);
+
+template <>
+struct fmt::formatter<compression_parameters> : fmt::formatter<std::string_view> {
+    auto format(const compression_parameters& cp, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+        return fmt::format_to(ctx.out(), "{}", cp.get_options());
+    }
 };
