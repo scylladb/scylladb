@@ -17,6 +17,7 @@
 #include <seastar/core/abort_source.hh>
 
 #include "db_clock.hh"
+#include "utils/UUID.hh"
 
 #include <chrono>
 #include <limits>
@@ -51,6 +52,7 @@ public:
         std::chrono::milliseconds rate_limiter_total_delay{}; // total delay due to rate limiting
         std::chrono::milliseconds replay_duration{};
         std::chrono::milliseconds cleanup_duration{};
+        utils::UUID tracing_session_id;
     };
 
 private:
@@ -80,7 +82,7 @@ private:
 
     gc_clock::time_point _last_replay;
 
-    future<std::optional<batchlog_replay_stats>> replay_all_failed_batches(post_replay_cleanup cleanup);
+    future<std::optional<batchlog_replay_stats>> replay_all_failed_batches(post_replay_cleanup cleanup, bool trace);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
@@ -91,7 +93,9 @@ public:
     future<> drain();
     future<> stop();
 
-    future<std::optional<batchlog_replay_stats>> do_batch_log_replay(post_replay_cleanup cleanup);
+    future<std::optional<batchlog_replay_stats>> do_batch_log_replay(post_replay_cleanup cleanup, bool trace = false);
+
+    future<> log_batch_traces(utils::UUID tracing_session_id);
 
     future<size_t> count_all_batches() const;
     db_clock::duration get_batch_log_timeout() const;
