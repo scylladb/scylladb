@@ -332,6 +332,14 @@ public:
             int32_t page_size,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
+    future<utils::UUID> query_internal_with_tracing(
+            const sstring& query_string,
+            db::consistency_level cl,
+            const data_value_list& values,
+            int32_t page_size,
+            bool trace,
+            noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
+
     /*
      * \brief iterate over all cql results using paging
      * An overload of query_internal without query parameters
@@ -498,7 +506,8 @@ private:
             const sstring& query_string,
             db::consistency_level,
             const data_value_list& values,
-            int32_t page_size);
+            int32_t page_size,
+            tracing::trace_state_ptr trace_state = {});
 
     /*!
      * \brief run a query using paging
