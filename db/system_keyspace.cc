@@ -103,6 +103,7 @@ namespace {
             system_keyspace::VIEW_BUILD_STATUS_V2,
             system_keyspace::CDC_STREAMS_STATE,
             system_keyspace::CDC_STREAMS_HISTORY,
+            system_keyspace::ENCRYPTED_KEYS,
             system_keyspace::ROLES,
             system_keyspace::ROLE_MEMBERS,
             system_keyspace::ROLE_ATTRIBUTES,
@@ -130,6 +131,7 @@ namespace {
                 system_keyspace::VIEW_BUILD_STATUS_V2,
                 system_keyspace::CDC_STREAMS_STATE,
                 system_keyspace::CDC_STREAMS_HISTORY,
+                system_keyspace::ENCRYPTED_KEYS,
                 // auth tables
                 system_keyspace::ROLES,
                 system_keyspace::ROLE_MEMBERS,
@@ -1260,6 +1262,21 @@ schema_ptr system_keyspace::view_build_status_v2() {
                 .with_column("view_name", utf8_type, column_kind::partition_key)
                 .with_column("host_id", uuid_type, column_kind::clustering_key)
                 .with_column("status", utf8_type)
+                .with_hash_version()
+                .build();
+    }();
+    return schema;
+}
+
+schema_ptr system_keyspace::encrypted_keys() {
+    static thread_local auto schema = [] {
+        auto id = generate_legacy_id(NAME, ENCRYPTED_KEYS);
+        return schema_builder(NAME, ENCRYPTED_KEYS, std::make_optional(id))
+                .with_column("key_file", utf8_type, column_kind::partition_key)
+                .with_column("cipher", utf8_type, column_kind::partition_key)
+                .with_column("strength", int32_type, column_kind::clustering_key)
+                .with_column("key_id", timeuuid_type, column_kind::clustering_key)
+                .with_column("key", utf8_type)
                 .with_hash_version()
                 .build();
     }();
@@ -2606,7 +2623,7 @@ std::vector<schema_ptr> system_keyspace::all_tables(const db::config& cfg) {
                     v3::cdc_local(),
                     raft(), raft_snapshots(), raft_snapshot_config(), group0_history(), discovery(),
                     topology(), cdc_generations_v3(), topology_requests(), service_levels_v2(), view_build_status_v2(),
-                    dicts(), view_building_tasks(), cdc_streams_state(), cdc_streams_history()
+                    dicts(), view_building_tasks(), cdc_streams_state(), cdc_streams_history(), encrypted_keys()
     });
 
     if (cfg.check_experimental(db::experimental_features_t::feature::BROADCAST_TABLES)) {
