@@ -2347,8 +2347,27 @@ future<> storage_service::bootstrap(std::unordered_set<token>& bootstrap_tokens,
 }
 
 future<std::unordered_map<dht::token_range, inet_address_vector_replica_set>>
-storage_service::get_range_to_address_map(locator::effective_replication_map_ptr erm) const {
-    co_return (co_await locator::get_range_to_address_map(erm, erm->get_token_metadata_ptr()->sorted_tokens())) |
+storage_service::get_range_to_address_map(sstring keyspace, std::optional<table_id> table_id) const {
+    locator::effective_replication_map_ptr erm;
+    utils::chunked_vector<token> tokens;
+
+    if (table_id.has_value()) {
+        auto& cf = _db.local().find_column_family(*table_id);
+        erm = cf.get_effective_replication_map();
+    } else {
+        auto& ks = _db.local().find_keyspace(keyspace);
+        erm = ks.get_static_effective_replication_map();
+    }
+
+    const auto& tm = *erm->get_token_metadata_ptr();
+    if (erm->get_replication_strategy().uses_tablets()) {
+        const auto& tablets = tm.tablets().get_tablet_map(*table_id);
+        tokens = co_await tablets.get_sorted_tokens();
+    } else {
+        tokens = tm.sorted_tokens();
+    }
+
+    co_return (co_await locator::get_range_to_address_map(erm, std::move(tokens))) |
         std::views::transform([&] (auto tid) { return std::make_pair(tid.first,
                 tid.second | std::views::transform([&] (auto id) { return _address_map.get(id); }) | std::ranges::to<inet_address_vector_replica_set>()); }) |
         std::ranges::to<std::unordered_map>();

@@ -528,6 +528,12 @@ class ScyllaRESTAPIClient:
             params = {"table": table}
         return await self.client.get_json(f'/storage_service/describe_ring/{keyspace}', host=node_ip, params=params)
 
+    async def range_to_endpoint_map(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> Any:
+        params = None
+        if (table):
+            params = {"cf": table}
+        return await self.client.get_json(f'/storage_service/range_to_endpoint_map/{keyspace}', host=node_ip, params=params)
+
     async def natural_endpoints(self, node_ip: str, keyspace: str, table: str, key: str) -> Any:
         params = {"cf": table, "key": key}
         return await self.client.get_json(f'/storage_service/natural_endpoints/{keyspace}', host=node_ip, params=params)
