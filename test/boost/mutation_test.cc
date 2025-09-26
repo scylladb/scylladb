@@ -649,6 +649,40 @@ SEASTAR_TEST_CASE(test_flush_in_the_middle_of_a_scan) {
   });
 }
 
+// Iterate over all partitions.  Protocol is the same as std::all_of(),
+// so that iteration can be stopped by returning false.
+static future<bool> for_all_partitions_slow(const replica::column_family& cf, schema_ptr s, reader_permit permit, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) {
+    struct iteration_state {
+        mutation_reader reader;
+        std::function<bool (const dht::decorated_key&, const mutation_partition&)> func;
+        bool ok = true;
+        bool empty = false;
+    public:
+        bool done() const { return !ok || empty; }
+        iteration_state(schema_ptr s, reader_permit permit, const replica::column_family& cf,
+                std::function<bool (const dht::decorated_key&, const mutation_partition&)>&& func)
+            : reader(cf.make_mutation_reader(std::move(s), std::move(permit)))
+            , func(std::move(func))
+        { }
+    };
+
+    return do_with(iteration_state(std::move(s), std::move(permit), cf, std::move(func)), [] (iteration_state& is) {
+        return do_until([&is] { return is.done(); }, [&is] {
+            return read_mutation_from_mutation_reader(is.reader).then([&is](mutation_opt&& mo) {
+                if (!mo) {
+                    is.empty = true;
+                } else {
+                    is.ok = is.func(mo->decorated_key(), mo->partition());
+                }
+            });
+        }).then([&is] {
+            return is.ok;
+        }).finally([&is] {
+            return is.reader.close();
+        });
+    });
+}
+
 SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     return sstables::test_env::do_with_async([] (sstables::test_env& env) {
     auto s = schema_builder(some_keyspace, some_column_family)
@@ -692,7 +726,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
         }
 
         return do_with(std::move(result), [&cf, s, &env, &r1_col, shadow] (auto& result) {
-            return cf.for_all_partitions_slow(s, env.make_reader_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
+            return for_all_partitions_slow(cf, s, env.make_reader_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
                 auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
                 for (const rows_entry& re : mp.range(*s, interval<clustering_key_prefix>())) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));

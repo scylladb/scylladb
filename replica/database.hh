@@ -1307,9 +1307,6 @@ private:
     void recalculate_tablet_count_stats();
     int64_t calculate_tablet_count() const;
 public:
-    // Iterate over all partitions.  Protocol is the same as std::all_of(),
-    // so that iteration can be stopped by returning false.
-    future<bool> for_all_partitions_slow(schema_ptr, reader_permit permit, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const;
 
     friend std::ostream& operator<<(std::ostream& out, const column_family& cf);
     // Testing purposes.
