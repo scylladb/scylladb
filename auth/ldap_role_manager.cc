@@ -233,9 +233,9 @@ future<role_set> ldap_role_manager::query_granted(std::string_view grantee_name,
 }
 
 future<role_to_directly_granted_map>
-ldap_role_manager::query_all_directly_granted() {
+ldap_role_manager::query_all_directly_granted(::service::query_state& qs) {
     role_to_directly_granted_map result;
-    auto roles = co_await query_all();
+    auto roles = co_await query_all(qs);
     for (auto& role: roles) {
         auto granted_set = co_await query_granted(role, recursive_role_query::no);
         for (auto& granted: granted_set) {
@@ -247,8 +247,8 @@ ldap_role_manager::query_all_directly_granted() {
     co_return result;
 }
 
-future<role_set> ldap_role_manager::query_all() {
-    return _std_mgr.query_all();
+future<role_set> ldap_role_manager::query_all(::service::query_state& qs) {
+    return _std_mgr.query_all(qs);
 }
 
 future<> ldap_role_manager::create_role(std::string_view role_name) {
@@ -311,12 +311,12 @@ future<bool> ldap_role_manager::can_login(std::string_view role_name) {
 }
 
 future<std::optional<sstring>> ldap_role_manager::get_attribute(
-        std::string_view role_name, std::string_view attribute_name) {
-    return _std_mgr.get_attribute(role_name, attribute_name);
+        std::string_view role_name, std::string_view attribute_name, ::service::query_state& qs) {
+    return _std_mgr.get_attribute(role_name, attribute_name, qs);
 }
 
-future<role_manager::attribute_vals> ldap_role_manager::query_attribute_for_all(std::string_view attribute_name) {
-    return _std_mgr.query_attribute_for_all(attribute_name);
+future<role_manager::attribute_vals> ldap_role_manager::query_attribute_for_all(std::string_view attribute_name, ::service::query_state& qs) {
+    return _std_mgr.query_attribute_for_all(attribute_name, qs);
 }
 
 future<> ldap_role_manager::set_attribute(

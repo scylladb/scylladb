@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "auth/common.hh"
 #include "auth/standard_role_manager.hh"
 #include "auth/ldap_role_manager.hh"
 #include "auth/password_authenticator.hh"
@@ -407,7 +408,7 @@ SEASTAR_TEST_CASE(ldap_delegates_query_all) {
         auto m = make_ldap_manager(env);
         m->start().get();
         create_ldap_roles(env, *m);
-        const auto roles = m->query_all().get();
+        const auto roles = m->query_all(auth::internal_distributed_query_state()).get();
         BOOST_REQUIRE_EQUAL(1, roles.count("role1"));
         BOOST_REQUIRE_EQUAL(1, roles.count("role2"));
         BOOST_REQUIRE_EQUAL(1, roles.count("jsmith"));
@@ -442,7 +443,7 @@ SEASTAR_TEST_CASE(ldap_delegates_attributes) {
         do_with_mc(env, [&] (service::group0_batch& b) {
             m->create("r", auth::role_config{}, b).get();
         });
-        BOOST_REQUIRE(!m->get_attribute("r", "a").get());
+        BOOST_REQUIRE(!m->get_attribute("r", "a", auth::internal_distributed_query_state()).get());
         do_with_mc(env, [&] (service::group0_batch& b) {
             m->set_attribute("r", "a", "3", b).get();
         });
@@ -451,7 +452,7 @@ SEASTAR_TEST_CASE(ldap_delegates_attributes) {
         do_with_mc(env, [&] (service::group0_batch& b) {
             m->remove_attribute("r", "a", b).get();
         });
-        BOOST_REQUIRE(!m->get_attribute("r", "a").get());
+        BOOST_REQUIRE(!m->get_attribute("r", "a", auth::internal_distributed_query_state()).get());
     });
 }
 

@@ -78,11 +78,11 @@ future<role_set> maintenance_socket_role_manager::query_granted(std::string_view
     return operation_not_supported_exception<role_set>("QUERY GRANTED");
 }
 
-future<role_to_directly_granted_map> maintenance_socket_role_manager::query_all_directly_granted() {
+future<role_to_directly_granted_map> maintenance_socket_role_manager::query_all_directly_granted(::service::query_state&) {
     return operation_not_supported_exception<role_to_directly_granted_map>("QUERY ALL DIRECTLY GRANTED");
 }
 
-future<role_set> maintenance_socket_role_manager::query_all() {
+future<role_set> maintenance_socket_role_manager::query_all(::service::query_state&) {
     return operation_not_supported_exception<role_set>("QUERY ALL");
 }
 
@@ -98,11 +98,11 @@ future<bool> maintenance_socket_role_manager::can_login(std::string_view role_na
     return make_ready_future<bool>(true);
 }
 
-future<std::optional<sstring>> maintenance_socket_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name) {
+future<std::optional<sstring>> maintenance_socket_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name, ::service::query_state&) {
     return operation_not_supported_exception<std::optional<sstring>>("GET ATTRIBUTE");
 }
 
-future<role_manager::attribute_vals> maintenance_socket_role_manager::query_attribute_for_all(std::string_view attribute_name) {
+future<role_manager::attribute_vals> maintenance_socket_role_manager::query_attribute_for_all(std::string_view attribute_name, ::service::query_state&) {
     return operation_not_supported_exception<role_manager::attribute_vals>("QUERY ATTRIBUTE");
 }
 
