@@ -18,27 +18,20 @@
 
 namespace locator {
 future<bool> gossiping_property_file_snitch::property_file_was_modified() {
-    return open_file_dma(_prop_file_name, open_flags::ro)
-    .then([](file f) {
-        return do_with(std::move(f), [] (file& f) {
-            return f.stat();
-        });
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            auto st = f.get();
-
-            if (!_last_file_mod ||
-                _last_file_mod->tv_sec != st.st_mtim.tv_sec) {
-                _last_file_mod = st.st_mtim;
-                return true;
-            } else {
-                return false;
-            }
-        } catch (...) {
-            logger().error("Failed to open {} for read or to get stats", _prop_file_name);
-            throw;
+    try {
+        auto f = co_await open_file_dma(_prop_file_name, open_flags::ro);
+        auto st = co_await f.stat();
+        if (!_last_file_mod ||
+            _last_file_mod->tv_sec != st.st_mtim.tv_sec) {
+            _last_file_mod = st.st_mtim;
+            co_return true;
+        } else {
+            co_return false;
         }
-    });
+    } catch (...) {
+        logger().error("Failed to open {} for read or to get stats", _prop_file_name);
+        throw;
+    }
 }
 
 gossiping_property_file_snitch::gossiping_property_file_snitch(const snitch_config& cfg)
@@ -68,45 +61,34 @@ future<> gossiping_property_file_snitch::start() {
         // minute and load its contents into the gossiper.endpoint_state_map
         //
         _file_reader.set_callback([this] {
-            periodic_reader_callback();
+            (void)periodic_reader_callback();
         });
 
-        return read_property_file().then([this] {
-            start_io();
-            set_snitch_ready();
-            return make_ready_future<>();
-        });
+        co_await read_property_file();
+        start_io();
     }
 
     set_snitch_ready();
-    return make_ready_future<>();
 }
 
-void gossiping_property_file_snitch::periodic_reader_callback() {
+future<> gossiping_property_file_snitch::periodic_reader_callback() {
     _file_reader_runs = true;
-    //FIXME: discarded future.
-    (void)property_file_was_modified().then([this] (bool was_modified) {
-
+    try {
+        bool was_modified = co_await property_file_was_modified();
         if (was_modified) {
-            return read_property_file();
+            co_await read_property_file();
         }
+    } catch (...) {
+        logger().error("Exception has been thrown when parsing the property file.");
+    }
 
-        return make_ready_future<>();
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-        } catch (...) {
-            logger().error("Exception has been thrown when parsing the property file.");
-        }
+    if (_state == snitch_state::stopping || _state == snitch_state::io_pausing) {
+        this->set_stopped();
+    } else if (_state != snitch_state::stopped) {
+        _file_reader.arm(reload_property_file_period());
+    }
 
-        if (_state == snitch_state::stopping || _state == snitch_state::io_pausing) {
-            this->set_stopped();
-        } else if (_state != snitch_state::stopped) {
-            _file_reader.arm(reload_property_file_period());
-        }
-
-        _file_reader_runs = false;
-    });
+    _file_reader_runs = false;
 }
 
 gms::application_state_map gossiping_property_file_snitch::get_app_states() const {
@@ -122,27 +104,26 @@ gms::application_state_map gossiping_property_file_snitch::get_app_states() cons
 }
 
 future<> gossiping_property_file_snitch::read_property_file() {
-    return load_property_file().then([this] {
-        return reload_configuration();
-    }).then_wrapped([this] (auto&& f) {
-        try {
-            f.get();
-            return make_ready_future<>();
-        } catch (...) {
-            //
-            // In case of an error:
-            //    - Halt if in the constructor.
-            //    - Print an error when reloading.
-            //
-            if (_state == snitch_state::initializing) {
-                logger().error("Failed to parse a properties file ({}). Halting...", _prop_file_name);
-                throw;
-            } else {
-                logger().warn("Failed to reload a properties file ({}). Using previous values.", _prop_file_name);
-                return make_ready_future<>();
-            }
+    std::exception_ptr ex;
+    try {
+        co_await load_property_file();
+        co_await reload_configuration();
+    } catch (...) {
+        ex = std::current_exception();
+    }
+    if (ex) {
+        //
+        // In case of an error:
+        //    - Halt if in the constructor.
+        //    - Print an error when reloading.
+        //
+        if (_state == snitch_state::initializing) {
+            logger().error("Failed to parse a properties file ({}). Halting...", _prop_file_name);
+            co_await coroutine::return_exception_ptr(std::move(ex));
+        } else {
+            logger().warn("Failed to reload a properties file ({}). Using previous values.", _prop_file_name);
         }
-    });
+    }
 }
 
 future<> gossiping_property_file_snitch::reload_configuration() {
@@ -170,17 +151,14 @@ future<> gossiping_property_file_snitch::reload_configuration() {
     }
 
     if (_state == snitch_state::initializing || _my_dc != new_dc || _my_rack != new_rack || _prefer_local != new_prefer_local) {
-        return container().invoke_on_all([new_dc, new_rack, new_prefer_local] (snitch_ptr& local_s) {
+        co_await container().invoke_on_all([new_dc, new_rack, new_prefer_local] (snitch_ptr& local_s) {
             local_s->set_my_dc_and_rack(new_dc, new_rack);
             local_s->set_prefer_local(new_prefer_local);
-        }).then([this] {
-            return seastar::async([this] {
-                _reconfigured();
-            });
+        });
+        co_await seastar::async([this] {
+            _reconfigured();
         });
     }
-
-    return make_ready_future<>();
 }
 
 void gossiping_property_file_snitch::set_stopped() {
@@ -223,22 +201,22 @@ void gossiping_property_file_snitch::start_io() {
 
 future<> gossiping_property_file_snitch::stop() {
     if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
-        return make_ready_future<>();
+        co_return;
     }
 
     _state = snitch_state::stopping;
 
-    return stop_io();
+    co_await stop_io();
 }
 
 future<> gossiping_property_file_snitch::pause_io() {
     if (_state == snitch_state::stopped || _state == snitch_state::io_paused) {
-        return make_ready_future<>();
+        co_return;
     }
 
     _state = snitch_state::io_pausing;
 
-    return stop_io();
+    co_await stop_io();
 }
 
 using registry_default = class_registrator<i_endpoint_snitch, gossiping_property_file_snitch, const snitch_config&>;

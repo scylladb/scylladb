@@ -50,7 +50,7 @@ public:
     }
 
 private:
-    void periodic_reader_callback();
+    future<> periodic_reader_callback();
 
     /**
      * Parse the property file and indicate the StorageService and a Gossiper if
