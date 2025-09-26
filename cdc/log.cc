@@ -24,6 +24,7 @@
 #include "index/vector_index.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "replica/database.hh"
+#include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "gms/feature_service.hh"
 #include "schema/schema.hh"
@@ -1935,7 +1936,8 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 // Preimage has been fetched by upper layers.
                 tracing::trace(tr_state, "CDC: Using a prefetched preimage");
                 f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(std::move(options->preimage));
-            } else if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
+            } else if (s->cdc_options().preimage() || s->cdc_options().postimage() ||
+                       (options && options->alternator && _ctxt._proxy.data_dictionary().get_config().alternator_streams_strict_compatibility())) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
