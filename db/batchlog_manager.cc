@@ -255,6 +255,9 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
             }();
 
            if (ttl > 0) {
+            if (utils::get_local_injector().is_enabled("batch_replay_throw")) {
+                throw std::runtime_error("Skipping batch replay due to batch_replay_throw injection");
+            }
             // Origin does the send manually, however I can't see a super great reason to do so.
             // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
             // in both cases.
