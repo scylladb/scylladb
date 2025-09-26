@@ -32,6 +32,11 @@ async def test_mutation_schema_change(manager, random_tables):
         start C
         do lwt write to the same key through C
     """
+    manager.ignore_log_patterns.extend([
+        "utils::injected_error",
+        "Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        "ignore outdated snapshot",
+    ])
     server_a, server_b, server_c = await manager.running_servers()
     t = await random_tables.add_table(ncolumns=5, pks=1)
     manager.driver_close()
@@ -95,6 +100,11 @@ async def test_mutation_schema_change_restart(manager, random_tables):
         start C
         do lwt write to the same key through A
     """
+    manager.ignore_log_patterns.extend([
+        "utils::injected_error",
+        "Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        "ignore outdated snapshot",
+    ])
     server_a, server_b, server_c = await manager.running_servers()
     t = await random_tables.add_table(ncolumns=5, pks=1)
     manager.driver_close()

@@ -22,12 +22,13 @@ class ServerInfo(NamedTuple):
     rpc_address: IPAddress
     datacenter: str
     rack: str
+    pid: int
 
     def __str__(self):
-        return f"Server({self.server_id}, {self.ip_addr}, {self.rpc_address}, {self.datacenter}, {self.rack})"
-    
+        return f"Server({self.server_id}, {self.ip_addr}, {self.rpc_address}, {self.datacenter}, {self.rack}, {self.pid})"
+
     def as_dict(self) -> dict[str, object]:
-        return {"server_id": self.server_id, "ip_addr": self.ip_addr, "rpc_address": self.rpc_address, "datacenter": self.datacenter, "rack": self.rack}
+        return {"server_id": self.server_id, "ip_addr": self.ip_addr, "rpc_address": self.rpc_address, "datacenter": self.datacenter, "rack": self.rack, "pid": self.pid}
 
     def property_file(self) -> dict[str, str]:
         return {"dc": self.datacenter, "rack": self.rack}
