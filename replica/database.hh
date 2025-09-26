@@ -982,7 +982,7 @@ public:
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
-        std::optional<query::querier>* saved_querier = { });
+        std::optional<querier>* saved_querier = { });
 
     // Performs a query on given data source returning data in reconcilable form.
     //
@@ -1008,7 +1008,7 @@ public:
             tracing::trace_state_ptr trace_state,
             query::result_memory_accounter accounter,
             db::timeout_clock::time_point timeout,
-            std::optional<query::querier>* saved_querier = { });
+            std::optional<querier>* saved_querier = { });
 
     void start();
     future<> stop();
@@ -1642,7 +1642,7 @@ private:
     uint32_t _critical_disk_utilization_mode_count = 0;
     bool _shutdown = false;
     bool _enable_autocompaction_toggle = false;
-    query::querier_cache _querier_cache;
+    querier_cache _querier_cache;
 
     std::unique_ptr<db::large_data_handler> _large_data_handler;
     std::unique_ptr<db::large_data_handler> _nop_large_data_handler;
@@ -2033,11 +2033,11 @@ public:
         _querier_cache.set_entry_ttl(entry_ttl);
     }
 
-    const query::querier_cache::stats& get_querier_cache_stats() const {
+    const querier_cache::stats& get_querier_cache_stats() const {
         return _querier_cache.get_stats();
     }
 
-    query::querier_cache& get_querier_cache() {
+    querier_cache& get_querier_cache() {
         return _querier_cache;
     }
 

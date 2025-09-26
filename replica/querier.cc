@@ -15,7 +15,7 @@
 #include "utils/log.hh"
 #include "utils/error_injection.hh"
 
-namespace query {
+namespace replica {
 
 logging::logger qlogger("querier_cache");
 logging::logger qrlogger("querier");
@@ -494,4 +494,4 @@ future<> querier_cache::stop() noexcept {
     }
 }
 
-} // namespace query
+} // namespace replica
