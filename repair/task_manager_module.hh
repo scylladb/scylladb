@@ -112,7 +112,7 @@ private:
     optimized_optional<abort_source::subscription> _abort_subscription;
     std::optional<int> _ranges_parallelism;
     size_t _metas_size = 0;
-    gc_clock::time_point _flush_time;
+    std::optional<gc_clock::time_point> _flush_time = gc_clock::time_point();
     service::frozen_topology_guard _topo_guard;
     bool _skip_flush;
 public:
@@ -134,7 +134,7 @@ public:
         return tasks::is_abortable(!_abort_subscription);
     }
 
-    gc_clock::time_point get_flush_time() const { return _flush_time; }
+    std::optional<gc_clock::time_point> get_flush_time() const { return _flush_time; }
 
     tasks::is_user_task is_user_task() const noexcept override;
     virtual future<> release_resources() noexcept override;
