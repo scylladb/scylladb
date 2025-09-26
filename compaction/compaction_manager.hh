@@ -31,7 +31,7 @@
 #include "strategy_control.hh"
 #include "backlog_controller.hh"
 #include "seastarx.hh"
-#include "sstables/exceptions.hh"
+#include "compaction/exceptions.hh"
 #include "tombstone_gc.hh"
 #include "utils/pluggable.hh"
 #include "compaction/compaction_reenabler.hh"
@@ -624,7 +624,7 @@ public:
 
     void stop_compaction(sstring reason) noexcept;
 
-    sstables::compaction_stopped_exception make_compaction_stopped_exception() const;
+    compaction_stopped_exception make_compaction_stopped_exception() const;
 
     template<typename TaskExecutor, typename... Args>
     requires std::is_base_of_v<compaction_task_executor, TaskExecutor> &&

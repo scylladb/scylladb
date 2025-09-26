@@ -1991,7 +1991,7 @@ void set_snapshot(http_context& ctx, routes& r, sharded<db::snapshot_ctl>& snap_
             if (stats.validation_errors) {
                 co_return json::json_return_type(static_cast<int>(scrub_status::validation_errors));
             }
-        } catch (const sstables::compaction_aborted_exception&) {
+        } catch (const compaction::compaction_aborted_exception&) {
             co_return json::json_return_type(static_cast<int>(scrub_status::aborted));
         } catch (...) {
             apilog.error("scrub keyspace={} tables={} failed: {}", info.keyspace, info.column_families, std::current_exception());
