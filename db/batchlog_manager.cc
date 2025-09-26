@@ -60,8 +60,8 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
 }
 
 future<std::optional<db::batchlog_manager::batchlog_replay_stats>>
-db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
-    return container().invoke_on(0, [cleanup] (auto& bm) -> future<std::optional<db::batchlog_manager::batchlog_replay_stats>> {
+db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup, bool trace) {
+    return container().invoke_on(0, [cleanup, trace] (auto& bm) -> future<std::optional<db::batchlog_manager::batchlog_replay_stats>> {
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
 
@@ -70,11 +70,11 @@ db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
         auto last_replay = gc_clock::now();
         std::optional<batchlog_replay_stats> stats;
         if (dest == 0) {
-            stats = co_await bm.replay_all_failed_batches(cleanup);
+            stats = co_await bm.replay_all_failed_batches(cleanup, trace);
         } else {
-            stats = co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
-                return with_gate(bm._gate, [&bm, cleanup] {
-                    return bm.replay_all_failed_batches(cleanup);
+            stats = co_await bm.container().invoke_on(dest, [cleanup, trace] (auto& bm) {
+                return with_gate(bm._gate, [&bm, cleanup, trace] {
+                    return bm.replay_all_failed_batches(cleanup, trace);
                 });
             });
         }
@@ -163,7 +163,7 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
 }
 
 future<std::optional<db::batchlog_manager::batchlog_replay_stats>>
-db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, bool trace) {
     typedef db_clock::rep clock_type;
 
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
@@ -292,17 +292,18 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
             co_return stop_iteration::no;
     };
 
-    co_return co_await with_gate(_gate, [this, cleanup, batch = std::move(batch), &stats] () mutable -> future<std::optional<batchlog_replay_stats>> {
-        blogger.debug("Started replayAllFailedBatches with cleanup: {}", cleanup);
+    co_return co_await with_gate(_gate, [this, cleanup, trace, batch = std::move(batch), &stats] () mutable -> future<std::optional<batchlog_replay_stats>> {
+        blogger.debug("Started replayAllFailedBatches with cleanup: {}, trace: {}", cleanup, trace);
 
         const gc_clock::time_point replay_start = gc_clock::now();
 
         co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
-        co_await _qp.query_internal(
+        stats.tracing_session_id = co_await _qp.query_internal_with_tracing(
                 format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
                 db::consistency_level::ONE,
                 {},
                 page_size,
+                trace,
                 std::move(batch));
 
         const gc_clock::time_point replay_end = gc_clock::now();
@@ -315,8 +316,33 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
             stats.cleanup_duration = std::chrono::duration_cast<std::chrono::milliseconds>(gc_clock::now() - replay_end);
         }
 
-        blogger.debug("Finished replayAllFailedBatches");
+        blogger.debug("Finished replayAllFailedBatches with trace session id: {}", stats.tracing_session_id);
 
         co_return stats;
     });
+}
+
+future<> db::batchlog_manager::log_batch_traces(utils::UUID tracing_session_id) {
+    if (!tracing_session_id) {
+        co_return;
+    }
+    unsigned tries = 0;
+    bool has_traces = false;
+    do {
+        has_traces = false;
+        co_await _qp.query_internal(fmt::format("SELECT * FROM system_traces.events WHERE session_id = {}", tracing_session_id),
+                [tracing_session_id, &has_traces] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+            has_traces = true;
+            const auto activity = row.get_as<sstring>("activity");
+            if (activity.contains("Page stats")) {
+                blogger.info("Batchlog replay page stats (session_id={}): {}", tracing_session_id, activity);
+            }
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+        if (has_traces) {
+            break;
+        }
+        blogger.trace("No batchlog traces yet for session_id={}, try #{}", tracing_session_id, tries);
+        co_await sleep(std::chrono::seconds(1));
+    } while (tries++ < 10);
 }
