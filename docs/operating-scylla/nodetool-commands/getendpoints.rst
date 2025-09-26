@@ -8,17 +8,20 @@ For example:
 
 ``nodetool getendpoints nba player_name Russell``
 
-==========  ==============  
-Parameter   Description  
-==========  ==============  
-keyspace    keyspace name       
-----------  --------------  
-table       table name           
-----------  --------------  
-key         partition key  
-==========  ==============  
+==============  ==============
+Parameter       Description
+==============  ==============
+keyspace        keyspace name
+--------------  --------------
+table           table name
+--------------  --------------
+key             partition key
+--------------  --------------
+key-components  partition key (alternative to key)
+==============  ==============
 
 In a case of a composite partition key, use ``:`` between columns in the key. All columns in the partition key are required.
+Alternatively, you can use the ``--key-components`` option to specify each component of the partition key separately.
 For example:
 
 .. code:: 
