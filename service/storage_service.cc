@@ -3285,7 +3285,7 @@ future<> storage_service::replicate_to_all_cores(mutable_token_metadata_ptr tmpt
                 auto view_erms = std::move(pending_view_erms[this_shard_id()]);
 
                 co_await utils::clear_gently(erms);
-                co_await utils::clear_gently(tmptr);
+                co_await utils::reset_gently(tmptr);
                 co_await utils::clear_gently(table_erms);
                 co_await utils::clear_gently(view_erms);
             });
