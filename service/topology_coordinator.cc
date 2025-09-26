@@ -1090,7 +1090,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         rtlogger.info("enabled features: {}", features_to_enable);
     }
 
-    future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}) {
+    future<group0_guard> global_token_metadata_barrier(group0_guard&& guard, std::unordered_set<raft::server_id> exclude_nodes = {}, bool* fenced = nullptr) {
         auto version = _topo_sm._topology.version;
         bool drain_failed = false;
         try {
@@ -1108,6 +1108,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         builder.set_fence_version(version);
         auto reason = ::format("advance fence version to {}", version);
         co_await update_topology_state(std::move(guard), {builder.build()}, reason);
+        if (fenced) {
+            *fenced = true;
+        }
         guard = co_await start_operation();
         if (drain_failed) {
             // if drain failed need to wait for fence to be active on all nodes
