@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: (LicenseRef-ScyllaDB-Source-Available-1.0)
  */
 
-#include "multishard_mutation_query.hh"
+#include "multishard_query.hh"
 #include "mutation/json.hh"
 #include "mutation_query.hh"
 #include "partition_slice_builder.hh"

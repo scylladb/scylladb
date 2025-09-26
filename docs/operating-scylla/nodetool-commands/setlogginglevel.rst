@@ -122,7 +122,7 @@ To display the log classes (output changes with each version so your display may
    messaging_service
    metadata_collector
    migration_manager
-   multishard_mutation_query
+   multishard_query
    mutation
    mutation_data
    mutation_fragment_stream_validator

@@ -32,6 +32,8 @@ namespace tracing {
     class trace_state_ptr;
 } // namespace tracing
 
+namespace replica {
+
 /// Run the mutation query on all shards.
 ///
 /// Under the hood it uses a multishard_combining_reader for reading the
@@ -85,3 +87,5 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
         query::result_options opts,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout);
+
+} // namespace replica

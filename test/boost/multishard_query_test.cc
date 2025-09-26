@@ -7,7 +7,7 @@
  */
 
 #include "utils/assert.hh"
-#include "multishard_mutation_query.hh"
+#include "replica/multishard_query.hh"
 #include "schema/schema_registry.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
@@ -196,7 +196,7 @@ static void require_eventually_empty_caches(sharded<replica::database>& db,
     tests::require(eventually_true(aggregated_population_is_zero));
 }
 
-BOOST_AUTO_TEST_SUITE(multishard_mutation_query_test)
+BOOST_AUTO_TEST_SUITE(multishard_query_test)
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
@@ -233,7 +233,7 @@ SEASTAR_THREAD_TEST_CASE(test_abandoned_read) {
     }, cql_config_with_extensions()).get();
 }
 
-} // multishard_mutation_query_test namespace
+} // multishard_query_test namespace
 
 static utils::chunked_vector<mutation> read_all_partitions_one_by_one(sharded<replica::database>& db, schema_ptr s, std::vector<dht::decorated_key> pkeys,
         const query::partition_slice& slice) {
@@ -540,7 +540,7 @@ void check_results_are_equal(utils::chunked_vector<mutation>& results1, utils::c
     }
 }
 
-namespace multishard_mutation_query_test {
+namespace multishard_query_test {
 
 // Best run with SMP>=2
 SEASTAR_THREAD_TEST_CASE(test_read_all) {
@@ -837,7 +837,7 @@ SEASTAR_THREAD_TEST_CASE(test_read_reversed) {
     }, cql_config_with_extensions()).get();
 }
 
-} // multishard_mutation_query_test namespace
+} // multishard_query_test namespace
 
 namespace {
 
@@ -1137,7 +1137,7 @@ run_fuzzy_test_workload(fuzzy_test_config cfg, sharded<replica::database>& db, s
 
 } // namespace
 
-namespace multishard_mutation_query_test {
+namespace multishard_query_test {
 
 SEASTAR_THREAD_TEST_CASE(fuzzy_test) {
     auto cql_cfg = cql_config_with_extensions();
