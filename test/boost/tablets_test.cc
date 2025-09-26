@@ -18,6 +18,7 @@
 #include "service/storage_service.hh"
 #include <fmt/ranges.h>
 #include <seastar/testing/thread_test_case.hh>
+#include "seastar/testing/on_internal_error.hh"
 #include "test/lib/cql_test_env.hh"
 #include "test/lib/log.hh"
 #include "test/lib/simple_schema.hh"
@@ -41,6 +42,7 @@
 #include "utils/to_string.hh"
 #include "service/topology_coordinator.hh"
 #include "service/topology_state_machine.hh"
+#include "service/migration_manager.hh"
 
 #include <boost/regex.hpp>
 #include <atomic>
@@ -328,6 +330,76 @@ SEASTAR_TEST_CASE(test_tablet_metadata_persistence) {
             verify_tablet_metadata_persistence(e, tm, ts);
         }
     }, tablet_cql_test_config());
+}
+
+SEASTAR_THREAD_TEST_CASE(test_invalid_colocated_tables) {
+    auto cfg = tablet_cql_test_config(db::tablets_mode_t::mode::enforced);
+    do_with_cql_env_thread([] (auto& e) {
+        auto& sp = e.get_storage_proxy().local();
+        auto& mm = e.migration_manager().local();
+
+        topology_builder topo(e);
+        topo.add_node(node_state::normal, 1);
+        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 1);
+        auto ksm = e.local_db().find_keyspace(ks_name).metadata();
+
+        const auto t = schema_builder("ks", "t")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .build();
+        const auto t_paxos = schema_builder("ks", "t$paxos")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .build();
+        const auto t_paxos_paxos = schema_builder("ks", "t$paxos$paxos")
+            .with_column("pk", int32_type, column_kind::partition_key)
+            .build();
+
+        // check we can't colocate a new table with another new colocated table
+        // in one prepare_new_column_families_announcement call
+        {
+            utils::chunked_vector<mutation> muts;
+            seastar::testing::scoped_no_abort_on_internal_error abort_guard{};
+            BOOST_CHECK_EXCEPTION(service::prepare_new_column_families_announcement(muts,
+                    sp, *ksm, {t, t_paxos, t_paxos_paxos},
+                    utils::UUID_gen::get_time_UUID().timestamp())
+                .get(),
+                std::runtime_error,
+                [&](const std::runtime_error& e) {
+                    const auto expected_message = ::format("Trying to set co-located table {} with base table {} but it's not a base table.",
+                        t_paxos_paxos->id(), t_paxos->id());
+                    return sstring(e.what()).starts_with(expected_message);
+                });
+        }
+
+        // create a colocated table
+        {
+            auto g = mm.start_group0_operation().get();
+            utils::chunked_vector<mutation> muts;
+            service::prepare_new_column_families_announcement(muts,
+                e.get_storage_proxy().local(), 
+                *ksm, 
+                {t, t_paxos},
+                g.write_timestamp()).get();
+            mm.announce(std::move(muts), std::move(g), "create test tables").get();
+        }
+
+        // check the same with an already existing colocated table
+        {
+            
+            seastar::testing::scoped_no_abort_on_internal_error abort_guard{};
+            BOOST_CHECK_EXCEPTION(service::prepare_new_column_family_announcement(
+                    e.get_storage_proxy().local(),
+                    t_paxos_paxos,
+                    utils::UUID_gen::get_time_UUID().timestamp())
+                .get(),
+                std::runtime_error,
+                [&](const std::runtime_error& e) {
+                    const auto expected_message = ::format("Trying to set co-located table {} with base table {} but it's not a base table.",
+                        t_paxos_paxos->id(), t_paxos->id());
+                    return sstring(e.what()).starts_with(expected_message);
+                });
+        }
+    }, tablet_cql_test_config())
+    .get();
 }
 
 SEASTAR_TEST_CASE(test_tablet_metadata_persistence_with_colocated_tables) {

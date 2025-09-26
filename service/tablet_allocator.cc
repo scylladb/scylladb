@@ -3265,10 +3265,19 @@ public:
             // The key is the base table id, which may be a new table or an existing table.
             const bool colocated_tablets_enabled = _db.features().colocated_tablets;
             std::unordered_map<table_id, std::vector<schema_ptr>> table_groups;
+            std::unordered_set<table_id> colocated_tables;
             for (auto s : cfms) {
                 std::optional<table_id> base_id;
                 if (colocated_tablets_enabled) {
                     base_id = _db.get_base_table_for_tablet_colocation(*s, new_cfms_map);
+                    if (base_id) {
+                        if (colocated_tables.contains(*base_id) || tm->tablets().get_base_table(*base_id) != *base_id) {
+                            on_internal_error(lblogger, 
+                                format("Trying to set co-located table {} with base table {} but it's not a base table.", 
+                                    s->id(), *base_id));
+                        }
+                        colocated_tables.insert(s->id());
+                    }
                 }
                 table_groups[base_id.value_or(s->id())].push_back(s);
             }
