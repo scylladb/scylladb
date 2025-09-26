@@ -17,6 +17,7 @@
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
+#include "sstables/exceptions.hh"
 #include "compaction/compaction_manager.hh"
 #include "utils/log.hh"
 #include "sstable_directory.hh"

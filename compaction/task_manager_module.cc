@@ -870,7 +870,7 @@ future<> shard_reshaping_compaction_task_impl::reshape_compaction_group(compacti
                 co_await dir.remove_unshared_sstables(std::move(sstlist));
                 co_await dir.collect_output_unshared_sstables(std::move(result.new_sstables), sstables::sstable_directory::can_be_remote::no);
             }, info, throw_if_stopping::yes);
-        } catch (sstables::compaction_stopped_exception& e) {
+        } catch (compaction::compaction_stopped_exception& e) {
             dblog.info("Table {}.{} with compaction strategy {} had reshape successfully aborted.", table.schema()->ks_name(), table.schema()->cf_name(), table.get_compaction_strategy().name());
             break;
         } catch (...) {
