@@ -20,6 +20,7 @@ target_sources(test-lib
     data_model.cc
     eventually.cc
     proc_utils.cc
+    gcs_fixture.cc
     )
 target_include_directories(test-lib
   PUBLIC

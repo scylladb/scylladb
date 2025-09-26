@@ -59,6 +59,13 @@ static bool storage_scope_implies(const scopes_type& scopes, const scopes_type& 
     return false;
 }
 
+static auto parse_rfc3339(const std::string& s) {
+    std::chrono::system_clock::time_point t;
+    std::istringstream is(s);
+    is >> std::chrono::parse("%FT%TZ", t);
+    return t;
+}
+
 class utils::gcp::storage::client::object_data_sink : public data_sink_impl {
     shared_ptr<impl> _impl;
     std::string _bucket;
@@ -73,14 +80,15 @@ class utils::gcp::storage::client::object_data_sink : public data_sink_impl {
     seastar::named_gate _gate;
     seastar::semaphore _semaphore;
     std::exception_ptr _exception;
-
+    seastar::abort_source* _as;
 public:
-    object_data_sink(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, rjson::value metadata)
+    object_data_sink(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, rjson::value metadata, seastar::abort_source* as)
         : _impl(i)
         , _bucket(bucket)
         , _object_name(object_name)
         , _metadata(std::move(metadata))
         , _semaphore(1)
+        , _as(as)
     {}
     future<> put(net::packet data) override {
         return fallback_put(std::move(data));
@@ -167,7 +175,7 @@ public:
     }
 };
 
-class utils::gcp::storage::client::object_data_source : public data_source_impl {
+class utils::gcp::storage::client::object_data_source : public seekable_data_source_impl {
     shared_ptr<impl> _impl;
     std::string _bucket;
     std::string _object_name;
@@ -175,16 +183,29 @@ class utils::gcp::storage::client::object_data_source : public data_source_impl 
     uint64_t _generation = 0;
     uint64_t _size = 0;
     uint64_t _position = 0;
+    std::chrono::system_clock::time_point _timestamp;
+    seastar::abort_source* _as;
     std::deque<temporary_buffer<char>> _buffers;
+
+    size_t buffer_size() const {
+        return std::accumulate(_buffers.begin(), _buffers.end(), 0, [](size_t sum, auto& b) { return sum + b.size(); });
+    }
+
 public:
-    object_data_source(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name)
+    object_data_source(shared_ptr<impl> i, std::string_view bucket, std::string_view object_name, seastar::abort_source* as)
         : _impl(i)
         , _bucket(bucket)
         , _object_name(object_name)
+        , _as(as)
     {}
     future<temporary_buffer<char>> get() override;
     future<temporary_buffer<char>> skip(uint64_t n) override;
     future<> read_info();
+
+    future<temporary_buffer<char>> get(size_t limit) override;
+    future<> seek(uint64_t pos) override;
+    future<uint64_t> size() override;
+    future<std::chrono::system_clock::time_point> timestamp() override;
 };
 
 using body_writer = std::function<future<>(output_stream<char>&&)>;
@@ -204,9 +225,9 @@ public:
     impl(const utils::http::url_info&, std::optional<google_credentials>, shared_ptr<seastar::tls::certificate_credentials> creds);
     impl(std::string_view endpoint, std::optional<google_credentials>, shared_ptr<seastar::tls::certificate_credentials> creds);
 
-    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, handler_func_ex, httpclient::method_type op, key_values headers = {});
-    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, rest::httpclient::handler_func, httpclient::method_type op, key_values headers = {});
-    future<rest::httpclient::result_type> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, httpclient::method_type op, key_values headers = {});
+    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, handler_func_ex, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
+    future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, rest::httpclient::handler_func, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
+    future<rest::httpclient::result_type> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
 
     future<> close();
 };
@@ -267,7 +288,7 @@ static future<> backoff(int n) {
  * Performs a REST post/put/get with credential refresh/retry.
  */
 future<> 
-utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers) {
+utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, handler_func_ex handler, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
     int retries = 0;
     bool do_backoff = false;
 
@@ -277,7 +298,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
         req.method(op);
 
         if (do_backoff) {
-            co_await backoff(retries);
+            co_await backoff(retries++);
         }
 
         if (_credentials) {
@@ -316,7 +337,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
                     throw storage_error(int(res._status), co_await get_gcp_error_message(in));
                 }
                 co_await handler(res, in);
-            });
+            }, as);
             break;
         } catch (storage_error& e) {
             gcp_storage.debug("{}: Got unexpected response: {}", _endpoint, e.what());
@@ -347,17 +368,17 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
 }
 
 future<> 
-utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, rest::httpclient::handler_func f, httpclient::method_type op, key_values headers) {
+utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, rest::httpclient::handler_func f, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
     co_await send_with_retry(path, scope, std::move(body), content_type, [f](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
         // ensure these are on our coroutine frame.
         auto& resp_handler = f;
         auto result = co_await util::read_entire_stream_contiguous(in);
         resp_handler(rep, result);
-    }, op, headers);
+    }, op, headers, as);
 }
 
 future<rest::httpclient::result_type> 
-utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, httpclient::method_type op, key_values headers) {
+utils::gcp::storage::client::impl::send_with_retry(const std::string& path, const std::string& scope, body_variant body, std::string_view content_type, httpclient::method_type op, key_values headers, seastar::abort_source* as) {
     rest::httpclient::result_type res;
     co_await send_with_retry(path, scope, std::move(body), content_type, [&res](const seastar::http::reply& r, std::string_view body)  {
         gcp_storage.trace("{}", body);
@@ -365,7 +386,7 @@ utils::gcp::storage::client::impl::send_with_retry(const std::string& path, cons
         res.reply._content = sstring(body);
         res.reply._headers = r._headers;
         res.reply._version = r._version;
-    }, op, headers);
+    }, op, headers, as);
     co_return res;
 }
 
@@ -391,6 +412,8 @@ future<> utils::gcp::storage::client::object_data_sink::acquire_session() {
         , std::move(body)
         , APPLICATION_JSON
         , httpclient::method_type::POST
+        , {}
+        , _as
     );
 
     if (reply.result() != status_type::ok) {
@@ -462,6 +485,7 @@ future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::de
                 , ""s // no content type
                 , httpclient::method_type::PUT
                 , rest::key_values({ { CONTENT_RANGE, range } })
+                , _as
             );
 
             switch (res.result()) {
@@ -531,6 +555,7 @@ future<> utils::gcp::storage::client::object_data_sink::check_upload() {
         , APPLICATION_JSON
         , httpclient::method_type::PUT
         , rest::key_values({ { CONTENT_RANGE, range } })
+        , _as
     );
 
     switch (res.result()) {
@@ -560,6 +585,8 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
         , ""s
         , APPLICATION_JSON
         , httpclient::method_type::DELETE
+        , {}
+        , _as
     );
 
     switch (int(res.result())) {
@@ -580,7 +607,7 @@ future<> utils::gcp::storage::client::object_data_sink::remove_upload() {
 }
 
 // Read a single buffer from the source object
-future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get() {
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get(size_t limit) {
     // If we don't know the source size yet, get the info from server
     if (_size == 0) {
         co_await read_info();
@@ -588,7 +615,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
 
     // If we don't have buffers to give, try getting one from server
     if (_buffers.empty()) {
-        auto to_read = std::min(_size - _position, uint64_t(default_gcp_storage_chunk_size));
+        auto to_read = std::min(_size - _position, limit);
 
         // to_read == 0 -> eof
         if (to_read != 0) {
@@ -604,7 +631,7 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 , ""s
                 , [&](const seastar::http::reply& rep, seastar::input_stream<char>& in) -> future<> {
                     if (rep._status != status_type::ok && rep._status != status_type::partial_content) {
-                        throw failed_operation(fmt::format("Could not read object {}: {} ({}/{})", _bucket, _object_name, _position, _size));
+                        throw failed_operation(fmt::format("Could not read object {}: {} ({}/{} - {})", _bucket, _object_name, _position, _size, int(rep._status)));
                     }
                     auto old = _position;
                     // ensure these are on our coroutine frame.
@@ -617,26 +644,46 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
                 }
                 , httpclient::method_type::GET
                 , rest::key_values({ { RANGE, range } })
+                , _as
             );
         }
     }
 
-    // Now, either buffers have data, or we are EOF.
+    temporary_buffer<char> res;
+
     if (!_buffers.empty()) {
-        auto res = std::move(_buffers.front());
-        _buffers.pop_front();
-        co_return res;
+        auto&& buf = _buffers.front();
+        if (buf.size() >= limit) {
+            res = buf.share(0, limit);
+            buf.trim_front(limit);
+        } else {
+            res = std::move(buf);
+            _buffers.pop_front();
+        }
     }
 
-    co_return temporary_buffer<char>{};
+    co_return res;
 }
 
-future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n) {
-    // If we don't know the source size yet, get the info from server
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::get() {
+    // If we don't have buffers to give, try getting one from server
+    co_return co_await get(default_gcp_storage_chunk_size);
+}
+
+future<> utils::gcp::storage::client::object_data_source::seek(uint64_t pos) {
     if (_size == 0) {
         co_await read_info();
     }
-    // First, skip any data we have in cache
+    auto buf_size = buffer_size();
+    assert(buf_size <= _position);
+    auto read_pos = _position - buf_size;
+    if (pos < read_pos || pos >= _position) {
+        _buffers.clear();
+        _position = std::min(pos, _size);
+        co_return;
+    }
+    auto n = pos - read_pos;
+    // Drop superfluous cache
     while (n > 0 && !_buffers.empty()) {
         auto m = std::min(n, _buffers.front().size());
         _buffers.front().trim_front(m);
@@ -645,10 +692,27 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
         }
         n -= m;
     }
-    // Now, if we have more to skip, just adjust our position.
-    auto skip = std::min(_size - _position, n);
-    _position += skip;
+}
 
+future<uint64_t> utils::gcp::storage::client::object_data_source::size() {
+    if (_size == 0) {
+        co_await read_info();
+    }
+    co_return _size;
+}
+
+future<std::chrono::system_clock::time_point> utils::gcp::storage::client::object_data_source::timestamp() {
+    if (_timestamp.time_since_epoch().count() == 0) {
+        co_await read_info();
+    }
+    co_return _timestamp;
+}
+
+future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::skip(uint64_t n) {
+    auto buf_size = buffer_size();
+    assert(buf_size <= _position);
+    auto read_pos = _position - buf_size;
+    co_await seek(read_pos + n);
     // And get the next buffer
     co_return co_await get();
 }
@@ -663,6 +727,8 @@ future<> utils::gcp::storage::client::object_data_source::read_info() {
         , ""s
         , ""s
         , httpclient::method_type::GET
+        , {}
+        , _as
     );
 
     if (res.result() != status_type::ok) {
@@ -677,6 +743,7 @@ future<> utils::gcp::storage::client::object_data_source::read_info() {
 
     _size = std::stoull(rjson::get<std::string>(item, "size"));
     _generation = std::stoull(rjson::get<std::string>(item, "generation"));
+    _timestamp = parse_rfc3339(rjson::get<std::string>(item, "updated"));
 }
 
 utils::gcp::storage::client::client(std::string_view endpoint, std::optional<google_credentials> c, shared_ptr<seastar::tls::certificate_credentials> certs)
@@ -724,7 +791,9 @@ future<> utils::gcp::storage::client::create_bucket(std::string_view project, st
     co_await create_bucket(project, std::move(meta));
 }
 
-future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket) {
+future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket_in) {
+    std::string bucket(bucket_in);
+
     gcp_storage.debug("Delete bucket {}", bucket);
 
     auto path = fmt::format("/storage/v1/b/{}", bucket);
@@ -751,13 +820,24 @@ future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket) {
 // read all data from network, etc. Thus there is not all that much
 // point in it. Return chunked_vector to avoid large alloc, but keep it
 // in one object... for now...
-future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix) {
-    gcp_storage.debug("List bucket {} (prefix={})", bucket, prefix);
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket_in, std::string_view prefix, bucket_paging& pager) {
+    std::string bucket(bucket_in);
+
+    gcp_storage.debug("List bucket {} (prefix={}, max_results={})", bucket, prefix, pager.max_results);
 
     auto path = fmt::format("/storage/v1/b/{}/o", bucket);
-
+    auto psep = "?";
     if (!prefix.empty()) {
-        path += fmt::format("?prefix={}", prefix);
+        path += fmt::format("{}prefix={}", psep, prefix);
+        psep = "&&";
+    }
+    if (pager.max_results != 0) {
+        path += fmt::format("{}maxResults={}", psep, pager.max_results);
+        psep = "&&";
+    }
+    if (!pager.token.empty()) {
+        path += fmt::format("{}pageToken={}", psep, pager.token);
+        psep = "&&";
     }
 
     utils::chunked_vector<utils::gcp::storage::object_info> result;
@@ -788,6 +868,9 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
             if (!items->IsArray()) {
                 throw failed_operation("Malformed list object items");
             }
+
+            pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
+
             for (auto& item : items->GetArray()) {
                 object_info info;
 
@@ -795,6 +878,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
                 info.content_type = rjson::get_opt<std::string>(item, "contentType").value_or(""s);
                 info.size = std::stoull(rjson::get<std::string>(item, "size"));
                 info.generation = std::stoull(rjson::get<std::string>(item, "generation"));
+                info.modified = parse_rfc3339(rjson::get<std::string>(item, "updated"));
                 result.emplace_back(std::move(info));
             }
 
@@ -805,8 +889,15 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
     co_return result;
 }
 
+future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::storage::client::list_objects(std::string_view bucket, std::string_view prefix) {
+    bucket_paging dummy(0);
+    co_return co_await list_objects(bucket, prefix, dummy);
+}
+
 // See https://cloud.google.com/storage/docs/deleting-objects
-future<> utils::gcp::storage::client::delete_object(std::string_view bucket, std::string_view object_name) {
+future<> utils::gcp::storage::client::delete_object(std::string_view bucket_in, std::string_view object_name_in) {
+    std::string bucket(bucket_in), object_name(object_name_in);
+
     gcp_storage.debug("Delete object {}:{}", bucket, object_name);
 
     auto path = fmt::format("/storage/v1/b/{}/o/{}", bucket, object_name);
@@ -823,6 +914,9 @@ future<> utils::gcp::storage::client::delete_object(std::string_view bucket, std
     case status_type::no_content:
         gcp_storage.debug("Deleted {}:{}", bucket, object_name);
         co_return; // done and happy
+    case status_type::not_found:
+        gcp_storage.debug("Could not delete {}:{} - no such object", bucket, object_name);
+        co_return; // ok...?
     default:
         throw failed_operation(fmt::format("Could not delete object {}:{}: {} ({})", bucket, object_name, res.result()
             , get_gcp_error_message(res.body())
@@ -838,7 +932,9 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std
 }
 
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
-future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std::string_view object_name, std::string_view new_name) {
+future<> utils::gcp::storage::client::rename_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_name_in) {
+    std::string bucket(bucket_in), object_name(object_name_in), new_name(new_name_in);
+
     gcp_storage.debug("Move object {}:{} -> {}", bucket, object_name, new_name);
 
     auto path = fmt::format("/storage/v1/b/{}/o/{}/moveTo/o/{}", bucket, object_name, new_name);
@@ -864,7 +960,9 @@ future<> utils::gcp::storage::client::rename_object(std::string_view bucket, std
 // See https://cloud.google.com/storage/docs/copying-renaming-moving-objects
 // Copying an object in GCP can only process a certain amount of data in one call
 // Must keep doing it until all data is copied, and check response.
-future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name) {
+future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, std::string_view object_name_in, std::string_view new_bucket_in, std::string_view to_name_in) {
+    std::string bucket(bucket_in), object_name(object_name_in), new_bucket(new_bucket_in), to_name(to_name_in);
+
     auto path = fmt::format("/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}", bucket, object_name, new_bucket, to_name);
     std::string body;
 
@@ -903,12 +1001,12 @@ future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::
     co_await copy_object(bucket, object_name, bucket, to_name);
 }
 
-seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata) const {
-    return seastar::data_sink(std::make_unique<object_data_sink>(_impl, bucket, object_name, std::move(metadata)));
+seastar::data_sink utils::gcp::storage::client::create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata, seastar::abort_source* as) const {
+    return seastar::data_sink(std::make_unique<object_data_sink>(_impl, bucket, object_name, std::move(metadata), as));
 }
 
-seastar::data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name) const {
-    return seastar::data_source(std::make_unique<object_data_source>(_impl, bucket, object_name));
+seekable_data_source utils::gcp::storage::client::create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* as) const {
+    return seekable_data_source(std::make_unique<object_data_source>(_impl, bucket, object_name, as));
 }
 
 future<> utils::gcp::storage::client::close() {

@@ -871,6 +871,7 @@ scylla_core = (['message/messaging_service.cc',
                 'compaction/incremental_compaction_strategy.cc',
                 'compaction/incremental_backlog_tracker.cc',
                 'sstables/integrity_checked_file_impl.cc',
+                'sstables/object_storage_client.cc',
                 'sstables/prepended_input_stream.cc',
                 'sstables/m_format_read_helpers.cc',
                 'sstables/sstable_directory.cc',
@@ -1050,6 +1051,7 @@ scylla_core = (['message/messaging_service.cc',
                 'db/virtual_table.cc',
                 'db/virtual_tables.cc',
                 'db/tablet_options.cc',
+                'db/object_storage_endpoint_param.cc',
                 'index/secondary_index_manager.cc',
                 'index/secondary_index.cc',
                 'index/vector_index.cc',
@@ -1399,6 +1401,7 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
     'test/lib/random_schema.cc',
     'test/lib/key_utils.cc',
     'test/lib/proc_utils.cc',
+    'test/lib/gcs_fixture.cc',
 ]
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc', 'utils/exceptions.cc']
