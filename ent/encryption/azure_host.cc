@@ -392,7 +392,7 @@ future<rjson::value> azure_host::impl::send_request(const sstring& host, unsigne
         // may appear only in testing.
         bool is_numeric_host = seastar::net::inet_address::parse_numerical(host).has_value();
         sstring server_name = is_numeric_host ? sstring{} : host;
-        options = { .wait_for_eof_on_shutdown = false, .server_name = server_name };
+        options = { .server_name = server_name, .bye_timeout = std::chrono::seconds(0) };
     }
 
     rest::httpclient client(host, port, std::move(creds), options);
