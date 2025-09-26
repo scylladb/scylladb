@@ -14,8 +14,10 @@
 #include "test/lib/log.hh"
 #include <functional>
 #include <chrono>
+#include <iostream>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
+#include <seastar/core/metrics_api.hh>
 #include <seastar/net/api.hh>
 #include <seastar/http/function_handlers.hh>
 #include <seastar/http/httpd.hh>
@@ -119,6 +121,14 @@ auto create_test_table(cql_test_env& env, const sstring& ks, const sstring& cf) 
     )",
             ks, cf));
     co_return env.local_db().find_schema(ks, cf);
+}
+
+auto get_metrics_value(sstring metric_name, const auto& all_metrics) {
+    const auto& all_metadata = *all_metrics->metadata;
+    const auto m = find_if(cbegin(all_metadata), cend(all_metadata), [&metric_name](const auto& x) {
+        return x.mf.name == metric_name;
+    });
+    return all_metrics->values[distance(cbegin(all_metadata), m)].cbegin();
 }
 
 class configure {
@@ -767,4 +777,30 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_host_resolved_to_multipl
                 co_await responding_s->stop();
                 co_await unavail_s->stop();
             }));
+}
+
+SEASTAR_TEST_CASE(vector_search_metrics_test) {
+    
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set("http://good.authority.here:6080");
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto as = abort_source();
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+                result.get()->throw_if_exception();
+                auto& vs = env.local_qp().vector_store_client();
+
+                vs.start_background_tasks();
+                auto all_metrics = seastar::metrics::impl::get_values();
+                auto dns = get_metrics_value("vector_store_dns_refreshes", all_metrics)->i();
+                dns++;
+                vector_store_client_tester::trigger_dns_resolver(vs);
+                BOOST_CHECK(co_await repeat_until(seconds(1), [&dns]() -> future<bool> {
+                    auto all_metrics = seastar::metrics::impl::get_values();
+                    auto new_dns = get_metrics_value("vector_store_dns_refreshes", all_metrics)->i();
+                    co_return dns == new_dns;
+                }));
+            },
+            cfg);
 }
