@@ -173,7 +173,7 @@ target_sources(scylla-main
     sstable_dict_autotrainer.cc
     exceptions/exceptions.cc
     generic_server.cc
-    debug.cc
+    debug/debug.cc
     init.cc
     keys/keys.cc
     multishard_mutation_query.cc
