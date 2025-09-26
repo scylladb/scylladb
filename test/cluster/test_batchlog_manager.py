@@ -291,3 +291,21 @@ async def test_drop_mutations_for_dropped_table(manager: ManagerClient) -> None:
             return True if batchlog_row_count == 0 else None
 
         await wait_for(batchlog_empty, time.time() + 60)
+
+
+@pytest.mark.asyncio
+async def test_batchlog_traces(manager: ManagerClient) -> None:
+    cmdline=['--logger-log-level', 'batchlog_manager=trace']
+    config = {'write_request_timeout_in_ms': 2000}
+    servers = await manager.servers_add(3, config=config, cmdline=cmdline, auto_rack_dc="dc1")
+    cql, hosts = await manager.get_ready_cql(servers)
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v int, PRIMARY KEY (key, c)) WITH tombstone_gc = {{'mode': 'repair'}}")
+
+        for _ in range(30):
+            await cql.run_async(f"BEGIN BATCH INSERT INTO {ks}.tab (key, c, v) VALUES (0,0,0); INSERT INTO {ks}.tab (key, c, v) VALUES (1,1,1); APPLY BATCH")
+
+        await manager.api.repair(servers[0].ip_addr, ks, "tab")
+
+    assert False

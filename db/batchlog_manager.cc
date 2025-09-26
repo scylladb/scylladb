@@ -59,20 +59,22 @@ db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_key
     });
 }
 
-future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) {
-    return container().invoke_on(0, [cleanup] (auto& bm) -> future<> {
+future<std::optional<db::batchlog_manager::batchlog_replay_stats>>
+db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup, bool trace) {
+    return container().invoke_on(0, [cleanup, trace] (auto& bm) -> future<std::optional<db::batchlog_manager::batchlog_replay_stats>> {
         auto gate_holder = bm._gate.hold();
         auto sem_units = co_await get_units(bm._sem, 1);
 
         auto dest = bm._cpu++ % smp::count;
         blogger.debug("Batchlog replay on shard {}: starts", dest);
         auto last_replay = gc_clock::now();
+        std::optional<batchlog_replay_stats> stats;
         if (dest == 0) {
-            co_await bm.replay_all_failed_batches(cleanup);
+            stats = co_await bm.replay_all_failed_batches(cleanup, trace);
         } else {
-            co_await bm.container().invoke_on(dest, [cleanup] (auto& bm) {
-                return with_gate(bm._gate, [&bm, cleanup] {
-                    return bm.replay_all_failed_batches(cleanup);
+            stats = co_await bm.container().invoke_on(dest, [cleanup, trace] (auto& bm) {
+                return with_gate(bm._gate, [&bm, cleanup, trace] {
+                    return bm.replay_all_failed_batches(cleanup, trace);
                 });
             });
         }
@@ -80,6 +82,7 @@ future<> db::batchlog_manager::do_batch_log_replay(post_replay_cleanup cleanup) 
             bm._last_replay = last_replay;
         });
         blogger.debug("Batchlog replay on shard {}: done", dest);
+        co_return stats;
     });
 }
 
@@ -159,7 +162,8 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     return _write_request_timeout * 2;
 }
 
-future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+future<std::optional<db::batchlog_manager::batchlog_replay_stats>>
+db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, bool trace) {
     typedef db_clock::rep clock_type;
 
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
@@ -167,32 +171,40 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
     auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
-    auto batch = [this, limiter](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    batchlog_replay_stats stats;
+
+    auto batch = [this, limiter, &stats](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
         auto timeout = get_batch_log_timeout();
         if (db_clock::now() < written_at + timeout) {
             blogger.debug("Skipping replay of {}, too fresh", id);
+            ++stats.skipped_batches;
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");
+            ++stats.skipped_batches;
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
 
         // check version of serialization format
         if (!row.has("version")) {
             blogger.warn("Skipping logged batch because of unknown version");
+            ++stats.skipped_batches;
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
 
         auto version = row.get_as<int32_t>("version");
         if (version != netw::messaging_service::current_version) {
             blogger.warn("Skipping logged batch because of incorrect version");
+            ++stats.skipped_batches;
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
+
+        ++stats.replayed_batches;
 
         auto data = row.get_blob_unfragmented("data");
 
@@ -217,8 +229,9 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 mutations.emplace_back(fm->to_mutation(s));
             }
             return mutations;
-        }).then([this, limiter, written_at, size, fms] (utils::chunked_vector<mutation> mutations) {
+        }).then([this, limiter, written_at, size, fms, &stats] (utils::chunked_vector<mutation> mutations) {
             if (mutations.empty()) {
+                ++stats.dropped_batches;
                 return make_ready_future<>();
             }
             const auto ttl = [written_at]() -> clock_type {
@@ -237,13 +250,24 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             }();
 
             if (ttl <= 0) {
+                ++stats.dropped_batches;
                 return make_ready_future<>();
             }
             // Origin does the send manually, however I can't see a super great reason to do so.
             // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
             // in both cases.
             // FIXME: verify that the above is reasonably true.
-            return limiter->reserve(size).then([this, mutations = std::move(mutations)] {
+            auto rl_fut = limiter->reserve(size);
+            const bool rl_engaged = !rl_fut.available();
+            const gc_clock::time_point rl_start = gc_clock::now();
+            if (rl_engaged) {
+                ++stats.rate_limiter_engaged;
+            }
+            return rl_fut.then([this, mutations = std::move(mutations), rl_engaged, rl_start, &stats] () mutable {
+                if (rl_engaged) {
+                    const auto rl_delay = std::chrono::duration_cast<std::chrono::milliseconds>(gc_clock::now() - rl_start);
+                    stats.rate_limiter_total_delay += rl_delay;
+                }
                 _stats.write_attempts += mutations.size();
                 // #1222 - change cl level to ALL, emulating origins behaviour of sending/hinting
                 // to all natural end points.
@@ -254,7 +278,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 auto timeout = db::timeout_clock::now() + write_timeout;
                 return _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
             });
-        }).then_wrapped([this, id](future<> batch_result) {
+        }).then_wrapped([this, id, &stats](future<> batch_result) {
             try {
                 batch_result.get();
             } catch (data_dictionary::no_such_keyspace& ex) {
@@ -269,6 +293,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                 // we have to resort to keeping this batch to next lap.
                 return make_ready_future<>();
             }
+            ++stats.deleted_batches;
             // delete batch
             auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
             auto key = partition_key::from_singular(*schema, id);
@@ -279,23 +304,57 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         }).then([] { return make_ready_future<stop_iteration>(stop_iteration::no); });
     };
 
-    co_await with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
-        blogger.debug("Started replayAllFailedBatches (cpu {})", this_shard_id());
+    co_return co_await with_gate(_gate, [this, cleanup, trace, batch = std::move(batch), &stats] () mutable -> future<std::optional<batchlog_replay_stats>> {
+        blogger.debug("Started replayAllFailedBatches with cleanup: {}, trace: {}", cleanup, trace);
+
+        const gc_clock::time_point replay_start = gc_clock::now();
+
         co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
-        co_await _qp.query_internal(
+        stats.tracing_session_id = co_await _qp.query_internal_with_tracing(
                 format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
                 db::consistency_level::ONE,
                 {},
                 page_size,
-                std::move(batch)).then([this, cleanup] {
-            if (cleanup == post_replay_cleanup::no) {
-                return make_ready_future<>();
-            }
+                trace,
+                std::move(batch));
+
+        const gc_clock::time_point replay_end = gc_clock::now();
+        stats.replay_duration = std::chrono::duration_cast<std::chrono::milliseconds>(replay_end - replay_start);
+
+        if (cleanup == post_replay_cleanup::yes) {
             // Replaying batches could have generated tombstones, flush to disk,
             // where they can be compacted away.
-            return replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
-        }).then([] {
-            blogger.debug("Finished replayAllFailedBatches");
-        });
+            co_await replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+            stats.cleanup_duration = std::chrono::duration_cast<std::chrono::milliseconds>(gc_clock::now() - replay_end);
+        }
+
+        blogger.debug("Finished replayAllFailedBatches with trace session id: {}", stats.tracing_session_id);
+
+        co_return stats;
     });
+}
+
+future<> db::batchlog_manager::log_batch_traces(utils::UUID tracing_session_id) {
+    if (!tracing_session_id) {
+        co_return;
+    }
+    unsigned tries = 0;
+    bool has_traces = false;
+    do {
+        has_traces = false;
+        co_await _qp.query_internal(fmt::format("SELECT * FROM system_traces.events WHERE session_id = {}", tracing_session_id),
+                [tracing_session_id, &has_traces] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+            has_traces = true;
+            const auto activity = row.get_as<sstring>("activity");
+            if (activity.contains("Page stats")) {
+                blogger.info("Batchlog replay page stats (session_id={}): {}", tracing_session_id, activity);
+            }
+            return make_ready_future<stop_iteration>(stop_iteration::no);
+        });
+        if (has_traces) {
+            break;
+        }
+        blogger.trace("No batchlog traces yet for session_id={}, try #{}", tracing_session_id, tries);
+        co_await sleep(std::chrono::seconds(1));
+    } while (tries++ < 10);
 }
