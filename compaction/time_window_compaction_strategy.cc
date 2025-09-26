@@ -11,6 +11,7 @@
 #include "mutation/mutation_source_metadata.hh"
 #include "cql3/statements/property_definitions.hh"
 #include "sstables/sstables.hh"
+#include "sstables/sstable_set_impl.hh"
 #include "compaction_strategy_state.hh"
 
 #include <ranges>
@@ -547,6 +548,10 @@ time_window_compaction_strategy::get_cleanup_compaction_jobs(compaction_group_vi
         std::move(per_window_jobs.begin(), per_window_jobs.end(), std::back_inserter(ret));
     }
     return ret;
+}
+
+std::unique_ptr<sstables::sstable_set_impl> time_window_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
+    return std::make_unique<sstables::time_series_sstable_set>(ts.schema(), _options.enable_optimized_twcs_queries);
 }
 
 }

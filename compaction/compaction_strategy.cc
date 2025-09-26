@@ -53,6 +53,11 @@ std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compact
     }) | std::ranges::to<std::vector>();
 }
 
+std::unique_ptr<sstables::sstable_set_impl>
+compaction_strategy_impl::make_sstable_set(const compaction_group_view& ts) const {
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
+}
+
 bool compaction_strategy_impl::worth_dropping_tombstones(const sstables::shared_sstable& sst, gc_clock::time_point compaction_time, const compaction_group_view& t) {
     if (_disable_tombstone_compaction) {
         return false;
@@ -736,6 +741,12 @@ mutation_reader_consumer compaction_strategy::make_interposer_consumer(const mut
 
 bool compaction_strategy::use_interposer_consumer() const {
     return _compaction_strategy_impl->use_interposer_consumer();
+}
+
+sstables::sstable_set
+compaction_strategy::make_sstable_set(const compaction::compaction_group_view& ts) const {
+    return sstables::sstable_set(
+            _compaction_strategy_impl->make_sstable_set(ts));
 }
 
 compaction_strategy make_compaction_strategy(compaction_strategy_type strategy, const std::map<sstring, sstring>& options) {
