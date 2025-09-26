@@ -1295,3 +1295,83 @@ async def test_repair_with_invalid_session_id(manager: ManagerClient):
 
     matches = [await log.grep("std::runtime_error \(Session not found", from_mark=mark) for log, mark in zip(logs, marks)]
     assert sum(len(x) for x in matches) > 0
+
+@pytest.mark.asyncio
+async def test_moving_replica_to_replica(manager: ManagerClient):
+    """
+    Verify that trying to move a tablet replica to a node that is already
+    a replica is prevented with an appropriate error message.
+    """
+
+    ks = "ks"
+    table = "my_table"
+
+    # For convenience when moving tablets.
+    cmdline = ["--smp=1"]
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, auto_rack_dc="dc1")
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    cql, _ = await manager.get_ready_cql([s1, s2])
+
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 2}} "
+                        f"AND tablets = {{'enabled': true, 'initial': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+    await cql.run_async(f"INSERT INTO {ks}.{table} (pk, ck, v) VALUES (1, 1, 1)")
+
+    # Doesn't matter. There's only one tablet.
+    tablet_token = 0
+
+    with pytest.raises(Exception, match=rf"Tablet .* has replica on {host_id2}"):
+        await manager.api.move_tablet(
+            node_ip=s1.ip_addr,
+            ks=ks,
+            table=table,
+            src_host=host_id1,
+            src_shard=0,
+            dst_host=host_id2,
+            dst_shard=0,
+            token=tablet_token)
+
+@pytest.mark.asyncio
+async def test_moving_replica_within_single_rack(manager: ManagerClient):
+    """
+    Verify that it's possible to move a tablet from a replica node to a node
+    that's not a replica.
+    """
+
+    ks = "ks"
+    table = "my_table"
+
+    # For convenience when moving tablets.
+    cmdline = ["--smp=1"]
+    s1, s2 = await manager.servers_add(2, cmdline=cmdline, property_file={"dc": "dc1", "rack": "r1"})
+
+    host_id1 = await manager.get_host_id(s1.server_id)
+    host_id2 = await manager.get_host_id(s2.server_id)
+
+    cql, _ = await manager.get_ready_cql([s1, s2])
+
+    await cql.run_async(f"CREATE KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': 1}} "
+                        f"AND tablets = {{'enabled': true, 'initial': 1}}")
+    await cql.run_async(f"CREATE TABLE {ks}.{table} (pk int, ck int, v int, PRIMARY KEY (pk, ck))")
+    await cql.run_async(f"INSERT INTO {ks}.{table} (pk, ck, v) VALUES (1, 1, 1)")
+
+    # Doesn't matter. There's only one tablet.
+    tablet_token = 0
+    host_id, _ = await get_tablet_replica(manager, s1, ks, table, tablet_token)
+
+    if host_id != host_id1:
+        s1, s2 = s2, s1
+        host_id1, host_id2 = host_id2, host_id1
+
+    await manager.api.move_tablet(
+        node_ip=s1.ip_addr,
+        ks=ks,
+        table=table,
+        src_host=host_id1,
+        src_shard=0,
+        dst_host=host_id2,
+        dst_shard=0,
+        token=tablet_token)
