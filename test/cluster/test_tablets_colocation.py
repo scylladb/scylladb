@@ -439,3 +439,29 @@ async def test_repair_colocated_base_and_view(manager: ManagerClient):
         rows = await cql_server2.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv", consistency_level=ConsistencyLevel.ONE))
         pks = set(row.pk for row in rows)
         assert 1 in pks and 2 in pks
+
+# Try to create a colocated table of a colocated table by creating a colocated MV table
+# and executing a LWT query on it that will create a colocated paxos table for the MV.
+# The paxos table should be created as colocated with the MV's base table because we don't
+# support multiple levels of colocation.
+@pytest.mark.asyncio
+async def test_colocated_table_of_colocated_table(manager: ManagerClient):
+    await manager.servers_add(1)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } AND tablets = {'initial': 4}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int, c int, v int, PRIMARY KEY(pk, c))")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+        await cql.run_async(f"INSERT INTO {ks}.test(pk, c, v) VALUES(1,1,1)")
+
+        # read with serial consistency from the MV. this will create a colocated paxos table for the MV.
+        await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv WHERE pk=1 AND c=1", consistency_level=ConsistencyLevel.SERIAL))
+
+        base_table_id = await manager.get_table_id(ks, 'test')
+        mv_table_id = await manager.get_view_id(ks, 'tv')
+        paxos_table_id = await manager.get_table_id(ks, f'tv$paxos')
+
+        rows = await cql.run_async(f"SELECT base_table FROM system.tablets WHERE table_id={paxos_table_id}")
+        assert rows[0].base_table == base_table_id
+
+        rows = await cql.run_async(f"SELECT base_table FROM system.tablets WHERE table_id={mv_table_id}")
+        assert rows[0].base_table == base_table_id

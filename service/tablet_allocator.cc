@@ -3268,7 +3268,11 @@ public:
             for (auto s : cfms) {
                 std::optional<table_id> base_id;
                 if (colocated_tablets_enabled) {
-                    base_id = _db.get_base_table_for_tablet_colocation(*s, new_cfms_map);
+                    // choose base table for colocation.
+                    // if our base table is a colocated table, take its base table as our base table, because we
+                    // want to have only a single level of colocation.
+                    base_id = _db.get_base_table_for_tablet_colocation(*s, new_cfms_map)
+                        .transform([&] (table_id id) { return tm->tablets().get_base_table(id); });
                 }
                 table_groups[base_id.value_or(s->id())].push_back(s);
             }
