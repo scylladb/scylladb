@@ -41,22 +41,26 @@ static const std::unordered_map<resource_kind, std::size_t> max_parts{
         {resource_kind::functions, 2}};
 
 static permission_set applicable_permissions(const data_resource_view& dv) {
-    if (dv.table()) {
-        return permission_set::of<
+    
+    // We only support VECTOR_SEARCH_INDEXING permission for ALL KEYSPACES.
+
+    auto set = permission_set::of<
                 permission::ALTER,
                 permission::DROP,
                 permission::SELECT,
                 permission::MODIFY,
                 permission::AUTHORIZE>();
+
+    if (!dv.table()) {
+        set.add(permission_set::of<permission::CREATE>());
     }
 
-    return permission_set::of<
-            permission::CREATE,
-            permission::ALTER,
-            permission::DROP,
-            permission::SELECT,
-            permission::MODIFY,
-            permission::AUTHORIZE>();
+    if (!dv.table() && !dv.keyspace()) {
+        set.add(permission_set::of<permission::VECTOR_SEARCH_INDEXING>());
+    }
+
+    return set;
+        
 }
 
 static permission_set applicable_permissions(const role_resource_view& rv) {
@@ -97,7 +101,9 @@ static permission_set applicable_permissions(const functions_resource_view& fv) 
             permission::EXECUTE>();
 }
 
-resource::resource(resource_kind kind) : _kind(kind) {
+resource::resource(resource_kind kind, bool is_vector_indexed)
+    : _kind(kind)
+    , _is_vector_indexed_table(is_vector_indexed) {
     _parts.emplace_back(roots.at(kind));
 }
 
@@ -110,6 +116,12 @@ resource::resource(data_resource_t, std::string_view keyspace) : resource(resour
 }
 
 resource::resource(data_resource_t, std::string_view keyspace, std::string_view table) : resource(resource_kind::data) {
+    _parts.emplace_back(keyspace);
+    _parts.emplace_back(table);
+}
+
+resource::resource(data_resource_t, std::string_view keyspace, std::string_view table, bool is_vector_indexed)
+    : resource(resource_kind::data, is_vector_indexed) {
     _parts.emplace_back(keyspace);
     _parts.emplace_back(table);
 }

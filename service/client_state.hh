@@ -332,7 +332,7 @@ public:
     future<> has_all_keyspaces_access(auth::permission) const;
     future<> has_keyspace_access(const sstring&, auth::permission) const;
     future<> has_column_family_access(const sstring&, const sstring&, auth::permission,
-                                      auth::command_desc::type = auth::command_desc::type::OTHER) const;
+                                      auth::command_desc::type = auth::command_desc::type::OTHER, bool is_vector_indexed = false) const;
     future<> has_schema_access(const schema& s, auth::permission p) const;
     future<> has_schema_access(const sstring&, const sstring&, auth::permission p) const;
 
@@ -342,10 +342,14 @@ public:
 private:
     future<> check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const;
     future<> has_access(const sstring& keyspace, auth::command_desc) const;
+    sstring generate_authorization_error_msg(const auth::command_desc&) const;
+    sstring generate_authorization_error_msg(const auth::command_desc_with_permission_set&) const;
 
 public:
-    future<bool> check_has_permission(auth::command_desc) const;
-    future<> ensure_has_permission(auth::command_desc) const;
+    template<typename Cmd> future<bool> check_has_permission(Cmd) const;
+    template<typename Cmd> future<> ensure_has_permission(Cmd) const;
+    
+    
     future<> maybe_update_per_service_level_params();
     void update_per_service_level_params(qos::service_level_options& slo);
 
