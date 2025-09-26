@@ -1931,25 +1931,23 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             transformer trans(_ctxt, s, m.decorated_key(), options);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
-            if (s->cdc_options().preimage() || s->cdc_options().postimage() || (options && options->alternator)) {
+            if (options && options->preimage && !options->preimage->empty()) {
+                // Preimage has been fetched by upper layers.
+                tracing::trace(tr_state, "CDC: Using a prefetched preimage");
+                f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(std::move(options->preimage));
+            } else if (s->cdc_options().preimage() || s->cdc_options().postimage()) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
-                if (options && options->preimage && !options->preimage->empty()) {
-                    tracing::trace(tr_state, "CDC: Using a prefetched preimage");
-                    // Preimage has been fetched by upper layers.
-                    f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(std::move(options->preimage));
-                } else {
-                    tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
-                    f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
-                        auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
-                        cdc_stats.counters_total.preimage_selects++;
-                        if (f.failed()) {
-                            cdc_stats.counters_failed.preimage_selects++;
-                        }
-                        return f;
-                    });
-                }
+                tracing::trace(tr_state, "CDC: Selecting preimage for {}", m.decorated_key());
+                f = trans.pre_image_select(qs.get_client_state(), write_cl, m).then_wrapped([this] (future<lw_shared_ptr<cql3::untyped_result_set>> f) {
+                    auto& cdc_stats = _ctxt._proxy.get_cdc_stats();
+                    cdc_stats.counters_total.preimage_selects++;
+                    if (f.failed()) {
+                        cdc_stats.counters_failed.preimage_selects++;
+                    }
+                    return f;
+                });
             } else {
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
