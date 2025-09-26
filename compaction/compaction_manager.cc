@@ -561,6 +561,10 @@ public:
     virtual void abort() noexcept override {
         return compaction_task_executor::abort(_as);
     }
+
+    bool is_major_compaction() const noexcept override {
+        return true;
+    }
 protected:
     virtual future<> run() override {
         return perform();
