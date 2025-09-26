@@ -751,14 +751,7 @@ def compare_events(expected_events, output, mode, expected_region):
             return False
     return True
 
-# Convenience function used to implement several tests below. It runs a given
-# function "updatefunc" which is supposed to do some updates to the table
-# and also return an expected_events list. do_test() then fetches the streams
-# data and compares it to the expected_events using compare_events().
-def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p = random_string(), c = random_string()):
-    table, arn = test_table_ss_stream
-    iterators = latest_iterators(dynamodbstreams, arn)
-    expected_events = updatefunc(table, p, c)
+def fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_events, mode):
     # Updating the stream is asynchronous. Moreover, it may even be delayed
     # artificially (see Alternator's alternator_streams_time_window_s config).
     # So if compare_events() reports the stream data is missing some of the
@@ -780,6 +773,26 @@ def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p
         time.sleep(0.5)
     # If we're still here, the last compare_events returned false.
     pytest.fail('missing events in output: {}'.format(output))
+
+# Convenience function used to implement several tests below. It runs a given
+# function "updatefunc" which is supposed to do some updates to the table
+# and also return an expected_events list. do_test() then fetches the streams
+# data and compares it to the expected_events using compare_events().
+def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p = random_string(), c = random_string()):
+    table, arn = test_table_ss_stream
+    iterators = latest_iterators(dynamodbstreams, arn)
+    expected_events = updatefunc(table, p, c)
+    fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_events, mode)
+
+def do_batch_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, item_count = 3):
+    p = [random_string() for _ in range(item_count)]
+    c = [random_string() for _ in range(item_count)]
+    assert len(list(set(p) & set(c))) == 0, "Some randomly-generated keys are identical, please re-run the test."
+
+    table, arn = test_table_ss_stream
+    iterators = latest_iterators(dynamodbstreams, arn)
+    expected_events = updatefunc(table, p, c)
+    fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_events, mode)
 
 # Test a single PutItem of a new item. Should result in a single INSERT
 # event. Reproduces #6930.
@@ -1359,6 +1372,57 @@ def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams)
 def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
         do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
+
+def do_updates_2_batch(table, ps, cs):
+    events = []
+    # Deleting non-existent items shouldn't produce events.
+    table.meta.client.batch_write_item(RequestItems = {
+        table.name: [{'DeleteRequest': {'Key': {'p': p, 'c': c}}} for p, c in zip(ps, cs)]
+    })
+    # Emit a separate event for each item in the batch.
+    table.meta.client.batch_write_item(RequestItems = {
+        table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': 1}}} for p, c in zip(ps, cs)]
+    })
+    events.extend([['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 1}] for p, c in zip(ps, cs)])
+    # Overwriting with identical items shouldn't produce any events
+    table.meta.client.batch_write_item(RequestItems = {
+        table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': 1}}} for p, c in zip(ps, cs)]
+    })
+    # ... but overwriting with different items should be reported as MODIFY.
+    table.meta.client.batch_write_item(RequestItems = {
+        table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': 2}}} for p, c in zip(ps, cs)]
+    })
+    events.extend([['MODIFY', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 1}] for p, c in zip(ps, cs)])
+    return events
+
+# Deleting non-existent items shouldn't produce events.
+def test_streams_batch_non_existent(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, ps, cs):
+        table.meta.client.batch_write_item(RequestItems = {
+            table.name: [{'DeleteRequest': {'Key': {'p': p, 'c': c}}} for p, c in zip(ps, cs)]
+        })
+        return []
+    with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
+        do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+        do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+
+# def test_streams_2_batch_keys_only(test_table_ss_keys_only, dynamodb, dynamodbstreams):
+#     with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
+#         do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates_2_batch, 'KEYS_ONLY')
+
+# def test_streams_2_batch_new_image(test_table_ss_new_image, dynamodb, dynamodbstreams):
+#     with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
+#         do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates_2_batch, 'NEW_IMAGE')
+
+# def test_streams_2_batch_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams):
+#     with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
+#         do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates_2_batch, 'OLD_IMAGE')
+
+# def test_streams_2_batch_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+#     with scylla_config_temporary(dynamodb, 'alternator_streams_strict_compatibility', 'true'):
+#         do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_2_batch, 'NEW_AND_OLD_IMAGES')
 
 # A fixture which creates a test table with a stream enabled, and returns a
 # bunch of interesting information collected from the CreateTable response.
