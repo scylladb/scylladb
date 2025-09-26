@@ -148,7 +148,7 @@ async def test_autotoogle_compaction(manager: ManagerClient, volumes_factory: Ca
                     mark, _ = await log.wait_for("compaction_manager - Enabled", from_mark=mark)
 
                 await manager.api.keyspace_compaction(servers[0].ip_addr, ks)
-                await log.wait_for(rf"Compact {ks}\.{table} .* Compacted .* sstables to .*", from_mark=mark)
+                await log.wait_for(rf"Major {ks}\.{table} .* Compacted .* sstables to .*", from_mark=mark)
 
 
 @pytest.mark.asyncio

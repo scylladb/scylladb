@@ -20,7 +20,7 @@
 namespace compaction {
 
 enum class compaction_type {
-    Compaction = 0,
+    Compaction = 0, // Used only for regular compactions
     Cleanup = 1,
     Validation = 2, // Origin uses this for a compaction that is used exclusively for repair
     Scrub = 3,
@@ -29,6 +29,7 @@ enum class compaction_type {
     Upgrade = 6,
     Reshape = 7,
     Split = 8,
+    Major = 9,
 };
 
 struct compaction_completion_desc {
@@ -48,6 +49,8 @@ using compaction_sstable_replacer_fn = std::function<void(compaction_completion_
 class compaction_type_options {
 public:
     struct regular {
+    };
+    struct major {
     };
     struct cleanup {
     };
@@ -88,7 +91,7 @@ public:
         mutation_writer::classify_by_token_group classifier;
     };
 private:
-    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split>;
+    using options_variant = std::variant<regular, cleanup, upgrade, scrub, reshard, reshape, split, major>;
 
 private:
     options_variant _options;
@@ -108,6 +111,10 @@ public:
 
     static compaction_type_options make_regular() {
         return compaction_type_options(regular{});
+    }
+
+    static compaction_type_options make_major() {
+        return compaction_type_options(major{});
     }
 
     static compaction_type_options make_cleanup() {
