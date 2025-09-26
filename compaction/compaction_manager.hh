@@ -424,12 +424,12 @@ public:
 
 private:
     std::vector<shared_ptr<compaction_task_executor>>
-    do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept;
-    future<> stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt = {}) noexcept;
+    do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt, bool skip_major_compaction = false) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt = {}, bool skip_major_compaction = false) noexcept;
 
 public:
     // Stops ongoing compaction of a given table and/or compaction_type.
-    future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<compaction_type> type_opt = {}) noexcept;
+    future<> stop_ongoing_compactions(sstring reason, compaction::compaction_group_view* t = nullptr, std::optional<compaction_type> type_opt = {}, bool skip_major_compaction = false) noexcept;
 
     future<> await_ongoing_compactions(compaction_group_view* t);
 
