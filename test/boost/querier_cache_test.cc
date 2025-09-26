@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "mutation_query.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"

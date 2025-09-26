@@ -24,7 +24,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "types/types.hh"
 #include "reader_concurrency_semaphore.hh"
 
