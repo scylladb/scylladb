@@ -179,7 +179,6 @@ target_sources(scylla-main
     mutation_query.cc
     node_ops/task_manager_module.cc
     partition_slice_builder.cc
-    querier.cc
     query/query.cc
     query_ranges_to_vnodes.cc
     query/query-result-set.cc

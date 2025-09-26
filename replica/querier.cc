@@ -8,7 +8,7 @@
 
 #include <seastar/core/coroutine.hh>
 
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "dht/i_partitioner.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"

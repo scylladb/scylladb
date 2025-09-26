@@ -22,7 +22,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/test_utils.hh"
 
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "mutation_query.hh"
 #include <seastar/core/do_with.hh>
 #include <seastar/core/thread.hh>

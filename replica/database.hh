@@ -51,7 +51,7 @@
 #include "dirty_memory_manager.hh"
 #include "reader_concurrency_semaphore_group.hh"
 #include "db/timeout_clock.hh"
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "cache_temperature.hh"
 #include <unordered_set>
 #include "utils/error_injection.hh"
