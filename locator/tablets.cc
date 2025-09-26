@@ -370,6 +370,10 @@ future<> tablet_metadata::set_colocated_table(table_id id, table_id base_id) {
         _table_groups.erase(it);
     }
 
+    if (!_table_groups.contains(base_id)) {
+        on_internal_error(tablet_logger, format("Trying to set co-located table {} with base table {} but it's not a base table.", id, base_id));
+    }
+
     if (auto it = _base_table.find(id); it == _base_table.end()) {
         _base_table[id] = base_id;
         _table_groups[base_id].push_back(id);

@@ -6631,6 +6631,16 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
             auto msg = format("Cannot use LightWeight Transactions for table {}.{}: LWT is not yet supported with tablets", schema->ks_name(), schema->cf_name());
             co_await coroutine::return_exception(exceptions::invalid_request_exception(msg));
         }
+        if (schema->is_view()) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                format("LWT is not supported on views: {}.{}", schema->ks_name(), schema->cf_name())
+            ));
+        }
+        if (cdc::is_log_schema(*schema)) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                format("LWT is not supported on CDC log tables: {}.{}", schema->ks_name(), schema->cf_name())
+            ));
+        }
         co_await remote().paxos_store().ensure_initialized(*schema, write_timeout);
     }
 
