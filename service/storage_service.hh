@@ -685,11 +685,23 @@ public:
      *
      * @param keyspaceName keyspace name also known as keyspace
      * @param cf Column family name
-     * @param key key for which we need to find the endpoint
+     * @param key Nodetool style key for which we need to find the endpoint
      * @return the endpoint responsible for this key
      */
-    inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace,
-            const sstring& cf, const sstring& key) const;
+    inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace, const sstring& cf, const sstring& key) const;
+    /**
+     * This method returns the N endpoints that are responsible for storing the
+     * specified key i.e for replication.
+     *
+     * @param keyspaceName keyspace name also known as keyspace
+     * @param cf Column family name
+     * @param key_components the components of the partition key for which we need to find the endpoint
+     * @return the endpoint responsible for this key
+     */
+    inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace, const sstring& cf, const std::vector<sstring>& key_components) const;
+
+private:
+    inet_address_vector_replica_set get_natural_endpoints(const sstring& keyspace, const schema_ptr& schema, const replica::column_family& cf, const partition_key& pk) const;
 
 public:
     future<> decommission();
