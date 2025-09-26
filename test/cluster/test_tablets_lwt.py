@@ -803,3 +803,30 @@ async def test_no_uncertainty_for_reads(manager: ManagerClient):
         row = rows[0]
         assert row.pk == 1
         assert row.c == 2
+
+
+@pytest.mark.asyncio
+async def test_lwts_for_special_tables(manager: ManagerClient):
+    """
+    SELECT commands with SERIAL consistency level are historically allowed for vnode-based views,
+    even though they don't provide linearizability guarantees. We prohibit LWTs for tablet-based views,
+    but preserve old behavior for vnode-based view for compatibility. Similar logic is applied to
+    CDC log tables.
+    """
+    cmdline = [
+        '--logger-log-level', 'paxos=trace'
+    ]
+    await manager.servers_add(1, cmdline=cmdline)
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1 } AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int, c int, v int, PRIMARY KEY(pk, c)) WITH cdc = {{'enabled': true}}")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.tv AS SELECT * FROM {ks}.test WHERE pk IS NOT NULL AND c IS NOT NULL PRIMARY KEY (pk, c)")
+
+        with pytest.raises(InvalidRequest, match=re.escape("Cannot directly modify a materialized view")):
+            await cql.run_async(f"INSERT INTO {ks}.tv (pk, c, v) VALUES (1, 2, 3) IF NOT EXISTS")
+
+        with pytest.raises(InvalidRequest, match=re.escape(f"LWT is not supported on views: {ks}.tv")):
+            await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.tv WHERE pk=1 AND c=2", consistency_level=ConsistencyLevel.SERIAL))
+
+        with pytest.raises(InvalidRequest, match=re.escape(f"LWT is not supported on CDC log tables: {ks}.test_scylla_cdc_log")):
+            await cql.run_async(SimpleStatement(f"SELECT * FROM {ks}.test_scylla_cdc_log WHERE \"cdc$stream_id\"=0xAB", consistency_level=ConsistencyLevel.SERIAL))
