@@ -4090,7 +4090,7 @@ table::disable_auto_compaction() {
     _compaction_disabled_by_user = true;
     return with_gate(_async_gate, [this] {
         return parallel_foreach_compaction_group_view([this] (compaction::compaction_group_view& view) {
-            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction);
+            return _compaction_manager.stop_ongoing_compactions("disable auto-compaction", &view, compaction::compaction_type::Compaction, true);
         });
     });
 }
