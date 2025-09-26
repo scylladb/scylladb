@@ -1931,7 +1931,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
             transformer trans(_ctxt, s, m.decorated_key(), options);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
-            if (s->cdc_options().preimage() || s->cdc_options().postimage() || options->alternator) {
+            if (s->cdc_options().preimage() || s->cdc_options().postimage() || (options && options->alternator)) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
