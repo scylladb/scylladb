@@ -11,6 +11,7 @@
 #pragma once
 
 #include "bytes_fwd.hh"
+#include "cql3/expr/evaluate.hh"
 #include "function.hh"
 #include <span>
 
@@ -25,7 +26,7 @@ public:
      * @return the result of applying this function to the parameter
      * @throws InvalidRequestException if this function cannot not be applied to the parameter
      */
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) = 0;
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const cql3::expr::evaluation_inputs& inputs) = 0;
 };
 
 

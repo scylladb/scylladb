@@ -29,7 +29,7 @@ public:
                     , _schema(s) {
     }
 
-    bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
         if (std::any_of(parameters.begin(), parameters.end(), [](const auto& param){ return !param; })) {
             return std::nullopt;
         }

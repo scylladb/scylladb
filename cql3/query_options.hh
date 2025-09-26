@@ -21,6 +21,7 @@
 #include "utils/result.hh"
 #include "utils/small_vector.hh"
 #include "service/storage_proxy_fwd.hh"
+#include "vector_search/vector_store_client.hh"
 
 namespace cql3 {
 
@@ -77,6 +78,7 @@ public:
         const std::optional<db::consistency_level> serial_consistency;
         const api::timestamp_type timestamp;
         const service::node_local_only node_local_only;
+        const vector_search::vector_store_client::ann_result ann_result;
     };
 private:
     const cql_config& _cql_config;
@@ -166,6 +168,7 @@ public:
     explicit query_options(db::consistency_level, raw_value_vector_with_unset values, specific_options options = specific_options::DEFAULT);
     explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<service::pager::paging_state> paging_state);
     explicit query_options(std::unique_ptr<query_options>, lw_shared_ptr<service::pager::paging_state> paging_state, int32_t page_size);
+    explicit query_options(std::unique_ptr<query_options>, vector_search::vector_store_client::ann_result ann_result);
 
     db::consistency_level get_consistency() const {
         return _consistency;
