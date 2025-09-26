@@ -699,7 +699,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
     cfg.enable_incremental_backups = false;
     cfg.cf_stats = &*cf_stats;
 
-    with_column_family(s, cfg, env.manager(), [s, &env] (auto& cf) mutable {
+    with_column_family(s, cfg, env.manager(), [s, &env] (auto& cf) mutable -> future<> {
         std::map<int32_t, std::map<int32_t, int32_t>> shadow, result;
 
         const column_definition& r1_col = *s->get_column_definition("r1");
@@ -725,8 +725,7 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
             (void)cf.flush();
         }
 
-        return do_with(std::move(result), [&cf, s, &env, &r1_col, shadow] (auto& result) {
-            return for_all_partitions_slow(cf, s, env.make_reader_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
+            co_await for_all_partitions_slow(cf, s, env.make_reader_permit(), [&, s] (const dht::decorated_key& pk, const mutation_partition& mp) {
                 auto p1 = value_cast<int32_t>(int32_type->deserialize(pk._key.explode(*s)[0]));
                 for (const rows_entry& re : mp.range(*s, interval<clustering_key_prefix>())) {
                     auto c1 = value_cast<int32_t>(int32_type->deserialize(re.key().explode(*s)[0]));
@@ -736,10 +735,8 @@ SEASTAR_TEST_CASE(test_multiple_memtables_multiple_partitions) {
                     }
                 }
                 return true;
-            }).then([&result, shadow] (bool ok) {
-                BOOST_REQUIRE(shadow == result);
             });
-        });
+            BOOST_REQUIRE(shadow == result);
     }).then([cf_stats] {}).get();
     });
 }
