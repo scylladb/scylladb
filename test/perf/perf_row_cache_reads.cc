@@ -24,7 +24,7 @@
 #include "test/lib/reader_concurrency_semaphore.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/simple_schema.hh"
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "types/types.hh"
 #include "reader_concurrency_semaphore.hh"
 
@@ -190,7 +190,7 @@ void test_scan_with_range_delete_over_rows() {
 
         auto d = duration_in_seconds([&] {
             auto slice = partition_slice_builder(*s).build();
-            auto q = query::querier(cache_ms, s, semaphore.make_permit(), pr, slice, nullptr);
+            auto q = replica::querier(cache_ms, s, semaphore.make_permit(), pr, slice, nullptr);
             auto close_q = deferred_close(q);
             q.consume_page(noop_compacted_fragments_consumer(),
                            std::numeric_limits<uint32_t>::max(),

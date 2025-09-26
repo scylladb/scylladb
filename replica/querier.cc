@@ -8,14 +8,14 @@
 
 #include <seastar/core/coroutine.hh>
 
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "dht/i_partitioner.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "schema/schema.hh"
 #include "utils/log.hh"
 #include "utils/error_injection.hh"
 
-namespace query {
+namespace replica {
 
 logging::logger qlogger("querier_cache");
 logging::logger qrlogger("querier");
@@ -494,4 +494,4 @@ future<> querier_cache::stop() noexcept {
     }
 }
 
-} // namespace query
+} // namespace replica
