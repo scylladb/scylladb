@@ -648,6 +648,15 @@ def test_storage_service_get_natural_endpoints_text_key_with_colon(cql, rest_api
             resp.raise_for_status()
             assert resp.json() == [rest_api.host]
 
+@pytest.mark.parametrize("tablets_enabled", ["true", "false"])
+def test_storage_service_get_natural_endpoints_v2_compound_key(cql, rest_api, tablets_enabled, skip_without_tablets):
+    with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 }} AND TABLETS = {{ 'enabled': {tablets_enabled} }}") as keyspace:
+        with new_test_table(cql, keyspace, 'p1 int, p2 text, c int, PRIMARY KEY ((p1, p2), c)') as t0:
+            table = t0.split(".")[1]
+            resp = rest_api.send("GET", f"storage_service/natural_endpoints/v2/{keyspace}", params={"cf": table, "key_component": [1, "value"]})
+            resp.raise_for_status()
+            assert resp.json() == [rest_api.host]
+
 def test_range_to_endpoint_map_tablets_enabled_keyspace_param_only(cql,  rest_api, skip_without_tablets):
     with new_test_keyspace(cql, "WITH REPLICATION = { 'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1 } AND TABLETS = { 'enabled': true }") as keyspace:
         with new_test_table(cql, keyspace, 'p int PRIMARY KEY') as table:
