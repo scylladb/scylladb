@@ -8,6 +8,7 @@
 
 #include "vector_store_client.hh"
 #include "dns.hh"
+#include "load_balancer.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/type_json.hh"
 #include "db/config.hh"
@@ -21,6 +22,7 @@
 #include <exception>
 #include <fmt/ranges.h>
 #include <regex>
+#include <random>
 #include <seastar/core/sstring.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
@@ -61,6 +63,8 @@ constexpr auto ANN_RETRIES = 3;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 logging::logger vslogger("vector_store_client");
+
+static thread_local auto random_engine = std::default_random_engine(std::random_device{}());
 
 auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     auto port = port_number{};
@@ -439,7 +443,8 @@ struct vector_store_client::impl {
                         clients.error())};
             }
 
-            for (const auto& client : *clients) {
+            load_balancer lb(std::move(*clients), random_engine);
+            while (auto client = lb.next()) {
                 auto result = co_await coroutine::as_future(client->make_request(
                         method, path, content,
                         [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
