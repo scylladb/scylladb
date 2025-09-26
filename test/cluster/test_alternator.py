@@ -350,13 +350,16 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
     # tasks_history will wait for it anyway. For the same reason we can't
     # task.cancel() (this will cause ScyllaClusterManager's tasks_history
     # to report the ScyllaClusterManager got BROKEN and fail the next test).
-    # Sadly even abruptly killing the servers (with manager.server_stop())
-    # (with the intention to then "await task" quickly) doesn't work,
-    # probably because of a bug in the library. So we "await task"
-    # anyway, and this test takes 2 minutes :-(
-    #for server in await manager.all_servers():
-    #    await manager.server_stop(server.server_id)
-    await task
+    # The solution is kill (with SIGKILL) the server currently starting and
+    # then the "await task" will quickly finish (and report a "Failed to add
+    # server" error).
+    # Without this trick, this test will take 2 minutes of wait to finish.
+    for server in await manager.starting_servers():
+        await manager.server_stop(server.server_id)
+    try:
+        await task
+    except Exception as e:
+        assert 'Failed to add server' in str(e)
 
 @pytest.mark.asyncio
 async def test_localnodes_multi_dc_multi_rack(manager: ManagerClient):
