@@ -1206,8 +1206,8 @@ std::vector<shared_ptr<compaction_task_executor>>
 compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt, bool skip_major_compaction) noexcept {
     auto ongoing_compactions = get_compactions(filter).size();
     auto tasks = _tasks
-            | std::views::filter([&filter, type_opt] (const auto& task) {
-                return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt);
+            | std::views::filter([&filter, type_opt, skip_major_compaction] (const auto& task) {
+                return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt)  && (!skip_major_compaction || !task.is_major_compaction());
             })
             | std::views::transform([] (auto& task) { return task.shared_from_this(); })
             | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
