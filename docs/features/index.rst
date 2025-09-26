@@ -16,6 +16,7 @@ This document highlights ScyllaDB's key data modeling features.
    Workload Attributes </features/workload-attributes>
    Workload Prioritization </features/workload-prioritization>
    Backup and Restore </features/backup-and-restore>
+   Incremental Repair </features/incremental-repair/>
 
 .. panel-box::
   :title: ScyllaDB Features
@@ -39,3 +40,6 @@ This document highlights ScyllaDB's key data modeling features.
     specify how ScyllaDB will handle requests depending on the workload.
   * :doc:`Backup and Restore </features/backup-and-restore>` allows you to create
     backups of your data and restore it when needed.
+  * :doc:`Incremental Repair </features/incremental-repair/>` provides a much more
+    efficient and lightweight approach to maintaining data consistency by
+    repairing only the data that has changed since the last repair.
