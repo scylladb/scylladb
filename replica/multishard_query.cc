@@ -20,6 +20,8 @@
 
 #include <fmt/ostream.h>
 
+namespace replica {
+
 logging::logger mq_log("multishard_query");
 
 template <typename T>
@@ -286,8 +288,10 @@ public:
     future<> stop();
 };
 
-template <> struct fmt::formatter<read_context::dismantle_buffer_stats> : fmt::formatter<string_view> {
-    auto format(const read_context::dismantle_buffer_stats& s, fmt::format_context& ctx) const {
+} // namespace replica
+
+template <> struct fmt::formatter<replica::read_context::dismantle_buffer_stats> : fmt::formatter<string_view> {
+    auto format(const replica::read_context::dismantle_buffer_stats& s, fmt::format_context& ctx) const {
         return fmt::format_to(ctx.out(),
                               "kept {} partitions/{} fragments/{} bytes, discarded {} partitions/{} fragments/{} bytes",
                               s.partitions,
@@ -298,6 +302,8 @@ template <> struct fmt::formatter<read_context::dismantle_buffer_stats> : fmt::f
                               s.discarded_bytes);
     }
 };
+
+namespace replica {
 
 std::string_view read_context::reader_state_to_string(reader_state rs) {
     switch (rs) {
@@ -1007,3 +1013,5 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
         return data_query_result_builder(*query_schema, cmd.slice, opts, std::move(accounter), cmd.tombstone_limit);
     });
 }
+
+} // namespace replica
