@@ -14,6 +14,7 @@ Querying data from data is done using a ``SELECT`` statement:
                    : [ WHERE `where_clause` ]
                    : [ GROUP BY `group_by_clause` ]
                    : [ ORDER BY `ordering_clause` ]
+                   : [ ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer` ]
                    : [ PER PARTITION LIMIT (`integer` | `bind_marker`) ]
                    : [ LIMIT (`integer` | `bind_marker`) ]
                    : [ ALLOW FILTERING ]
@@ -236,6 +237,46 @@ Currently, the possible orderings are limited by the :ref:`clustering order <clu
 - If the table has been defined without any specific ``CLUSTERING ORDER``, then allowed orderings are the order
   induced by the clustering columns and the reverse of that one.
 - Otherwise, the orderings allowed are the order of the ``CLUSTERING ORDER`` option and the reversed one.
+
+
+.. _vector-queries:
+
+Vector queries
+~~~~~~~~~~~~~~
+
+The ``ORDER BY`` clause can also be used with vector columns to perform the approximate nearest neighbor (ANN) search. 
+When using vector columns, the syntax is as follows:
+
+.. code-block::
+
+   order_by_vector: ORDER BY `vector_column_name` ANN OF `vector` LIMIT `integer`
+
+Where ``vector_column_name`` is the name of the vector column,
+``vector`` is the query :ref:`vector <vectors>`, and ``LIMIT`` is a limit on the number of results to return.
+Vector queries can only be performed on a vector column that has a :ref:`vector index <create-vector-index-statement>` created.
+
+The ``ANN OF`` clause orders the results by their distance to the provided query vector,
+using the distance function defined for the vector column when
+:ref:`creating the vector index <create-vector-index-statement>`.
+The query vector must have the same dimension as the vector column.
+
+Supported ``LIMIT`` values are integers between 1 and 1000, inclusive.
+However, based on the index parameters and the dataset size and distribution,
+the actual number of results returned may be less than the specified limit.
+
+For example::
+
+    SELECT image_id FROM ImageEmbeddings
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
+
+This query returns up to 5 rows with the closest distance of ``embedding`` vector to the provided query vector,
+in this case ``[0.1, 0.2, 0.3, 0.4]``.
+
+.. warning:: 
+
+  Currently, vector queries do not support filtering with ``WHERE`` clause, grouping with ``GROUP BY`` and paging.
+  This will be added in the future releases.
+
 
 .. _limit-clause:
 

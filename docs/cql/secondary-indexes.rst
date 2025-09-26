@@ -85,7 +85,8 @@ More on :doc:`Local Secondary Indexes </features/local-secondary-indexes>`
 .. placed within the ``keys()`` function, the index will be on the map keys, allowing you to use ``CONTAINS KEY`` in
 .. ``WHERE`` clauses. Otherwise, the index will be on the map values.
 
-.. _drop-index-statement:
+
+.. _create-vector-index-statement:
 
 Vector Index :label-caution:`Experimental` :label-note:`ScyllaDB Cloud`
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -135,6 +136,9 @@ The following options are supported for vector indexes. All of them are optional
 |                              | as ``efSearch``. Higher values lead to better recall (i.e., more relevant results are found)             |               |
 |                              | but increase query latency. Supported values are integers between 1 and 4096.                            |               |
 +------------------------------+----------------------------------------------------------------------------------------------------------+---------------+
+
+
+.. _drop-index-statement:
 
 DROP INDEX
 ^^^^^^^^^^

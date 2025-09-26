@@ -2477,15 +2477,15 @@ void select_statement::verify_ann_ordering_is_valid(const std::optional<expr::ex
                                                     const std::optional<expr::expression>& per_partition_limit,
                                                     const selection::selection& selection) const {
     if (!limit.has_value()) {
-        throw exceptions::invalid_request_exception("ANN queries must have a limit specified");
+        throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
     }
 
     if (per_partition_limit.has_value()) {
-        throw exceptions::invalid_request_exception("ANN queries do not support per-partition limits");
+        throw exceptions::invalid_request_exception("Vector ANN queries do not support per-partition limits");
     }
 
     if (selection.is_aggregate()) {
-        throw exceptions::invalid_request_exception("ANN queries can not be run with aggregation");
+        throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
     }
 }
 
