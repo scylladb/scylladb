@@ -20,7 +20,7 @@
 
 #include <fmt/ostream.h>
 
-logging::logger mmq_log("multishard_mutation_query");
+logging::logger mq_log("multishard_query");
 
 template <typename T>
 using foreign_unique_ptr = foreign_ptr<std::unique_ptr<T>>;
@@ -217,7 +217,7 @@ public:
             // The algorithm is full of assumptions about shard assignment being round-robin, static, and full.
             // This does not hold for tablets. We chose to avoid this algorithm rather than adapting it.
             // The coordinator should split ranges accordingly.
-            on_internal_error(mmq_log, format("multishard reader cannot be used on tables with non-static sharding: {}.{}",
+            on_internal_error(mq_log, format("multishard reader cannot be used on tables with non-static sharding: {}.{}",
                               _schema->ks_name(), _schema->cf_name()));
         }
     }
@@ -329,7 +329,7 @@ mutation_reader read_context::create_reader(
         auto msg = seastar::format("Unexpected request to create reader for shard {}."
                 " The reader is expected to be in either `used`, `successful_lookup` or `inexistent` state,"
                 " but is in `{}` state instead.", shard, reader_state_to_string(rm.state));
-        mmq_log.warn("{}", msg);
+        mq_log.warn("{}", msg);
         throw std::logic_error(msg.c_str());
     }
 
@@ -340,7 +340,7 @@ mutation_reader read_context::create_reader(
             // The saved reader permit is expected to be the same one passed to create_reader,
             // as returned from obtain_reader_permit()
             if (reader_opt->permit() != permit) {
-                on_internal_error(mmq_log, "read_context::create_reader(): passed-in permit is different than saved reader's permit");
+                on_internal_error(mq_log, "read_context::create_reader(): passed-in permit is different than saved reader's permit");
             }
             permit.set_trace_state(trace_state);
             return std::move(*reader_opt);
@@ -388,7 +388,7 @@ future<> read_context::destroy_reader(stopped_reader reader) noexcept {
         rm.rparts->handle = std::move(reader.handle);
         rm.rparts->buffer = std::move(reader.unconsumed_fragments);
     } else {
-        mmq_log.warn(
+        mq_log.warn(
                 "Unexpected request to dismantle reader in state `{}`."
                 " Reader was not created nor is in the process of being created.",
                 reader_state_to_string(rm.state));
@@ -554,14 +554,14 @@ future<> read_context::save_reader(shard_id shard, full_position_view last_pos) 
         } catch (...) {
             // We don't want to fail a read just because of a failure to
             // save any of the readers.
-            mmq_log.debug("Failed to save reader: {}", std::current_exception());
+            mq_log.debug("Failed to save reader: {}", std::current_exception());
             ++db.get_stats().multishard_query_failed_reader_saves;
             return make_ready_future<>();
         }
     }).handle_exception([this, shard] (std::exception_ptr e) {
         // We don't want to fail a read just because of a failure to
         // save any of the readers.
-        mmq_log.debug("Failed to save reader on shard {}: {}", shard, e);
+        mq_log.debug("Failed to save reader on shard {}: {}", shard, e);
         // This will account the failure on the local shard but we don't
         // know where exactly the failure happened anyway.
         ++_db.local().get_stats().multishard_query_failed_reader_saves;
