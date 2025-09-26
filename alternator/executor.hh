@@ -230,12 +230,13 @@ public:
         const std::optional<attrs_to_get>&,
         uint64_t* = nullptr);
 
+    template<typename Callback>
     static future<std::vector<rjson::value>> describe_multi_item(schema_ptr schema,
         const query::partition_slice&& slice,
         shared_ptr<cql3::selection::selection> selection,
         foreign_ptr<lw_shared_ptr<query::result>> query_result,
         shared_ptr<const std::optional<attrs_to_get>> attrs_to_get,
-        uint64_t& rcu_half_units);
+        Callback item_callback = std::function<void(rjson::value&, const uint64_t&)>());
 
     static void describe_single_item(const cql3::selection::selection&,
         const std::vector<managed_bytes_opt>&,
