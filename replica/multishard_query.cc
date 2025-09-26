@@ -7,7 +7,7 @@
  */
 
 #include "schema/schema_registry.hh"
-#include "multishard_mutation_query.hh"
+#include "replica/multishard_query.hh"
 #include "mutation_query.hh"
 #include "replica/database.hh"
 #include "query/query-result-writer.hh"

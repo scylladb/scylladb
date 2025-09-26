@@ -55,7 +55,7 @@
 #include "cdc/log.hh"
 #include "db/operation_type.hh"
 #include "db/view/view_update_generator.hh"
-#include "multishard_mutation_query.hh"
+#include "replica/multishard_query.hh"
 
 #include "utils/human_readable.hh"
 #include "utils/error_injection.hh"

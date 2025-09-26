@@ -51,7 +51,7 @@
 #include <seastar/core/metrics.hh>
 #include <seastar/core/execution_stage.hh>
 #include "db/timeout_clock.hh"
-#include "multishard_mutation_query.hh"
+#include "replica/multishard_query.hh"
 #include "replica/database.hh"
 #include "db/consistency_level_validations.hh"
 #include "cdc/log.hh"
@@ -5977,7 +5977,7 @@ storage_proxy::query_result_local(locator::effective_replication_map_ptr erm, sc
             });
         });
     } else {
-        // FIXME: adjust multishard_mutation_query to accept an smp_service_group and propagate it there
+        // FIXME: adjust query_*_on_all_shards() to accept an smp_service_group and propagate it there
         tracing::trace(trace_state, "Start querying token range {}", pr);
         return query_nonsingular_data_locally(query_schema, cmd, {pr}, opts, trace_state, timeout).then(
                 [trace_state = std::move(trace_state)] (rpc::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>&& r_ht) {

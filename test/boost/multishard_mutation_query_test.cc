@@ -7,7 +7,7 @@
  */
 
 #include "utils/assert.hh"
-#include "multishard_mutation_query.hh"
+#include "replica/multishard_query.hh"
 #include "schema/schema_registry.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"

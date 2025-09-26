@@ -176,7 +176,6 @@ target_sources(scylla-main
     debug.cc
     init.cc
     keys/keys.cc
-    multishard_mutation_query.cc
     mutation_query.cc
     node_ops/task_manager_module.cc
     partition_slice_builder.cc
