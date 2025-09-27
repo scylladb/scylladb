@@ -355,6 +355,7 @@ private:
 
     // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
     utils::phased_barrier _pending_writes_phaser;
+    locator::token_metadata::version_t _fence_version = 0;
 private:
     future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -672,6 +673,8 @@ private:
     mutation do_get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
     future<> drain_on_shutdown();
 public:
+    void update_fence_version(locator::token_metadata::version_t fence_version);
+
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {

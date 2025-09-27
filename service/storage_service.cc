@@ -6223,7 +6223,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
 future<> storage_service::update_fence_version(token_metadata::version_t new_version) {
     return container().invoke_on_all([new_version] (storage_service& ss) {
-        ss._shared_token_metadata.update_fence_version(new_version);
+        ss._qp.proxy().update_fence_version(new_version);
     });
 }
 

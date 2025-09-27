@@ -3426,7 +3426,7 @@ storage_proxy::mutate_hint(const schema_ptr& s, const frozen_mutation& m, tracin
 
 std::optional<replica::stale_topology_exception>
 storage_proxy::check_fence(fencing_token token, locator::host_id caller_address) noexcept {
-    const auto fence_version = _shared_token_metadata.get_fence_version();
+    const auto fence_version = _fence_version;
     if (!token || token.topology_version >= fence_version) {
         return std::nullopt;
     }
@@ -3486,6 +3486,30 @@ fencing_token storage_proxy::get_fence(const locator::effective_replication_map&
     // bootstrapping node because it hasn't been published to clients yet.
     return erm.get_replication_strategy().is_local() ?
             fencing_token{} : fencing_token{erm.get_token_metadata().get_version()};
+}
+
+void storage_proxy::update_fence_version(locator::token_metadata::version_t fence_version) {
+    if (const auto current_version = get_token_metadata_ptr()->get_version(); fence_version > current_version) {
+        // The token_metadata::version under no circumstance can go backwards.
+        // Even in case of topology change coordinator moving to another node
+        // this condition must hold, that is why we treat its violation
+        // as an internal error.
+        on_internal_error(slogger,
+            format("update_fence_version: invalid new fence version, can't be greater than the current version, "
+                   "current version {}, new fence version {}", current_version, fence_version));
+    }
+    if (fence_version < _fence_version) {
+        // If topology change coordinator moved to another node,
+        // it can get ahead and increment the fence version
+        // while we are handling raft_topology_cmd::command::fence,
+        // so we just throw an error in this case.
+        throw std::runtime_error(
+            format("update_fence_version: can't set decreasing fence version: {} -> {}",
+                _fence_version, fence_version));
+    }
+    slogger.debug("update_fence_version: new fence_version {} is set, prev version {}",
+        fence_version, _fence_version);
+    _fence_version = fence_version;
 }
 
 future<>

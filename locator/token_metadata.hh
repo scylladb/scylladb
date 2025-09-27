@@ -402,7 +402,6 @@ class shared_token_metadata : public peering_sharded_service<shared_token_metada
     //   includes its own invocation as an operation in the new phase.
     utils::phased_barrier _versions_barrier;
     shared_future<> _stale_versions_in_use{make_ready_future<>()};
-    token_metadata::version_t _fence_version = 0;
     using version_tracker_list_type = boost::intrusive::list<version_tracker,
             boost::intrusive::member_hook<version_tracker, version_tracker::link_type, &version_tracker::_link>,
             boost::intrusive::constant_time_size<false>>;
@@ -446,11 +445,6 @@ public:
 
     future<> stale_versions_in_use() const {
         return _stale_versions_in_use.get_future();
-    }
-
-    void update_fence_version(token_metadata::version_t version);
-    token_metadata::version_t get_fence_version() const noexcept {
-        return _fence_version;
     }
 
     // Token metadata changes are serialized
