@@ -561,6 +561,10 @@ public:
     virtual void abort() noexcept override {
         return compaction_task_executor::abort(_as);
     }
+
+    bool is_major_compaction() const noexcept override {
+        return true;
+    }
 protected:
     virtual future<> run() override {
         return perform();
@@ -1199,11 +1203,11 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
 }
 
 std::vector<shared_ptr<compaction_task_executor>>
-compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt) noexcept {
+compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view*)> filter, std::optional<compaction_type> type_opt, bool skip_major_compaction) noexcept {
     auto ongoing_compactions = get_compactions(filter).size();
     auto tasks = _tasks
-            | std::views::filter([&filter, type_opt] (const auto& task) {
-                return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt);
+            | std::views::filter([&filter, type_opt, skip_major_compaction] (const auto& task) {
+                return filter(task.compacting_table()) && (!type_opt || task.compaction_type() == *type_opt)  && (!skip_major_compaction || !task.is_major_compaction());
             })
             | std::views::transform([] (auto& task) { return task.shared_from_this(); })
             | std::ranges::to<std::vector<shared_ptr<compaction_task_executor>>>();
@@ -1225,13 +1229,13 @@ compaction_manager::do_stop_ongoing_compactions(sstring reason, std::function<bo
     return tasks;
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<compaction_type> type_opt) noexcept {
-    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, type_opt);
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, compaction_group_view* t, std::optional<compaction_type> type_opt, bool skip_major_compaction) noexcept {
+    return stop_ongoing_compactions(std::move(reason), [t] (const compaction_group_view* x) { return !t || x == t; }, type_opt, skip_major_compaction);
 }
 
-future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<compaction_type> type_opt) noexcept {
+future<> compaction_manager::stop_ongoing_compactions(sstring reason, std::function<bool(const compaction_group_view* t)> filter, std::optional<compaction_type> type_opt, bool skip_major_compaction) noexcept {
     try {
-        auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), type_opt);
+        auto tasks = do_stop_ongoing_compactions(std::move(reason), std::move(filter), type_opt, skip_major_compaction);
         bool task_stopped = true;
         co_await await_tasks(std::move(tasks), task_stopped);
     } catch (...) {
