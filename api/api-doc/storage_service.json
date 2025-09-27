@@ -595,6 +595,50 @@
          ]
       },
       {
+         "path": "/storage_service/natural_endpoints/v2/{keyspace}",
+         "operations": [
+            {
+               "method": "GET",
+               "summary":"This method returns the N endpoints that are responsible for storing the specified key i.e for replication. the endpoint responsible for this key",
+               "type": "array",
+               "items": {
+                  "type": "string"
+               },
+               "nickname": "get_natural_endpoints_v2",
+               "produces": [
+                  "application/json"
+               ],
+               "parameters": [
+                  {
+                     "name": "keyspace",
+                     "description": "The keyspace to query about.",
+                     "required": true,
+                     "allowMultiple": false,
+                     "type": "string",
+                     "paramType": "path"
+                  },
+                  {
+                     "name": "cf",
+                     "description": "Column family name.",
+                     "required": true,
+                     "allowMultiple": false,
+                     "type": "string",
+                     "paramType": "query"
+                  },
+                  {
+                     "name": "key_component",
+                     "description": "Each component of the key for which we need to find the endpoint (e.g. ?key_component=part1&key_component=part2).",
+                     "required": true,
+                     "allowMultiple": true,
+                     "type": "string",
+                     "paramType": "query"
+                  }
+               ]
+            }
+         ]
+      },
+
+      {
          "path":"/storage_service/cdc_streams_check_and_repair",
          "operations":[
             {

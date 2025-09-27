@@ -716,6 +716,14 @@ rest_get_natural_endpoints(http_context& ctx, sharded<service::storage_service>&
 }
 
 static
+json::json_return_type
+rest_get_natural_endpoints_v2(http_context& ctx, sharded<service::storage_service>& ss, const_req req) {
+        auto keyspace = validate_keyspace(ctx, req);
+        auto res = ss.local().get_natural_endpoints(keyspace, req.get_query_param("cf"), req.get_query_param_array("key_component"));
+        return res | std::views::transform([] (auto& ep) { return fmt::to_string(ep); }) | std::ranges::to<std::vector>();
+}
+
+static
 future<json::json_return_type>
 rest_cdc_streams_check_and_repair(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         return ss.invoke_on(0, [] (service::storage_service& ss) {
@@ -1726,6 +1734,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     ss::describe_ring.set(r, rest_bind(rest_describe_ring, ctx, ss));
     ss::get_current_generation_number.set(r, rest_bind(rest_get_current_generation_number, ss));
     ss::get_natural_endpoints.set(r, rest_bind(rest_get_natural_endpoints, ctx, ss));
+    ss::get_natural_endpoints_v2.set(r, rest_bind(rest_get_natural_endpoints_v2, ctx, ss));
     ss::cdc_streams_check_and_repair.set(r, rest_bind(rest_cdc_streams_check_and_repair, ss));
     ss::cleanup_all.set(r, rest_bind(rest_cleanup_all, ctx, ss));
     ss::force_flush.set(r, rest_bind(rest_force_flush, ctx));
