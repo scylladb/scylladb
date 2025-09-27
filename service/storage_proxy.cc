@@ -613,11 +613,14 @@ private:
             co_await coroutine::all(
                 [&] () -> future<> {
                     try {
-                        auto op = _sp.start_write();
                         // FIXME: get_schema_for_write() doesn't timeout
                         schema_ptr s = co_await get_schema_for_write(schema_version, reply_to_host_id, shard, timeout);
                         // Note: blocks due to execution_stage in replica::database::apply()
-                        co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout, fence);
+                        auto op = p->start_write();
+                        co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
+                        if (auto stale = p->check_fence(fence, src_addr)) {
+                            co_await coroutine::return_exception(std::move(stale));
+                        }
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                         // lots of unsent responses, which can OOM our shard.
                         //
@@ -690,9 +693,9 @@ private:
         return handle_write(src_addr, t, schema_version, std::move(in), std::move(forward), reply_to, std::move(forward_id), reply_to_id, shard, response_id,
                 trace_info ? *trace_info : std::nullopt,
                 fence.value_or(fencing_token{}),
-                /* apply_fn */ [smp_grp, rate_limit_info, src_addr] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
-                        clock_type::time_point timeout, fencing_token fence) {
-                    return p->apply_fence_on_ready(p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info), fence, src_addr);
+                /* apply_fn */ [smp_grp, rate_limit_info] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s, const frozen_mutation& m,
+                        clock_type::time_point timeout) {
+                    return p->mutate_locally(std::move(s), m, std::move(tr_state), db::commitlog::force_sync::no, timeout, smp_grp, rate_limit_info);
                 },
                 /* forward_fn */ [this, rate_limit_info] (shared_ptr<storage_proxy>& p, locator::host_id addr, clock_type::time_point timeout, const frozen_mutation& m,
                         gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
@@ -729,9 +732,9 @@ private:
         return handle_write(src_addr, t, schema_version, std::move(decision), std::move(forward), reply_to, std::move(forward_id),reply_to_id, shard,
                 response_id, trace_info,
                 fence.value_or(fencing_token{}),
-               /* apply_fn */ [this, src_addr] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
-                       const paxos::proposal& decision, clock_type::time_point timeout, fencing_token fence) {
-                    return p->apply_fence_on_ready(paxos::paxos_state::learn(*p, paxos_store(), std::move(s), decision, timeout, tr_state), fence, src_addr);
+               /* apply_fn */ [this] (shared_ptr<storage_proxy>& p, tracing::trace_state_ptr tr_state, schema_ptr s,
+                       const paxos::proposal& decision, clock_type::time_point timeout) {
+                    return paxos::paxos_state::learn(*p, paxos_store(), std::move(s), decision, timeout, tr_state);
               },
               /* forward_fn */ [this] (shared_ptr<storage_proxy>&, locator::host_id addr, clock_type::time_point timeout, const paxos::proposal& m,
                       gms::inet_address ip, locator::host_id reply_to, unsigned shard, response_id_type response_id,
