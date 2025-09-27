@@ -45,6 +45,7 @@
 #include "utils/updateable_value.hh"
 #include "dht/decorated_key.hh"
 #include "service/session.hh"
+#include "sstables/trie/bti_index.hh"
 
 #include <seastar/util/optimized_optional.hh>
 
@@ -287,7 +288,9 @@ public:
             streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,
             mutation_reader::forwarding fwd_mr = mutation_reader::forwarding::yes,
             read_monitor& monitor = default_read_monitor(),
-            integrity_check integrity = integrity_check::no);
+            integrity_check integrity = integrity_check::no,
+            const utils::hashed_key* single_partition_read_murmur_hash = nullptr
+        );
 
     // A reader which doesn't use the index at all. It reads everything from the
     // sstable and it doesn't support skipping.
@@ -328,19 +331,16 @@ public:
 
     future<> seal_sstable(bool backup);
 
-    static uint64_t get_estimated_key_count(const uint32_t size_at_full_sampling, const uint32_t min_index_interval) {
-        return ((uint64_t)size_at_full_sampling + 1) * min_index_interval;
-    }
     // Size at full sampling is calculated as if sampling were static, using minimum index as a strict sampling interval.
     static uint64_t get_size_at_full_sampling(const uint64_t key_count, const uint32_t min_index_interval) {
         return std::ceil(float(key_count) / min_index_interval) - 1;
     }
 
     uint64_t get_estimated_key_count() const {
-        return get_estimated_key_count(_components->summary.header.size_at_full_sampling, _components->summary.header.min_index_interval);
+        return get_stats_metadata().estimated_partition_size.count();
     }
 
-    uint64_t estimated_keys_for_range(const dht::token_range& range);
+    future<uint64_t> estimated_keys_for_range(const dht::token_range& range);
 
     // mark_for_deletion() specifies that a sstable isn't relevant to the
     // current shard, and thus can be deleted by the deletion manager, if
@@ -378,6 +378,8 @@ public:
         return _index_file;
     }
     file uncached_index_file();
+    file uncached_partitions_file();
+    file uncached_rows_file();
     // Returns size of bloom filter data.
     uint64_t filter_size() const;
 
@@ -544,8 +546,15 @@ private:
     file _index_file;
     seastar::shared_ptr<cached_file> _cached_index_file;
     file _data_file;
+    file _partitions_file;
+    seastar::shared_ptr<cached_file> _cached_partitions_file;
+    std::optional<trie::bti_partitions_db_footer> _partitions_db_footer;
+    file _rows_file;
+    seastar::shared_ptr<cached_file> _cached_rows_file;
     uint64_t _data_file_size;
-    uint64_t _index_file_size;
+    uint64_t _index_file_size = 0;
+    uint64_t _partitions_file_size = 0;
+    uint64_t _rows_file_size = 0;
     // on-disk size of components but data and index.
     uint64_t _metadata_size_on_disk = 0;
     db_clock::time_point _data_file_write_time;
@@ -646,6 +655,8 @@ private:
 
     future<file> new_sstable_component_file(const io_error_handler& error_handler, component_type f, open_flags flags, file_open_options options = {}) const noexcept;
 
+    future<> unlink_component(component_type type) noexcept;
+
     future<file_writer> make_component_file_writer(component_type c, file_output_stream_options options,
             open_flags oflags = open_flags::wo | open_flags::create | open_flags::exclusive) noexcept;
 
@@ -671,6 +682,8 @@ private:
     // This should be called only before an sstable is sealed.
     void maybe_rebuild_filter_from_index(uint64_t num_partitions);
 
+    void build_delayed_filter(uint64_t num_partitions);
+
     future<> update_info_for_opened_data(sstable_open_config cfg = {});
 
     future<> read_toc() noexcept;
@@ -683,6 +696,8 @@ private:
     // To be called when we try to load an SSTable that lacks a Summary. Could
     // happen if old tools are being used.
     future<> generate_summary();
+
+    future<> read_partitions_db_footer();
 
     future<> read_statistics();
     void write_statistics();
@@ -700,6 +715,7 @@ private:
     void validate_max_local_deletion_time();
     void validate_partitioner();
 
+    // Loads first and last partition keys from appropriate components into `_first` and `_last`.
     void set_first_and_last_keys();
 
     // Create a position range based on the min/max_column_names metadata of this sstable.

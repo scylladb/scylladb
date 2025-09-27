@@ -12,6 +12,10 @@
 #include "mutation/position_in_partition.hh"
 #include "sstables/types.hh"
 
+namespace utils {
+    struct hashed_key;
+}
+
 namespace sstables {
 
 struct data_file_positions_range {
@@ -61,7 +65,12 @@ public:
     // Returns `true` iff it's possible that `key` is a partition key present in the sstable.
     // (In other words, if it returns `false`, then the key is definitely not present.
     // Otherwise it's unknown if it's present).
-    // 
+    //
+    // If `hash` is provided, it must be the murmur hash of the partition key in `key`.
+    // (Some index use the hash to filter out false positives. They could compute the hash
+    // themselves, but since the caller often has to compute the hash anyway,
+    // it can be passed down to avoid recomputation).
+    //
     // If the return value is `false`, the reader becomes broken and cannot be used again.
     // (This method is only used for single-partition reads, so no reason to keep the reader
     // usable after we know that the entire sstable read is already doomed). 
@@ -71,6 +80,7 @@ public:
     // Note: this is the most important and performance-sensitive method of the reader.
     // This is what's used by sstable readers to find positions for single-partition reads.
     virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key) = 0;
+    virtual future<bool> advance_lower_and_check_if_present(dht::ring_position_view key, const utils::hashed_key& hash) = 0;
     // Advances lower bound to the first PK greater than dk.
     //
     // Preconditions: dk >= lower bound, dk is present in the sstable

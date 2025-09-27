@@ -447,6 +447,10 @@ static future<shared_sstable> load_large_partition_sst(test_env& env, const ssta
 // search for anything.
 SEASTAR_TEST_CASE(promoted_index_read) {
   return for_each_sstable_version([] (const sstables::sstable::version_types version) {
+    if (!has_summary_and_index(version)) {
+        // This test is so basic that updating it to support `ms` sstables is not worth the effort.
+        return make_ready_future<>();
+    }
     return test_env::do_with_async([version] (test_env& env) {
         auto sstp = load_large_partition_sst(env, version).get();
         std::vector<sstables::test::index_entry> vec = sstables::test(sstp).read_indexes(env.make_reader_permit()).get();

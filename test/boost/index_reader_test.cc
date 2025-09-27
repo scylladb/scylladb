@@ -17,13 +17,27 @@
 
 using namespace sstables;
 
+// For the main use case of index readers — queries —
+// there's no need to support `abort_source`.
+// An index query will complete after several milliseconds,
+// so it won't meaningfully delay node shutdown.
+//
+// But `index_consume_entry_context` supports `abort_source`
+// for the sake of the optional bloom filter rebuild (from Index) that
+// happens before sstable sealing (see `sstable::maybe_rebuild_filter_from_index`).
+// This is a test for this.
 SEASTAR_TEST_CASE(test_abort_during_index_read) {
     return test_env::do_with_async([](test_env& env) {
         simple_schema ss;
         auto schema_ptr = ss.schema();
+        // This test only is designed specifically for BIG index readers.
+        // It's not valid for BTI index readers.
+        // (And we don't even want to support `abort_source` in BTI index readers.
+        // There's no use case for that).
+        auto version = sstable_version_types::me;
         auto mut = mutation(schema_ptr, ss.make_pkey());
         auto mut_reader = make_mutation_reader_from_mutations(schema_ptr, env.make_reader_permit(), std::move(mut));
-        auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer());
+        auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer(), version);
 
         struct dummy_index_consumer {
             dummy_index_consumer() {}
@@ -55,6 +69,9 @@ SEASTAR_TEST_CASE(test_promoted_index_parsing_page_crossing_and_retries) {
 #else
         simple_schema ss;
         auto s = ss.schema();
+        // This test only is designed specifically for BIG index readers.
+        // It's not valid for BTI index readers.
+        auto version = sstable_version_types::me;
 
         auto pk = ss.make_pkey();
         auto mut = mutation(s, pk);
@@ -74,7 +91,7 @@ SEASTAR_TEST_CASE(test_promoted_index_parsing_page_crossing_and_retries) {
 
         env.manager().set_promoted_index_block_size(1); // force entry for each row
         auto mut_reader = make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut));
-        auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer());
+        auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer(), version);
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();
@@ -145,6 +162,10 @@ SEASTAR_TEST_CASE(test_no_data_file_read_on_missing_clustering_keys_with_dense_i
     return test_env::do_with_async([](test_env& env) {
         simple_schema ss;
         auto s = ss.schema();
+        // The general idea of this test could be applied to `ms` sstables
+        // as well, but the test uses APIs specific to `bsearch_clustered_cursor`,
+        // so it's not easy to adapt it to `ms`. 
+        auto version = sstable_version_types::me;
 
         auto pk = ss.make_pkey();
 
@@ -187,7 +208,7 @@ SEASTAR_TEST_CASE(test_no_data_file_read_on_missing_clustering_keys_with_dense_i
 
         env.manager().set_promoted_index_block_size(1); // force entry for each row
         auto mut_reader = make_mutation_reader_from_mutations(s, env.make_reader_permit(), std::move(mut));
-        auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer());
+        auto sst = make_sstable_easy(env, std::move(mut_reader), env.manager().configure_writer(), version);
 
         tests::reader_concurrency_semaphore_wrapper semaphore;
         auto permit = semaphore.make_permit();

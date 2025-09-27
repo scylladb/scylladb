@@ -14,6 +14,7 @@
 #include "schema/schema.hh"
 #include "sstables/index_reader.hh"
 #include "reader_concurrency_semaphore.hh"
+#include "test/lib/log.hh"
 
 class index_reader_assertions {
     std::unique_ptr<sstables::abstract_index_reader> _r;
@@ -55,7 +56,8 @@ public:
                 prev_end = sstables::materialize(ei.end);
             }
           } else {
-            BOOST_FAIL("Test unimplemented for this index type");
+            auto& ref = *_r;
+            testlog.warn("Skipping row index monotonicity check for index type {}, because iteration over index blocks is not supported", typeid(ref).name());
           }
 
             _r->advance_to_next_partition().get();
@@ -71,7 +73,8 @@ public:
             _r->advance_to_next_partition().get();
         }
       } else {
-        BOOST_FAIL("Test unimplemented for this index type");
+        auto& ref = *_r;
+        testlog.warn("Skipping row index emptiness check for index type {}, because iteration over index blocks is not supported", typeid(ref).name());
       }
         return *this;
     }

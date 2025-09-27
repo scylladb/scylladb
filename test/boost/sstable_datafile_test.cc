@@ -472,6 +472,10 @@ static shared_sstable sstable_for_overlapping_test(test_env& env, const schema_p
 SEASTAR_TEST_CASE(check_read_indexes) {
     return test_env::do_with_async([] (test_env& env) {
         for_each_sstable_version([&env] (const sstables::sstable::version_types version) {
+            if (!has_summary_and_index(version)) {
+                // read_indexes isn't implemented for BTI indexes
+                return make_ready_future<>();
+            }
             return seastar::async([&env, version] {
                 auto builder = schema_builder("test", "summary_test")
                     .with_column("a", int32_type, column_kind::partition_key);
@@ -2086,7 +2090,8 @@ SEASTAR_TEST_CASE(test_summary_entry_spanning_more_keys_than_min_interval) {
             keys_written++;
         }
 
-        auto sst = make_sstable_containing(env.make_sstable(s), mutations);
+        auto version = sstable_version_types::me;
+        auto sst = make_sstable_containing(env.make_sstable(s, version), mutations);
 
         const summary& sum = sst->get_summary();
         BOOST_REQUIRE(sum.entries.size() == 1);
@@ -2205,6 +2210,13 @@ SEASTAR_TEST_CASE(test_broken_promoted_index_is_skipped) {
     // delete from ks.test where pk = 1 and ck = 2;
     return test_env::do_with_async([] (test_env& env) {
       for (const auto version : all_sstable_versions) {
+        if (!has_summary_and_index(version)) {
+            // This is an old test for some workaround for
+            // incorrectly-generated promoted indexes.
+            // It doesn't make sense to port this test to
+            // newer sstable formats.
+            continue;
+        }
         auto s = schema_builder("ks", "test")
                 .with_column("pk", int32_type, column_kind::partition_key)
                 .with_column("ck", int32_type, column_kind::clustering_key)
@@ -2285,7 +2297,8 @@ SEASTAR_TEST_CASE(summary_rebuild_sanity) {
             mutations.push_back(make_insert(partition_key::from_exploded(*s, {std::move(key)})));
         }
 
-        auto sst = make_sstable_containing(env.make_sstable(s), mutations);
+        auto version = sstable_version_types::me;
+        auto sst = make_sstable_containing(env.make_sstable(s, version), mutations);
 
         summary s1 = std::move(sstables::test(sst)._summary());
         BOOST_REQUIRE(!(bool)sstables::test(sst)._summary()); // make sure std::move above took place

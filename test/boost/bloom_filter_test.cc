@@ -8,10 +8,12 @@
 
 #include <seastar/testing/test_case.hh>
 
+#include "sstables/sstable_writer.hh"
 #include "test/lib/eventually.hh"
 #include "test/lib/simple_schema.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "test/lib/sstable_utils.hh"
+#include "test/lib/random_utils.hh"
 
 #include "db/config.hh"
 #include "readers/from_mutations.hh"
@@ -192,6 +194,7 @@ SEASTAR_TEST_CASE(test_bloom_filter_reclaim_during_reload) {
 
 SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimates) {
     return test_env::do_with_async([](test_env& env) {
+      for (const auto version : {sstable_version_types::me, sstable_version_types::ms}) {
         simple_schema ss;
         auto schema = ss.schema();
         const auto actual_partition_count = 10000;
@@ -215,11 +218,17 @@ SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimates) {
         auto do_test = [&] (int estimated_partition_count, bool expect_rebuild, std::string origin = "") {
             // create sstable with the estimated partition count
             auto sst = make_sstable_easy(env, make_mutation_reader_from_mutations(schema, env.make_reader_permit(), mutations),
-                                         env.manager().configure_writer(origin), sstables::get_highest_sstable_version(), estimated_partition_count);
+                                         env.manager().configure_writer(origin), version, estimated_partition_count);
 
             auto filter1 = static_cast<utils::filter::bloom_filter*>(sstables::test(sst).get_filter().get());
 
-            if (!expect_rebuild) {
+            // Note: sstables with BTI indexes (i.e. with `!has_summary_and_index(version)`)
+            // currently ignore the partition count estimate,
+            // and instead they always build the bloom filter
+            // in a second pass over the keys (actually: hashes of keys)
+            // after the count is known.
+            // So their bloom filters always have optimal size and don't need the rebuild mechanism.
+            if (!expect_rebuild && has_summary_and_index(version)) {
                 // Verify that the filter was not rebuilt
                 BOOST_REQUIRE_EQUAL(filter1->bits().memory_size(),
                     utils::i_filter::get_filter_size(estimated_partition_count, schema->bloom_filter_fp_chance()));
@@ -243,6 +252,7 @@ SEASTAR_TEST_CASE(test_bloom_filters_with_bad_partition_estimates) {
         do_test(actual_partition_count - 900, false); // |curr_size(11388) - optimal_size(12508)| < 10% of curr_size(11388)
         do_test(actual_partition_count + 2500, false); // curr_size(15636) not optimal but < 16K
         do_test(actual_partition_count * 2, false, "garbage_collection"); // curr_size is too large(25012) but origin is garbage_collection
+      }
     });
 };
 
@@ -417,5 +427,82 @@ SEASTAR_TEST_CASE(test_components_memory_reclaim_threshold_liveupdateness) {
         // limit available memory to the sstables_manager to test reclaiming.
         // this will set the reclaim threshold to 200 bytes.
         .available_memory = 1000
+    });
+}
+
+// Test the "delayed filter" mechanism used by trie-indexed sstables,
+// where the writer writes hashes to TemporaryHashes.db,
+// and only at the end of the stream a bloom filter is built from the hashes.
+//
+// The test creates two sstables: one `me` sstable with a perfect partition count estimate,
+// and one `ms` sstable with a bad partition count estimate.
+// It expects both sstables to end up with identical bloom filters after the end of the writer stream.
+SEASTAR_TEST_CASE(test_rebuild_from_temporary_hashes) {
+    return test_env::do_with_async([] (test_env& env) {
+        const float bloom_filter_fp_chance = 0.01;
+        const float approx_expected_filter_bytes_per_element = 1.25;
+        auto s = schema_builder("ks", "test_rebuild_from_temporary_hashes")
+                .with_column("pk", long_type, column_kind::partition_key)
+                .set_bloom_filter_fp_chance(bloom_filter_fp_chance)
+                .build();
+
+        // Making this random should increase the strength of the test somewhat.
+        const auto n_partitions = tests::random::get_int<uint64_t>(1, 1000);
+        const auto bad_estimate = n_partitions / 3;
+
+        auto cfg = env.manager().configure_writer();
+        auto enc_stats = encoding_stats();
+        auto partition_tombstone = tombstone(api::new_timestamp(), gc_clock::now());
+        
+        auto sst_perfect_estimate = env.make_sstable(s, sstables::sstable_version_types::me);
+        auto sst_perfect_estimate_wr = sst_perfect_estimate->get_writer(*s, n_partitions, cfg, enc_stats);
+        auto sst_temporary_hashes = env.make_sstable(s, sstables::sstable_version_types::ms);
+        auto sst_temporary_hashes_wr = sst_temporary_hashes->get_writer(*s, bad_estimate, cfg, enc_stats);
+
+        std::vector<dht::decorated_key> dks;
+        for (int64_t pk = 0; dks.size() < n_partitions; pk++) {
+            auto dk = dht::decorate_key(*s, partition_key::from_singular(*s, pk));
+            if (s->get_sharder().shard_of(dk.token()) != this_shard_id()) {
+                // This ensures that we use keys owned by this shard,
+                // which prevents complaints about "failing to generate sharding metadata"
+                // coming from the sstable.
+                continue;
+            }
+            dks.push_back(std::move(dk));
+        }
+        std::ranges::sort(dks, dht::decorated_key::less_comparator(s));
+        for (const auto& dk : dks) {
+            for (auto wr : {std::ref(sst_perfect_estimate_wr), std::ref(sst_temporary_hashes_wr)}) {
+                wr.get().consume_new_partition(dk);
+                wr.get().consume(partition_tombstone);
+                wr.get().consume_end_of_partition();
+            }
+        }
+
+        // Sanity check. We expect the `me` sstable to be building the filter online,
+        // and we expect `ms` sstables to defer the filter building until the end of the stream.
+        // This is a sanity check that we are actually testing the rebuild mechanism,
+        // not a property that we want to preserve.
+        uint64_t size_check_leeway_bytes = 16;
+        BOOST_REQUIRE(sstables::test(sst_perfect_estimate).get_filter());
+        BOOST_REQUIRE_GT(sst_perfect_estimate->filter_memory_size() + size_check_leeway_bytes, size_t(approx_expected_filter_bytes_per_element * n_partitions / 2));
+        BOOST_REQUIRE_LT(sst_perfect_estimate->filter_memory_size(), size_t(approx_expected_filter_bytes_per_element * n_partitions * 2) + size_check_leeway_bytes);
+        BOOST_REQUIRE_EQUAL(sstables::test(sst_temporary_hashes).get_filter(), nullptr);
+
+        for (auto wr : {std::ref(sst_perfect_estimate_wr), std::ref(sst_temporary_hashes_wr)}) {
+            wr.get().consume_end_of_stream();
+        }
+
+        // The main check. We expect both sstables to end up with bit-identical bloom filters.
+        auto& perfect_filter = dynamic_cast<utils::filter::bloom_filter&>(*sstables::test(sst_perfect_estimate).get_filter());
+        auto& filter_rebuilt_from_temporary_hashes = dynamic_cast<utils::filter::bloom_filter&>(*sstables::test(sst_temporary_hashes).get_filter());
+        BOOST_REQUIRE_EQUAL(perfect_filter.memory_size(), filter_rebuilt_from_temporary_hashes.memory_size());
+        BOOST_REQUIRE_EQUAL_COLLECTIONS(perfect_filter.bits().get_storage().begin(), perfect_filter.bits().get_storage().end(),
+            filter_rebuilt_from_temporary_hashes.bits().get_storage().begin(), filter_rebuilt_from_temporary_hashes.bits().get_storage().end());
+
+        // Sanity check: verify that the bloom filter doens't return incorrect answers.
+        for (const auto& dk : dks) {
+            BOOST_REQUIRE(sst_temporary_hashes->filter_has_key(sstables::key::from_partition_key(*s, dk._key)));
+        }
     });
 }

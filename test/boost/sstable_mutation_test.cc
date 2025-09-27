@@ -1178,14 +1178,14 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
             testlog.trace("est = {}", max_est);
 
             {
-                auto est = sst->estimated_keys_for_range(dht::token_range::make_open_ended_both_sides());
+                auto est = sst->estimated_keys_for_range(dht::token_range::make_open_ended_both_sides()).get();
                 testlog.trace("est([-inf; +inf]) = {}", est);
                 BOOST_REQUIRE_EQUAL(est, sst->get_estimated_key_count());
             }
 
             for (int size : {1, 64, 256, 512, 1024, 4096, count}) {
                 auto r = dht::token_range::make(pks[0].token(), pks[size - 1].token());
-                auto est = sst->estimated_keys_for_range(r);
+                auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est([0; {}] = {}", size - 1, est);
                 BOOST_REQUIRE_GE(est, size);
                 BOOST_REQUIRE_LE(est, max_est);
@@ -1195,7 +1195,7 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
                 auto lower = 5000;
                 auto upper = std::min(count - 1, lower + size - 1);
                 auto r = dht::token_range::make(pks[lower].token(), pks[upper].token());
-                auto est = sst->estimated_keys_for_range(r);
+                auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est([{}; {}]) = {}", lower, upper, est);
                 BOOST_REQUIRE_GE(est, upper - lower + 1);
                 BOOST_REQUIRE_LE(est, max_est);
@@ -1203,14 +1203,14 @@ SEASTAR_TEST_CASE(test_key_count_estimation) {
 
             {
                 auto r = dht::token_range::make(all_pks[0].token(), all_pks[0].token());
-                auto est = sst->estimated_keys_for_range(r);
+                auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est(non-overlapping to the left) = {}", est);
                 BOOST_REQUIRE_EQUAL(est, 0);
             }
 
             {
                 auto r = dht::token_range::make(all_pks[all_pks.size() - 1].token(), all_pks[all_pks.size() - 1].token());
-                auto est = sst->estimated_keys_for_range(r);
+                auto est = sst->estimated_keys_for_range(r).get();
                 testlog.trace("est(non-overlapping to the right) = {}", est);
                 BOOST_REQUIRE_EQUAL(est, 0);
             }

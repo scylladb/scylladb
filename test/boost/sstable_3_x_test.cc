@@ -3166,10 +3166,22 @@ static sstring get_write_test_path(sstring table_name) {
 
 // This method should not be called for compressed sstables because compression is not deterministic
 static void compare_sstables(const std::filesystem::path& result_path, sstring table_name, sstable_version_types version, sstables::shared_sstable sst) {
-    for (auto file_type : {component_type::Data,
-                           component_type::Index,
-                           component_type::Digest,
-                           component_type::Filter}) {
+    // Note: for `ms`, we could test that Partition.db and Rows.db don't change
+    // over time, but do we want that?
+    // Index.db depends only on one parameter aside from the data itself: the index block size.
+    // But Partitions.db and Rows.db are more free-form than that. The writer can freely choose
+    // node types and moves nodes around the file.
+    auto file_types = has_summary_and_index(version)
+        ? std::vector<component_type>{
+            component_type::Data, 
+            component_type::Index,
+            component_type::Digest,
+            component_type::Filter}
+        : std::vector<component_type>{
+            component_type::Data,
+            component_type::Digest,
+            component_type::Filter};
+    for (auto file_type : file_types) {
         auto orig_filename =
                 sstable::filename(get_write_test_path(table_name),
                                   "ks", table_name, sstables::sstable_version_types::mc, generation_from_value(1), big, file_type);
@@ -3231,10 +3243,11 @@ static sstable_assertions validate_read(test_env& env, shared_sstable input_sst,
     return sst;
 }
 
-constexpr std::array<sstable_version_types, 3> test_sstable_versions = {
+constexpr std::array<sstable_version_types, 4> test_sstable_versions = {
     sstable_version_types::mc,
     sstable_version_types::md,
     sstable_version_types::me,
+    sstable_version_types::ms,
 };
 
 static void write_mut_and_compare_sstables_version(test_env& env, schema_ptr s, mutation& mut, const sstring& table_name,
