@@ -515,6 +515,7 @@ scylla_tests = set([
     'test/boost/log_heap_test',
     'test/boost/logalloc_standard_allocator_segment_pool_backend_test',
     'test/boost/logalloc_test',
+    'test/boost/lru_string_map_test',
     'test/boost/managed_bytes_test',
     'test/boost/managed_vector_test',
     'test/boost/map_difference_test',
@@ -1328,6 +1329,7 @@ alternator = [
        'alternator/serialization.cc',
        'alternator/expressions.cc',
        Antlr3Grammar('alternator/expressions.g'),
+       'alternator/parsed_expression_cache.cc',
        'alternator/conditions.cc',
        'alternator/consumed_capacity.cc',
        'alternator/auth.cc',
@@ -1462,6 +1464,7 @@ pure_boost_tests = set([
     'test/boost/keys_test',
     'test/boost/like_matcher_test',
     'test/boost/linearizing_input_stream_test',
+    'test/boost/lru_string_map_test',
     'test/boost/map_difference_test',
     'test/boost/nonwrapping_interval_test',
     'test/boost/observable_test',
@@ -1478,7 +1481,6 @@ pure_boost_tests = set([
 ])
 
 tests_not_using_seastar_test_framework = set([
-    'test/boost/alternator_unit_test',
     'test/boost/small_vector_test',
     'test/manual/gossip',
     'test/manual/message',

@@ -669,13 +669,13 @@ def test_filter_expression_and_sort_key_condition(test_table_sn_with_data):
 # In particular, test that FilterExpression may inspect attributes which will
 # not be returned by the query, because of the ProjectionExpression.
 # This test reproduces issue #6951.
-def test_filter_expression_and_projection_expression(test_table):
+def test_filter_expression_and_projection_expression(test_table_ss):
     p = random_string()
-    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
-    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
     # Note that the filter is on the column x, but x is not included in the
     # results because of ProjectionExpression. The filter should still work.
-    got_items = full_query(test_table,
+    got_items = full_query(test_table_ss,
         KeyConditionExpression='p=:p',
         FilterExpression='x=:x',
         ProjectionExpression='y',
@@ -697,12 +697,12 @@ def test_filter_expression_and_projection_expression(test_table):
 # future we add an optimization to not read ":attrs" when not needed, this
 # test will make sure "when not needed" remembers also the filtering.
 # This test also reproduces issue #6951.
-def test_filter_expression_and_projection_expression_2(test_table):
+def test_filter_expression_and_projection_expression_2(test_table_ss):
     p = random_string()
-    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
     # Note that the filter is on the column x, but x is not included in the
     # results because of ProjectionExpression. The filter should still work.
-    got_items = full_query(test_table,
+    got_items = full_query(test_table_ss,
         KeyConditionExpression='p=:p',
         FilterExpression='x=:x',
         ProjectionExpression='p',
@@ -712,11 +712,11 @@ def test_filter_expression_and_projection_expression_2(test_table):
 # Test that a FilterExpression and Select=COUNT may be given together. Namely,
 # test that FilterExpression may inspect attributes which will not be returned
 # by the query, because the responses are just counted.
-def test_filter_expression_and_select_count(test_table):
+def test_filter_expression_and_select_count(test_table_ss):
     p = random_string()
-    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
-    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
-    (prefilter_count, postfilter_count, pages, got_items) = full_query_and_counts(test_table,
+    test_table_ss.put_item(Item={'p': p, 'c': 'hi', 'x': 'dog', 'y': 'cat'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'yo', 'x': 'mouse', 'y': 'horse'})
+    (prefilter_count, postfilter_count, pages, got_items) = full_query_and_counts(test_table_ss,
         KeyConditionExpression='p=:p',
         FilterExpression='x=:x',
         Select='COUNT',
@@ -730,14 +730,14 @@ def test_filter_expression_and_select_count(test_table):
 # It is not allowed to combine the new-style FilterExpression with the
 # old-style AttributesToGet. You must use ProjectionExpression instead
 # (tested in test_filter_expression_and_projection_expression() above).
-def test_filter_expression_and_attributes_to_get(test_table):
+def test_filter_expression_and_attributes_to_get(test_table_ss):
     p = random_string()
     # DynamoDB complains: "Can not use both expression and non-expression
     # parameters in the same request: Non-expression parameters:
     # {AttributesToGet} Expression parameters: {FilterExpression,
     # KeyConditionExpression}.
     with pytest.raises(ClientError, match='ValidationException.* both'):
-        full_query(test_table,
+        full_query(test_table_ss,
             KeyConditionExpression='p=:p',
             FilterExpression='x=:x',
             AttributesToGet=['y'],
@@ -748,11 +748,11 @@ def test_filter_expression_and_attributes_to_get(test_table):
 # support that too. This test just checks one operators - we don't
 # test all the different operators again here, we will assume the same
 # code is used internally so if one operator worked, all will work.
-def test_filter_expression_nested_attribute(test_table):
+def test_filter_expression_nested_attribute(test_table_ss):
     p = random_string()
-    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': {'a': 'dog', 'b': 3}})
-    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': {'a': 'mouse', 'b': 4}})
-    got_items = full_query(test_table,
+    test_table_ss.put_item(Item={'p': p, 'c': 'hi', 'x': {'a': 'dog', 'b': 3}})
+    test_table_ss.put_item(Item={'p': p, 'c': 'yo', 'x': {'a': 'mouse', 'b': 4}})
+    got_items = full_query(test_table_ss,
         KeyConditionExpression='p=:p',
         FilterExpression='x.a=:a',
         ExpressionAttributeValues={':p': p, ':a': 'mouse'})
@@ -765,26 +765,26 @@ def test_filter_expression_nested_attribute(test_table):
 # sub-attributes of the same top-level attribute, or one be a sub-attribute
 # of the other. We need to verify that these corner cases work correctly.
 # This test reproduces issue #6951 (for the nested attribute case).
-def test_filter_expression_and_projection_expression_nested(test_table):
+def test_filter_expression_and_projection_expression_nested(test_table_ss):
     p = random_string()
-    test_table.put_item(Item={'p': p, 'c': 'hi', 'x': {'a': 'dog', 'b': 3}, 'y': 'cat'})
-    test_table.put_item(Item={'p': p, 'c': 'yo', 'x': {'a': 'mouse', 'b': 4}, 'y': 'horse'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'hi', 'x': {'a': 'dog', 'b': 3}, 'y': 'cat'})
+    test_table_ss.put_item(Item={'p': p, 'c': 'yo', 'x': {'a': 'mouse', 'b': 4}, 'y': 'horse'})
     # Case 1: filter on x.a, but project only x.b:
-    got_items = full_query(test_table,
+    got_items = full_query(test_table_ss,
         KeyConditionExpression='p=:p',
         FilterExpression='x.a=:a',
         ProjectionExpression='x.b',
         ExpressionAttributeValues={':p': p, ':a': 'mouse'})
     assert(got_items == [{'x': {'b': 4}}])
     # Case 2: filter on x.a, project entire x:
-    got_items = full_query(test_table,
+    got_items = full_query(test_table_ss,
         KeyConditionExpression='p=:p',
         FilterExpression='x.a=:a',
         ProjectionExpression='x',
         ExpressionAttributeValues={':p': p, ':a': 'mouse'})
     assert(got_items == [{'x': {'a': 'mouse', 'b': 4}}])
     # Case 3: filter on entire x, project only x.a:
-    got_items = full_query(test_table,
+    got_items = full_query(test_table_ss,
         KeyConditionExpression='p=:p',
         FilterExpression='x=:x',
         ProjectionExpression='x.a',
