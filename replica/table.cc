@@ -445,40 +445,6 @@ api::timestamp_type table::min_memtable_live_row_marker_timestamp() const {
         | std::views::transform(std::mem_fn(&storage_group::min_memtable_live_row_marker_timestamp)));
 }
 
-// Not performance critical. Currently used for testing only.
-future<bool>
-table::for_all_partitions_slow(schema_ptr s, reader_permit permit, std::function<bool (const dht::decorated_key&, const mutation_partition&)> func) const {
-    struct iteration_state {
-        mutation_reader reader;
-        std::function<bool (const dht::decorated_key&, const mutation_partition&)> func;
-        bool ok = true;
-        bool empty = false;
-    public:
-        bool done() const { return !ok || empty; }
-        iteration_state(schema_ptr s, reader_permit permit, const column_family& cf,
-                std::function<bool (const dht::decorated_key&, const mutation_partition&)>&& func)
-            : reader(cf.make_mutation_reader(std::move(s), std::move(permit)))
-            , func(std::move(func))
-        { }
-    };
-
-    return do_with(iteration_state(std::move(s), std::move(permit), *this, std::move(func)), [] (iteration_state& is) {
-        return do_until([&is] { return is.done(); }, [&is] {
-            return read_mutation_from_mutation_reader(is.reader).then([&is](mutation_opt&& mo) {
-                if (!mo) {
-                    is.empty = true;
-                } else {
-                    is.ok = is.func(mo->decorated_key(), mo->partition());
-                }
-            });
-        }).then([&is] {
-            return is.ok;
-        }).finally([&is] {
-            return is.reader.close();
-        });
-    });
-}
-
 static bool belongs_to_current_shard(const std::vector<shard_id>& shards) {
     return std::ranges::contains(shards, this_shard_id());
 }
