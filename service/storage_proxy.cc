@@ -1876,7 +1876,7 @@ public:
         return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
             _rate_limit_info,
             *_effective_replication_map_ptr,
-            storage_proxy::get_fence(*_effective_replication_map_ptr));
+            storage_proxy::get_fence(*_effective_replication_map_ptr)).finally([op = std::move(op)]{});
     }
     future<> apply_remotely(locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
