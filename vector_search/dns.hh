@@ -16,7 +16,7 @@
 #include <seastar/core/sstring.hh>
 #include "utils/log.hh"
 #include <chrono>
-#include <optional>
+#include <map>
 #include <vector>
 #include <functional>
 #include <seastar/net/inet_address.hh>
@@ -27,9 +27,10 @@ class dns {
 public:
     using address_type = std::vector<seastar::net::inet_address>;
     using resolver_type = std::function<seastar::future<address_type>(seastar::sstring const&)>;
-    using listener_type = std::function<seastar::future<>(address_type const&)>;
+    using host_address_map = std::unordered_map<seastar::sstring, address_type>;
+    using listener_type = std::function<seastar::future<>(host_address_map const&)>;
 
-    explicit dns(logging::logger& logger, std::optional<seastar::sstring> host, listener_type listener);
+    explicit dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener);
 
     void start_background_tasks();
 
@@ -37,9 +38,9 @@ public:
         _refresh_interval = interval;
     }
 
-    void host(std::optional<seastar::sstring> h) {
-        current_addrs.clear();
-        _host = std::move(h);
+    void hosts(std::vector<seastar::sstring> hosts) {
+        _addresses.clear();
+        _hosts = std::move(hosts);
         trigger_refresh();
     }
 
@@ -69,8 +70,8 @@ private:
     std::chrono::milliseconds _refresh_interval;
     seastar::condition_variable refresh_cv;
     resolver_type _resolver;
-    std::optional<seastar::sstring> _host;
-    std::vector<seastar::net::inet_address> current_addrs;
+    std::vector<seastar::sstring> _hosts;
+    host_address_map _addresses;
     listener_type _listener;
 };
 

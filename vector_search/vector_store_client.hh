@@ -103,12 +103,6 @@ public:
     /// Check if the vector_store_client is disabled.
     auto is_disabled() const -> bool;
 
-    /// Get the current host name.
-    [[nodiscard]] auto host() const -> std::expected<host_name, disabled>;
-
-    /// Get the current port number.
-    [[nodiscard]] auto port() const -> std::expected<port_number, disabled>;
-
     /// Request the vector store service for the primary keys of the nearest neighbors
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
             -> future<std::expected<primary_keys, ann_error>>;

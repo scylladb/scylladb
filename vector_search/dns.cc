@@ -11,6 +11,7 @@
 #include <chrono>
 #include <fmt/format.h>
 #include <seastar/coroutine/as_future.hh>
+#include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/core/sleep.hh>
 #include <seastar/net/dns.hh>
 #include <seastar/core/on_internal_error.hh>
@@ -41,7 +42,7 @@ auto wait_for_timeout(lowres_clock::duration timeout, abort_source& as) -> futur
 
 } // namespace
 
-dns::dns(logging::logger& logger, std::optional<seastar::sstring> host, listener_type listener)
+dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener)
     : vslogger(logger)
     , _refresh_interval(DNS_REFRESH_INTERVAL)
     , _resolver([](auto const& host) -> future<address_type> {
@@ -57,7 +58,7 @@ dns::dns(logging::logger& logger, std::optional<seastar::sstring> host, listener
         auto addr = co_await std::move(f);
         co_return addr.addr_list;
     })
-    , _host(std::move(host))
+    , _hosts(std::move(hosts))
     , _listener(std::move(listener)) {
 }
 
@@ -114,17 +115,14 @@ seastar::future<> dns::refresh_addr_task() {
 }
 
 seastar::future<> dns::refresh_addr() {
-    if (_host) {
-        auto new_addrs = co_await _resolver(*_host);
-        if (new_addrs != current_addrs) {
-            current_addrs = new_addrs;
-            co_await _listener(current_addrs);
-        }
-    } else {
-        if (!current_addrs.empty()) {
-            current_addrs.clear();
-            co_await _listener(current_addrs);
-        }
+    host_address_map new_addrs;
+    auto copy = _hosts;
+    co_await coroutine::parallel_for_each(std::move(copy), [this, &new_addrs](const sstring& host) -> future<> {
+        new_addrs[host] = co_await _resolver(host);
+    });
+    if (new_addrs != _addresses) {
+        _addresses = new_addrs;
+        co_await _listener(_addresses);
     }
 }
 

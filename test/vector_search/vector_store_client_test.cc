@@ -344,36 +344,19 @@ auto make_vs_mock_server(Args&&... args) -> future<std::unique_ptr<vs_mock_serve
 } // namespace
 
 BOOST_AUTO_TEST_CASE(vector_store_client_test_ctor) {
-    {
-        auto cfg = config();
-        auto vs = vector_store_client{cfg};
-        BOOST_CHECK(vs.is_disabled());
-        BOOST_CHECK(!vs.host());
-        BOOST_CHECK(!vs.port());
-    }
-    {
-        auto cfg = config();
-        cfg.vector_store_primary_uri.set("http://good.authority.com:6080");
-        auto vs = vector_store_client{cfg};
-        BOOST_CHECK(!vs.is_disabled());
-        BOOST_CHECK_EQUAL(*vs.host(), "good.authority.com");
-        BOOST_CHECK_EQUAL(*vs.port(), 6080);
-    }
-    {
-        auto cfg = config();
-        cfg.vector_store_primary_uri.set("http://bad,authority.com:6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("bad-schema://authority.com:6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://bad.port.com:a6080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://bad.port.com:60806080");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://bad.format.com:60:80");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-        cfg.vector_store_primary_uri.set("http://authority.com:6080/bad/path");
-        BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
-    }
+    auto cfg = config();
+    cfg.vector_store_primary_uri.set("http://bad,authority.com:6080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("bad-schema://authority.com:6080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://bad.port.com:a6080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://bad.port.com:60806080");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://bad.format.com:60:80");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
+    cfg.vector_store_primary_uri.set("http://authority.com:6080/bad/path");
+    BOOST_CHECK_THROW(vector_store_client{cfg}, configuration_exception);
 }
 
 /// Resolving of the hostname is started in start_background_tasks()
@@ -819,7 +802,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_high_availability_host_resolved_to_multiple_ips) {
+SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
 
     auto responding_s = co_await make_vs_mock_server();
     auto unavail_s = co_await make_unavailable_server(responding_s->port());
@@ -831,7 +814,7 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_host_resolved_to_multipl
                 auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "idx");
                 auto& vs = env.local_qp().vector_store_client();
-                configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{unavail_s->host(), LOCALHOST}}});
+                configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{unavail_s->host(), responding_s->host()}}});
                 vs.start_background_tasks();
                 std::expected<vector_store_client::primary_keys, vector_store_client::ann_error> keys;
 
@@ -853,7 +836,7 @@ SEASTAR_TEST_CASE(vector_store_client_high_availability_host_resolved_to_multipl
             }));
 }
 
-SEASTAR_TEST_CASE(vector_store_client_load_balancing) {
+SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
 
     auto s1 = co_await make_vs_mock_server();
     auto s2 = co_await make_vs_mock_server(s1->port());
@@ -866,6 +849,70 @@ SEASTAR_TEST_CASE(vector_store_client_load_balancing) {
                 auto schema = co_await create_test_table(env, "ks", "idx");
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{s1->host(), s2->host()}}});
+                vs.start_background_tasks();
+
+                // Wait until requests are handled by both servers.
+                // The load balancing algorithm is random, so we send requests in a loop
+                // until both servers have received at least one, verifying that load is distributed.
+                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    co_return s1->requests() > 0 && s2->requests() > 0;
+                }));
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&s1, &s2] -> future<> {
+                co_await s1->stop();
+                co_await s2->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
+
+    auto responding_s = co_await make_vs_mock_server();
+    auto unavail_s = co_await make_unavailable_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{},http://s2.node:{}", unavail_s->port(), responding_s->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"s1.node", std::vector<std::string>{unavail_s->host()}}, {"s2.node", std::vector<std::string>{responding_s->host()}}});
+                vs.start_background_tasks();
+                std::expected<vector_store_client::primary_keys, vector_store_client::ann_error> keys;
+
+                // Because requests are distributed in random order due to load balancing,
+                // repeat the ANN query until the unavailable server is queried.
+                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    co_return unavail_s->connections() > 1;
+                }));
+
+                // The query is successful because the client falls back to the available server
+                // when the attempt to connect to the unavailable one fails.
+                BOOST_CHECK(keys);
+            },
+            cfg)
+            .finally(seastar::coroutine::lambda([&responding_s, &unavail_s] -> future<> {
+                co_await responding_s->stop();
+                co_await unavail_s->stop();
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
+
+    auto s1 = co_await make_vs_mock_server();
+    auto s2 = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{},http://s2.node:{}", s1->port(), s2->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"s1.node", std::vector<std::string>{s1->host()}}, {"s2.node", std::vector<std::string>{s2->host()}}});
                 vs.start_background_tasks();
 
                 // Wait until requests are handled by both servers.
