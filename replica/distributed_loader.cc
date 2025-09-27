@@ -458,7 +458,7 @@ future<> distributed_loader::populate_keyspace(sharded<replica::database>& db,
             dblog.error("{}", msg);
             try {
                 std::rethrow_exception(eptr);
-            } catch (sstables::compaction_stopped_exception& e) {
+            } catch (compaction::compaction_stopped_exception& e) {
                 // swallow compaction stopped exception, to allow clean shutdown.
             } catch (...) {
                 ex = std::make_exception_ptr(std::runtime_error(msg.c_str()));

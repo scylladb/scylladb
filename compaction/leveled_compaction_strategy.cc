@@ -9,6 +9,7 @@
 #include "leveled_compaction_strategy.hh"
 #include "leveled_manifest.hh"
 #include "compaction_strategy_state.hh"
+#include "sstables/sstable_set_impl.hh"
 #include <algorithm>
 
 namespace compaction {
@@ -253,6 +254,10 @@ unsigned leveled_compaction_strategy::ideal_level_for_input(const std::vector<ss
 
 leveled_compaction_strategy_state::leveled_compaction_strategy_state() {
     compaction_counter.resize(leveled_manifest::MAX_LEVELS);
+}
+
+std::unique_ptr<sstables::sstable_set_impl> leveled_compaction_strategy::make_sstable_set(const compaction_group_view& ts) const {
+    return std::make_unique<sstables::partitioned_sstable_set>(ts.schema(), ts.token_range());
 }
 
 }

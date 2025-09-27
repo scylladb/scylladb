@@ -21,7 +21,6 @@
 #include <seastar/coroutine/switch_to.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/maybe_yield.hh>
-#include "sstables/exceptions.hh"
 #include "sstables/sstable_directory.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
@@ -343,12 +342,12 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_tas
         auto&& res = co_await task->run_compaction();
         cmlog.debug("{}: done", *task);
         co_return res;
-    } catch (sstables::compaction_stopped_exception& e) {
+    } catch (compaction_stopped_exception& e) {
         cmlog.info("{}: stopped, reason: {}", *task, e.what());
         if (do_throw_if_stopping) {
             throw;
         }
-    } catch (sstables::compaction_aborted_exception& e) {
+    } catch (compaction_aborted_exception& e) {
         cmlog.error("{}: aborted, reason: {}", *task, e.what());
         _stats.errors++;
         throw;
@@ -951,7 +950,7 @@ future<semaphore_units<named_semaphore_exception_factory>> compaction_task_execu
     return seastar::get_units(sem, units, _compaction_data.abort).handle_exception_type([this] (const abort_requested_exception& e) {
         auto s = _compacting_table->schema();
         return make_exception_future<semaphore_units<named_semaphore_exception_factory>>(
-                sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), e.what()));
+                compaction_stopped_exception(s->ks_name(), s->cf_name(), e.what()));
     });
 }
 
@@ -981,9 +980,9 @@ void compaction_task_executor::stop_compaction(sstring reason) noexcept {
     _compaction_data.stop(std::move(reason));
 }
 
-sstables::compaction_stopped_exception compaction_task_executor::make_compaction_stopped_exception() const {
+compaction_stopped_exception compaction_task_executor::make_compaction_stopped_exception() const {
     auto s = _compacting_table->schema();
-    return sstables::compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
+    return compaction_stopped_exception(s->ks_name(), s->cf_name(), _compaction_data.stop_requested);
 }
 
 class compaction_manager::strategy_control : public compaction::strategy_control {
@@ -1186,7 +1185,7 @@ future<> compaction_manager::await_tasks(std::vector<shared_ptr<compaction_task_
         auto unlink_task = deferred_action([task, task_stopped] { if (task_stopped) { task->unlink(); } });
         try {
             co_await task->compaction_done();
-        } catch (sstables::compaction_stopped_exception&) {
+        } catch (compaction_stopped_exception&) {
             // swallow stop exception if a given procedure decides to propagate it to the caller,
             // as it happens with reshard and reshape.
         } catch (...) {
@@ -1344,9 +1343,9 @@ inline bool compaction_task_executor::can_proceed(throw_if_stopping do_throw_if_
 future<stop_iteration> compaction_task_executor::maybe_retry(std::exception_ptr err, bool throw_on_abort) {
     try {
         std::rethrow_exception(err);
-    } catch (sstables::compaction_stopped_exception& e) {
+    } catch (compaction_stopped_exception& e) {
         cmlog.info("{}: {}: stopping", *this, e.what());
-    } catch (sstables::compaction_aborted_exception& e) {
+    } catch (compaction_aborted_exception& e) {
         cmlog.error("{}: {}: stopping", *this, e.what());
         _cm._stats.errors++;
         if (throw_on_abort) {
@@ -1611,7 +1610,7 @@ private:
                 compaction_result _ = co_await compact_sstables(std::move(*desc), _compaction_data, on_replace,
                                                                           compaction_manager::can_purge_tombstones::no,
                                                                           sstables::offstrategy::yes);
-            } catch (sstables::compaction_stopped_exception&) {
+            } catch (compaction_stopped_exception&) {
                 // If off-strategy compaction stopped on user request, let's not discard the partial work.
                 // Therefore, both un-reshaped and reshaped data will be integrated into main set, allowing
                 // regular compaction to continue from where off-strategy left off.
@@ -1927,7 +1926,7 @@ private:
                     sst->run_identifier(),
                     compaction_type_options::make_scrub(compaction_type_options::scrub::mode::validate, _quarantine_sstables));
             co_return co_await ::compaction::compact_sstables(std::move(desc), _compaction_data, *_compacting_table, _progress_monitor);
-        } catch (sstables::compaction_stopped_exception&) {
+        } catch (compaction_stopped_exception&) {
             // ignore, will be handled by can_proceed()
         } catch (storage_io_error& e) {
             cmlog.error("{}: failed due to storage io error: {}: stopping", *this, e.what());

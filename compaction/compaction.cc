@@ -28,6 +28,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "compaction/compaction_garbage_collector.hh"
+#include "compaction/exceptions.hh"
 #include "dht/i_partitioner.hh"
 #include "sstables/exceptions.hh"
 #include "sstables/sstables.hh"
@@ -1131,7 +1132,7 @@ compacted_fragments_writer::compacted_fragments_writer(compacted_fragments_write
 void compacted_fragments_writer::maybe_abort_compaction() {
     if (_c._cdata.is_stop_requested()) [[unlikely]] {
         // Compaction manager will catch this exception and re-schedule the compaction.
-        throw sstables::compaction_stopped_exception(_c._schema->ks_name(), _c._schema->cf_name(), _c._cdata.stop_requested);
+        throw compaction_stopped_exception(_c._schema->ks_name(), _c._schema->cf_name(), _c._cdata.stop_requested);
     }
 }
 
@@ -1541,7 +1542,7 @@ private:
         void maybe_abort_scrub(std::function<void()> report_error) {
             if (_scrub_mode == compaction_type_options::scrub::mode::abort) {
                 report_error();
-                throw sstables::compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
+                throw compaction_aborted_exception(_schema->ks_name(), _schema->cf_name(), "scrub compaction found invalid data");
             }
             ++_validation_errors;
         }
@@ -1555,7 +1556,7 @@ private:
 
             auto pe = mutation_fragment_v2(*_schema, _permit, partition_end{});
             if (!_validator(pe)) {
-                throw sstables::compaction_aborted_exception(
+                throw compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
                         "scrub compaction failed to rectify unexpected partition-start, validator rejects the injected partition-end");
@@ -1563,7 +1564,7 @@ private:
             push_mutation_fragment(std::move(pe));
 
             if (!_validator(ps)) {
-                throw sstables::compaction_aborted_exception(
+                throw compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
                         "scrub compaction failed to rectify unexpected partition-start, validator rejects it even after the injected partition-end");
@@ -1595,7 +1596,7 @@ private:
             const auto& key = _validator.previous_partition_key();
 
             if (_validator.current_tombstone()) {
-                throw sstables::compaction_aborted_exception(
+                throw compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
                         "scrub compaction cannot handle invalid fragments with an active range tombstone change");
@@ -1635,7 +1636,7 @@ private:
 
         void on_malformed_sstable_exception(std::exception_ptr e) {
             if (_scrub_mode != compaction_type_options::scrub::mode::skip) {
-                throw sstables::compaction_aborted_exception(
+                throw compaction_aborted_exception(
                         _schema->ks_name(),
                         _schema->cf_name(),
                         format("scrub compaction failed due to unrecoverable error: {}", e));
@@ -1659,7 +1660,7 @@ private:
         }
 
         void fill_buffer_from_underlying() {
-            utils::get_local_injector().inject("rest_api_keyspace_scrub_abort", [] { throw sstables::compaction_aborted_exception("", "", "scrub compaction found invalid data"); });
+            utils::get_local_injector().inject("rest_api_keyspace_scrub_abort", [] { throw compaction_aborted_exception("", "", "scrub compaction found invalid data"); });
             while (!_reader.is_buffer_empty() && !is_buffer_full()) {
                 auto mf = _reader.pop_mutation_fragment();
                 if (mf.is_partition_start()) {
@@ -1724,7 +1725,7 @@ private:
             }).handle_exception([this] (std::exception_ptr e) {
                 try {
                     std::rethrow_exception(std::move(e));
-                } catch (const sstables::compaction_job_exception&) {
+                } catch (const compaction_job_exception&) {
                     // Propagate these unchanged.
                     throw;
                 } catch (const storage_io_error&) {
@@ -1734,7 +1735,7 @@ private:
                     on_malformed_sstable_exception(std::current_exception());
                 } catch (...) {
                     // We don't want failed scrubs to be retried.
-                    throw sstables::compaction_aborted_exception(
+                    throw compaction_aborted_exception(
                             _schema->ks_name(),
                             _schema->cf_name(),
                             format("scrub compaction failed due to unrecoverable error: {}", std::current_exception()));
@@ -2024,7 +2025,7 @@ static future<compaction_result> scrub_sstables_validate_mode(compaction_descrip
         // Did validation actually finish because aborted?
         if (cdata.is_stop_requested()) {
             // Compaction manager will catch this exception and re-schedule the compaction.
-            throw sstables::compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
+            throw compaction_stopped_exception(schema->ks_name(), schema->cf_name(), cdata.stop_requested);
         }
 
         clogger.info("Finished scrubbing in validate mode {} - sstable is {}", sst->get_filename(), validation_errors == 0 ? "valid" : "invalid");
