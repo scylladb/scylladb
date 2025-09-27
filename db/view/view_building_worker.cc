@@ -674,9 +674,11 @@ void view_building_worker::batch::start() {
     state = batch_state::in_progress;
     work = smp::submit_to(replica.shard, [this] () -> future<> {
         return do_work();
-    }).finally([this] () {
+    }).finally([this] () -> future<> {
+        auto& local_vbw = _vbw.local();
+        auto lock = co_await local_vbw._group0_client.hold_read_apply_mutex(local_vbw._as);
         state = batch_state::finished;
-        _vbw.local()._vb_state_machine.event.broadcast();
+        local_vbw._vb_state_machine.event.broadcast();
     });
 }
 
