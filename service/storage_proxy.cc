@@ -532,12 +532,6 @@ private:
             tracing::trace(trace_state_ptr, "Message received from /{}", src_addr);
         }
 
-        // FIXME: this is also held while mutations are send to replicas which is not needed. They are send inside mutate_counters_on_leader
-        // called below. The way to fix it is to move the entry to the phased barrier into the function, but the barrier needs to be entered
-        // before fencing so the fencing should be moves as well, but and we do fencing here because was want to avoid fetching schema for
-        // fenced writes.
-        auto op = _sp.start_write();
-
         if (auto f = _sp.apply_fence_result<replica::exception_variant>(fence_opt, src_addr)) {
             co_return co_await std::move(*f);
         }
@@ -553,10 +547,10 @@ private:
             });
         });
         auto& sp = _sp;
-        co_await sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit());
-
-        if (auto f = _sp.apply_fence_result<replica::exception_variant>(fence_opt, src_addr)) {
-            co_return co_await std::move(*f);
+        auto f = co_await coroutine::as_future(sp.mutate_counters_on_leader(std::move(mutations), cl, timeout, std::move(trace_state_ptr), /* FIXME: rpc should also pass a permit down to callbacks */ empty_service_permit(), fence_opt.value_or({}), src_addr));
+        if (f.failed()) {
+            co_return co_await encode_replica_exception_for_rpc<replica::exception_variant>(sp.features(),
+                f.get_exception());
         }
 
         co_return replica::exception_variant{};
@@ -3493,29 +3487,39 @@ fencing_token storage_proxy::get_fence(const locator::effective_replication_map&
 
 future<>
 storage_proxy::mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
-                                         tracing::trace_state_ptr trace_state, service_permit permit) {
+                                         tracing::trace_state_ptr trace_state, service_permit permit,
+                                         fencing_token fence, locator::host_id caller) {
     get_stats().received_counter_updates += mutations.size();
     {
         auto& update_ms = mutations;
         co_await coroutine::parallel_for_each(update_ms, [&] (frozen_mutation_and_schema& fm_a_s) -> future<> {
-            co_await mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state, permit);
+            co_await mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state, permit, fence, caller);
         });
     }
 }
 
 future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
-                                                      tracing::trace_state_ptr trace_state, service_permit permit) {
+                                                      tracing::trace_state_ptr trace_state, service_permit permit,
+                                                      fencing_token fence, locator::host_id caller) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
     // FIXME: This does not handle intra-node tablet migration properly.
     // Refs https://github.com/scylladb/scylladb/issues/18180
     auto shard = erm->get_sharder(*s).shard_for_reads(fm.token(*s));
     bool local = shard == this_shard_id();
     get_stats().replica_cross_shard_ops += !local;
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&proxy = container(), gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local] (replica::database& db) {
+    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&proxy = container(), gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local, fence, caller] (replica::database& db) {
         auto trace_state = gt.get();
         auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
-        return db.apply_counter_update(gs, fm, timeout, trace_state).then([&proxy, cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
+        auto op = proxy.local().start_write();
+        if (auto stale = proxy.local().check_fence(fence, caller)) {
+            return make_exception_future(std::move(stale));
+        }
+        return db.apply_counter_update(gs, fm, timeout, trace_state).then([&proxy, cl, timeout, trace_state, p = std::move(p), op = std::move(op), fence, caller] (mutation m) mutable {
+            if (auto stale = proxy.local().check_fence(fence, caller)) {
+                return make_exception_future(std::move(stale));
+            }
+            op = decltype(op){};
             return proxy.local().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(p));
         });
     });
@@ -3890,12 +3894,7 @@ future<> storage_proxy::mutate_counters(Range&& mutations, db::consistency_level
         auto endpoint = endpoint_and_mutations.first;
 
         if (endpoint == my_address) {
-            // FIXME: this is also held while mutations are send to replicas which is not needed
-            // because mutate_counters_on_leader do so internally. The way to fix it is to move the
-            // entry to the phased barrier into the function, but the function is called from the RPC
-            // handler as well and there it is more complicated. See FIXME there.
-            auto op = start_write();
-            co_await apply_fence_on_ready(this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit), fence, my_address);
+            co_await this->mutate_counters_on_leader(std::move(endpoint_and_mutations.second), cl, timeout, tr_state, permit, fence, my_address);
         } else {
             auto& mutations = endpoint_and_mutations.second;
             auto fms = mutations
