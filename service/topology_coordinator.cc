@@ -2545,6 +2545,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     muts = mark_nodes_as_cleanup_needed(node, false);
                     topology_mutation_builder builder(node.guard.write_timestamp());
                     builder.del_transition_state()
+                           .set_version(_topo_sm._topology.version + 1)
                            .with_node(node.id)
                            .set("node_state", node_state::normal);
                     muts.emplace_back(builder.build());
@@ -3075,6 +3076,56 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     }
 
     future<> start_cleanup_on_dirty_nodes(group0_guard guard, std::variant<std::pair<topology_request, raft::server_id>, utils::UUID> cmd) {
+        sstring cleanup_reason;
+        if (const auto* global_request_id = std::get_if<utils::UUID>(&cmd)) {
+            cleanup_reason = ::format("by global request {}", *global_request_id);
+        } else {
+            const auto& req = std::get<std::pair<topology_request, raft::server_id>>(cmd);
+            cleanup_reason = ::format("required by '{}' of the node {}", req.first, req.second);
+        }
+        rtlogger.info("starting vnodes cleanup {}", cleanup_reason);
+
+        // We need a barrier to make sure that no request coordinators
+        // are sending requests to old replicas/ranges that we're going to cleanup.
+        if (_topo_sm._topology.fence_version < _topo_sm._topology.version) {
+            bool fenced = false;
+            bool failed = false;
+            try {
+                rtlogger.info("vnodes cleanup {}: running global_token_metadata_barrier", cleanup_reason);
+                guard = co_await global_token_metadata_barrier(std::move(guard), _topo_sm._topology.get_excluded_nodes(), &fenced);
+            } catch (term_changed_error&) {
+                throw;
+            } catch (group0_concurrent_modification&) {
+                throw;
+            } catch (raft::request_aborted&) {
+                throw;
+            } catch (...) {
+                // The barrier does its best to ensure no data plane requests are affected
+                // by fencing. It runs barrier_and_drain command on all nodes and then
+                // commits fence_version := version to the raft group0. If the first barrier
+                // failed it runs another barrier with the new fence_version.
+                // Both of these barriers might fail, but if we managed to commit the
+                // new fence_version to group0 then we can continue with the cleanup. Why?
+                // Cleanup on a replica first calls `read_barrier()`. This ensures that
+                // new requests from old coordinators are fenced out before they start
+                // executing, preventing them from corrupting the cleaned-up replica state.
+                // There may still be active requests on the replica from the old topology
+                // if `barrier_and_drain` failed on this replica. We wait for those requests
+                // to finish using `await_pending_writes()` before starting the cleanup.
+
+                if (!fenced) {
+                    throw;
+                }
+                failed = true;
+                rtlogger.warn("vnodes cleanup {}: global_token_metadata_barrier threw an error {}; "
+                    "this is not fatal, continuing cleanup.",
+                    cleanup_reason, std::current_exception());
+            }
+            if (failed) {
+                guard = co_await start_operation();
+            }
+        }
+
         auto& topo = _topo_sm._topology;
         utils::chunked_vector<canonical_mutation> muts;
 
@@ -3094,18 +3145,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             muts.reserve(topo.normal_nodes.size());
         }
 
+        size_t nodes_to_cleanup = 0;
         for (auto& [id, rs] : topo.normal_nodes) {
             if (rs.cleanup == cleanup_status::needed) {
                 topology_mutation_builder builder(guard.write_timestamp());
                 builder.with_node(id).set("cleanup_status", cleanup_status::running);
                 muts.emplace_back(builder.build());
                 rtlogger.debug("mark node {} as cleanup running", id);
+                ++nodes_to_cleanup;
             }
         }
 
         if (!muts.empty()) {
           co_await update_topology_state(std::move(guard), std::move(muts), "Starting cleanup");
         }
+
+        rtlogger.info("vnodes cleanup {} started, nodes to cleanup {}", cleanup_reason, nodes_to_cleanup);
     }
 
     future<> run_view_building_coordinator() {
