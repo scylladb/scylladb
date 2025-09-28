@@ -3488,7 +3488,44 @@ fencing_token storage_proxy::get_fence(const locator::effective_replication_map&
             fencing_token{} : fencing_token{erm.get_token_metadata().get_version()};
 }
 
+template <typename Func, typename F>
+requires requires (Func f) {
+    { f() } -> std::same_as<typename F::type>;
+}
+F::type storage_proxy::run_fenceable_write(const locator::abstract_replication_strategy& rs,
+        fencing_token caller_token, locator::host_id caller_id,
+        Func&& write_func)
+{
+    if (auto stale = check_fence(caller_token, caller_id)) {
+        return F::make_exception_future(std::move(*stale));
+    }
+    gate::holder h{};
+    if (!rs.uses_tablets() && !rs.is_local()) {
+        // check_fence above ensures caller_token.topology_version >= fence_version,
+        // so the gate is not closed and hold() won’t throw.
+        auto& g = _pending_fenceable_writes[caller_token.topology_version];
+        if (!g) {
+            g = make_lw_shared<gate>();
+        }
+        h = g->hold();
+    }
+    return write_func().then_wrapped([this, caller_token, caller_id, h = std::move(h)](F::type f) mutable {
+        h.release();
+        if (f.failed()) {
+            return std::move(f);
+        }
+        if (auto stale = check_fence(caller_token, caller_id)) {
+            return F::make_exception_future(std::move(*stale));
+        }
+        return std::move(f);
+    });
+}
+
 void storage_proxy::update_fence_version(locator::token_metadata::version_t fence_version) {
+    const auto prev = _fence_version;
+    if (fence_version == prev) {
+        return;
+    }
     if (const auto current_version = get_token_metadata_ptr()->get_version(); fence_version > current_version) {
         // The token_metadata::version under no circumstance can go backwards.
         // Even in case of topology change coordinator moving to another node
@@ -3498,18 +3535,43 @@ void storage_proxy::update_fence_version(locator::token_metadata::version_t fenc
             format("update_fence_version: invalid new fence version, can't be greater than the current version, "
                    "current version {}, new fence version {}", current_version, fence_version));
     }
-    if (fence_version < _fence_version) {
+    if (fence_version < prev) {
         // If topology change coordinator moved to another node,
         // it can get ahead and increment the fence version
         // while we are handling raft_topology_cmd::command::fence,
         // so we just throw an error in this case.
         throw std::runtime_error(
             format("update_fence_version: can't set decreasing fence version: {} -> {}",
-                _fence_version, fence_version));
+                prev, fence_version));
     }
-    slogger.debug("update_fence_version: new fence_version {} is set, prev version {}",
-        fence_version, _fence_version);
+
+    // It's guaranteed that after this assignment, no new fenceable writes
+    // with versions < fence_version can appear on this shard.
     _fence_version = fence_version;
+
+    // If there are fenceable writes with versions smaller than fence_version,
+    // we need to update _stale_pending_writes to wait for them. Otherwise, the
+    // cleanup process might run before they finish, potentially leaving behind side effects.
+    std::vector<future<>> futures;
+    size_t stale_writes_count = 0;
+    while (!_pending_fenceable_writes.empty()) {
+        const auto it = _pending_fenceable_writes.begin();
+        auto& [v, g] = *it;
+        if (v >= fence_version) {
+            break;
+        }
+        stale_writes_count += g->get_count();
+        auto* gate_ptr = g.get();
+        futures.push_back(gate_ptr->close().finally([g = std::move(g)]{}));
+        _pending_fenceable_writes.erase(it);
+    }
+    if (!futures.empty()) {
+        futures.push_back(_stale_pending_writes.get_future());
+        _stale_pending_writes = when_all_succeed(std::move(futures));
+    }
+
+    slogger.info("update_fence_version: new fence_version {} is set, prev fence_version {}, pending stale writes {}",
+        fence_version, prev, stale_writes_count);
 }
 
 future<>

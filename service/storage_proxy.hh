@@ -356,6 +356,8 @@ private:
     // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
     utils::phased_barrier _pending_writes_phaser;
     locator::token_metadata::version_t _fence_version = 0;
+    std::map<locator::token_metadata::version_t, lw_shared_ptr<gate>> _pending_fenceable_writes;
+    shared_future<> _stale_pending_writes{make_ready_future<>()};
 private:
     future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -669,6 +671,34 @@ private:
     utils::phased_barrier::operation start_write() {
         return _pending_writes_phaser.start();
     }
+
+    // Fencing tokens are checked twice: once before a replica-local storage operation
+    // and once after it completes. The second check ensures that if the coordinator
+    // was fenced out during execution, the replica does not count this operation
+    // toward the target CL.
+    //
+    // For writes, this creates a cleanup concern: if the coordinator is fenced out
+    // mid-operation, the write’s partial effects must be cleaned up before the range
+    // becomes visible again. Otherwise, data resurrection could occur. Cleanup is
+    // performed by ss::sstable_vnodes_cleanup_fiber for vnode-based tables.
+    //
+    // To ensure correctness, all potentially fenced-out writes must complete before
+    // cleanup runs. This function enforces that guarantee by holding a gate tied to
+    // the caller’s fencing_token version for the entire write operation. The vnode cleanup
+    // procedure waits for all gates with versions lower than the current fencing
+    // version to close().
+    //
+    // Whether the gate is needed depends on the replication strategy. For local and
+    // tablet-based tables, it is unnecessary: ss::sstable_vnodes_cleanup_fiber does
+    // not handle them. For tablets, table::cleanup_tablet() calls
+    // storage_group::stop(), which waits for all tablet operations to finish.
+    template <typename Func, typename F = futurize<std::invoke_result_t<Func>>>
+    requires requires (Func f) {
+        { f() } -> std::same_as<typename F::type>;
+    }
+    F::type run_fenceable_write(const locator::abstract_replication_strategy& rs,
+        fencing_token caller_token, locator::host_id caller_id,
+        Func&& write_func);
 
     mutation do_get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
     future<> drain_on_shutdown();
