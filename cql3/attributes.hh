@@ -12,7 +12,7 @@
 
 #include "cql3/expr/expression.hh"
 #include "cql3/expr/unset.hh"
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 
 namespace qos {
 class service_level_controller;

@@ -12,7 +12,7 @@
 #include <cstddef>
 #include <limits>
 #include <chrono>
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 
 namespace db::view {
 

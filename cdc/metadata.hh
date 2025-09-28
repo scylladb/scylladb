@@ -10,7 +10,7 @@
 
 #include <map>
 
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "mutation/timestamp.hh"
 #include "cdc/generation.hh"
 

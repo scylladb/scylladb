@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "gc_clock.hh"
+#include "clocks/gc_clock.hh"
 #include "mutation/timestamp.hh"
 #include "utils/extremum_tracking.hh"
 

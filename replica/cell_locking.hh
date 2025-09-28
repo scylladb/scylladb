@@ -17,7 +17,7 @@
 #include "mutation/mutation_partition.hh"
 #include "utils/xx_hasher.hh"
 
-#include "db/timeout_clock.hh"
+#include "clocks/timeout_clock.hh"
 #include "utils/log.hh"
 
 extern logging::logger cell_locker_log;

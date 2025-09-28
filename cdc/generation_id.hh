@@ -10,7 +10,7 @@
 
 #include <variant>
 
-#include "db_clock.hh"
+#include "clocks/db_clock.hh"
 #include "utils/UUID.hh"
 
 namespace cdc {
