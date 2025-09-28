@@ -1281,7 +1281,7 @@ public:
             tracing::trace_state_ptr tr_state) = 0;
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm, fencing_token fence) = 0;
+            const locator::effective_replication_map& erm) = 0;
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
@@ -1328,12 +1328,12 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm, fencing_token fence) override {
+            const locator::effective_replication_map& erm) override {
         const auto my_id = sp.my_host_id(erm);
         auto m = _mutations[my_id];
         if (m) {
             tracing::trace(tr_state, "Executing a mutation locally");
-            return sp.apply_fence_on_ready(sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, my_id);
+            return sp.mutate_locally(_schema, *m, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info);
         }
         return make_ready_future<>();
     }
@@ -1383,9 +1383,9 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm, fencing_token fence) override {
+            const locator::effective_replication_map& erm) override {
         tracing::trace(tr_state, "Executing a mutation locally");
-        return sp.apply_fence_on_ready(sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info), fence, sp.my_host_id(erm));
+        return sp.mutate_locally(_schema, *_mutation, std::move(tr_state), db::commitlog::force_sync::no, timeout, rate_limit_info);
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1414,10 +1414,10 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm, fencing_token fence) override {
+            const locator::effective_replication_map& erm) override {
         // A hint will be sent to all relevant endpoints when the endpoint it was originally intended for
         // becomes unavailable - this might include the current node
-        return sp.apply_fence_on_ready(sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout), fence, sp.my_host_id(erm));
+        return sp.mutate_hint(_schema, *_mutation, std::move(tr_state), timeout);
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1545,10 +1545,10 @@ public:
     }
     virtual future<> apply_locally(storage_proxy& sp, storage_proxy::clock_type::time_point timeout,
             tracing::trace_state_ptr tr_state, db::per_partition_rate_limit::info rate_limit_info,
-            const locator::effective_replication_map& erm, fencing_token fence) override {
+            const locator::effective_replication_map& erm) override {
         tracing::trace(tr_state, "Executing a learn locally");
         // TODO: Enforce per partition rate limiting in paxos
-        return sp.apply_fence_on_ready(paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state), fence, sp.my_host_id(erm));
+        return paxos::paxos_state::learn(sp, sp.remote().paxos_store(), _schema, *_proposal, timeout, tr_state);
     }
     virtual future<> apply_remotely(storage_proxy& sp, locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -1873,10 +1873,11 @@ public:
     }
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
         auto op = _proxy->start_write();
-        return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
+        return _proxy->apply_fence_on_ready(_mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
             _rate_limit_info,
-            *_effective_replication_map_ptr,
-            storage_proxy::get_fence(*_effective_replication_map_ptr)).finally([op = std::move(op)]{});
+            *_effective_replication_map_ptr), 
+            storage_proxy::get_fence(*_effective_replication_map_ptr),
+             _proxy->my_host_id(*_effective_replication_map_ptr)).finally([op = std::move(op)]{});
     }
     future<> apply_remotely(locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
