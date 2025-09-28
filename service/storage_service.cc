@@ -1122,6 +1122,11 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
             }
 
             {
+                rtlogger.info("vnodes_cleanup: drain closing sessions");
+                co_await proxy.invoke_on_all([] (storage_proxy& sp) {
+                    return get_topology_session_manager().drain_closing_sessions();
+                });
+
                 rtlogger.info("vnodes_cleanup: wait for stale pending writes");
                 co_await proxy.invoke_on_all([] (storage_proxy& sp) {
                     return sp.await_stale_pending_writes();
