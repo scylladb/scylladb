@@ -884,7 +884,7 @@ public:
         return _stats_key;
     }
 
-    future<> await_pending_writes() noexcept {
+    future<> await_stale_pending_writes() noexcept {
         return _stale_pending_writes.get_future();
     }
 

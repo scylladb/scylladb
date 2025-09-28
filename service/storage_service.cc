@@ -1122,9 +1122,9 @@ future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gat
             }
 
             {
-                rtlogger.info("vnodes_cleanup: wait for pending writes");
-                co_await proxy.invoke_on_all([] (storage_proxy& sp) -> future<> {
-                    co_return co_await sp.await_pending_writes();
+                rtlogger.info("vnodes_cleanup: wait for stale pending writes");
+                co_await proxy.invoke_on_all([] (storage_proxy& sp) {
+                    return sp.await_stale_pending_writes();
                 });
 
                 rtlogger.info("vnodes_cleanup: flush_all_tables");
