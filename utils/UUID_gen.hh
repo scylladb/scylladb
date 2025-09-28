@@ -245,9 +245,15 @@ public:
     /**
      * Creates a type 3 (name based) UUID based on the specified byte array.
      */
-    static UUID get_name_UUID(bytes_view b);
-    static UUID get_name_UUID(std::string_view str);
-    static UUID get_name_UUID(const unsigned char* s, size_t len);
+    static UUID get_name_UUID(bytes_view b) 
+        pre (not b.empty());
+
+    static UUID get_name_UUID(std::string_view str)
+        pre (not str.empty());
+
+    static UUID get_name_UUID(const unsigned char* s, size_t len)
+        pre (s != nullptr)
+        pre (len > 0);
 
     /** decomposes a uuid into raw bytes. */
     static std::array<int8_t, 16> decompose(const UUID& uuid)

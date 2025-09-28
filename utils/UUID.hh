@@ -122,7 +122,9 @@ inline constexpr UUID null_uuid() noexcept {
     return UUID();
 }
 
-UUID make_random_uuid() noexcept;
+UUID make_random_uuid() noexcept
+  post (ret: not ret.is_null()); 
+
 
 // Read 8 most significant bytes of timeuuid from serialized bytes
 inline uint64_t timeuuid_read_msb(const int8_t *b) noexcept {
