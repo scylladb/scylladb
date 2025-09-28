@@ -2756,9 +2756,16 @@ void view_builder::on_create_view(const sstring& ks_name, const sstring& view_na
             // threshold.
           return initialize_reader_at_current_token(step).then([this, view, &step] () mutable {
             return add_new_view(view, step).then_wrapped([this, view] (future<>&& f) {
-                if (f.failed()) {
-                    vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), f.get_exception());
+                try {
+                    f.get();
+                } catch (abort_requested_exception&) {
+                    vlogger.debug("Aborted while setting up view for building {}.{}", view->ks_name(), view->cf_name());
+                } catch (raft::request_aborted&) {
+                    vlogger.debug("Aborted while setting up view for building {}.{}", view->ks_name(), view->cf_name());
+                } catch (...) {
+                    vlogger.error("Error setting up view for building {}.{}: {}", view->ks_name(), view->cf_name(), std::current_exception());
                 }
+
                 // Waited on indirectly in stop().
                 (void)_build_step.trigger();
             });
