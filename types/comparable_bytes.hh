@@ -48,6 +48,7 @@ public:
     bool empty() const { return _encoded_bytes.empty(); }
 
     managed_bytes_view as_managed_bytes_view() const { return managed_bytes_view(_encoded_bytes); }
+    managed_bytes_mutable_view as_managed_bytes_mutable_view() { return managed_bytes_mutable_view(_encoded_bytes); }
 
     auto operator<=>(const comparable_bytes& other) const {
         return compare_unsigned(managed_bytes_view(_encoded_bytes), managed_bytes_view(other._encoded_bytes));

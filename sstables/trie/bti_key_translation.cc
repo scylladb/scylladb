@@ -131,72 +131,43 @@ static bound_weight convert_bound_to_bound_weight(sstables::bound_kind_m b) {
     }
 }
 
-lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv)
-    : _ckp(pipv.has_key() ? std::optional<clustering_key_prefix>(pipv.key()) : std::optional<clustering_key_prefix>())
-    , _s(s) {
+static std::byte pip_to_terminator(const position_in_partition_view& pipv) {
     if (pipv.region() < partition_region::clustered) [[unlikely]] {
-        _terminator = bound_weight_to_terminator(bound_weight::before_all_prefixed);
         // This isn't defined by the BTI format docs, it's just something smaller than
         // any actual BTI-encoded clustering position.
         // It could be reasonably used during reads, but it should never be written.
-        _terminator = std::byte(0x00);
+        return std::byte(0x00);
     } else if (pipv.region() > partition_region::clustered) [[unlikely]] {
-        _terminator = bound_weight_to_terminator(bound_weight::after_all_prefixed);
         // This isn't defined by the BTI format docs, it's just something greater than
         // any actual BTI-encoded clustering position.
         // It could be reasonably used during reads, but it should never be written.
-        _terminator = std::byte(0xff);
+        return std::byte(0xff);
     } else {
-        _terminator = bound_weight_to_terminator(pipv.get_bound_weight());
+        return bound_weight_to_terminator(pipv.get_bound_weight());
     }
-    advance();
 }
 
-lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, sstables::clustering_info ci)
-    : _ckp(std::move(ci.clustering))
-    , _terminator(bound_weight_to_terminator(convert_bound_to_bound_weight(ci.kind)))
-    , _s(s) {
-    advance();
-}
+lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv)
+    : _encoded(comparable_bytes_from_compound(
+        *s.clustering_key_prefix_type(),
+        pipv.has_key() ? pipv.key().representation() : managed_bytes_view(),
+        pip_to_terminator(pipv)
+    ))
+    , _size(_encoded.size())
+{}
 
-void lazy_comparable_bytes_from_clustering_position::advance() {
-    if (!_gen_it && _ckp) {
-        _gen = lazy_comparable_bytes_from_compound(*_s.clustering_key_type(), _ckp->representation());
-        _gen_it = _gen->begin();
-    }
-    if (_gen_it && *_gen_it != std::default_sentinel) {
-        _frags.emplace_back(bytespan_to_bytesview(**_gen_it));
-        ++*_gen_it;
-        return;
-    }
-    _frags.push_back(bytes{bytes::value_type(_terminator)});
-    _finished = true;
-}
+lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, const sstables::clustering_info& ci)
+    : _encoded(comparable_bytes_from_compound(
+        *s.clustering_key_prefix_type(),
+        ci.clustering.representation(),
+        bound_weight_to_terminator(convert_bound_to_bound_weight(ci.kind))
+    ))
+    , _size(_encoded.size())
+{}
 
-auto lazy_comparable_bytes_from_clustering_position::iterator::operator++() -> iterator& {
-    ++_i;
-    if (_i == _owner._frags.size()) {
-        if (_owner._finished) {
-            return *this;
-        }
-        _owner.advance();
-    }
-    _frag = std::as_writable_bytes(std::span(_owner._frags[_i]));
-    return *this;
+void lazy_comparable_bytes_from_clustering_position::trim(unsigned n) {
+    SCYLLA_ASSERT(n <= _size);
+    _size = n;
 }
-
-void lazy_comparable_bytes_from_clustering_position::trim(const size_t n) {
-    size_t remaining = n;
-    for (size_t i = 0; i < _frags.size(); ++i) {
-        if (_frags[i].size() >= remaining) {
-            _frags[i].resize(remaining);
-            _frags.resize(i + 1);
-            break;
-        }
-        remaining -= _frags[i].size();
-    }
-    _finished = true;
-}
-
 
 } // namespace sstables::trie

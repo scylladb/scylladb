@@ -117,50 +117,57 @@ public:
 };
 static_assert(comparable_bytes_iterator<lazy_comparable_bytes_from_ring_position::iterator>);
 
-// Like lazy_comparable_bytes_from_ring_position, but for clustering positions.
-// The difference is small enough that maybe the two classes should be merged.
-//
-// The value of the lazy encoding for clustering positions is debatable.
-// It would be more obviously positive if the underlying comparable_bytes
-// translation was also lazy. But it isn't, so we perform the encoding
-// column by column.
+// Eagerly translates a clustering position to the BTI encoding.
 struct lazy_comparable_bytes_from_clustering_position {
-    std::optional<clustering_key_prefix> _ckp;
-    std::byte _terminator;
-    const schema& _s;
-    utils::small_vector<bytes, 3> _frags;
-    std::optional<std::generator<const_bytes>> _gen;
-    std::optional<decltype(_gen->begin())> _gen_it;
-    bool _finished = false;
-
+    comparable_bytes _encoded;
+    // Initially equal to _encoded.size(),
+    // but might be reduced by trim().
+    unsigned _size;
     lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv);
-    lazy_comparable_bytes_from_clustering_position(const schema& s, sstables::clustering_info);
+    lazy_comparable_bytes_from_clustering_position(const schema& s, const sstables::clustering_info&);
     lazy_comparable_bytes_from_clustering_position(lazy_comparable_bytes_from_clustering_position&&) = delete;
-    void advance();
     struct iterator {
         using difference_type = std::ptrdiff_t;
         using value_type = std::span<std::byte>;
 
         lazy_comparable_bytes_from_clustering_position& _owner;
-        size_t _i = 0;
-        std::span<std::byte> _frag;
+        // Note: the reason we keep `_current` in a separate member
+        // is because `operator*` returns a reference to the span.
+        // (Becauase the caller mutates it while it's reading the iterator,
+        // for convenience.)
+        managed_bytes_mutable_view _remaining;
+        std::span<std::byte> _current;
 
         iterator(lazy_comparable_bytes_from_clustering_position& o)
             : _owner(o)
-            , _frag(std::as_writable_bytes(std::span(_owner._frags[_i])))
-        {}
-        std::span<std::byte>&& operator*() {
-            return std::move(_frag);
+            , _remaining(managed_bytes_mutable_view(_owner._encoded.as_managed_bytes_mutable_view()).prefix(_owner._size))
+        {
+            _current = std::as_writable_bytes(std::span(_remaining.current_fragment()));
+            if (!_remaining.empty()) {
+                _remaining.remove_current();
+            }
         }
-        iterator& operator++();
+        std::span<std::byte>&& operator*() {
+            return std::move(_current);
+        }
+        iterator& operator++() {
+            _current = std::as_writable_bytes(std::span(_remaining.current_fragment()));
+            if (!_remaining.empty()) {
+                _remaining.remove_current();
+            }
+            return *this;
+        }
         void operator++(int) {
             ++*this;
         }
         bool operator==(const std::default_sentinel_t&) const {
-            return _i == _owner._frags.size();
+            return _current.empty() && _remaining.empty();
         }
     };
-    void trim(const size_t n);
+    // Trims to the target size.
+    // The target size must be smaller than the number of bytes observed by an iterator.
+    // Invalidates iterators.
+    void trim(unsigned n);
     iterator begin() { return iterator(*this); }
     std::default_sentinel_t end() { return std::default_sentinel; }
 };
