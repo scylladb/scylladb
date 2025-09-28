@@ -13,10 +13,8 @@ namespace aws {
 
 class aws_error;
 
-class default_aws_retry_strategy : public seastar::http::experimental::default_retry_strategy {
+class default_aws_retry_strategy : public seastar::http::experimental::retry_strategy {
 protected:
-    [[nodiscard]] unsigned get_max_retries() const noexcept override { return _max_retries; }
-
     unsigned _max_retries;
     unsigned _scale_factor;
 
