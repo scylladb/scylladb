@@ -339,7 +339,7 @@ add_scylla_test(combined_tests
     loading_cache_test.cc
     memtable_test.cc
     multishard_combining_reader_as_mutation_source_test.cc
-    multishard_mutation_query_test.cc
+    multishard_query_test.cc
     mutation_reader_test.cc
     mutation_writer_test.cc
     network_topology_strategy_test.cc
