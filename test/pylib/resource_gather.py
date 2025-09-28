@@ -269,7 +269,6 @@ def setup_cgroup(is_required: bool) -> None:
         if _is_cgroup_rw() and is_docker:
             subprocess.run(
                 [
-                    "sudo",
                     "mount",
                     "-o",
                     "remount,rw",
@@ -279,7 +278,7 @@ def setup_cgroup(is_required: bool) -> None:
             )
 
         if is_podman or is_docker:
-            subprocess.run(['sudo', 'chown', '-R', f"{getpass.getuser()}:{getpass.getuser()}", '/sys/fs/cgroup'],
+            subprocess.run(['chown', '-R', f"{getpass.getuser()}:{getpass.getuser()}", '/sys/fs/cgroup'],
                            check=True)
 
         configured = False
