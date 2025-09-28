@@ -15,6 +15,7 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/log.hh"
 #include "test/lib/nondeterministic_choice_stack.hh"
+#include <generator>
  
 static std::vector<std::byte> linearize(comparable_bytes_iterator auto&& it) {
     auto result = std::vector<std::byte>(); 

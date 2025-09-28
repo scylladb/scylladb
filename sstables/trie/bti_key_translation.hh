@@ -21,7 +21,6 @@
 #include "types/comparable_bytes.hh"
 #include "common.hh"
 #include "dht/ring_position.hh"
-#include <generator>
 #include "comparable_bytes_iterator.hh"
 
 namespace sstables {
@@ -30,33 +29,9 @@ namespace sstables {
 
 namespace sstables::trie {
 
-// FIXME: this doesn't deserve to be a template.
-// The actual data structure is the same for both partition keys and clustering keys.
-// There's no need to codegen two separate functions for them.
-// Unfortunately p.components(representation).begin() returns an internal type
-// of compound_type. So this isn't easy to detemplatize.
-template <allow_prefixes AllowPrefixes>
-std::generator<const_bytes> lazy_comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation) {
-    auto t_it = p.types().begin();
-    const auto t_end = p.types().end();
-    auto c_it = p.components(representation).begin();
-    const auto c_end = p.components(representation).end();
+std::byte bound_weight_to_terminator(bound_weight b);
 
-    while (c_it != c_end) {
-        SCYLLA_ASSERT(t_it != t_end);
-
-        constexpr std::byte col_separator = std::byte(0x40);
-        co_yield std::array<std::byte, 1>{col_separator};
-
-        auto cb = comparable_bytes(**t_it, *c_it);
-        auto mbv = cb.as_managed_bytes_view();
-        for (bytes_view bv : fragment_range(mbv)) {
-            co_yield std::as_bytes(std::span(bv));
-        }
-        ++c_it;
-        ++t_it;
-    }
-}
+std::byte bound_weight_to_terminator(bound_weight b);
 
 // Translates a ring position (during an index query)
 // or a decorated key (during an index write)
@@ -71,46 +46,82 @@ std::generator<const_bytes> lazy_comparable_bytes_from_compound(const compound_t
 // column isn't needed for anything, and the encoding might
 // be quite costly in the worst case. So we make an effort to avoid it.
 class lazy_comparable_bytes_from_ring_position {
-    dht::token _token;
-    std::optional<partition_key> _pk;
-    int _weight;
-    utils::small_vector<bytes, 1> _frags;
     const schema& _s;
-    std::optional<std::generator<const_bytes>> _gen;
-    std::optional<decltype(_gen->begin())> _gen_it;
-    bool _finished = false;
+    std::array<std::byte, 9> _token_buf;
+    bound_weight _weight;
+    // Length of this BTI encoding, in bytes.
+    // Used to implement `trim()`.
+    //
+    // Starts at something meaningless but greater than `_token_buf.size()`,
+    // is set to the full encoding size when `_pk` is converted to `comparable_bytes`,
+    // might be later reduced by trim().
+    unsigned _size = -1;
+    // Starts as `partition_key`, potentially is converted to `comparable_bytes`
+    // later if it turns out that the token isn't enough.
+    std::variant<partition_key, comparable_bytes> _pk;
 private:
-    void init_first_fragment();
-
+    void init_first_fragment(dht::token);
 public:
     lazy_comparable_bytes_from_ring_position(const schema& s, dht::ring_position_view);
     lazy_comparable_bytes_from_ring_position(const schema& s, dht::decorated_key);
     lazy_comparable_bytes_from_ring_position(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
     lazy_comparable_bytes_from_ring_position& operator=(lazy_comparable_bytes_from_ring_position&&) noexcept = delete;
-    void advance();
-    class iterator {
+    struct iterator {
         using difference_type = std::ptrdiff_t;
         using value_type = std::span<std::byte>;
 
         lazy_comparable_bytes_from_ring_position& _owner;
-        size_t _i = 0;
-        std::span<std::byte> _frag;
-    public:
+        // Note: the reason we keep `_current` in a separate member
+        // is because `operator*` returns a reference to the span.
+        // (Becauase the caller mutates it while it's reading the iterator,
+        // for convenience.)
+        std::span<std::byte> _current;
+        // When `_remaining` is nullopt, it means that we haven't considered
+        // "_owner._pk" yet. If `_current` runs out, we will
+        // initialize `_remaining` from "_owner._pk".
+        std::optional<managed_bytes_mutable_view> _remaining;
+
         iterator(lazy_comparable_bytes_from_ring_position& o)
             : _owner(o)
-            , _frag(std::as_writable_bytes(std::span(_owner._frags[_i])))
-        {}
-        std::span<std::byte>&& operator*() {
-            return std::move(_frag);
+        {
+            _current = std::as_writable_bytes(std::span(_owner._token_buf));
+            // Note that `_size` is meaningless if `trim()` wasn't called yet,
+            // but it's guaranteed to be greater than `_token_buf.size()`,
+            // so this branch won't be taken.
+            if (_owner._size <= _current.size()) {
+                _current = _current.first(_owner._size);
+                _remaining.emplace();
+            }
         }
-        iterator& operator++();
+        std::span<std::byte>&& operator*() {
+            return std::move(_current);
+        }
+        iterator& operator++() {
+            if (!_remaining) {
+                if (auto raw_pk = std::get_if<partition_key>(&_owner._pk)) {
+                    // The lazy BTI translation happens here.
+                    _owner._pk = comparable_bytes_from_compound(*_owner._s.partition_key_type(), raw_pk->representation(), bound_weight_to_terminator(_owner._weight));
+                    _owner._size = std::get<comparable_bytes>(_owner._pk).size() + _owner._token_buf.size();
+                }
+                auto& cb = std::get<comparable_bytes>(_owner._pk);
+                _remaining = managed_bytes_mutable_view(cb.as_managed_bytes_mutable_view()).prefix(_owner._size - _owner._token_buf.size());
+            }
+            _current = std::as_writable_bytes(std::span(_remaining->current_fragment()));
+            if (!_remaining->empty()) {
+                _remaining->remove_current();
+            }
+            return *this;
+        }
         void operator++(int) {
             ++*this;
         }
         bool operator==(const std::default_sentinel_t&) const {
-            return _i == _owner._frags.size();
+            return _current.empty() && _remaining.has_value() && _remaining->empty();
         }
     };
+    // Trims to the target size.
+    // The target size must be smaller than the number of bytes observed by an iterator.
+    // Invalidates iterators.
     void trim(const size_t n);
     iterator begin() { return iterator(*this); }
     std::default_sentinel_t end() { return std::default_sentinel; }
