@@ -549,8 +549,21 @@ static int64_t row_payload_to_offset(const payload_result& p) {
     return result;
 }
 
-static inline std::generator<std::span<const std::byte>> single_fragment_generator(std::span<const std::byte> only_frag) {
-    co_yield only_frag;
+static inline auto single_fragment_generator(std::span<const std::byte> only_frag) {
+    struct iterator {
+        std::span<const std::byte> _only_frag;
+        iterator& operator++() {
+            _only_frag = {};
+            return *this;
+        }
+        bool operator==(const std::default_sentinel_t&) const {
+            return _only_frag.empty();
+        }
+        std::span<const std::byte>&& operator*() {
+            return std::move(_only_frag);
+        }
+    };
+    return iterator{only_frag};
 }
 
 future<std::optional<uint64_t>> index_cursor::last_block_offset() const {
@@ -562,7 +575,7 @@ future<std::optional<uint64_t>> index_cursor::last_block_offset() const {
     auto cur = _row_cursor;
     const std::byte past_all_keys[] = {std::byte(0xff)};
 
-    co_await cur.set_to(_partition_metadata->trie_root, single_fragment_generator(past_all_keys).begin(), _permit, _trace_state);
+    co_await cur.set_to(_partition_metadata->trie_root, single_fragment_generator(past_all_keys), _permit, _trace_state);
     // Sic. The last payloaded node points to the END_OF_PARTITION byte.
     // The second-to-last payloaded node points to the last clustering key block.
     co_await cur.step_back(_permit, _trace_state);
