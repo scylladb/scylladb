@@ -616,11 +616,9 @@ private:
                         // FIXME: get_schema_for_write() doesn't timeout
                         schema_ptr s = co_await get_schema_for_write(schema_version, reply_to_host_id, shard, timeout);
                         // Note: blocks due to execution_stage in replica::database::apply()
-                        auto op = p->start_write();
-                        co_await apply_fn(p, trace_state_ptr, std::move(s), m, timeout);
-                        if (auto stale = p->check_fence(fence, src_addr)) {
-                            co_await coroutine::return_exception(std::move(stale));
-                        }
+                        co_await p->run_fenceable_write(s->table().get_effective_replication_map()->get_replication_strategy(),
+                            fence, src_addr,
+                            [&] { return apply_fn(p, trace_state_ptr, std::move(s), m, timeout); });
                         // We wait for send_mutation_done to complete, otherwise, if reply_to is busy, we will accumulate
                         // lots of unsent responses, which can OOM our shard.
                         //
@@ -1872,12 +1870,14 @@ public:
         return _mutation_holder->store_hint(hm, ep, std::move(ermptr), tr_state);
     }
     future<> apply_locally(storage_proxy::clock_type::time_point timeout, tracing::trace_state_ptr tr_state) {
-        auto op = _proxy->start_write();
-        return _proxy->apply_fence_on_ready(_mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
-            _rate_limit_info,
-            *_effective_replication_map_ptr), 
-            storage_proxy::get_fence(*_effective_replication_map_ptr),
-             _proxy->my_host_id(*_effective_replication_map_ptr)).finally([op = std::move(op)]{});
+        auto& erm = *_effective_replication_map_ptr;
+        return _proxy->run_fenceable_write(erm.get_replication_strategy(),
+            storage_proxy::get_fence(erm),
+            _proxy->my_host_id(erm),
+            [this, timeout, tr_state = std::move(tr_state)]() mutable {
+                return _mutation_holder->apply_locally(*_proxy, timeout, std::move(tr_state),
+                    _rate_limit_info, *_effective_replication_map_ptr);
+            });
     }
     future<> apply_remotely(locator::host_id ep, const host_id_vector_replica_set& forward,
             storage_proxy::response_id_type response_id, storage_proxy::clock_type::time_point timeout,
@@ -3261,7 +3261,6 @@ storage_proxy::storage_proxy(sharded<replica::database>& db, storage_proxy::conf
     , _mutate_stage{"storage_proxy_mutate", &storage_proxy::do_mutate}
     , _max_view_update_backlog(max_view_update_backlog)
     , _cancellable_write_handlers_list(std::make_unique<cancellable_write_handlers_list>())
-    , _pending_writes_phaser("storage_proxy::pending_writes")
 {
     namespace sm = seastar::metrics;
     _metrics.add_group(storage_proxy_stats::COORDINATOR_STATS_CATEGORY, {
@@ -3601,17 +3600,14 @@ storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, froze
     return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&proxy = container(), gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local, fence, caller] (replica::database& db) {
         auto trace_state = gt.get();
         auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
-        auto op = proxy.local().start_write();
-        if (auto stale = proxy.local().check_fence(fence, caller)) {
-            return make_exception_future(std::move(stale));
-        }
-        return db.apply_counter_update(gs, fm, timeout, trace_state).then([&proxy, cl, timeout, trace_state, p = std::move(p), op = std::move(op), fence, caller] (mutation m) mutable {
-            if (auto stale = proxy.local().check_fence(fence, caller)) {
-                return make_exception_future(std::move(stale));
-            }
-            op = decltype(op){};
-            return proxy.local().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(p));
-        });
+        const auto& rs = gs.get()->table().get_effective_replication_map()->get_replication_strategy();
+        return proxy.local().run_fenceable_write(rs, fence, caller,
+            [&db, fm = std::move(fm), timeout, trace_state, gs = std::move(gs)]() mutable {
+                return db.apply_counter_update(std::move(gs), fm, timeout, std::move(trace_state));
+            })
+            .then([&proxy, cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
+                return proxy.local().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(p));
+            });
     });
 }
 

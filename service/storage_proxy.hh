@@ -354,7 +354,6 @@ private:
     cdc_stats _cdc_stats;
 
     // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
-    utils::phased_barrier _pending_writes_phaser;
     locator::token_metadata::version_t _fence_version = 0;
     std::map<locator::token_metadata::version_t, lw_shared_ptr<gate>> _pending_fenceable_writes;
     shared_future<> _stale_pending_writes{make_ready_future<>()};
@@ -668,10 +667,6 @@ private:
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 
-    utils::phased_barrier::operation start_write() {
-        return _pending_writes_phaser.start();
-    }
-
     // Fencing tokens are checked twice: once before a replica-local storage operation
     // and once after it completes. The second check ensures that if the coordinator
     // was fenced out during execution, the replica does not count this operation
@@ -890,7 +885,7 @@ public:
     }
 
     future<> await_pending_writes() noexcept {
-        return _pending_writes_phaser.advance_and_await();
+        return _stale_pending_writes.get_future();
     }
 
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;
