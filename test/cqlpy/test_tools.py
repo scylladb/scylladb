@@ -2064,3 +2064,39 @@ def test_scylla_sstable_upgrade(cql, test_keyspace, scylla_path, scylla_data_dir
             assert len(lines) == len(sstables)
             for line, sst in zip(lines, sstables):
                 assert line.startswith(f"Nothing to do for sstable {sst}, skipping (use --all to force upgrade all sstables).")
+
+
+def test_scylla_sstable_dump_schema(cql, test_keyspace, scylla_path, scylla_data_dir):
+    def query_system_schema(schema_table: str, table_name: str) -> list:
+        q = f"SELECT * FROM system_schema.{schema_table} WHERE keyspace_name = '{test_keyspace}' AND table_name = '{table_name}'"
+        def process(r):
+            d = {}
+            for k, v in r._asdict().items():
+                # id and version depend on create time, so we normalize them
+                if k == 'id':
+                    d[k] = '$ID'
+                elif k == 'version':
+                    d[k] = '$VERSION'
+                else:
+                    d[k] = v
+            return d
+
+        return list(map(process, cql.execute(q)))
+
+    expected_results = {}
+
+    with scylla_sstable(simple_clustering_table, cql, test_keyspace, scylla_data_dir) as (table, schema_file, sstables):
+        for schema_table in ('columns', 'tables', 'scylla_tables'):
+            expected_results[schema_table] = query_system_schema(schema_table, table)
+
+        table_name = table
+        dumped_schema = subprocess.check_output([scylla_path, "sstable", f"dump-schema", "--schema-file", schema_file, sstables[0]], text=True)
+
+    cql.execute(dumped_schema)
+
+    try:
+        for schema_table in ('columns', 'tables', 'scylla_tables'):
+            new_res = query_system_schema(schema_table, table_name)
+            assert new_res == expected_results[schema_table]
+    finally:
+        cql.execute(f"DROP TABLE {test_keyspace}.{table_name}")

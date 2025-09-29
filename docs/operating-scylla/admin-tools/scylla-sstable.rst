@@ -555,6 +555,17 @@ The content is dumped in JSON, using the following schema:
         "above_threshold": Uint
     }
 
+dump-schema
+^^^^^^^^^^^
+
+Dump the schema of the table or sstable in CQL describe table format.
+
+Uses the regular `schema load <schema_>`_ mechanism to obtain the schema.
+With certain schema sources, the schema can be obtained without any sstables passed to the tool.
+
+Important note: the dumped schema will always be a `CREATE TABLE` statement, even if the table is in fact a materialized view or an index.
+This schema is enough to understand and parse the sstable data, but it may not be enough to recreate the table or write new sstables for it.
+
 .. _scylla-sstable-validate-operation:
 
 validate
