@@ -223,10 +223,10 @@ bool ks_prop_defs::get_durable_writes() const {
 
 lw_shared_ptr<data_dictionary::keyspace_metadata> ks_prop_defs::as_ks_metadata(sstring ks_name, const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg) {
     auto sc = get_replication_strategy_class().value();
-    // if tablets options have not been specified, but tablets are globally enabled, set the value to 0 for N.T.S. only
+    // if tablets options have not been specified, but tablets are globally enabled, set the value to 0. The strategy will
+    // validate it and throw an error if it does not support tablets.
     auto enable_tablets = feat.tablets && cfg.enable_tablets_by_default();
-    std::optional<unsigned> default_initial_tablets = enable_tablets && locator::abstract_replication_strategy::to_qualified_class_name(sc) == "org.apache.cassandra.locator.NetworkTopologyStrategy"
-            ? std::optional<unsigned>(0) : std::nullopt;
+    std::optional<unsigned> default_initial_tablets = enable_tablets ? std::optional<unsigned>(0) : std::nullopt;
     auto initial_tablets = get_initial_tablets(default_initial_tablets, cfg.enforce_tablets());
     auto options = prepare_options(sc, tm, get_replication_options());
     return data_dictionary::keyspace_metadata::new_keyspace(ks_name, sc,
