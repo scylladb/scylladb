@@ -1447,6 +1447,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
     , alternator_allow_system_table_write(this, "alternator_allow_system_table_write", liveness::LiveUpdate, value_status::Used,
         false,
         "Allow writing to system tables using the .scylla.alternator.system prefix")
+    , alternator_max_expression_cache_entries_per_shard(this, "alternator_max_expression_cache_entries_per_shard", liveness::LiveUpdate, value_status::Used, 2000, "Maximum number of cached parsed request expressions, per shard.")
     , vector_store_primary_uri(this, "vector_store_primary_uri", liveness::LiveUpdate, value_status::Used, "", "A comma-separated list of vector store node URIs. If not set, vector search is disabled.")
     , abort_on_ebadf(this, "abort_on_ebadf", value_status::Used, true, "Abort the server on incorrect file descriptor access. Throws exception when disabled.")
     , sanitizer_report_backtrace(this, "sanitizer_report_backtrace", value_status::Used, false,
