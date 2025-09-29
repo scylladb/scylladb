@@ -459,7 +459,7 @@ async def test_missing_data(manager: ManagerClient):
 # Reproduces #23284
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-async def test_tablet_split_merge_with_many_tables(manager: ManagerClient, racks = 2):
+async def test_tablet_split_merge_with_many_tables(build_mode: str, manager: ManagerClient, racks = 2):
     cmdline = ['--smp', '4', '-m', '2G', '--target-tablet-size-in-bytes', '30000', '--max-task-backlog', '200',]
     config = {'error_injections_at_startup': ['short_tablet_stats_refresh_interval']}
 
@@ -472,7 +472,8 @@ async def test_tablet_split_merge_with_many_tables(manager: ManagerClient, racks
     cql = manager.get_cql()
     ks = await create_new_test_keyspace(cql, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'initial': 1}}")
     await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
-    await asyncio.gather(*[cql.run_async(f"CREATE TABLE {ks}.test{i} (pk int PRIMARY KEY, c blob);") for i in range(1, 200)])
+    num_tables = 200 if build_mode != 'debug' else 20
+    await asyncio.gather(*[cql.run_async(f"CREATE TABLE {ks}.test{i} (pk int PRIMARY KEY, c blob);") for i in range(1, num_tables)])
 
     async def check_logs(when):
         for server in servers:
