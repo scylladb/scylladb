@@ -1059,8 +1059,6 @@ class LdapTest(BoostTest):
             cmd, input='\n\n'.join(DEFAULT_ENTRIES).encode('ascii'), stderr=subprocess.STDOUT)
         # Set up the server.
         SLAPD_URLS='ldap://:{}/ ldaps://:{}/'.format(port, port + 1)
-        def can_connect_to_slapd():
-            return can_connect(('127.0.0.1', port)) and can_connect(('127.0.0.1', port + 1)) and can_connect(('127.0.0.1', port + 2))
         def can_connect_to_saslauthd():
             return can_connect(os.path.join(saslauthd_socket_path.name, 'mux'), socket.AF_UNIX)
         slapd_proc = subprocess.Popen(['prlimit', '-n1024', 'slapd', '-F', instance_path, '-h', SLAPD_URLS, '-d', '0'])
@@ -1081,8 +1079,6 @@ class LdapTest(BoostTest):
             saslauthd_socket_path.cleanup()
             subprocess.check_output(['toxiproxy-cli', 'd', proxy_name])
         try:
-            if not try_something_backoff(can_connect_to_slapd):
-                raise Exception('Unable to connect to slapd')
             if not try_something_backoff(can_connect_to_saslauthd):
                 raise Exception('Unable to connect to saslauthd')
         except:
@@ -1514,6 +1510,17 @@ class TabularConsoleOutput:
 
 toxiproxy_id_gen = 0
 
+def is_port_available(host, port):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.1)
+        return s.connect_ex((host, port)) != 0
+
+def can_connect_to_local_ports(ports_range):
+    for port in ports_range:
+        if not is_port_available('localhost', port):
+            return False
+    return True
+
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
@@ -1522,6 +1529,13 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
         toxiproxy_id = toxiproxy_id_gen
         toxiproxy_id_gen += 1
         ldap_port = 5000 + (toxiproxy_id * 3) % 55000
+        while not can_connect_to_local_ports(range(ldap_port, ldap_port+3)):
+            print("One of {} ports required by LDAP are busy, trying the next 3 ports".format(list(range(ldap_port, ldap_port+3))))
+            ldap_port = ldap_port + 3
+            if ldap_port > 65535: # it's the highest possible TCP port number
+                print("No more ports to check, exiting")
+                return False
+
         cleanup_fn = None
         finject_desc = None
         def report_error(error, failure_injection_desc = None):
