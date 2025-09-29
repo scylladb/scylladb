@@ -10,12 +10,13 @@ import time
 import tempfile
 import pytest
 import os
+from contextlib import ExitStack
 from . import rest_api
 from cassandra.protocol import SyntaxException, AlreadyExists, InvalidRequest, ConfigurationException, ReadFailure, WriteFailure
 from cassandra.query import SimpleStatement
 from .cassandra_tests.porting import assert_rows, assert_row_count, assert_rows_ignoring_order, assert_empty
 
-from .util import new_test_table, unique_name, unique_key_int, is_scylla, ScyllaMetrics
+from .util import new_test_table, unique_name, unique_key_int, is_scylla, ScyllaMetrics, config_value_context
 
 # A reproducer for issue #7443: Normally, when the entire table is SELECTed,
 # the partitions are returned sorted by the partitions' token. When there
@@ -2100,6 +2101,39 @@ def test_limit_partition_slice(cql, test_keyspace):
         rs = cql.execute(f'SELECT pk, ck2 FROM {table} WHERE ck1 = 1 LIMIT 3')
         assert sorted(list(rs)) == [(1,1), (1,2), (2,1)]
         assert rs.has_more_pages == False
+
+
+# Test that a query using a secondary index can handle "short reads".
+#
+# A read is short when the query is paged and the page size (in bytes) hits an
+# internal memory limit (`query_page_size_in_bytes` cfg option; default is 1MiB).
+# In this case, the page is cut before reaching the user's requested page size
+# (in number of rows).
+#
+# Reproduces #25839 - The test fails because the third row (i.e., the last row
+# of the first partition) is missing from the query result. This happens because
+# the first page is cut short (2 rows suffice to hit the limit), but the code
+# assumes that the last partition of the previous page was fully read, so it
+# completely ignores it when preparing the second page. This logic is
+# implemented in `find_index_partition_ranges()`.
+@pytest.mark.xfail(reason="issue #25839")
+def test_short_read(cql, test_keyspace):
+    page_memory_limit = 1024 if is_scylla(cql) else 1024 * 1024  # 1MiB in Cassandra, 1KiB in Scylla (for faster execution)
+    row_size = page_memory_limit // 2  # will cause short read after 2 rows
+    with ExitStack() as stack:
+        table = stack.enter_context(new_test_table(cql, test_keyspace, 'pk int, ck1 int, ck2 int, data text, primary key (pk, ck1, ck2)'))
+        if is_scylla(cql):
+            stack.enter_context(config_value_context(cql, 'query_page_size_in_bytes', str(page_memory_limit)))
+        cql.execute(f'CREATE INDEX ON {table}(ck1)')
+        stmt = cql.prepare(f'INSERT INTO {table} (pk, ck1, ck2, data) VALUES (?, ?, ?, ?)')
+        cql.execute(stmt, [1, 1, 1, 'A' * row_size])
+        cql.execute(stmt, [1, 1, 2, 'B' * row_size])
+        cql.execute(stmt, [1, 1, 3, 'C' * row_size])
+        cql.execute(stmt, [2, 1, 1, 'D' * row_size])
+        rs = cql.execute(f'SELECT pk, ck2, data FROM {table} WHERE ck1 = 1')
+        rows = [(col[0], col[1]) for col in list(rs)]
+        assert sorted(rows) == [(1,1), (1,2), (1,3), (2,1)]
+
 
 def test_index_metrics(cql, test_keyspace, scylla_only):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
