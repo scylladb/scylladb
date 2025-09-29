@@ -46,6 +46,7 @@ target_link_libraries(test-lib
     scylla_version
     service
     sstables
+    vector_search # used by cql3
     utils
     Boost::regex
     Boost::unit_test_framework)
