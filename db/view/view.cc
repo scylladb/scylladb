@@ -3728,8 +3728,8 @@ void validate_view_keyspace(const data_dictionary::database& db, std::string_vie
 
     if (!required_config && uses_tablets) {
         throw std::logic_error("Materialized views and secondary indexes are not supported on base tables with tablets. "
-                "To be able to use them, enable the experimental feature `views-with-tablets` and the configuration "
-                "option `rf_rack_valid_keyspaces`.");
+                "To be able to use them, enable the configuration option `rf_rack_valid_keyspaces` and make sure "
+                "that the cluster feature `VIEWS_WITH_TABLETS` is enabled.");
     }
 }
 
