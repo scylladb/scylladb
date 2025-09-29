@@ -339,6 +339,7 @@ future<> view_building_worker::run_view_building_state_observer() {
 
     while (!_as.abort_requested()) {
         bool sleep = false;
+        _state.some_batch_finished = false;
         try {
             vbw_logger.trace("view_building_state_observer() iteration");
             auto read_apply_mutex_holder = co_await _group0_client.hold_read_apply_mutex(_as);
@@ -348,7 +349,12 @@ future<> view_building_worker::run_view_building_state_observer() {
             _as.check();
 
             read_apply_mutex_holder.return_all();
-            co_await _vb_state_machine.event.wait();
+
+            // A batch could finished its work while the worker was
+            // updating the state. In that case we should do another iteration.
+            if (!_state.some_batch_finished) {
+                co_await _vb_state_machine.event.wait();
+            }
         } catch (abort_requested_exception&) {
         } catch (broken_condition_variable&) {
         } catch (...) {
@@ -656,6 +662,7 @@ future<> view_building_worker::local_state::clear_state() {
     finished_tasks.clear();
     aborted_tasks.clear();
     state_updated_cv.broadcast();
+    some_batch_finished = false;
     vbw_logger.debug("View building worker state was cleared.");
 }
 
@@ -675,6 +682,7 @@ void view_building_worker::batch::start() {
         return do_work();
     }).finally([this] () {
         state = batch_state::finished;
+        _vbw.local()._state.some_batch_finished = true;
         _vbw.local()._vb_state_machine.event.broadcast();
     });
 }
