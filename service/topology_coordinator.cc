@@ -960,7 +960,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             continue;
                         }
                         old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
-                        locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count()};
+                        locator::replication_strategy_params params{repl_opts, old_tablets.tablet_count(), ks.metadata()->consistency_option()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params);
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
                     } catch (const std::exception& e) {
@@ -1013,6 +1013,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 const sstring strategy_name = "NetworkTopologyStrategy";
                 auto ks_md = keyspace_metadata::new_keyspace(ks_name, strategy_name, repl_opts,
                                                              new_ks_props.get_initial_tablets(std::nullopt),
+                                                             new_ks_props.get_consistency_option(),
                                                              new_ks_props.get_durable_writes(), new_ks_props.get_storage_options());
                 auto schema_muts = prepare_keyspace_update_announcement(_db, ks_md, guard.write_timestamp());
                 for (auto& m: schema_muts) {
