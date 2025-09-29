@@ -24,6 +24,7 @@
 #include <regex>
 #include <random>
 #include <seastar/core/sstring.hh>
+#include <seastar/core/metrics.hh>
 #include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/exception.hh>
 #include <seastar/http/client.hh>
@@ -316,6 +317,9 @@ struct vector_store_client::impl {
     milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
     sequential_producer<clients_type> clients_producer;
     dns dns;
+    uint64_t dns_refreshes = 0;
+    seastar::metrics::metric_groups _metrics;
+
 
     impl(utils::config_file::named_value<sstring> cfg)
         : uri_observer(cfg.observe([this](seastar::sstring uris_csv) {
@@ -336,7 +340,10 @@ struct vector_store_client::impl {
         })
         , dns(vslogger, get_hosts(_uris), [this](auto const& addrs) -> future<> {
             co_await handle_addresses_changed(addrs);
-        }) {
+        }, dns_refreshes) {
+        _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
+            return dns_refreshes;
+        }).aggregate({seastar::metrics::shard_label})});
     }
 
     void handle_uris_changed(std::vector<uri> uris) {
@@ -471,6 +478,40 @@ struct vector_store_client::impl {
 
         co_return std::unexpected{service_unavailable{}};
     }
+
+    auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
+            -> future<std::expected<primary_keys, ann_error>> {
+        if (is_disabled()) {
+            vslogger.error("Disabled Vector Store while calling ann");
+            co_return std::unexpected{disabled{}};
+        }
+
+        auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
+        auto content = write_ann_json(std::move(vs_vector), limit);
+
+        auto resp = co_await make_request(operation_type::POST, std::move(path), std::move(content), as);
+        if (!resp) {
+            co_return std::unexpected{std::visit(
+                    [](auto&& err) {
+                        return ann_error{err};
+                    },
+                    resp.error())};
+        }
+
+        if (resp->status != status_type::ok) {
+            vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, seastar::value_of([&resp] {
+                return response_content_to_sstring(resp->content);
+            }));
+            co_return std::unexpected{service_error{resp->status}};
+        }
+
+        try {
+            co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
+        } catch (const rjson::error& e) {
+            vslogger.error("Vector Store returned invalid JSON: {}", e.what());
+            co_return std::unexpected{service_reply_format_error{}};
+        }
+    }
 };
 
 vector_store_client::vector_store_client(config const& cfg)
@@ -497,36 +538,7 @@ auto vector_store_client::is_disabled() const -> bool {
 
 auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
         -> future<std::expected<primary_keys, ann_error>> {
-    if (is_disabled()) {
-        vslogger.error("Disabled Vector Store while calling ann");
-        co_return std::unexpected{disabled{}};
-    }
-
-    auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-    auto content = write_ann_json(std::move(vs_vector), limit);
-
-    auto resp = co_await _impl->make_request(operation_type::POST, std::move(path), std::move(content), as);
-    if (!resp) {
-        co_return std::unexpected{std::visit(
-                [](auto&& err) {
-                    return ann_error{err};
-                },
-                resp.error())};
-    }
-
-    if (resp->status != status_type::ok) {
-        vslogger.error("Vector Store returned error: HTTP status {}: {}", resp->status, seastar::value_of([&resp] {
-            return response_content_to_sstring(resp->content);
-        }));
-        co_return std::unexpected{service_error{resp->status}};
-    }
-
-    try {
-        co_return read_ann_json(rjson::parse(std::move(resp->content)), schema);
-    } catch (const rjson::error& e) {
-        vslogger.error("Vector Store returned invalid JSON: {}", e.what());
-        co_return std::unexpected{service_reply_format_error{}};
-    }
+    return _impl->ann(keyspace, name, schema, vs_vector, limit, as);
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {

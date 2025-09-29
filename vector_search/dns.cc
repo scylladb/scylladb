@@ -42,17 +42,19 @@ auto wait_for_timeout(lowres_clock::duration timeout, abort_source& as) -> futur
 
 } // namespace
 
-dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener)
+dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener, uint64_t& refreshes_counter)
     : vslogger(logger)
     , _refresh_interval(DNS_REFRESH_INTERVAL)
-    , _resolver([](auto const& host) -> future<address_type> {
+    , _resolver([this, &refreshes_counter](auto const& host) -> future<address_type> {
         auto f = co_await coroutine::as_future(net::dns::get_host_by_name(host));
 
+        refreshes_counter++;
         if (f.failed()) {
             auto err = f.get_exception();
             if (try_catch<std::system_error>(err) != nullptr) {
                 co_return address_type{};
             }
+            vslogger.warn("Failed to resolve vector store service address: {}", err);
             co_await coroutine::return_exception_ptr(std::move(err));
         }
         auto addr = co_await std::move(f);

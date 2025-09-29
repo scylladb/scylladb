@@ -30,7 +30,7 @@ public:
     using host_address_map = std::unordered_map<seastar::sstring, address_type>;
     using listener_type = std::function<seastar::future<>(host_address_map const&)>;
 
-    explicit dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener);
+    explicit dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener, uint64_t& refreshes_counter);
 
     void start_background_tasks();
 
