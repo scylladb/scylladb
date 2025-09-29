@@ -13,7 +13,7 @@ ANN_ONLY_SUPPORTED_ON_VECTOR_MESSAGE = "ANN ordering is only supported on float 
 ANN_REQUIRES_INDEX_MESSAGE = "ANN ordering by vector requires the column to be indexed"
 SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector does not support filtering"
 CASSANDRA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE = "ANN ordering by vector requires all restricted column(s) to be indexed"
-TOPK_AGGREGATION_ERROR = "can not be run with aggregation"
+TOPK_AGGREGATION_ERROR = "cannot be run with aggregation"
 TOPK_LIMIT_ERROR = "queries must have a limit specified"
 VECTOR_INDEXES_ANN_ONLY_MESSAGE = "Vector indexes only support ANN queries"
 
