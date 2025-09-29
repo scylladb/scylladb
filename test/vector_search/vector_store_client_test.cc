@@ -763,6 +763,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
+    configure{vs};
 
     vs.start_background_tasks();
 
@@ -946,23 +947,18 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
     cfg.db_config->vector_store_primary_uri.set("http://good.authority.here:6080");
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
-                auto as = abort_source();
+                auto as = abort_source_timeout();
                 auto schema = co_await create_test_table(env, "ks", "test");
                 auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
                 result.get()->throw_if_exception();
                 auto& vs = env.local_qp().vector_store_client();
-
+                configure{vs};
                 vs.start_background_tasks();
-                auto all_metrics = seastar::metrics::impl::get_values();
-                auto dns = get_metrics_value("vector_store_dns_refreshes", all_metrics)->i();
-                dns++;
-                vector_store_client_tester::trigger_dns_resolver(vs);
-                BOOST_CHECK(co_await repeat_until(seconds(1), [&dns]() -> future<bool> {
-                    co_await sleep(milliseconds(10));
-                    auto all_metrics = seastar::metrics::impl::get_values();
-                    auto new_dns = get_metrics_value("vector_store_dns_refreshes", all_metrics)->i();
-                    co_return dns == new_dns;
-                }));
+
+                co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+
+                auto metrics = seastar::metrics::impl::get_values();
+                BOOST_CHECK_EQUAL(get_metrics_value("vector_store_dns_refreshes", metrics)->i(), 1);
             },
             cfg);
 }
