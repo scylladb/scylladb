@@ -495,7 +495,15 @@ future<> group0_voter_handler::update_nodes(
     group0_voter_calculator::nodes_list_t nodes;
 
     // Helper for adding a single node
-    auto add_node = [&nodes, &group0_config, &leader_id](const raft::server_id& id, const replica_state& rs, bool is_alive) {
+    auto add_node = [this, &nodes, &group0_config, &leader_id](const raft::server_id& id, const replica_state& rs, bool is_alive) {
+        // Some topology members may not belong to the new group 0 in the Raft-based recovery procedure.
+        if (!group0_config.contains(id)) {
+            if (!_gossiper.get_recovery_leader()) {
+                rvlogger.warn("node {} in state {} is not a part of the group 0 configuration {}, ignoring",
+                        id, rs.state, group0_config);
+            }
+            return;
+        }
         const auto is_voter = group0_config.can_vote(id);
         const auto is_leader = (id == leader_id);
         nodes.emplace(id, group0_voter_calculator::node_descriptor{
