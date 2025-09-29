@@ -586,7 +586,7 @@ SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_regular) {
 }
 SEASTAR_THREAD_TEST_CASE(compact_with_corrupted_sstable_scrub) {
     using scrub_mode = compaction::compaction_type_options::scrub::mode;
-    compact_corrupted<sstables::compaction_aborted_exception>(get_name(),
+    compact_corrupted<compaction::compaction_aborted_exception>(get_name(),
             compaction::compaction_type_options::make_scrub(scrub_mode::segregate),
             "scrub compaction failed due to unrecoverable error: sstables::malformed_sstable_exception");
 }
@@ -2976,7 +2976,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_test) {
         // We expect the scrub with mode=srub::mode::abort to stop on the first invalid fragment.
         compaction::compaction_type_options::scrub opts = {};
         opts.operation_mode = compaction::compaction_type_options::scrub::mode::abort;
-        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
+        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), compaction::compaction_aborted_exception);
 
         BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
         BOOST_REQUIRE(in_strategy_sstables(ts).get().front() == sst);
@@ -3000,7 +3000,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_abort_mode_malformed_sstable_test) {
         // We expect the scrub with mode=scrub::mode::abort to abort scrub on invalid sstable
         compaction::compaction_type_options::scrub opts = {};
         opts.operation_mode = compaction::compaction_type_options::scrub::mode::abort;
-        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), sstables::compaction_aborted_exception);
+        BOOST_REQUIRE_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get(), compaction::compaction_aborted_exception);
 
         BOOST_REQUIRE(in_strategy_sstables(ts).get().size() == 1);
         BOOST_REQUIRE(in_strategy_sstables(ts).get().front() == sst);
