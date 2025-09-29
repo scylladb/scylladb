@@ -57,7 +57,7 @@
 #include "utils/runtime.hh"
 #include "utils/log.hh"
 #include "utils/directories.hh"
-#include "debug.hh"
+#include "debug/debug.hh"
 #include "auth/common.hh"
 #include "init.hh"
 #include "release.hh"

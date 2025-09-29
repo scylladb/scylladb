@@ -64,7 +64,7 @@
 #include "utils/class_registrator.hh"
 #include "utils/cross-shard-barrier.hh"
 #include "streaming/stream_manager.hh"
-#include "debug.hh"
+#include "debug/debug.hh"
 #include "db/schema_tables.hh"
 #include "db/virtual_tables.hh"
 #include "service/raft/raft_group0_client.hh"
