@@ -93,9 +93,9 @@ future<> service::client_state::has_function_access(const sstring& ks, const sst
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
-                const sstring& cf, auth::permission p, auth::command_desc::type t) const {
+                const sstring& cf, auth::permission p, auth::command_desc::type t, std::optional<bool> is_vector_indexed) const {
     auto r = auth::make_data_resource(ks, cf);
-    co_return co_await has_access(ks, {p, r, t});
+    co_return co_await has_access(ks, {p, r, t}, is_vector_indexed);
 }
 
 future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
@@ -148,7 +148,7 @@ future<> service::client_state::check_internal_table_permissions(std::string_vie
     return make_ready_future<>();
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
+future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd, std::optional<bool> is_vector_indexed) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
@@ -222,6 +222,12 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
             && !co_await _auth_service->underlying_role_manager().is_superuser(*_user->name)) [[unlikely]] {
         throw exceptions::unauthorized_exception(
                 ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
+    }
+
+    if (cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) {
+
+        co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({auth::permission_set::of<auth::permission::SELECT, auth::permission::VECTOR_SEARCH_INDEXING>(), cmd.resource});
+
     }
 
     co_return co_await ensure_has_permission(cmd);
