@@ -47,5 +47,6 @@ run_in_dev:
   - dtest/auth_roles_test
   - dtest/audit_test
   - dtest/commitlog_test
+  - dtest/cfid_test
 run_in_debug:
   - random_failures/test_random_failures
