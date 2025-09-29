@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "keys/compound.hh"
+#include "mutation/position_in_partition.hh"
 #include "utils/managed_bytes.hh"
 
 class data_value;
@@ -76,3 +78,6 @@ struct fmt::formatter<comparable_bytes_opt> : fmt::formatter<managed_bytes_view>
         return fmt::format_to(ctx.out(), "null");
     }
 };
+
+template <allow_prefixes AllowPrefixes>
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator);

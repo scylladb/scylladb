@@ -868,7 +868,7 @@ static void unescape_zeros(managed_bytes_view& comparable_bytes_view, bytes_ostr
 }
 
 // Functions are defined later in the file as they depend on to_comparable_bytes_visitor and from_comparable_bytes_visitor.
-static void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out);
+void to_comparable_bytes(const abstract_type& type, managed_bytes_view& serialized_bytes_view, bytes_ostream& out);
 static void from_comparable_bytes(const abstract_type& type, managed_bytes_view& comparable_bytes_view, bytes_ostream& out);
 
 // Encodes a single non-null element of a multi-component type into a byte-comparable format.
@@ -1390,3 +1390,30 @@ data_value comparable_bytes::to_data_value(const data_type& type) const {
 
     return type->deserialize(decoded_bytes.value());
 }
+
+static bytes_view bytespan_to_bytesview(std::span<const std::byte> s) {
+    return {reinterpret_cast<const bytes::value_type*>(s.data()), s.size()};
+}
+
+template <allow_prefixes AllowPrefixes>
+comparable_bytes comparable_bytes_from_compound(const compound_type<AllowPrefixes>& p, managed_bytes_view representation, std::byte terminator) {
+    bytes_ostream out;
+    auto t_it = p.types().begin();
+    const auto t_end = p.types().end();
+    auto c_it = p.components(representation).begin();
+    const auto c_end = p.components(representation).end();
+    while (c_it != c_end) {
+        SCYLLA_ASSERT(t_it != t_end);
+
+        constexpr std::byte col_separator = std::byte(0x40);
+        out.write(bytespan_to_bytesview(object_representation(col_separator)));
+        auto mbv = *c_it;
+        to_comparable_bytes(**t_it, mbv, out);
+        ++c_it;
+        ++t_it;
+    }
+    out.write(bytespan_to_bytesview(object_representation(terminator)));
+    return std::move(out).to_managed_bytes();
+}
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::yes>(const compound_type<allow_prefixes::yes>&, managed_bytes_view, std::byte);
+template comparable_bytes comparable_bytes_from_compound<allow_prefixes::no>(const compound_type<allow_prefixes::no>&, managed_bytes_view, std::byte);
