@@ -231,6 +231,17 @@ struct command_desc {
     } type_ = type::OTHER;
 };
 
+/// Similar to command_desc, but used in cases where multiple permissions allow the access to the resource.
+struct command_desc_with_permission_set {
+    permission_set permission;
+    const ::auth::resource& resource;
+    enum class type {
+        ALTER_WITH_OPTS,
+        ALTER_SYSTEM_WITH_ALLOWED_OPTS,
+        OTHER
+    } type_ = type::OTHER;
+};
+
 ///
 /// Protected resources cannot be modified even if the performer has permissions to do so.
 ///
