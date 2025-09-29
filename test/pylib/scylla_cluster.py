@@ -1002,6 +1002,7 @@ class ScyllaCluster:
         self.stopped: Dict[ServerNum, ScyllaServer] = {}        # servers no longer running but present
         self.servers = ChainMap(self.running, self.stopped)
         self.removed: Set[ServerNum] = set()                    # removed servers (might be running)
+        self.starting: Dict[ServerNum, ScyllaServer] = {}       # servers starting right now, not yet running (and not included in "servers").
         # The first IP assigned to a server added to the cluster.
         self.initial_seed: Optional[IPAddress] = None
         # cluster is started (but it might not have running servers)
@@ -1153,6 +1154,7 @@ class ScyllaCluster:
 
         try:
             server = self.create_server(params)
+            self.starting[server.server_id] = server
             self.logger.info("Cluster %s adding server...", self)
             if start:
                 await server.install_and_start(self.api, expected_error, expected_server_up_state)
@@ -1164,6 +1166,8 @@ class ScyllaCluster:
                           ip_addr, workdir, str(exc))
             await handle_join_failure()
             raise
+        finally:
+            del self.starting[server.server_id]
 
         if expected_error:
             await handle_join_failure()
@@ -1239,6 +1243,10 @@ class ScyllaCluster:
         """Get a list of tuples of server id and IP address of all servers"""
         return [server.server_info() for server in self.servers.values()]
 
+    def starting_servers(self) -> list[ServerInfo]:
+        """Get a list of tuples of server ids and IP address of servers which are currently starting (not yet running)"""
+        return [server.server_info() for server in self.starting.values()]
+
     def _get_keyspace_count(self) -> int:
         """Get the current keyspace count"""
         assert self.start_exception is None
@@ -1288,17 +1296,23 @@ class ScyllaCluster:
         self.logger.info("Cluster %s stopping server %s", self, server_id)
         if server_id in self.stopped:
             return
-        assert server_id in self.running, f"Server {server_id} unknown"
+        assert server_id in self.running or server_id in self.starting, f"Server {server_id} unknown"
         self.is_dirty = True
-        server = self.running[server_id]
+        if server_id in self.running:
+            server = self.running[server_id]
+        else:
+            server = self.starting[server_id]
         # Remove the server from `running` only after we successfully stop it.
         # Stopping may fail and if we removed it from `running` now it might leak.
         if gracefully:
             await server.stop_gracefully()
         else:
             await server.stop()
-        self.running.pop(server_id)
-        self.stopped[server_id] = server
+        if server_id in self.running:
+            self.running.pop(server_id)
+            self.stopped[server_id] = server
+        else:
+            self.starting.pop(server_id)
 
     def server_mark_removed(self, server_id: ServerNum) -> None:
         """Mark server as removed."""
@@ -1638,6 +1652,7 @@ class ScyllaClusterManager:
         add_get('/cluster/replicas', self._cluster_replicas)
         add_get('/cluster/running-servers', self._cluster_running_servers)
         add_get('/cluster/all-servers', self._cluster_all_servers)
+        add_get('/cluster/starting-servers', self._cluster_starting_servers)
         add_get('/cluster/host-ip/{server_id}', self._cluster_server_ip_addr)
         add_get('/cluster/host-id/{server_id}', self._cluster_host_id)
         add_put('/cluster/before-test/{test_case_name}', self._before_test_req)
@@ -1694,6 +1709,10 @@ class ScyllaClusterManager:
     async def _cluster_all_servers(self, _request) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
         """Return a dict of all server ids to IPs"""
         return self.cluster.all_servers()
+
+    async def _cluster_starting_servers(self, _request) -> list[tuple[ServerNum, IPAddress, IPAddress]]:
+        """Return a dict of starting server ids to IPs"""
+        return self.cluster.starting_servers()
 
     async def _cluster_server_ip_addr(self, request) -> IPAddress:
         """IP address of a server"""
