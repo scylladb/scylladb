@@ -177,7 +177,8 @@ def run_iotune():
                 subprocess.check_call([bindir() + "/iotune",
                                        "--format", "envfile",
                                        "--options-file", etcdir() + "/scylla.d/io.conf",
-                                       "--properties-file", etcdir() + "/scylla.d/io_properties.yaml"] + iotune_args)
+                                       "--properties-file", etcdir() + "/scylla.d/io_properties.yaml",
+                                       *(f"--get-best-iops-with-buffer-sizes={s}" for s in [512, 4096])] + iotune_args)
             except Exception as e:
                 logging.error(e)
                 logging.error("%s did not pass validation tests, it may not be on XFS and/or has limited disk space.\n"
