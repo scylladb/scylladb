@@ -451,13 +451,16 @@ selector returns [shared_ptr<raw_selector> s]
     ;
 
 unaliasedSelector returns [uexpression tmp]
-    :  ( c=cident                                  { tmp = unresolved_identifier{std::move(c)}; }
-       | K_COUNT '(' countArgument ')'             { tmp = make_count_rows_function_expression(); }
-       | K_WRITETIME '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
+    :  ( c=cident                                           { tmp = unresolved_identifier{std::move(c)}; }
+       | K_COUNT '(' countArgument ')'                      { tmp = make_count_rows_function_expression(); }
+       | K_SIMILARITY_EUCLIDEAN args=vectorSimilarityArgs   { tmp = function_call{cql3::functions::function_name::native_function("similarity_euclidean"), std::move(args)}; }
+       | K_SIMILARITY_COSINE args=vectorSimilarityArgs      { tmp = function_call{cql3::functions::function_name::native_function("similarity_cosine"), std::move(args)}; }
+       | K_SIMILARITY_DOT_PRODUCT args=vectorSimilarityArgs { tmp = function_call{cql3::functions::function_name::native_function("similarity_dot_product"), std::move(args)}; }
+       | K_WRITETIME '(' c=cident ')'                       { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::writetime,
                                                                                               unresolved_identifier{std::move(c)}}; }
-       | K_TTL       '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
+       | K_TTL       '(' c=cident ')'                       { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
                                                                                               unresolved_identifier{std::move(c)}}; }
-       | f=functionName args=selectionFunctionArgs { tmp = function_call{std::move(f), std::move(args)}; }
+       | f=functionName args=selectionFunctionArgs          { tmp = function_call{std::move(f), std::move(args)}; }
        | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
        )
        ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
@@ -470,6 +473,10 @@ selectionFunctionArgs returns [std::vector<expression> a]
     | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
           ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
       ')'
+    ;
+
+vectorSimilarityArgs returns [std::vector<expression> a]
+    : '(' s=unaliasedSelector { a.push_back(std::move(s)); } ',' v=listOrVectorLiteral { a.push_back(std::move(v)); } ')'
     ;
 
 countArgument
@@ -1650,11 +1657,16 @@ setOrMapLiteral[uexpression t] returns [collection_constructor value]
       { $value = collection_constructor{collection_constructor::style_type::set, std::move(e)}; }
     ;
 
-collectionLiteral returns [uexpression value]
-	@init{ std::vector<expression> l; }
+listOrVectorLiteral returns [collection_constructor value]
+    @init{ std::vector<expression> l; }
     : '['
           ( t1=term { l.push_back(std::move(t1)); } ( ',' tn=term { l.push_back(std::move(tn)); } )* )?
       ']' { $value = collection_constructor{collection_constructor::style_type::list_or_vector, std::move(l)}; }
+    ;
+
+collectionLiteral returns [uexpression value]
+	@init{ std::vector<expression> l; }
+    : v=listOrVectorLiteral { $value = std::move(v); }
     | '{' t=term v=setOrMapLiteral[t] { $value = std::move(v); } '}'
     // Note that we have an ambiguity between maps and set for "{}". So we force it to a set literal,
     // and deal with it later based on the type of the column (SetLiteral.java).
@@ -2397,6 +2409,10 @@ K_PRUNE:       P R U N E;
 K_EXECUTE:     E X E C U T E;
 
 K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
+
+K_SIMILARITY_EUCLIDEAN:     S I M I L A R I T Y '_' E U C L I D E A N;
+K_SIMILARITY_COSINE:        S I M I L A R I T Y '_' C O S I N E;
+K_SIMILARITY_DOT_PRODUCT:   S I M I L A R I T Y '_' D O T '_' P R O D U C T;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
