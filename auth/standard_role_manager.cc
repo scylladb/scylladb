@@ -50,22 +50,11 @@ constexpr std::string_view name{"role_members" , 12};
 }
 
 namespace role_attributes_table {
+
 constexpr std::string_view name{"role_attributes", 15};
 
-static std::string_view creation_query() noexcept {
-    static const sstring instance = seastar::format(
-            "CREATE TABLE {}.{} ("
-            "  role text,"
-            "  name text,"
-            "  value text,"
-            "  PRIMARY KEY(role, name)"
-            ")",
-            meta::legacy::AUTH_KS,
-            name);
+}
 
-    return instance;
-}
-}
 }
 
 static logging::logger log("standard_role_manager");
@@ -153,6 +142,17 @@ const resource_set& standard_role_manager::protected_resources() const {
 }
 
 future<> standard_role_manager::create_legacy_metadata_tables_if_missing() const {
+    static const sstring create_roles_query = fmt::format(
+            "CREATE TABLE {}.{} ("
+            "  {} text PRIMARY KEY,"
+            "  can_login boolean,"
+            "  is_superuser boolean,"
+            "  member_of set<text>,"
+            "  salted_hash text"
+            ")",
+            meta::legacy::AUTH_KS,
+            meta::roles_table::name,
+            meta::roles_table::role_col_name);
     static const sstring create_role_members_query = fmt::format(
             "CREATE TABLE {}.{} ("
             "  role text,"
@@ -161,13 +161,20 @@ future<> standard_role_manager::create_legacy_metadata_tables_if_missing() const
             ")",
             meta::legacy::AUTH_KS,
             meta::role_members_table::name);
-
-
+    static const sstring create_role_attributes_query = seastar::format(
+            "CREATE TABLE {}.{} ("
+            "  role text,"
+            "  name text,"
+            "  value text,"
+            "  PRIMARY KEY(role, name)"
+            ")",
+            meta::legacy::AUTH_KS,
+            meta::role_attributes_table::name);
     return when_all_succeed(
             create_legacy_metadata_table_if_missing(
                     meta::roles_table::name,
                     _qp,
-                    meta::roles_table::creation_query(),
+                    create_roles_query,
                     _migration_manager),
             create_legacy_metadata_table_if_missing(
                     meta::role_members_table::name,
@@ -177,19 +184,18 @@ future<> standard_role_manager::create_legacy_metadata_tables_if_missing() const
             create_legacy_metadata_table_if_missing(
                     meta::role_attributes_table::name,
                     _qp,
-                    meta::role_attributes_table::creation_query(),
+                    create_role_attributes_query,
                     _migration_manager)).discard_result();
 }
 
 future<> standard_role_manager::legacy_create_default_role_if_missing() {
-    SCYLLA_ASSERT(legacy_mode(_qp));
     try {
-        const auto exists = co_await default_role_row_satisfies(_qp, &has_can_login, _superuser);
+        const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_can_login, _superuser);
         if (exists) {
             co_return;
         }
         const sstring query = seastar::format("INSERT INTO {}.{} ({}, is_superuser, can_login) VALUES (?, true, true)",
-                get_auth_ks_name(_qp),
+                meta::legacy::AUTH_KS,
                 meta::roles_table::name,
                 meta::roles_table::role_col_name);
         co_await _qp.execute_internal(
@@ -284,7 +290,7 @@ future<> standard_role_manager::migrate_legacy_metadata() {
                     std::move(config),
                     ::service::group0_batch::unused(),
                     [this](const auto& name, const auto& config, auto& mc) {
-                return create_or_replace(name, config, mc);
+                return create_or_replace(meta::legacy::AUTH_KS, name, config, mc);
             });
         }).finally([results] {});
     }).then([] {
@@ -305,11 +311,15 @@ future<> standard_role_manager::start() {
             const bool legacy = legacy_mode(_qp);
             if (legacy) {
                 if (!_superuser_created_promise.available()) {
+                    // Counterintuitively, we mark promise as ready before any startup work
+                    // because wait_for_schema_agreement() below will block indefinitely
+                    // without cluster majority. In that case, blocking node startup
+                    // would lead to a cluster deadlock.
                     _superuser_created_promise.set_value();
                 }
                 co_await _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as);
 
-                if (co_await any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
+                if (co_await legacy::any_nondefault_role_row_satisfies(_qp, &has_can_login)) {
                     if (legacy_metadata_exists()) {
                         log.warn("Ignoring legacy user metadata since nondefault roles already exist.");
                     }
@@ -345,12 +355,12 @@ future<> standard_role_manager::ensure_superuser_is_created() {
     return _superuser_created_promise.get_shared_future();
 }
 
-future<> standard_role_manager::create_or_replace(std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
+future<> standard_role_manager::create_or_replace(std::string_view auth_ks_name, std::string_view role_name, const role_config& c, ::service::group0_batch& mc) {
     const sstring query = seastar::format("INSERT INTO {}.{} ({}, is_superuser, can_login) VALUES (?, ?, ?)",
-            get_auth_ks_name(_qp),
+            auth_ks_name,
             meta::roles_table::name,
             meta::roles_table::role_col_name);
-    if (legacy_mode(_qp)) {
+    if (auth_ks_name == meta::legacy::AUTH_KS) {
         co_await _qp.execute_internal(
                 query,
                 consistency_for_role(role_name),
@@ -369,7 +379,7 @@ standard_role_manager::create(std::string_view role_name, const role_config& c, 
             throw role_already_exists(role_name);
         }
 
-        return create_or_replace(role_name, c, mc);
+        return create_or_replace(get_auth_ks_name(_qp), role_name, c, mc);
     });
 }
 

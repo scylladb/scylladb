@@ -102,7 +102,11 @@ future<> password_authenticator::migrate_legacy_metadata() const {
         return do_for_each(*results, [this](const cql3::untyped_result_set_row& row) {
             auto username = row.get_as<sstring>("username");
             auto salted_hash = row.get_as<sstring>(SALTED_HASH);
-            static const auto query = update_row_query();
+            static const auto query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+                    meta::legacy::AUTH_KS,
+                    meta::roles_table::name,
+                    SALTED_HASH,
+                    meta::roles_table::role_col_name);
             return _qp.execute_internal(
                     query,
                     consistency_for_user(username),
@@ -119,8 +123,7 @@ future<> password_authenticator::migrate_legacy_metadata() const {
 }
 
 future<> password_authenticator::legacy_create_default_if_missing() {
-    SCYLLA_ASSERT(legacy_mode(_qp));
-    const auto exists = co_await default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
+    const auto exists = co_await legacy::default_role_row_satisfies(_qp, &has_salted_hash, _superuser);
     if (exists) {
         co_return;
     }
@@ -128,7 +131,11 @@ future<> password_authenticator::legacy_create_default_if_missing() {
     if (salted_pwd.empty()) {
         salted_pwd = passwords::hash(DEFAULT_USER_PASSWORD, rng_for_salt, _scheme);
     }
-    const auto query = update_row_query();
+    const auto query = seastar::format("UPDATE {}.{} SET {} = ? WHERE {} = ?",
+            meta::legacy::AUTH_KS,
+            meta::roles_table::name,
+            SALTED_HASH,
+            meta::roles_table::role_col_name);
     co_await _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
@@ -211,11 +218,15 @@ future<> password_authenticator::start() {
             return async([this] {
                 if (legacy_mode(_qp)) {
                     if (!_superuser_created_promise.available()) {
+                        // Counterintuitively, we mark promise as ready before any startup work
+                        // because wait_for_schema_agreement() below will block indefinitely
+                        // without cluster majority. In that case, blocking node startup
+                        // would lead to a cluster deadlock.
                         _superuser_created_promise.set_value();
                     }
                     _migration_manager.wait_for_schema_agreement(_qp.db().real_database(), db::timeout_clock::time_point::max(), &_as).get();
 
-                    if (any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
+                    if (legacy::any_nondefault_role_row_satisfies(_qp, &has_salted_hash, _superuser).get()) {
                         if (legacy_metadata_exists()) {
                             plogger.warn("Ignoring legacy authentication metadata since nondefault data already exist.");
                         }
@@ -240,10 +251,21 @@ future<> password_authenticator::start() {
         });
 
         if (legacy_mode(_qp)) {
+            static const sstring create_roles_query = fmt::format(
+                    "CREATE TABLE {}.{} ("
+                    "  {} text PRIMARY KEY,"
+                    "  can_login boolean,"
+                    "  is_superuser boolean,"
+                    "  member_of set<text>,"
+                    "  salted_hash text"
+                    ")",
+                    meta::legacy::AUTH_KS,
+                    meta::roles_table::name,
+                    meta::roles_table::role_col_name);
             return create_legacy_metadata_table_if_missing(
                     meta::roles_table::name,
                     _qp,
-                    meta::roles_table::creation_query(),
+                    create_roles_query,
                     _migration_manager);
         }
         return make_ready_future<>();
