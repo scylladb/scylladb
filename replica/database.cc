@@ -3513,8 +3513,8 @@ void database::validate_tablet_views_indexes() const {
 
     dblog.warn("Some of the existing keyspaces violate the requirements "
             "for using materialized views or secondary indexes. Those features require enabling "
-            "the experimental feature `views-with-tablets` and the configuration option "
-            "`rf_rack_valid_keyspaces`. The keyspaces that violate that condition: {}", ks_list);
+            "the configuration option `rf_rack_valid_keyspaces` and the cluster feature "
+            "`VIEWS_WITH_TABLETS`. The keyspaces that violate that condition: {}", ks_list);
 }
 
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
