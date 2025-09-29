@@ -86,33 +86,39 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
     # which the test relies on.
     await manager.api.disable_tablet_balancing(servers[2].ip_addr)
 
-    logger.info(f'Creating new tables')
+    logger.info('Creating new tables')
     random_tables = RandomTables(request.node.name, manager, unique_name(), 3)
-    table1 = await random_tables.add_table(name='t1', pks=1, columns=[
+    await random_tables.add_table(name='t1', pks=1, columns=[
         Column("pk", IntType),
         Column('int_c', IntType)
     ])
     if not tablets_enabled:  # issue #18180
-        table2 = await random_tables.add_table(name='t2', pks=1, columns=[
+        await random_tables.add_table(name='t2', pks=1, columns=[
             Column("pk", IntType),
             Column('counter_c', CounterType)
         ])
     cql = manager.get_cql()
     await cql.run_async(f"USE {random_tables.keyspace}")
 
-    logger.info(f'Waiting for cql and hosts')
+    logger.info('Waiting for cql and hosts')
     host2 = (await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60))[0]
+
+    # Run cleanup_all so the global barrier distributes fence_version := version to all nodes.
+    # It must be invoked on the same host where version and fence_version are decremented.
+    # Otherwise, cleanup_all might finish before all group0 state updates are applied on host2,
+    # causing topology_state_load on it to see the decremented version and report broken invariants.
+    await manager.api.cleanup_all(servers[2].ip_addr)
 
     version = await get_version(manager, host2)
     logger.info(f"version on host2 {version}")
 
     await set_version(manager, host2, version - 1)
-    logger.info(f"decremented version on host2")
+    logger.info(f"set version on host2 to {version - 1}")
     await set_fence_version(manager, host2, version - 1)
-    logger.info(f"decremented fence version on host2")
+    logger.info(f"set fence version on host2 to {version - 1}")
 
     await manager.server_restart(servers[2].server_id, wait_others=2)
-    logger.info(f"host2 restarted")
+    logger.info("host2 restarted")
 
     host2 = (await wait_for_cql_and_get_hosts(cql, [servers[2]], time.time() + 60))[0]
 
