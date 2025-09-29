@@ -131,6 +131,28 @@ def configure_iotune_open_fd_limit(shards_count):
         logging.error(f"Required FDs count: {precalculated_fds_count}, default limit: {fd_limits}!")
         sys.exit(1)
 
+def force_random_request_size_of_4k():
+    """
+    It is a known bug that on i4i, i7i, i8g, i8ge instances, the disk controller reports the wrong
+    physical sector size as 512bytes, but the actual physical sector size is 4096bytes. This function
+    helps us work around that issue until AWS manages to get a fix for it. It returns 4096 if it
+    detect it's running on one of the affected instance types, otherwise it returns None and IOTune
+    will use the physical sector size reported by the disk.
+    """
+    path="/sys/devices/virtual/dmi/id/product_name"
+
+    try:
+        with open(path, "r") as f:
+            instance_type = f.read().strip()
+    except FileNotFoundError:
+        logging.warning(f"Couldn't find {path}. Falling back to IOTune using the physical sector size reported by disk.")
+        return
+
+    prefixes = ["i7i", "i4i", "i8g", "i8ge"]
+    if any(instance_type.startswith(p) for p in prefixes):
+        return 4096
+
+
 def run_iotune():
             if "SCYLLA_CONF" in os.environ:
                 conf_dir = os.environ["SCYLLA_CONF"]
@@ -173,6 +195,8 @@ def run_iotune():
 
             configure_iotune_open_fd_limit(cpudata.nr_shards())
 
+            if (reqsize := force_random_request_size_of_4k()):
+                iotune_args += ["--random-write-io-buffer-size", f"{reqsize}"]
             try:
                 subprocess.check_call([bindir() + "/iotune",
                                        "--format", "envfile",
