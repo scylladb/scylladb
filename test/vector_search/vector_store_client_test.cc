@@ -763,6 +763,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_invalid) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
+    configure{vs};
 
     vs.start_background_tasks();
 
