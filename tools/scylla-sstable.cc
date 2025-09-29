@@ -36,6 +36,7 @@
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/open_info.hh"
+#include "release.hh"
 #include "replica/schema_describe_helper.hh"
 #include "test/lib/cql_test_env.hh"
 #include "tools/json_writer.hh"
@@ -2106,7 +2107,7 @@ const std::map<operation, operation_func> operations_with_func{
 /* dump-data */
     {{"dump-data",
             "Dump content of sstable(s)",
-R"(
+fmt::format(R"(
 Dump the content of the data component. This component contains the data-proper
 of the sstable. This might produce a huge amount of output. In general the
 human-readable output will be larger than the binary file.
@@ -2118,9 +2119,8 @@ format.
 Supports both a text and JSON output. The text output uses the built-in scylla
 printers, which are also used when logging mutation-related data structures.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-data
-for more information on this operation, including the schema of the JSON output.
-)",
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#dump-data")),
             {
                     typed_option<std::vector<sstring>>("partition", "partition(s) to filter for, partitions are expected to be in the hex format"),
                     typed_option<sstring>("partitions-file", "file containing partition(s) to filter for, partitions are expected to be in the hex format"),
@@ -2132,7 +2132,7 @@ for more information on this operation, including the schema of the JSON output.
 /* dump-index */
     {{"dump-index",
             "Dump content of sstable index(es)",
-R"(
+fmt::format(R"(
 Dump the content of the index component. Contains the partition-index of the data
 component. This is effectively a list of all the partitions in the sstable, with
 their starting position in the data component and optionally a promoted index,
@@ -2140,80 +2140,73 @@ which contains a sampled index of the clustering rows in the partition.
 Positions (both that of partition and that of rows) is valid for uncompressed
 data.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-index
-for more information on this operation, including the schema of the JSON output.
-)"},
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#dump-index"))},
             dump_index_operation},
 /* dump-compression-info */
     {{"dump-compression-info",
             "Dump content of sstable compression info(s)",
-R"(
+fmt::format(R"(
 Dump the content of the compression-info component. Contains compression
 parameters and maps positions into the uncompressed data to that into compressed
 data. Note that compression happens over chunks with configurable size, so to
 get data at a position in the middle of a compressed chunk, the entire chunk has
 to be decompressed.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-compression-info
-for more information on this operation, including the schema of the JSON output.
-)"},
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#dump-compression-info"))},
             dump_compression_info_operation},
 /* dump-summary */
     {{"dump-summary",
             "Dump content of sstable summary(es)",
-R"(
+fmt::format(R"(
 Dump the content of the summary component. The summary is a sampled index of the
 content of the index-component. An index of the index. Sampling rate is chosen
 such that this file is small enough to be kept in memory even for very large
 sstables.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-summary
-for more information on this operation, including the schema of the JSON output.
-
-)"},
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#dump-summary"))},
             dump_summary_operation},
 /* dump-statistics */
     {{"dump-statistics",
             "Dump content of sstable statistics(s)",
-R"(
+fmt::format(R"(
 Dump the content of the statistics component. Contains various metadata about the
 data component. In the sstable 3 format, this component is critical for parsing
 the data component.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-statistics
-for more information on this operation, including the schema of the JSON output.
-)"},
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#dump-statistics"))},
             dump_statistics_operation},
 /* dump-scylla-metadata */
     {{"dump-scylla-metadata",
             "Dump content of sstable scylla metadata(s)",
-R"(
+fmt::format(R"(
 Dump the content of the scylla-metadata component. Contains scylla-specific
 metadata about the data component. This component won't be present in sstables
 produced by Apache Cassandra.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#dump-scylla-metadata
-for more information on this operation, including the schema of the JSON output.
-)"},
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#dump-scylla-metadata"))},
             dump_scylla_metadata_operation},
 /* validate */
     {{"validate",
             "Validate the sstable(s), same as scrub in validate mode",
-R"(
+fmt::format(R"(
 Validates the content of the sstable on the mutation-fragment level, see
 https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#sstable-content
 for more details.
 Any parsing errors will also be detected, but after successful parsing the
 validation will happen on the fragment level.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#validate
-for more information on this operation.
-)"},
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#validate"))},
             validate_operation},
 /* scrub */
     {{"scrub",
             "Scrub the sstable(s), in the specified mode",
-R"(
+fmt::format(R"(
 Read and re-write the sstable, getting rid of or fixing broken parts, depending
 on the selected mode.
 Output sstables are written to the directory specified via `--output-directory`.
@@ -2226,9 +2219,8 @@ abort the scrub. This can be overridden by the
 be aborted if an sstable cannot be written because its generation clashes with
 pre-existing sstables in the directory.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#scrub
-for more information on this operation, including what the different modes do.
-)",
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#scrub")),
             {
                     typed_option<std::string>("scrub-mode", "scrub mode to use, one of (abort, skip, segregate, validate)"),
                     typed_option<std::string>("output-dir", ".", "directory to place the scrubbed sstables to"),
@@ -2238,12 +2230,11 @@ for more information on this operation, including what the different modes do.
 /* validate-checksums */
     {{"validate-checksums",
             "Validate the checksums of the sstable(s)",
-R"(
+fmt::format(R"(
 Validate both the whole-file and the per-chunk checksums of the data component.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#validate-checksums
-for more information on this operation.
-)"},
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#validate-checksums"))},
             validate_checksums_operation},
 /* decompress */
     {{"decompress",
@@ -2262,7 +2253,7 @@ the output will be:
 /* write */
     {{"write",
             "Write an sstable",
-R"(
+fmt::format(R"(
 Write an sstable based on a JSON representation of the content. The JSON
 representation has to have the same schema as that of a single sstable
 from the output of the dump-data operation (corresponding to the $SSTABLE
@@ -2282,9 +2273,8 @@ format and random UUID generation (printed to stdout). By default it is
 placed in the local directory, can be changed with --output-dir. If the
 output sstable clashes with an existing sstable, the write will fail.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#write
-for more information on this operation, including the schema of the JSON input.
-)",
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#write")),
             {
                     typed_option<std::string>("input-file", "the file containing the input"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
@@ -2294,13 +2284,12 @@ for more information on this operation, including the schema of the JSON input.
 /* script */
     {{"script",
             "Run a script on content of an sstable",
-R"(
+fmt::format(R"(
 Read the sstable(s) and pass the resulting fragment stream to the script
 specified by `--script-file`. Currently only Lua scripts are supported.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#script
-for more information on this operation, including the API documentation.
-)",
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#script")),
             {
                 typed_option<>("merge", "merge all sstables into a single mutation fragment stream (use a combining reader over all sstable readers)"),
                 typed_option<std::string>("script-file", "script file to load and execute"),
@@ -2321,7 +2310,7 @@ for more information on this operation, including the API documentation.
 /* query */
     {{"query",
             "Run a query on the content of the sstable(s)",
-R"(
+fmt::format(R"(
 The query is run on the combined content of all input sstables.
 
 By default, the following query is run: SELECT * FROM $table.
@@ -2345,9 +2334,8 @@ cql_test_env. This temporary directory will have a size of a couple of megabytes
 By default it will create this in /tmp, this can be changed with the `TEMPDIR`
 environment variable. This temporary directory is removed on exit.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#query
-for more information on this operation, including usage examples.
-)",
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#query")),
             {
                 typed_option<std::string>("query,q", "execute the query provided on the command-line"),
                 typed_option<std::string>("query-file", "execute the query from the file, the file is expected to contain a single query"),
@@ -2357,7 +2345,7 @@ for more information on this operation, including usage examples.
 /* upgrade */
     {{"upgrade",
             "Upgrade sstable(s) to the highest supported version and apply the latest schema",
-R"(
+fmt::format(R"(
 This command is an offline version of nodetool upgradesstables.
 Applies the latest sstable version and the latest schema to the sstables.
 
@@ -2374,9 +2362,8 @@ versions which are supported for writing: mc, md and me.
 
 Mapping of input sstables to output sstables is printed to stdout.
 
-See https://docs.scylladb.com/operating-scylla/admin-tools/scylla-sstable#upgrade
-for more information on this operation, including usage examples.
-)",
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#upgrade")),
             {
                 typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                 typed_option<std::string>("sstable-version", fmt::to_string(sstables::get_highest_sstable_version()), "sstable version to use, defaults to the latest supported version"),
