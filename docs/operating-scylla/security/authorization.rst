@@ -387,6 +387,7 @@ The full set of available permissions is:
 - ``MODIFY``
 - ``AUTHORIZE``
 - ``DESCRIBE``
+- ``VECTOR_SEARCH_INDEXING``
 
 .. 
    - ``EXECUTE``
@@ -458,6 +459,9 @@ permissions can be granted on which types of resources, and which statements are
    * - ``DESCRIBE``
      - ``ALL ROLES``
      - ``LIST ROLES`` on all roles or only roles granted to another specified role
+   * - ``VECTOR_SEARCH_INDEXING``
+     - ``ALL KEYSPACES``
+     - ``SELECT`` on all tables with vector search indexes
   
 .. _grant-permission-statement:
 
