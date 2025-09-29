@@ -98,6 +98,7 @@ else()
     set(Seastar_IO_URING ON CACHE BOOL "" FORCE)
     set(Seastar_SCHEDULING_GROUPS_COUNT 19 CACHE STRING "" FORCE)
     set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
+    set(Seastar_CXX_FLAGS "${CMAKE_CXX_FLAGS}" CACHE STRING "" FORCE)
     add_subdirectory(seastar)
     target_compile_definitions (seastar
       PRIVATE
