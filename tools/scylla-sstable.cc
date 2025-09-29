@@ -2234,6 +2234,12 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
     }
 }
 
+void dump_schema_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
+        sstables::sstables_manager& sst_man, const db::config&, const bpo::variables_map& vm) {
+    auto schema_desc = schema->describe({.type = schema_describe_helper::type::table}, cql3::describe_option::STMTS);
+    fmt::print(std::cout, "{}\n", schema_desc.create_statement.value().linearize());
+}
+
 const std::vector<operation_option> global_options {
     typed_option<sstring>("schema-file", "schema.cql", "use the file containing the schema description as the schema source"),
     typed_option<sstring>("keyspace", "keyspace name"),
@@ -2554,6 +2560,27 @@ For more information, see: {}
                 typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
             }},
             upgrade_operation},
+/* dump-schema */
+    {{"dump-schema",
+            "Dump the schema of a table or sstable",
+fmt::format(R"(
+Dump the schema of the table or sstable in CQL describe table format.
+
+The schema is obtained via the regular schema sources, that all operations use.
+If the schema is obtained from the system schema tables, or it is a
+system-schema, no sstable argument is required.
+As usual, it is possible to dump the schema from just the sstable itself.
+
+Important note: the dumped schema will always be a `CREATE TABLE` statement,
+even if the table is in fact a materialized view or an index. This schema is
+enough to understand and parse the sstable data, but it may not be enough
+to recreate the table or write new sstables for it.
+
+For more information, see: {}
+)", doc_link("operating-scylla/admin-tools/scylla-sstable#dump-schema")),
+            {
+            }},
+            dump_schema_operation},
 };
 
 } // anonymous namespace
