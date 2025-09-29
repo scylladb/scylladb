@@ -341,11 +341,12 @@ public:
     future<> has_function_access(const sstring& ks, const sstring& function_signature, auth::permission p) const;
 private:
     future<> check_internal_table_permissions(std::string_view ks, std::string_view table_name, const auth::command_desc& cmd) const;
-    future<> has_access(const sstring& keyspace, auth::command_desc) const;
+    sstring generate_authorization_error_msg(const auth::command_desc&) const;
+    sstring generate_authorization_error_msg(const auth::command_desc_with_permission_set&) const;
 
 public:
-    future<bool> check_has_permission(auth::command_desc) const;
-    future<> ensure_has_permission(auth::command_desc) const;
+    template<typename Cmd = auth::command_desc> future<bool> check_has_permission(Cmd) const;
+    template<typename Cmd = auth::command_desc> future<> ensure_has_permission(Cmd) const;
     future<> maybe_update_per_service_level_params();
     void update_per_service_level_params(qos::service_level_options& slo);
 
