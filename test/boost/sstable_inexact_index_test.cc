@@ -117,6 +117,9 @@ struct inexact_partition_index : abstract_index_reader {
         testlog.trace("<inexact_partition_index/advance_lower_and_check_if_present: _lower={}, _upper={}, pk_idx={}", _lower, _upper, pk_idx);
         return make_ready_future<bool>(true);
     }
+    future<bool> advance_lower_and_check_if_present(dht::ring_position_view rpv, const utils::hashed_key& hash) override {
+        return advance_lower_and_check_if_present(rpv);
+    }
     future<> advance_upper_past(position_in_partition_view pos) override {
         auto cmp = position_in_partition::less_compare(*_s);
         auto pk_idx = pos_idx_to_pk_idx(_lower);
@@ -306,7 +309,7 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_range_query) {
         }
 
         // Generate the sstable.
-        auto sst = make_sstable_containing(env.make_sstable(table.schema()), muts);
+        auto sst = make_sstable_containing(env.make_sstable(table.schema(), sstable_version_types::me), muts);
 
         // Use the index to find key positions.
         std::vector<uint64_t> partition_positions = get_partition_positions(sst, permit);
@@ -425,7 +428,8 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_range_query) {
                         mutation_reader::forwarding::yes,
                         default_read_monitor(),
                         sstables::integrity_check::no,
-                        std::make_unique<inexact_partition_index>(ncs, partition_positions, ck_positions, present_dks, cks, table.schema())
+                        std::make_unique<inexact_partition_index>(ncs, partition_positions, ck_positions, present_dks, cks, table.schema()),
+                        static_cast<utils::hashed_key*>(nullptr)
                     ));
                 }
                 // Check that the reader produces correct output for the chosen partition range.
@@ -516,7 +520,8 @@ SEASTAR_TEST_CASE(test_inexact_partition_index_singular_query) {
                     std::span<uint64_t>(),
                     present_dks,
                     std::span<clustering_key>(),
-                    table.schema())
+                    table.schema()),
+                static_cast<utils::hashed_key*>(nullptr)
             ));
             testlog.debug("Check that the reader produces nothing");
             reader.produces_end_of_stream();

@@ -977,6 +977,9 @@ public:
             });
         });
     }
+    future<bool> advance_lower_and_check_if_present(dht::ring_position_view key, const utils::hashed_key&) override {
+        return advance_lower_and_check_if_present(key);
+    }
 
     // Advances the upper bound to the partition immediately following the partition of the lower bound.
     //

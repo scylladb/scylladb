@@ -12,7 +12,7 @@ from collections.abc import Callable
 
 import pytest
 
-from dtest_class import Tester, create_cf, create_ks, get_ip_from_node
+from dtest_class import Tester, create_cf, create_ks, get_ip_from_node, highest_supported_sstable_format
 from tools.data import create_c1c2_table, insert_c1c2
 from tools.metrics import get_node_metrics
 
@@ -69,6 +69,8 @@ class TestBypassCache(Tester):
             create_c1c2_table(session)
             insert_c1c2(session, n=NUM_OF_QUERY_EXECUTIONS, ks=keyspace_name)
 
+        self.sstable_format = highest_supported_sstable_format(node1)
+
         return session
 
     def get_scylla_cache_reads_metrics(self, node, metrics):
@@ -103,6 +105,17 @@ class TestBypassCache(Tester):
     def cache_thresh(self):
         return 800 if not self.tablets else 150
 
+    def metric_name_for_index_cache_hits(self):
+        """
+        `scylla_sstables_index_page_cache_*` are cache stats for the `cached_file` objects used by index readers.
+        `scylla_sstables_index_page_hits` is the name for hits in the "structured" cache (with parsed and materialized
+        "index pages" of Index.db)
+
+        BIG-index sstables (like "me") use both types of caches.
+        BTI-index sstables (like "ms") use only the former.
+        """
+        return "scylla_sstables_index_page_cache_hits" if self.sstable_format == "ms" else "scylla_sstables_index_page_hits"
+
     def verify_read_was_from_disk(self, node, query, session, index_cache_involved: bool = False):
         # TODO: After https://github.com/scylladb/scylla/issues/9968 remove index_cache_involved, assume that it is false
         errors = self.run_query_and_check_metrics(
@@ -113,7 +126,7 @@ class TestBypassCache(Tester):
                 "scylla_cache_reads": self.gen_less_than(self.cache_thresh()),
                 # Internal reads can also use the sstable index page cache, so we
                 # cannot make assumptions about the index metrics not changing
-                "scylla_sstables_index_page_hits": self.gen_more_than(self.cache_thresh()) if index_cache_involved else "ignore",
+                self.metric_name_for_index_cache_hits(): self.gen_more_than(self.cache_thresh()) if index_cache_involved else "ignore",
                 "scylla_sstables_index_page_cache_misses": "increased_by_at_least_1" if index_cache_involved else "ignore",
                 "scylla_sstables_index_page_cache_populations": "increased_by_at_least_1" if index_cache_involved else "ignore",
             },
@@ -127,7 +140,7 @@ class TestBypassCache(Tester):
             query,
             metrics_validators={
                 "scylla_cache_reads": self.gen_more_than(self.cache_thresh()),
-                "scylla_sstables_index_page_hits": "ignore",
+                self.metric_name_for_index_cache_hits(): "ignore",
                 "scylla_sstables_index_page_cache_misses": "ignore",
                 "scylla_sstables_index_page_cache_populations": "ignore",
             },

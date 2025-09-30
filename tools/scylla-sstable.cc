@@ -743,7 +743,7 @@ private:
 private:
     sstables::shared_sstable do_make_sstable() const {
         const auto format = sstables::sstable_format_types::big;
-        const auto version = sstables::get_highest_sstable_version();
+        const auto version = _sst_man.get_preferred_sstable_version();
         auto generation = _generation_generator();
         auto sst_name = sstables::sstable::filename(_output_dir, _schema->ks_name(), _schema->cf_name(), version, generation, format, component_type::Data);
         if (file_exists(sst_name).get()) {
@@ -1624,7 +1624,9 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     auto output_dir = vm["output-dir"].as<std::string>();
     auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
     auto format = sstables::sstable_format_types::big;
-    auto version = sstables::get_highest_sstable_version();
+    auto version = vm.contains("sstable-version")
+        ? version_from_string(vm["sstable-version"].as<std::string>())
+        : manager.get_preferred_sstable_version();
 
     {
         auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
@@ -2061,7 +2063,9 @@ void upgrade_operation(schema_ptr schema, reader_permit permit, const std::vecto
     const auto local = data_dictionary::make_local_options(output_dir);
 
     const auto new_format = sstables::sstable_format_types::big;
-    const auto new_version = sstables::version_from_string(vm["sstable-version"].as<std::string>());
+    const auto new_version = vm.contains("sstable-version")
+        ? sstables::version_from_string(vm["sstable-version"].as<std::string>())
+        : sst_man.get_preferred_sstable_version();
 
     for (const auto& sst : sstables) {
         if (sst->get_version() == new_version && !all) {
@@ -2289,6 +2293,7 @@ for more information on this operation, including the schema of the JSON input.
                     typed_option<std::string>("input-file", "the file containing the input"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
+                    typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"ms\")"),
             }},
             write_operation},
 /* script */
@@ -2370,7 +2375,7 @@ directly expressed in CQL. Editing schema options (the part after WITH) is safe.
 
 The sstable version can be selected manually with the --sstable-version option,
 by default the latest supported version is used. Valid options are sstable
-versions which are supported for writing: mc, md and me.
+versions which are supported for writing: mc, md, me, ms.
 
 Mapping of input sstables to output sstables is printed to stdout.
 
@@ -2379,7 +2384,7 @@ for more information on this operation, including usage examples.
 )",
             {
                 typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
-                typed_option<std::string>("sstable-version", fmt::to_string(sstables::get_highest_sstable_version()), "sstable version to use, defaults to the latest supported version"),
+                typed_option<std::string>("sstable-version", "sstable version to use, defaults to the same version as ScyllaDB would"),
                 typed_option<>("all", "upgrade all sstables, even if they are already at the requested version"),
                 typed_option<>("unsafe-accept-nonempty-output-dir", "allow the operation to write into a non-empty output directory, acknowledging the risk that this may result in sstable clash"),
             }},
@@ -2607,6 +2612,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         db::nop_large_data_handler large_data_handler;
         db::nop_corrupt_data_handler corrupt_data_handler(db::corrupt_data_handler::register_metrics::no);
 
+        feature_service.ms_sstable.enable();
         sstables::sstables_manager sst_man(
             "scylla_sstable",
             large_data_handler,
