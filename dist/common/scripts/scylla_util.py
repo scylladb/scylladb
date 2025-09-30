@@ -296,6 +296,16 @@ def swap_exists():
     swaps = out('swapon --noheadings --raw')
     return True if swaps != '' else False
 
+def check_sysfs_numa_topology_is_valid():
+    # Verify that the sysfs entry exists correctly, same as the checks
+    # performed by hwloc code (check_sysfs_cpu_path() on topology-linux.c)
+    if os.path.isdir("/sys/devices/system/cpu"):
+        if os.path.exists("/sys/devices/system/cpu/cpu0/topology/package_cpus") or os.path.exists("/sys/devices/system/cpu/cpu0/topology/core_cpus"):
+            return True
+        if os.path.exists("/sys/devices/system/cpu/cpu0/topology/core_siblings") or os.path.exists("/sys/devices/system/cpu/cpu0/topology/thread_siblings"):
+            return True
+    return False
+
 def pkg_error_exit(pkg, offline_exit=True):
     print(f'Package "{pkg}" required.')
     if offline_exit:
