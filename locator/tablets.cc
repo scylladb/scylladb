@@ -1173,6 +1173,10 @@ public:
     const dht::sharder& get_sharder(const schema& s) const override {
         return _sharder;
     }
+
+    virtual dht::shard_replica_set shards_ready_for_reads(const schema& s, const token& token) const override {
+        return _sharder.shards_ready_for_reads(token);
+    }
 };
 
 void tablet_aware_replication_strategy::validate_tablet_options(const abstract_replication_strategy& ars,
