@@ -547,7 +547,7 @@ public:
             compaction_group_view* t,
             tasks::task_id parent_id,
             bool consider_only_existing_data)
-        : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Compaction, "Major compaction")
+        : compaction_task_executor(mgr, do_throw_if_stopping, t, compaction_type::Major, "Major compaction")
         , major_compaction_task_impl(mgr._task_manager_module, tasks::task_id::create_random_id(), 0, "compaction group", t->schema()->ks_name(), t->schema()->cf_name(), "", parent_id, flush_mode::compacted_tables, consider_only_existing_data)
     {
         _status.progress_units = "bytes";
