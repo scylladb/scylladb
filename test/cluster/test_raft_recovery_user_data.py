@@ -60,10 +60,11 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
     property_file_dc2 = {'dc': 'dc2', 'rack': 'rack2'}
 
-    logging.info('Adding servers that will survive majority loss to dc1')
-    live_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc1)
+    # Add servers to dc2 first, so 3 out of 5 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
     dead_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc2)
+    logging.info('Adding servers that will survive majority loss to dc1')
+    live_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc1)
     logging.info(f'Servers to survive majority loss: {live_servers}, servers to be killed: {dead_servers}')
 
     cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
