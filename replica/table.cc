@@ -771,7 +771,7 @@ private:
         return tablet_map().tablet_count();
     }
 
-    sstables::compaction_type_options::split split_compaction_options() const noexcept;
+    future<sstables::compaction_type_options::split> split_compaction_options() const noexcept;
 
     // Called when coordinator executes tablet splitting, i.e. commit the new tablet map with
     // each tablet split into two, so this replica will remap all of its compaction groups
@@ -1066,16 +1066,21 @@ bool table::all_storage_groups_split() {
     return _sg_manager->all_storage_groups_split();
 }
 
-sstables::compaction_type_options::split tablet_storage_group_manager::split_compaction_options() const noexcept {
-    return {[this](dht::token t) {
+future<sstables::compaction_type_options::split> tablet_storage_group_manager::split_compaction_options() const noexcept {
+    // Split must work with a snapshot of tablet map, since it expects stability
+    // throughout its execution.
+    auto erm = _t.get_effective_replication_map();
+    auto tablet_map_ptr = co_await erm->get_token_metadata().tablets().get_tablet_map_ptr(schema()->id());
+
+    co_return sstables::compaction_type_options::split([tablet_map_ptr = make_lw_shared(std::move(tablet_map_ptr))] (dht::token t) {
         // Classifies the input stream into either left or right side.
-        auto [_, side] = storage_group_of(t);
+        auto [_, side] = (*tablet_map_ptr)->get_tablet_id_and_range_side(t);
         return mutation_writer::token_group_id(side);
-    }};
+    });
 }
 
 future<> tablet_storage_group_manager::split_all_storage_groups(tasks::task_info tablet_split_task_info) {
-    sstables::compaction_type_options::split opt = split_compaction_options();
+    sstables::compaction_type_options::split opt = co_await split_compaction_options();
 
     co_await utils::get_local_injector().inject("split_storage_groups_wait", [] (auto& handler) -> future<> {
         dblog.info("split_storage_groups_wait: waiting");
@@ -1095,17 +1100,17 @@ future<> table::split_all_storage_groups(tasks::task_info tablet_split_task_info
 
 future<> tablet_storage_group_manager::maybe_split_compaction_group_of(size_t idx) {
     if (!tablet_map().needs_split()) {
-        return make_ready_future<>();
+        co_return;
     }
     tasks::task_info tablet_split_task_info{tasks::task_id{tablet_map().resize_task_info().tablet_task_id.uuid()}, 0};
 
-    auto& sg = _storage_groups[idx];
+    auto sg = _storage_groups[idx];
     if (!sg) {
         on_internal_error(tlogger, format("Tablet {} of table {}.{} is not allocated in this shard",
                                           idx, schema()->ks_name(), schema()->cf_name()));
     }
 
-    return sg->split(split_compaction_options(), tablet_split_task_info);
+    co_return co_await sg->split(co_await split_compaction_options(), tablet_split_task_info);
 }
 
 future<std::vector<sstables::shared_sstable>>
@@ -1116,7 +1121,7 @@ tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable
 
     auto& cg = compaction_group_for_sstable(sst);
     auto holder = cg.async_gate().hold();
-    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, cg.as_table_state(), split_compaction_options());
+    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, cg.as_table_state(), co_await split_compaction_options());
 }
 
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {

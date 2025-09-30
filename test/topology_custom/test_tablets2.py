@@ -1835,3 +1835,77 @@ async def test_tablet_cleanup_vs_snapshot_race(manager: ManagerClient):
         await s0_log.wait_for('Cleanup failed for tablet', from_mark=s0_mark)
 
         await manager.api.take_snapshot(servers[0].ip_addr, ks, "test_snapshot")
+
+async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
+    await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
+
+# This is a test and reproducer for https://github.com/scylladb/scylladb/issues/24153
+@pytest.mark.asyncio
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_split_correctness_on_tablet_count_change(manager: ManagerClient):
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'error_injections_at_startup': ['short_tablet_stats_refresh_interval']
+            }
+    cmdline = [
+        '--target-tablet-size-in-bytes', '10000',
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+        '--smp', '1', # single cpu is needed to prevent intra-node migration which interacts badly with injection splitting_mutation_writer_switch_wait.
+    ]
+    server = await manager.server_add(cmdline=cmdline, config=cfg)
+
+    logger.info(f'server_id = {server.server_id}')
+
+    cql = manager.get_cql()
+
+    await manager.api.disable_tablet_balancing(server.ip_addr)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'initial': 2}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c blob) WITH compression = {{'sstable_compression': ''}};")
+
+        await manager.api.disable_autocompaction(server.ip_addr, ks, 'test')
+
+        # insert data and force split
+        total_keys = 100
+        pks = range(total_keys)
+        insert = cql.prepare(f"INSERT INTO {ks}.test(pk, c) VALUES(?, ?)")
+        for pk in pks:
+            value = random.randbytes(2000)
+            cql.execute(insert, [pk, value])
+
+        # flush the table
+        await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        log = await manager.server_open_log(server.server_id)
+        log_mark = await log.mark()
+
+        await manager.api.enable_injection(server.ip_addr, "splitting_mutation_writer_switch_wait", one_shot=True)
+        await manager.api.enable_tablet_balancing(server.ip_addr)
+
+        await log.wait_for('Emitting resize decision of type split', from_mark=log_mark)
+        await log.wait_for('splitting_mutation_writer_switch_wait: waiting', from_mark=log_mark)
+
+        await manager.api.enable_injection(server.ip_addr, "merge_completion_fiber", one_shot=True)
+
+        last_tablet_count = await get_tablet_count(manager, server, ks, 'test')
+
+        # trigger merge by increasing target avg tablet significantly
+        await live_update_config(manager, [server], "target_tablet_size_in_bytes", "500000")
+
+        # wait for merge to complete
+        actual_tablet_count = last_tablet_count
+        started = time.time()
+        while actual_tablet_count >= last_tablet_count:
+            actual_tablet_count = await get_tablet_count(manager, server, ks, 'test')
+
+            assert time.time() - started < 120, 'Timeout while waiting for tablet merge'
+            await asyncio.sleep(.1)
+
+        logger.info(f'Merged test table; new number of tablets: {actual_tablet_count}')
+
+        await manager.api.message_injection(server.ip_addr, "splitting_mutation_writer_switch_wait")
+        await asyncio.sleep(.1)
+        await manager.api.message_injection(server.ip_addr, "merge_completion_fiber")
