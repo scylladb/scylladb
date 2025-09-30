@@ -5075,7 +5075,6 @@ class scylla_small_objects(gdb.Command):
             self._resolve_symbols = resolve_symbols
 
             self._text_ranges = get_text_ranges()
-            self._free_object_ptr = gdb.lookup_type('void').pointer().pointer()
             self._page_size = int(gdb.parse_and_eval('\'seastar::memory::page_size\''))
             self._free_in_pool = set()
             self._free_in_span = set()
@@ -5084,7 +5083,7 @@ class scylla_small_objects(gdb.Command):
               pool_next_free = small_pool['_free']
               while pool_next_free:
                 self._free_in_pool.add(int(pool_next_free))
-                pool_next_free = pool_next_free.reinterpret_cast(self._free_object_ptr).dereference()
+                pool_next_free = pool_next_free['next']
 
             self._span_it = iter(spans())
             self._obj_it = iter([]) # initialize to exhausted iterator
@@ -5104,7 +5103,7 @@ class scylla_small_objects(gdb.Command):
             span_next_free = span.page['freelist']
             while span_next_free:
                 self._free_in_span.add(int(span_next_free))
-                span_next_free = span_next_free.reinterpret_cast(self._free_object_ptr).dereference()
+                span_next_free = span_next_free['next']
 
             return span_start, span_end
 
