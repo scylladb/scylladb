@@ -15,7 +15,7 @@ run Scylla easily without setting up the build dependencies beforehand:
 
 ## The `dbuild` script
 
-The script `dbuild` allows you to run any in that toolchain with
+The script `dbuild` allows you to run any command in that toolchain with
 the working directory mounted:
 
     ./tools/toolchain/dbuild ./configure.py
@@ -95,7 +95,7 @@ another using native systems, which requires access to aarch64 and s390x machine
    include the toolchain change, for atomicity. Do not push the commit
    to `next` yet.
 2. Run `tools/toolchain/prepare --clang-build-mode INSTALL_FROM --clang-archive <filename to the archive>` and wait.
-   The clang archive need to be download prior to build.
+   The clang archive needs to be downloaded prior to build.
    It requires `buildah` and `qemu-user-static` to be installed
    (and will complain if they are not).
 3. Publish the image using the instructions printed by the previous step.
