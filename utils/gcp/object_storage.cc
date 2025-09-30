@@ -814,6 +814,18 @@ future<> utils::gcp::storage::client::delete_bucket(std::string_view bucket_in) 
     }
 }
 
+static utils::gcp::storage::object_info create_info(const rjson::value& item) {
+    utils::gcp::storage::object_info info;
+
+    info.name = rjson::get<std::string>(item, "name");
+    info.content_type = rjson::get_opt<std::string>(item, "contentType").value_or(""s);
+    info.size = std::stoull(rjson::get<std::string>(item, "size"));
+    info.generation = std::stoull(rjson::get<std::string>(item, "generation"));
+    info.modified = parse_rfc3339(rjson::get<std::string>(item, "updated"));
+
+    return info;
+}
+
 // See https://cloud.google.com/storage/docs/listing-objects
 // TODO: maybe make a generator? However, we don't have a streaming 
 // json parsing routine as such, so however we do this, we need to
@@ -872,13 +884,7 @@ future<utils::chunked_vector<utils::gcp::storage::object_info>> utils::gcp::stor
             pager.token = rjson::get_opt<std::string>(root, "nextPageToken").value_or(""s);
 
             for (auto& item : items->GetArray()) {
-                object_info info;
-
-                info.name = rjson::get<std::string>(item, "name");
-                info.content_type = rjson::get_opt<std::string>(item, "contentType").value_or(""s);
-                info.size = std::stoull(rjson::get<std::string>(item, "size"));
-                info.generation = std::stoull(rjson::get<std::string>(item, "generation"));
-                info.modified = parse_rfc3339(rjson::get<std::string>(item, "updated"));
+                object_info info = create_info(item);
                 result.emplace_back(std::move(info));
             }
 
@@ -995,6 +1001,46 @@ future<> utils::gcp::storage::client::copy_object(std::string_view bucket_in, st
 
         gcp_storage.debug("Partial copy of {}:{} to {}:{} ({}/{})", bucket, object_name, new_bucket, to_name, written, size);
     }
+}
+
+future<utils::gcp::storage::object_info> utils::gcp::storage::client::merge_objects(std::string_view bucket_in, std::string_view dest_object_name, std::vector<std::string> source_object_names, rjson::value metadata, seastar::abort_source* as) {
+    rjson::value compose = rjson::empty_object();
+    rjson::value source_objects = rjson::empty_array();
+
+    if (source_object_names.size() > 32) {
+        throw std::invalid_argument(fmt::format("Can only merge up to 32 objects. {} requested.", source_object_names.size()));
+    }
+
+    for (auto& src : source_object_names) {
+        rjson::value obj = rjson::empty_object();
+        rjson::add(obj, "name", src);
+        rjson::push_back(source_objects, std::move(obj));
+    }
+
+    rjson::add(compose, "sourceObjects", std::move(source_objects));
+    rjson::add(compose, "destination", std::move(metadata));
+
+    std::string bucket(bucket_in), object_name(dest_object_name);
+
+    auto path = fmt::format("/storage/v1/b/{}/o/{}/compose", bucket, object_name);
+    auto body = rjson::print(compose);
+
+    auto res = co_await _impl->send_with_retry(path
+        , GCP_OBJECT_SCOPE_READ_WRITE
+        , body
+        , APPLICATION_JSON
+        , httpclient::method_type::POST
+    );
+
+    if (res.result() != status_type::ok) {
+        throw failed_operation(fmt::format("Could not merge to object {} -> {}:{}: {} ({})", source_object_names, bucket, object_name, res.result()
+            , get_gcp_error_message(res.body())
+        ));
+    }
+
+    auto resp = rjson::parse(res.body());
+
+    co_return create_info(resp);
 }
 
 future<> utils::gcp::storage::client::copy_object(std::string_view bucket, std::string_view object_name, std::string_view to_name) {
