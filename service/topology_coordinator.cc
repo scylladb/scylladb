@@ -3020,6 +3020,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
         }
 
+        if (*node.request == topology_request::join) {
+            auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
+            auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
+            bool is_zero_token_node = (num_tokens == 0 && tokens_string.empty());
+
+            if (!is_zero_token_node && !_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
+                    locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::add,
+                        to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
+                return node_validation_failure{
+                    .reason = "Cannot join the node because its addition would make some existing keyspace not RF-rack-valid",
+                };
+            }
+        }
+
         std::vector<sstring> unsupported_features;
         const auto& supported_features = node.rs->supported_features;
         std::ranges::set_difference(node.topology->enabled_features, supported_features, std::back_inserter(unsupported_features));
@@ -3036,6 +3050,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     node_validation_result
     validate_removing_node(const node_to_work_on& node) {
+        if (!_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
+                locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::remove,
+                    to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
+            return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace not RF-rack-valid"};
+        }
         return node_validation_success {};
     }
 

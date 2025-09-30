@@ -3495,6 +3495,9 @@ future<service::topology> system_keyspace::load_topology_state(const std::unorde
                 }
                 ret.req_param.emplace(host_id, service::rebuild_param{*rebuild_option});
                 break;
+            case service::topology_request::join:
+                ret.req_param.emplace(host_id, service::join_param{num_tokens, tokens_string});
+                break;
             default:
                 // no parameters for other requests
                 break;
