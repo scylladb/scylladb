@@ -256,6 +256,11 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delayed_replica", ["base", "mv"])
 @pytest.mark.parametrize("altered_dc", ["dc1", "dc2"])
+# FIXME: The test relies on cross-rack tablet migrations. They're forbidden when the configuration option
+# `rf_rack_valid_keyspaces` is enabled. On the other hand, materialized views in tablet-based keyspaces
+# are going to require the configuration option to be used.
+# Hence, we need to rewrite this test.
+@pytest.mark.skip
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altered_dc: str):
     servers = []
