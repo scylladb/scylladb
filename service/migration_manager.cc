@@ -625,7 +625,7 @@ void migration_notifier::before_drop_keyspace(const sstring& keyspace_name,
     });
 }
 
-void migration_notifier::before_allocate_tablet_map(const locator::tablet_map& map,
+void migration_notifier::before_allocate_tablet_map(const locator::shared_tablet_map& map,
         const schema& s, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
     _listeners.thread_for_each([&map, &s, &mutations, ts] (migration_listener* listener) {
         listener->on_before_allocate_tablet_map(map, s, mutations, ts);
@@ -931,7 +931,7 @@ static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr vi
 
     co_await tablet_map.for_each_tablet([&] (auto tid, const auto& tablet_info) -> future<> {
         auto last_token = tablet_map.get_last_token(tid);
-        for (auto& replica: tablet_info.replicas) {
+        for (auto& replica: tablet_info.replicas()) {
             auto id = utils::UUID_gen::get_time_UUID();
             view_building_task task {
                 id, view_building_task::task_type::build_range, view_building_task::task_state::idle,
