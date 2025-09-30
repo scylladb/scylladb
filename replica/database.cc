@@ -984,6 +984,13 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
         return find_schema(table_id);
     };
 
+    auto table_id_by_name = [this, &new_cfms, &s] (std::string_view cf_name) {
+        const auto it = std::ranges::find_if(new_cfms, [&s, cf_name] (const auto& p) {
+            return p.second->ks_name() == s.ks_name() && p.second->cf_name() == cf_name;
+        });
+        return it == new_cfms.end() ? find_uuid(s.ks_name(), cf_name) : it->second->id();
+    };
+
     // Co-locate a view table with its base table when it has exactly the same partition key - the same columns
     // in the same order. In this case the tokens of corresponding partitions are equal and we can benefit from
     // locality of view updates.
@@ -1012,20 +1019,12 @@ std::optional<table_id> database::get_base_table_for_tablet_colocation(const sch
         return s.view_info()->base_id();
     }
 
-    if (const auto t = service::paxos::paxos_store::try_get_base_table(s.cf_name()); t) {
-        return find_uuid(s.ks_name(), *t);
+    if (const auto t = service::paxos::paxos_store::try_get_base_table(s.cf_name())) {
+        return table_id_by_name(*t);
     }
 
     if (cdc::is_log_schema(s)) {
-        auto base_cf_name = cdc::base_name(s.cf_name());
-
-        for (auto new_cfm : new_cfms) {
-            if (new_cfm.second->ks_name() == s.ks_name() && new_cfm.second->cf_name() == base_cf_name) {
-                return new_cfm.second->id();
-            }
-        }
-
-        return find_schema(s.ks_name(), base_cf_name)->id();
+        return table_id_by_name(cdc::base_name(s.cf_name()));
     }
 
     return std::nullopt;

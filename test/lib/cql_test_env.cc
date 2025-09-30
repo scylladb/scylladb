@@ -10,6 +10,7 @@
 #include <random>
 #include <seastar/core/thread.hh>
 #include <seastar/util/defer.hh>
+#include <boost/test/unit_test.hpp>
 #include "gms/generation-number.hh"
 #include "db/view/view_building_worker.hh"
 #include "replica/database_fwd.hh"
@@ -1187,9 +1188,17 @@ private:
                 create_keyspace(cfg_in, ks_name).get();
             }
 
-            with_scheduling_group(dbcfg.statement_scheduling_group, [&func, this] {
-                return func(*this);
-            }).get();
+            try {
+                with_scheduling_group(dbcfg.statement_scheduling_group, [&func, this] {
+                    return func(*this);
+                }).get();
+            } catch (...) {
+                namespace utf = boost::unit_test::framework;
+                testlog.error("{}cql env callback failed, error: {}",
+                    utf::test_in_progress() ? utf::current_test_unit().p_name.get() + ": " : "",
+                    std::current_exception());
+                throw;
+            }
     }
 
 public:
