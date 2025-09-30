@@ -2535,6 +2535,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     co_await sleep_abortable(_ring_delay, _as);
                     node = retake_node(co_await start_operation(), node.id);
                 }
+                co_await utils::get_local_injector().inject("topology_coordinator/write_both_read_new/after_barrier",
+                    utils::wait_for_message(std::chrono::minutes(5)));
                 topology_request_tracking_mutation_builder rtbuilder(node.rs->request_id);
                 rtbuilder.done();
                 switch(node.rs->state) {
