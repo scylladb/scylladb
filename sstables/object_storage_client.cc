@@ -106,29 +106,30 @@ public:
     }
 };
 
-static shared_ptr<gcp::storage::client> make_gcs_client(const db::object_storage_endpoint_param& ep) {
+static shared_ptr<gcp::storage::client> make_gcs_client(const db::object_storage_endpoint_param& ep, semaphore& memory) {
     auto& epc = ep.get_gs_storage();
     auto host = epc.endpoint.empty() || epc.endpoint == "default"
         ? gcp::storage::client::DEFAULT_ENDPOINT
         : epc.endpoint
         ;
     if (epc.credentials_file == "none") {
-        return seastar::make_shared<gcp::storage::client>(host, std::nullopt);
+        return seastar::make_shared<gcp::storage::client>(host, std::nullopt, memory);
     }
     auto credentials = epc.credentials_file.empty()
         ? gcp::google_credentials::uninitialized_default_credentials()
         : gcp::google_credentials::uninitialized_from_file(epc.credentials_file)
         ;
-    return seastar::make_shared<gcp::storage::client>(host, std::move(credentials));
+    return seastar::make_shared<gcp::storage::client>(host, std::move(credentials), memory);
 }
 
 class gs_client_wrapper : public sstables::object_storage_client {
     shared_ptr<gcp::storage::client> _client;
-    // TODO: semaphore& _memory;
+    semaphore& _memory;
     std::function<shared_ptr<gcp::storage::client>()> _shard_client;
 public:
-    gs_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore&, shard_client_factory cf)
-        : _client(make_gcs_client(ep))
+    gs_client_wrapper(const db::object_storage_endpoint_param& ep, semaphore& memory, shard_client_factory cf)
+        : _client(make_gcs_client(ep, memory))
+        , _memory(memory)
         , _shard_client([cf = std::move(cf), endpoint = ep.key()] {
             auto lc = cf(endpoint);
             if (!lc) {
@@ -279,7 +280,7 @@ public:
 
     }
     future<> update_config(const db::object_storage_endpoint_param& ep) override {
-        auto client = std::exchange(_client, make_gcs_client(ep));
+        auto client = std::exchange(_client, make_gcs_client(ep, _memory));
         co_await client->close();
     }
     future<> close() override {
