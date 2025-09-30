@@ -16,6 +16,7 @@
 
 #include <boost/regex.hpp>
 
+#include <seastar/core/align.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/sleep.hh>
@@ -75,6 +76,7 @@ class utils::gcp::storage::client::object_data_sink : public data_sink_impl {
     std::string _content_type;
     std::deque<temporary_buffer<char>> _buffers;
     uint64_t _accumulated = 0;
+    seastar::semaphore_units<> _mem_held;
     bool _closed = false;
     bool _completed = false;
     seastar::named_gate _gate;
@@ -131,6 +133,7 @@ public:
     future<> do_single_upload(std::deque<temporary_buffer<char>>, size_t offset, size_t len, bool final);
     future<> check_upload();
     future<> remove_upload();
+    future<> adjust_memory_limit(size_t);
     future<> maybe_do_upload(bool force) {
         auto total = std::accumulate(_buffers.begin(), _buffers.end(), size_t{}, [](size_t s, auto& buf) {
             return s + buf.size();
@@ -138,6 +141,9 @@ public:
         if (total == 0) {
             co_return;
         }
+
+        co_await adjust_memory_limit(total);
+
         // GCP only allows upload of less than 256k on last chunk
         if (total < min_gcp_storage_chunk_size && !_closed) {
             co_return;
@@ -184,6 +190,7 @@ class utils::gcp::storage::client::object_data_source : public seekable_data_sou
     uint64_t _size = 0;
     uint64_t _position = 0;
     std::chrono::system_clock::time_point _timestamp;
+    seastar::semaphore_units<> _limits;
     seastar::abort_source* _as;
     std::deque<temporary_buffer<char>> _buffers;
 
@@ -201,6 +208,7 @@ public:
     future<temporary_buffer<char>> get() override;
     future<temporary_buffer<char>> skip(uint64_t n) override;
     future<> read_info();
+    void adjust_lease();
 
     future<temporary_buffer<char>> get(size_t limit) override;
     future<> seek(uint64_t pos) override;
@@ -219,27 +227,37 @@ using namespace rest;
 class utils::gcp::storage::client::impl {
     std::string _endpoint;
     std::optional<google_credentials> _credentials;
+    seastar::semaphore _unlimited;
+    seastar::semaphore& _limits;
     seastar::http::experimental::client _client;
     shared_ptr<seastar::tls::certificate_credentials> _certs;
 public:
-    impl(const utils::http::url_info&, std::optional<google_credentials>, shared_ptr<seastar::tls::certificate_credentials> creds);
-    impl(std::string_view endpoint, std::optional<google_credentials>, shared_ptr<seastar::tls::certificate_credentials> creds);
+    impl(const utils::http::url_info&, std::optional<google_credentials>, seastar::semaphore*, shared_ptr<seastar::tls::certificate_credentials> creds);
+    impl(std::string_view endpoint, std::optional<google_credentials>, seastar::semaphore*, shared_ptr<seastar::tls::certificate_credentials> creds);
 
     future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, handler_func_ex, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
     future<> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, rest::httpclient::handler_func, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
     future<rest::httpclient::result_type> send_with_retry(const std::string& path, const std::string& scope, body_variant, std::string_view content_type, httpclient::method_type op, key_values headers = {}, seastar::abort_source* = nullptr);
 
+    auto get_units(size_t s) const {
+        return seastar::get_units(_limits, s);
+    }
+    auto try_get_units(size_t s) const {
+        return seastar::try_get_units(_limits, s);
+    }
     future<> close();
 };
 
-utils::gcp::storage::client::impl::impl(const utils::http::url_info& url, std::optional<google_credentials> c, shared_ptr<seastar::tls::certificate_credentials> certs)
+utils::gcp::storage::client::impl::impl(const utils::http::url_info& url, std::optional<google_credentials> c, seastar::semaphore* memory, shared_ptr<seastar::tls::certificate_credentials> certs)
     : _endpoint(url.host)
     , _credentials(std::move(c))
+    , _unlimited(std::numeric_limits<size_t>::max())
+    , _limits(memory ? *memory : _unlimited)
     , _client(std::make_unique<utils::http::dns_connection_factory>(url.host, url.port, url.is_https(), gcp_storage, certs), 100, seastar::http::experimental::client::retry_requests::yes)
 {}
 
-utils::gcp::storage::client::impl::impl(std::string_view endpoint, std::optional<google_credentials> c, shared_ptr<seastar::tls::certificate_credentials> certs)
-    : impl(utils::http::parse_simple_url(endpoint.empty() ? STORAGE_APIS_URI : endpoint), std::move(c), std::move(certs))
+utils::gcp::storage::client::impl::impl(std::string_view endpoint, std::optional<google_credentials> c, seastar::semaphore* memory, shared_ptr<seastar::tls::certificate_credentials> certs)
+    : impl(utils::http::parse_simple_url(endpoint.empty() ? STORAGE_APIS_URI : endpoint), std::move(c), memory, std::move(certs))
 {}
 
 using status_type = seastar::http::reply::status_type;
@@ -444,10 +462,37 @@ static bool parse_response_range(const seastar::http::reply& r, uint64_t& first,
     return true;
 }
 
+future<> utils::gcp::storage::client::object_data_sink::adjust_memory_limit(size_t total) {
+    auto held = _mem_held.count();
+    if (held < total) {
+        auto want = align_up(total, default_gcp_storage_chunk_size) - held;
+
+        if (held == 0) {
+            // first put into buffer queue. enforce.
+            _mem_held = co_await _impl->get_units(want);
+        } else {
+            // try to get units to cover the bulk of buffers
+            // but if we fail, we accept it and try to get by
+            // with the lease we have. If we get here we should
+            // have at least 8M in our lease, and will in fact do
+            // a write, so data should get released.
+            auto h = _impl->try_get_units(want);
+            if (h) {
+                _mem_held.adopt(std::move(*h));
+            }
+        }
+    }
+} 
+
 // Write a chunk to the dest object
 // See https://cloud.google.com/storage/docs/resumable-uploads
 // See https://cloud.google.com/storage/docs/performing-resumable-uploads
 future<> utils::gcp::storage::client::object_data_sink::do_single_upload(std::deque<temporary_buffer<char>> bufs, size_t offset, size_t len, bool final) {
+    // always take the whole memory lease. This might be more or less than what we actually release
+    // but we only ever leave sub-256k amount of data in queue, and we want the next
+    // put to enforce waiting for a full 8M lease...
+    auto mine_held = std::exchange(_mem_held, {});
+
     // Ensure to block close from completing
     auto h = _gate.hold();
     // Enforce our concurrency constraints
@@ -621,6 +666,21 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
         if (to_read != 0) {
             gcp_storage.debug("Reading object {}:{} ({}-{}/{})", _bucket, _object_name, _position, _position+to_read, _size);
 
+            auto lease = _impl->try_get_units(to_read);
+            if (lease) {
+                if (_limits) {
+                    _limits.adopt(std::move(*lease));
+                } else {
+                    _limits = std::move(*lease);
+                }
+            } else {
+                // If we can't get a lease to cover this read, don't wait, as this
+                // could cause deadlock in higher layers, but instead adjust the
+                // size down to decrease memory pressure.
+                to_read = std::min(to_read, min_gcp_storage_chunk_size);
+                gcp_storage.debug("Reading object (adjusted) {}:{} ({}-{}/{})", _bucket, _object_name, _position, _position+to_read, _size);
+            }
+
             // Ensure we read from the same generation as we queried in read_info. Note: mock server ignores this.
             auto path = fmt::format("/storage/v1/b/{}/o/{}?ifGenerationMatch={}&alt=media", _bucket, _object_name, _generation);
             auto range = fmt::format("bytes={}-{}", _position, _position+to_read-1); // inclusive range
@@ -662,6 +722,8 @@ future<temporary_buffer<char>> utils::gcp::storage::client::object_data_source::
         }
     }
 
+    adjust_lease();
+
     co_return res;
 }
 
@@ -691,6 +753,16 @@ future<> utils::gcp::storage::client::object_data_source::seek(uint64_t pos) {
             _buffers.pop_front();
         }
         n -= m;
+    }
+    adjust_lease();
+}
+
+void utils::gcp::storage::client::object_data_source::adjust_lease() {
+    auto total = std::accumulate(_buffers.begin(), _buffers.end(), size_t{}, [](size_t s, auto& buf) {
+        return s + buf.size();
+    });
+    if (total < _limits.count()) {
+        _limits.return_units(_limits.count() - total);
     }
 }
 
@@ -747,7 +819,11 @@ future<> utils::gcp::storage::client::object_data_source::read_info() {
 }
 
 utils::gcp::storage::client::client(std::string_view endpoint, std::optional<google_credentials> c, shared_ptr<seastar::tls::certificate_credentials> certs)
-    : _impl(seastar::make_shared<impl>(endpoint, std::move(c), std::move(certs)))
+    : _impl(seastar::make_shared<impl>(endpoint, std::move(c), nullptr, std::move(certs)))
+{}
+
+utils::gcp::storage::client::client(std::string_view endpoint, std::optional<google_credentials> c, seastar::semaphore& memory, shared_ptr<seastar::tls::certificate_credentials> certs)
+    : _impl(seastar::make_shared<impl>(endpoint, std::move(c), &memory, std::move(certs)))
 {}
 
 utils::gcp::storage::client::~client() = default;

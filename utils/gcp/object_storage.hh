@@ -14,6 +14,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/net/tls.hh>
 
 #include "utils/rjson.hh"
@@ -77,6 +78,13 @@ namespace utils::gcp::storage {
          * using system trust iff endpoint is a https url)
          */
         client(std::string_view endpoint, std::optional<google_credentials> credentials, shared_ptr<seastar::tls::certificate_credentials> certs={});
+
+        /**
+         * Same as above, but with an additional memory limiting semaphore which will be shared across all up/download source/sinks to
+         * limit buffer memory usage.
+         */
+        client(std::string_view endpoint, std::optional<google_credentials> credentials, seastar::semaphore& memory_limit, shared_ptr<seastar::tls::certificate_credentials> certs={});
+
         ~client();
 
         /**
