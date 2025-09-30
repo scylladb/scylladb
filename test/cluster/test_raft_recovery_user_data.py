@@ -13,6 +13,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.cluster.conftest import cluster_con
@@ -90,6 +91,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     logging.info(f'Killing {dead_servers}')
     await asyncio.gather(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
+
+    logging.info('Checking that group 0 has no majority')
+    with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out"):
+        await read_barrier(manager.api, live_servers[0].ip_addr, timeout=2)
 
     logging.info('Starting the recovery procedure')
 
