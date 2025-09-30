@@ -244,7 +244,7 @@ future<> view_building_worker::create_staging_sstable_tasks() {
 
     // Move staging sstables from `_sstables_to_register` (on shard0) to `_staging_sstables` on corresponding shards.
     // Firstly reorgenize `_sstables_to_register` for easier movement.
-    // This is done in separate loop after commiting the group0 command, because we need to move values from `_sstables_to_register`
+    // This is done in separate loop after committing the group0 command, because we need to move values from `_sstables_to_register`
     // (`staging_sstable_task_info` is non-copyable because of `foreign_ptr` field).
     std::unordered_map<shard_id, std::unordered_map<table_id, std::unordered_map<dht::token, std::vector<foreign_ptr<sstables::shared_sstable>>>>> new_sstables_per_shard;
     for (auto& [table_id, sst_infos]: _sstables_to_register) {
