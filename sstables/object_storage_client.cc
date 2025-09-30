@@ -210,21 +210,73 @@ public:
     future<> upload_file(std::filesystem::path path, object_name name, utils::upload_progress& up, seastar::abort_source* as) override {
         auto f = co_await open_file_dma(path.string(), open_flags::ro);
         auto s = co_await f.stat();
-        up.total += s.st_size;
-        uint64_t pos = 0;
-        auto sink = make_upload_sink(std::move(name), as);
-        for (;;) {
-            auto buf = co_await f.dma_read_bulk<char>(pos, 64*1024);
-            auto n = buf.size();
-            if (n == 0) {
-                break;
+        uint64_t size = s.st_size;
+        up.total += size;
+
+        auto upload_one = [this, as, &up, &f](object_name name, uint64_t offset, uint64_t size) -> future<> {
+            uint64_t pos = offset;
+            auto sink = make_upload_sink(std::move(name), as);
+            while (size > 0) {
+                auto rem = std::min(size, size_t(64*1024));
+                auto buf = co_await f.dma_read_bulk<char>(pos, rem);
+                auto n = buf.size();
+                if (n == 0) {
+                    break;
+                }
+                co_await sink.put(std::move(buf));
+                up.uploaded += n;
+                pos += n;
+                size -= n;
             }
-            co_await sink.put(std::move(buf));
-            up.uploaded += n;
-            pos += n;
+            co_await sink.flush();
+            co_await sink.close();
+        };
+        constexpr size_t chunk_size = 8*1024*1024;
+
+        if (size <= chunk_size) {
+            co_await upload_one(std::move(name), 0, size);
+            co_await f.close();
+        } else {
+            size_t cc = chunk_size;
+            while ((cc * 32) < size) {
+                cc <<= 1;
+            }
+            struct part {
+                std::string name;
+                uint64_t off, size;
+            };
+            std::vector<part> ranges;
+            auto object = name.object();
+            auto bucket = name.bucket();
+
+            for (uint64_t off = 0; off < size;) {
+                auto rem = std::min(size - off, cc);
+                auto subname = fmt::format("{}-temp-{}-{}", object, off, off+rem);
+                ranges.emplace_back(part{subname, off, rem});
+                off += rem;
+            }
+
+            auto existing = (co_await _client->list_objects(bucket, fmt::format("{}-temp-", object)))
+                | std::views::transform([](auto& info) { return info.name; })
+                | std::ranges::to<std::unordered_set<std::string>>()
+            ;
+
+            co_await parallel_for_each(ranges, [bucket, &upload_one, &existing](const part& p) -> future<> {
+                if (!existing.count(p.name)) {
+                    co_await upload_one(object_name(bucket, p.name), p.off, p.size);
+                }
+            });
+
+            co_await f.close();
+
+            auto names = ranges | std::views::transform([](auto& p) { return p.name; }) | std::ranges::to<std::vector<std::string>>();
+            co_await _client->merge_objects(bucket, object, std::move(names), {}, as);
+
+            co_await parallel_for_each(names, [this, bucket](auto& name) -> future<> {
+                co_await _client->delete_object(bucket, name);
+            });
         }
-        co_await sink.flush();
-        co_await sink.close();
+
     }
     future<> update_config(const db::object_storage_endpoint_param& ep) override {
         auto client = std::exchange(_client, make_gcs_client(ep));
