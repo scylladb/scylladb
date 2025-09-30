@@ -331,8 +331,8 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
     # If we run the test with more than 1 shard and the tablet for the view table gets allocated on the same shard as the tablet of the base table,
     # we'll perform an intranode migration of one of these tablets to the other shard. This migration can be confused with the migration to the
     # new dc in the "first_migration_done()" below. To avoid this, run servers with only 1 shard.
-    servers.append(await manager.server_add(cmdline=['--smp', '1'], config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
-    servers.append(await manager.server_add(cmdline=['--smp', '1'], config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack1'}))
+    servers.append(await manager.server_add(cmdline=['--smp', '1'], property_file={'dc': f'dc1', 'rack': 'myrack1'}))
+    servers.append(await manager.server_add(cmdline=['--smp', '1'], property_file={'dc': f'dc2', 'rack': 'myrack1'}))
 
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1}")
