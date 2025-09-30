@@ -19,6 +19,7 @@
 #include <seastar/core/fstream.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/abort_source.hh>
 
 #include <fmt/ranges.h>
 #include <fmt/std.h>
@@ -35,6 +36,7 @@
 #include "utils/UUID.hh"
 #include "utils/UUID_gen.hh"
 #include "utils/hash.hh"
+#include "service/query_state.hh"
 #include "service/storage_service.hh"
 #include "service/migration_manager.hh"
 #include "compaction/compaction_manager.hh"
@@ -83,14 +85,16 @@ public:
         }
     };
 
-    replicated_key_provider(encryption_context& ctxt, shared_ptr<system_key> system_key, shared_ptr<key_provider> local_provider)
+    replicated_key_provider(encryption_context& ctxt, shared_ptr<system_key> system_key, shared_ptr<key_provider> local_provider, const options& opts)
         : _ctxt(ctxt)
         , _system_key(std::move(system_key))
         , _local_provider(std::move(local_provider))
+        , _original_options(opts)
     {}
 
 
     future<std::tuple<key_ptr, opt_bytes>> key(const key_info&, opt_bytes = {}) override;
+    future<std::tuple<key_ptr, opt_bytes>> key(const key_info&, opt_bytes, utils::chunked_vector<mutation>&, api::timestamp_type) override;
     future<> validate() const override;
     future<> maybe_initialize_tables();
     static future<> do_initialize_tables(::replica::database& db, service::migration_manager&);
@@ -125,13 +129,21 @@ public:
     }
 
 private:
+    struct group0_ctx {
+        utils::chunked_vector<mutation>& mutations;
+        api::timestamp_type timestamp;
+    };
+
     void cache_key(const key_id&, const UUID&, key_ptr);
 
     static opt_bytes decode_id(const opt_bytes&);
     static bytes encode_id(const UUID&);
 
-    future<std::tuple<UUID, key_ptr>> get_key(const key_info&, opt_bytes = {});
-    future<std::optional<std::tuple<UUID, key_ptr>>> find_key(key_id& id, sstring_view cipher);
+    future<std::tuple<UUID, key_ptr>> get_key(const key_info&, opt_bytes = {}, std::optional<group0_ctx> g0_ctx = {});
+    future<std::tuple<key_ptr, opt_bytes>> key_impl(const key_info& info, opt_bytes input, std::optional<group0_ctx> g0_ctx = {});
+    future<std::optional<std::tuple<UUID, key_ptr>>> find_key(key_id& id, sstring_view cipher, sstring_view ksname, sstring_view tablename);
+    future<std::tuple<UUID, key_ptr>> create_key(const key_info&, sstring_view cipher);
+    future<std::tuple<UUID, key_ptr>> create_key_in_group0(const key_info&, sstring_view cipher, std::optional<group0_ctx> g0_ctx = {});
 
     template<typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> query(sstring, Args&& ...);
@@ -142,9 +154,13 @@ private:
     shared_ptr<system_key> _system_key;
     shared_ptr<key_provider> _local_provider;
     std::unordered_map<key_id, std::pair<UUID, key_ptr>, key_id_hash> _keys;
+    options _original_options;
 
     bool _initialized = false;
     bool _use_cache = true;
+
+    enum class keys_location { sys_repl_keys_ks, group0 };
+    keys_location _keys_on = keys_location::sys_repl_keys_ks;
 
     friend class replicated_key_provider_factory;
 
@@ -222,6 +238,14 @@ const bytes replicated_key_provider::local_fallback_id = encode_id(local_fallbac
 const bytes_view replicated_key_provider::local_fallback_bytes(local_fallback_id.data() + 1, 16);
 
 future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key(const key_info& info, opt_bytes input) {
+    co_return co_await key_impl(info, std::move(input));
+}
+
+future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key(const key_info& info, opt_bytes input, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+    co_return co_await key_impl(info, std::move(input), group0_ctx{muts, ts});
+}
+
+future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key_impl(const key_info& info, opt_bytes input, std::optional<group0_ctx> g0_ctx) {
     opt_bytes id;
 
     if (input) { //reading header?
@@ -241,7 +265,7 @@ future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key(const key_in
     // try keyspace lookup.
     if (!try_local) {
         try {
-            auto [uuid, k] = co_await get_key(info, std::move(id));
+            auto [uuid, k] = co_await get_key(info, std::move(id), g0_ctx);
             co_return std::make_tuple(k, encode_id(uuid));
         } catch (std::invalid_argument& e) {
             std::throw_with_nested(configuration_error(e.what()));
@@ -276,15 +300,33 @@ future<std::tuple<key_ptr, opt_bytes>> replicated_key_provider::key(const key_in
     co_return std::make_tuple(k, local_fallback_id);
 }
 
-future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_info& info, opt_bytes opt_id) {
+future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_info& info, opt_bytes opt_id, std::optional<group0_ctx> g0_ctx) {
     if (!_initialized) {
         co_await maybe_initialize_tables();
     }
 
-    key_id id(info, std::move(opt_id));
+    // Search the key in the local shard's cache first.
+    key_id id(info, opt_id);
     auto i = _keys.find(id);
     if (i != _keys.end()) {
         co_return std::tuple(i->second.first, i->second.second);
+    }
+
+    // If not found in the cache, search in the `encrypted_keys` table, or create a new one.
+    // Creating a key requires a group0 transaction, which can only be executed from shard 0.
+    // Therefore, dispatch to shard 0.
+    if (this_shard_id() != 0) {
+        auto [uuid, key_bytes] = co_await smp::submit_to(0, [this, info, opt_id, g0_ctx]() -> future<std::tuple<UUID, bytes>> {
+            auto provider = _ctxt.get_provider(_original_options);
+            auto [uuid, key] = co_await dynamic_cast<replicated_key_provider*>(provider.get())->get_key(info, opt_id, g0_ctx);
+            co_return std::tuple(uuid, key->key());
+        });
+        auto key = make_shared<symmetric_key>(info, key_bytes);
+        // If we reach here, it means that we are not running in shard 0, so no
+        // g0_ctx was given, and therefore the key returned from shard 0 has been
+        // committed to Raft. We can safely cache the key here.
+        cache_key(id, uuid, key);
+        co_return std::tuple(uuid, key);
     }
 
     // TODO: origin does non-cql acquire of all available keys from
@@ -295,39 +337,39 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
 
     auto cipher = info.alg.substr(0, info.alg.find('/')); // e.g. "AES"
 
-    auto res = co_await find_key(id, cipher);
+    auto res = co_await [&] -> future<std::optional<std::tuple<UUID, key_ptr>>> {
+        switch (_keys_on) {
+        case keys_location::sys_repl_keys_ks:
+            co_return co_await find_key(id, cipher, KSNAME, TABLENAME);
+        case keys_location::group0:
+            co_return co_await find_key(id, cipher, db::system_keyspace::NAME, db::system_keyspace::ENCRYPTED_KEYS);
+        }
+    }();
     if (res) {
         auto [uuid, k] = *res;
         cache_key(id, uuid, k);
         co_return std::tuple(uuid, k);
     }
 
-    // otoh, if we don't need a specific key, we can just create a new one (writing a sstable)
-    UUID uuid = utils::UUID_gen::get_time_UUID();
+    log.debug("No key found. Generating new key{}", _keys_on == keys_location::group0 ? " in group0" : "");
 
-    log.debug("No key found. Generating {}", uuid);
-
-    auto k = make_shared<symmetric_key>(id.info);
-    cache_key(id, uuid, k);
-
-    auto b = co_await _system_key->encrypt(k->key());
-    auto ks = base64_encode(b);
-    log.trace("Inserting generated key {}", uuid);
-    co_await query(fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)",
-        KSNAME, TABLENAME), _system_key->name(), cipher, int32_t(id.info.len), uuid, ks
-    );
-    log.trace("Flushing key table");
-    co_await force_blocking_flush();
-
+    auto [uuid, k] = co_await [&] -> future<std::tuple<UUID, key_ptr>> {
+        switch (_keys_on) {
+        case keys_location::sys_repl_keys_ks:
+            co_return co_await create_key(info, cipher);
+        case keys_location::group0:
+            co_return co_await create_key_in_group0(info, cipher, g0_ctx);
+        }
+    }();
     co_return std::tuple(uuid, k);
 }
 
-future<std::optional<std::tuple<UUID, key_ptr>>> replicated_key_provider::find_key(key_id& id, sstring_view cipher) {
+future<std::optional<std::tuple<UUID, key_ptr>>> replicated_key_provider::find_key(key_id& id, sstring_view cipher, sstring_view ksname, sstring_view tablename) {
     shared_ptr<cql3::untyped_result_set> res;
     if (id.id) {
         auto uuid = utils::UUID_gen::get_UUID(*id.id);
         log.debug("Finding key {} ({})", uuid, id.info);
-        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? AND key_id=?;", KSNAME, TABLENAME);
+        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? AND key_id=?;", ksname, tablename);
         res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len), uuid);
 
         // if we find nothing, and we actually queried a specific key (by uuid), we've failed.
@@ -337,7 +379,7 @@ future<std::optional<std::tuple<UUID, key_ptr>>> replicated_key_provider::find_k
         }
     } else {
         log.debug("Finding key ({})", id.info);
-        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? LIMIT 1;", KSNAME, TABLENAME);
+        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? LIMIT 1;", ksname, tablename);
         res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len));
 
         if (res->empty()) {
@@ -353,6 +395,97 @@ future<std::optional<std::tuple<UUID, key_ptr>>> replicated_key_provider::find_k
     auto b = co_await _system_key->decrypt(kb);
     auto k = make_shared<symmetric_key>(id.info, b);
     co_return std::tuple(uuid, k);
+}
+
+future<std::tuple<UUID, key_ptr>> replicated_key_provider::create_key(const key_info& info, sstring_view cipher) {
+    UUID uuid = utils::UUID_gen::get_time_UUID();
+
+    log.debug("Generating key {} ({})", uuid, info);
+
+    auto k = make_shared<symmetric_key>(info);
+    auto b = co_await _system_key->encrypt(k->key());
+    auto ks = base64_encode(b);
+
+    auto insert_stmt = fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)", KSNAME, TABLENAME);
+    co_await query(std::move(insert_stmt), _system_key->name(), cipher, int32_t(info.len), uuid, ks);
+    log.trace("Flushing key table");
+    co_await force_blocking_flush();
+
+    co_return std::make_tuple(uuid, k);
+}
+
+future<std::tuple<UUID, key_ptr>> replicated_key_provider::create_key_in_group0(const key_info& info, sstring_view cipher, std::optional<group0_ctx> g0_ctx) {
+    if (this_shard_id() != 0) {
+        on_internal_error(log, "create_key_in_group0: must run on shard 0");
+    }
+
+    key_id id(info, {});
+    UUID uuid = utils::UUID_gen::get_time_UUID();
+    auto k = make_shared<symmetric_key>(info);
+    auto b = co_await _system_key->encrypt(k->key());
+    auto ks = base64_encode(b);
+
+    auto& qp = _ctxt.get_query_processor().local();
+    auto insert_stmt = fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)", db::system_keyspace::NAME, db::system_keyspace::ENCRYPTED_KEYS);
+    std::vector<data_value_or_unset> values = {
+        data_value_or_unset(_system_key->name()),
+        data_value_or_unset(cipher),
+        data_value_or_unset(int32_t(info.len)),
+        data_value_or_unset(uuid),
+        data_value_or_unset(ks)
+    };
+
+    if (g0_ctx) {
+        // A group0 transaction is in progress; just return the mutations and let the caller handle them.
+        // Also do not store the key in the cache, since the key hasn't been stored on the table yet (group0 transaction hasn't been committed).
+        auto muts = co_await qp.get_mutations_internal(insert_stmt, rkp_db_query_state(), g0_ctx->timestamp, values);
+        std::ranges::move(muts, std::back_inserter(g0_ctx->mutations));
+        co_return std::make_tuple(uuid, k);
+    }
+
+    // We reach here only when no group0 transaction is in progress.
+
+    auto* group0_client = _ctxt.get_storage_service().local().get_group0_client();
+    if (!group0_client) {
+        on_internal_error(log, "create_key_in_group0: storage_service has not been initialized");
+    }
+    auto& as = _ctxt.get_storage_service().local().get_group0_abort_source();
+
+    while (true) {
+        as.check();
+
+        auto guard = co_await group0_client->start_operation(as);
+
+        log.debug("Checking if key exists after group0 read barrier");
+        auto res = co_await find_key(id, cipher, db::system_keyspace::NAME, db::system_keyspace::ENCRYPTED_KEYS);
+        if (res) {
+            co_return *res;
+        }
+
+        log.debug("Generating key {} ({})", uuid, info);
+
+        auto timestamp = guard.write_timestamp();
+        auto muts = co_await qp.get_mutations_internal(insert_stmt, rkp_db_query_state(), timestamp, values);
+        utils::chunked_vector<mutation> cmuts = {muts.begin(), muts.end()};
+
+        auto group0_cmd = group0_client->prepare_command(
+            ::service::write_mutations{.mutations{cmuts.begin(), cmuts.end()}},
+            guard,
+            "encryption at rest: insert key"
+        );
+
+        try {
+            co_await group0_client->add_entry(std::move(group0_cmd), std::move(guard), as, ::service::raft_timeout{});
+        } catch (::service::group0_concurrent_modification&) {
+            log.debug("Concurrent modification detected when inserting key, retrying.");
+            continue;
+        }
+        break;
+    }
+    // The group0 transaction has been committed, it's safe to store the key in the cache.
+    cache_key(id, uuid, k);
+
+    co_return std::make_tuple(uuid, k);
 }
 
 future<> replicated_key_provider::validate() const {
@@ -455,7 +588,7 @@ shared_ptr<key_provider> replicated_key_provider_factory::get_provider(encryptio
     }
     auto p = ctxt.get_cached_provider(name);
     if (!p) {
-        auto rp = seastar::make_shared<replicated_key_provider>(ctxt, std::move(system_key), local_file_provider_factory::find(ctxt, local_key_file.string()));
+        auto rp = seastar::make_shared<replicated_key_provider>(ctxt, std::move(system_key), local_file_provider_factory::find(ctxt, local_key_file.string()), map);
         ctxt.cache_provider(name, rp);
 
         if (debug && debug->find("nocache") != sstring::npos) {
