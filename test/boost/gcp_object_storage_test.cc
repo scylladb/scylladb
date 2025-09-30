@@ -83,18 +83,15 @@ static future<> create_object_of_size(storage::client& c, std::string_view bucke
     co_await os.close();
 }
 
-static future<> test_read_write_helper(const local_gcs_wrapper& env, size_t dest_size) {
+static future<> compare_object_data(const local_gcs_wrapper& env, std::string_view object_name, std::vector<temporary_buffer<char>>&& bufs) {
     auto& c = env.client();
-    auto uuid = fmt::format("{}", utils::UUID_gen::get_time_UUID());
-    std::vector<temporary_buffer<char>> written;
+    auto total = std::accumulate(bufs.begin(), bufs.end(), size_t{}, [](size_t s, auto& buf) {
+        return s + buf.size();
+    });
 
-    // ensure we remove the object
-    env.objects_to_delete.emplace_back(uuid);
-    co_await create_object_of_size(c, env.bucket, uuid, dest_size, &written);
-
-    auto source = c.create_download_source(env.bucket, uuid);
+    auto source = c.create_download_source(env.bucket, object_name);
     auto is1 = seastar::input_stream<char>(std::move(source));
-    auto is2 = seastar::input_stream<char>(create_memory_source(std::move(written)));
+    auto is2 = seastar::input_stream<char>(create_memory_source(std::move(bufs)));
 
     uint64_t read = 0;
     while (!is1.eof()) {
@@ -107,7 +104,18 @@ static future<> test_read_write_helper(const local_gcs_wrapper& env, size_t dest
         read += buf.size();
     }
 
-    BOOST_REQUIRE_EQUAL(read, dest_size);
+    BOOST_REQUIRE_EQUAL(read, total);
+}
+
+static future<> test_read_write_helper(const local_gcs_wrapper& env, size_t dest_size) {
+    auto& c = env.client();
+    auto uuid = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+    std::vector<temporary_buffer<char>> written;
+
+    // ensure we remove the object
+    env.objects_to_delete.emplace_back(uuid);
+    co_await create_object_of_size(c, env.bucket, uuid, dest_size, &written);
+    co_await compare_object_data(env, uuid, std::move(written));
 }
 
 BOOST_AUTO_TEST_SUITE(gcs_tests, *seastar::testing::async_fixture<gcs_fixture>())
@@ -211,6 +219,33 @@ SEASTAR_FIXTURE_TEST_CASE(test_gcp_storage_skip_read, local_gcs_wrapper, *check_
             std::rethrow_exception(p);
         }
     }
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_merge_objects, local_gcs_wrapper, *check_gcp_storage_test_enabled()) {
+    auto& env = *this;
+    auto& c = env.client();
+    std::vector<temporary_buffer<char>> bufs;
+    std::vector<std::string> names;
+
+    size_t total = 0; 
+    for (size_t i = 0; i < 32; ++i) {
+        auto name = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+        auto size = tests::random::get_int(size_t(1), size_t(2*1024*1024));
+        env.objects_to_delete.emplace_back(name);
+        co_await create_object_of_size(c, env.bucket, name, size, &bufs);
+        names.emplace_back(name);
+        total += size;
+    }
+
+    auto name = fmt::format("{}", utils::UUID_gen::get_time_UUID());
+    env.objects_to_delete.emplace_back(name);
+
+    auto info = co_await c.merge_objects(env.bucket, name, names);
+
+    BOOST_REQUIRE_EQUAL(info.name, name);
+    BOOST_REQUIRE_EQUAL(info.size, total);
+
+    co_await compare_object_data(env, name, std::move(bufs));
 }
 
 BOOST_AUTO_TEST_SUITE_END()
