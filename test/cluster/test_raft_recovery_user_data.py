@@ -75,7 +75,12 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     rf: int = 3
     ks_name = unique_name()
-    finish_writes = await start_writes(cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
+    # Use a separate CQL connection for the write workload as `cql` must be reconnected below to prevent hitting
+    # https://github.com/scylladb/python-driver/issues/295.
+    ccluster_all_nodes = cluster_con([srv.ip_addr for srv in live_servers + dead_servers])
+    cql_all_nodes = ccluster_all_nodes.connect()
+    await wait_for_cql_and_get_hosts(cql_all_nodes, live_servers + dead_servers, time.time() + 60)
+    finish_writes = await start_writes(cql_all_nodes, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
                                        ks_name=ks_name, node_shutdowns=True)
 
     # Send some writes before we kill nodes.
@@ -90,13 +95,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     logging.info(f'Restarting {live_servers}')
     await manager.rolling_restart(live_servers)
 
-    # We reconnect the driver before calling delete_discovery_state_and_group0_id below due to
-    # https://github.com/scylladb/python-driver/issues/295. We must pause the write workload for reconnection.
-    await finish_writes()
     await reconnect_driver(manager)
     cql, _ = await manager.get_ready_cql(live_servers)
-    finish_writes = await start_writes(cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
-                                       ks_name=ks_name, node_shutdowns=True)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     for h in hosts:
@@ -113,10 +113,6 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     logging.info(f'Restarting {live_servers} with recovery leader {live_servers[0].server_id}')
     await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
 
-    # We reconnect the driver before we send ALTER KEYSPACE requests below (if remove_dead_nodes_with == "remove") due
-    # to https://github.com/scylladb/python-driver/issues/295. We must finish sending writes before reconnecting.
-    await finish_writes()
-
     await reconnect_driver(manager)
     cql, hosts = await manager.get_ready_cql(live_servers)
 
@@ -126,6 +122,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # but CL=LOCAL_QUORUM requires 1 normal replica). Writes would also fail after the second step (RF=2, 1 normal
     # replica, 1 pending replica, CL=LOCAL_QUORUM requires 2 normal replicas). So, we can start sending writes to dc2
     # only after increasing RF to 3, which we do - see finish_writes_dc2.
+    await finish_writes()
+    ccluster_all_nodes.shutdown()
     dc1_cql = cluster_con(
             [srv.ip_addr for srv in live_servers],
             load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers])).connect()
