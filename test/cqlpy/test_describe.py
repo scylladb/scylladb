@@ -103,6 +103,24 @@ def assert_element_listing(cql, elements, name_column, name_f):
 def test_keyspaces(cql, test_keyspace):
     assert_element_listing(cql, "keyspaces", "keyspace_name", lambda r: r.keyspace_name)
 
+# Test that even with a USE statement, `DESC KEYSPACES` still lists all the
+# keyspaces, not just the USEd keyspace. Reproduces issue #26334.
+@pytest.mark.xfail(reason="Issue #26334")
+def test_keyspaces_with_use(cql, test_keyspace):
+    # Create new session to ensure the `USE keyspace` doesn't leak to other
+    # tests that we'll run later and use the same "cql" fixture.
+    with new_cql(cql) as ncql:
+        ncql.execute(f"USE {test_keyspace}")
+        # we can't use assert_element_listing because it currently undoes
+        # our "USE" by using new_cql itself...
+        desc_keyspaces = [x.keyspace_name for x in ncql.execute("DESC KEYSPACES")]
+        expected_keyspaces = [x.keyspace_name for x in ncql.execute(f"SELECT keyspace_name FROM system_schema.keyspaces")]
+        # Allow, like assert_element_listing(), for DESC KEYSPACES to contain
+        # *more* keyspaces beyond what's listed in system_schema - but not
+        # less. In Cassandra, some virtual system keyspaces are listed by
+        # DESC KEYSPACE but aren't in system_schema.
+        assert set(expected_keyspaces).issubset(set(desc_keyspaces))
+
 # Test that `DESC TABLES` contains all tables
 def test_tables(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "id int PRIMARY KEY"):
@@ -463,8 +481,11 @@ def test_desc_schema(cql, test_keyspace, random_seed):
 # The test is `scylla_only` because there is no `system.token_ring` table in Cassandra
 @pytest.mark.parametrize("test_keyspace", ["tablets", "vnodes"], indirect=True)
 def test_desc_cluster(scylla_only, cql, test_keyspace):
-    cql.execute(f"USE {test_keyspace}")
-    desc = cql.execute("DESC CLUSTER").one()
+    # Create new session to ensure the `USE keyspace` statement doesn't
+    # "infect" other tests that later use the same connection.
+    with new_cql(cql) as ncql:
+        ncql.execute(f"USE {test_keyspace}")
+        desc = ncql.execute("DESC CLUSTER").one()
 
     if keyspace_has_tablets(cql, test_keyspace):
         # FIXME: there is no endpoint content for tablet keyspaces yet
