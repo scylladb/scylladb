@@ -119,7 +119,6 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     await reconnect_driver(manager)
     cql, hosts = await manager.get_ready_cql(live_servers)
-    recovery_leader_host = [h for h in hosts if h.address == live_servers[0].ip_addr][0]
 
     # Ensure we keep sending writes only to dc1 for now. At the end of the test, if remove_dead_nodes_with == "remove",
     # we add 3 new nodes to dc2 and increase RF in dc2 from 0 to 3. We increase RF by 1 in each of the 3 steps. When
@@ -146,12 +145,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         logging.info(f'Decreasing RF of {ks_name} to 0 in dc2')
         for i in range(1, rf + 1):
             # ALTER KEYSPACE with tablets can decrease RF only by one.
-            # Send requests to the recovery leader (which is the topology coordinator) to avoid rejection on
-            # "Another global topology request is ongoing, please retry.". Other nodes could receive a second request
-            # before updating the topology state after the first request.
             await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""",
-                                host=recovery_leader_host)
+                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""")
 
         logging.info(f'Removing {dead_servers}')
         for i, being_removed in enumerate(dead_servers):
@@ -195,8 +190,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         logging.info(f'Increasing RF of {ks_name} back to {rf} in dc2')
         for i in range(1, rf + 1):
             await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""",
-                                host=recovery_leader_host)
+                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""")
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
     dc2_cql = cluster_con(
