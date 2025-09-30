@@ -126,6 +126,12 @@ namespace utils::gcp::storage {
         future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name);
 
         /**
+         * Merges sub-objects into a new destination. Actual file will be composed in order of subobject in `source_object`.
+         * @return info of the created, merged object.
+         */
+        future<object_info> merge_objects(std::string_view bucket, std::string_view dest_object_name, std::vector<std::string> source_objects, rjson::value metadata = {}, seastar::abort_source* = nullptr);
+
+        /**
          * Creates a data_sink for uploading data to a given name in bucket.
          *
          * @name - name of object to create/overwrite
