@@ -306,12 +306,23 @@ async def test_alter_base_schema_while_build_in_progress(manager: ManagerClient,
 @pytest.mark.asyncio
 @skip_mode("release", "error injections are not supported in release mode")
 async def test_change_rf_while_build_in_progress(manager: ManagerClient, change: str):
-    node_count = 4
-    servers = await manager.servers_add(node_count, config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, cmdline=cmdline_loggers)
+    if change == "increase":
+        node_count = 2
+        rack_layout = ["rack1", "rack2"]
+    elif change == "decrease":
+        node_count = 3
+        rack_layout = ["rack1", "rack1", "rack2"]
+    else:
+        assert False
+
+    property_file = [{"dc": "dc1", "rack": rack} for rack in rack_layout]
+    servers = await manager.servers_add(node_count, config={"enable_tablets": "true"}, cmdline=cmdline_loggers,
+                                        property_file=property_file)
     cql, _ = await manager.get_ready_cql(servers)
     await disable_tablet_load_balancing_on_all_servers(manager)
 
-    rf = 3
+    rf = node_count - 1
+
     async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': {rf}}} AND tablets = {{'enabled': true}}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
         await populate_base_table(cql, ks, "tab")
@@ -325,7 +336,7 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
 
         new_rf = rf + 1 if change == "increase" else rf - 1
-        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'datacenter1': {new_rf}}}")
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH replication = {{'class': 'NetworkTopologyStrategy', 'dc1': {new_rf}}}")
 
         await unpause_view_building_tasks(manager)
 
@@ -336,8 +347,18 @@ async def test_change_rf_while_build_in_progress(manager: ManagerClient, change:
 @pytest.mark.asyncio
 @skip_mode("release", "error injections are not supported in release mode")
 async def test_node_operation_during_view_building(manager: ManagerClient, operation: str):
-    node_count = 4 if operation == "remove" or operation == "decommission" else 3
-    servers = await manager.servers_add(node_count, config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, cmdline=cmdline_loggers)
+    if operation == "remove" or operation == "decommission":
+        node_count = 4
+        rack_layout = ["rack1", "rack2", "rack3", "rack3"]
+    else:
+        node_count = 3
+        rack_layout = ["rack1", "rack2", "rack3"]
+
+    property_file = [{"dc": "dc1", "rack": rack} for rack in rack_layout]
+    servers = await manager.servers_add(node_count, config={"enable_tablets": "true"},
+                                        cmdline=cmdline_loggers,
+                                        property_file=property_file)
+
     cql, _ = await manager.get_ready_cql(servers)
     await disable_tablet_load_balancing_on_all_servers(manager)
 
@@ -353,7 +374,8 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
         await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
 
         if operation == "add":
-            await manager.server_add(config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, cmdline=cmdline_loggers)
+            property_file = servers[-1].property_file()
+            await manager.server_add(config={"enable_tablets": "true"}, cmdline=cmdline_loggers, property_file=property_file)
             node_count = node_count + 1
         elif operation == "remove":
             await manager.server_stop_gracefully(servers[-1].server_id)
@@ -363,9 +385,11 @@ async def test_node_operation_during_view_building(manager: ManagerClient, opera
             await manager.decommission_node(servers[-1].server_id)
             node_count = node_count - 1
         elif operation == "replace":
+            property_file = servers[-1].property_file()
             await manager.server_stop_gracefully(servers[-1].server_id)
             replace_cfg = ReplaceConfig(replaced_id = servers[-1].server_id, reuse_ip_addr = False, use_host_id = True)
-            await manager.server_add(replace_cfg, config={"rf_rack_valid_keyspaces": "false", "enable_tablets": "true"}, cmdline=cmdline_loggers)
+            await manager.server_add(replace_cfg, config={"enable_tablets": "true"}, cmdline=cmdline_loggers,
+                                     property_file=property_file)
 
         await unpause_view_building_tasks(manager)
         await wait_for_view(cql, 'mv_cf_view', node_count)
