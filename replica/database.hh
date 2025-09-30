@@ -153,6 +153,8 @@ class system_keyspace;
 
 namespace view {
 class view_update_generator;
+struct wait_for_all_updates_tag;
+using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 }
 
 }
@@ -1282,7 +1284,7 @@ public:
 
 private:
     future<row_locker::lock_holder> do_push_view_replica_updates(shared_ptr<db::view::view_update_generator> gen, schema_ptr s, mutation m, db::timeout_clock::time_point timeout, mutation_source source,
-            tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, query::partition_slice::option_set custom_opts) const;
+            tracing::trace_state_ptr tr_state, reader_concurrency_semaphore& sem, query::partition_slice::option_set custom_opts, db::view::wait_for_all_updates synchronous) const;
     std::vector<view_ptr> affected_views(shared_ptr<db::view::view_update_generator> gen, const schema_ptr& base, const mutation& update) const;
 
     mutable row_locker _row_locker;

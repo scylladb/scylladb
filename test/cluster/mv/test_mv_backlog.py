@@ -12,8 +12,9 @@ import pytest
 from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view, wait_for
 from test.cluster.mv.tablets.test_mv_tablets import pin_the_only_tablet
-from test.pylib.tablets import get_tablet_replica
+from test.pylib.tablets import get_tablet_replica, get_tablet_replicas
 from test.cluster.util import new_test_keyspace
+from test.cluster.test_view_building_coordinator import delete_table_sstables
 
 logger = logging.getLogger(__name__)
 
@@ -189,3 +190,96 @@ async def test_configurable_mv_control_flow_delay(manager: ManagerClient) -> Non
         # Additionally, check that the delay is zero for a zero value
         # of the view_flow_control_delay_limit_in_ms parameter
         assert computed_delays[0] == 0.0
+
+# This test verifies that view update backlog doesn't grow unbounded
+# when generating view updates from staging sstables.
+# The test creates staging sstables by deleting normal sstables and repairing,
+# then checks that view updates are processed with limited concurrency, by checking
+# the view update backlog metric.
+@pytest.mark.asyncio
+@skip_mode('release', "error injections aren't enabled in release mode")
+async def test_view_backlog_bounded_during_staging_sstable_processing(manager: ManagerClient) -> None:
+    # Use 3 nodes: 1 in rack1 (source for repair) and 2 in rack2 (base and view tablets)
+    # With RF=2, this ensures we have a replica to repair from after deleting sstables
+    servers = [
+        await manager.server_add(config={'tablets_mode_for_new_keyspaces': 'enabled'}, property_file={'dc': 'dc1', 'rack': 'rack1'}),
+        await manager.server_add(config={'tablets_mode_for_new_keyspaces': 'enabled'}, property_file={'dc': 'dc1', 'rack': 'rack2'}),
+        await manager.server_add(config={'tablets_mode_for_new_keyspaces': 'enabled'}, property_file={'dc': 'dc1', 'rack': 'rack2'}),
+    ]
+
+    # Disable automatic tablet load balancing since we're setting the layout manually
+    await asyncio.gather(*(manager.api.disable_tablet_balancing(s.ip_addr) for s in servers))
+
+    cql = manager.get_cql()
+    # Use RF=2 so that after deleting sstables on one node, repair can restore data from the other replica
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 2} AND tablets = {'initial': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c))")
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL PRIMARY KEY (c, key) ")
+
+        await wait_for_view(cql, 'mv_cf_view', len(servers))
+
+        # Move base table tablet to servers[1] (rack2) and view tablet to servers[2] (rack2)
+        # This ensures remote updates between the two nodes in rack2
+        host_ids = [await manager.get_host_id(s.server_id) for s in servers]
+        base_replicas = await get_tablet_replicas(manager, servers[0], ks, "tab", 0)
+        view_replicas = await get_tablet_replicas(manager, servers[0], ks, "mv_cf_view", 0)
+
+        for base_host_id, base_shard in base_replicas:
+            if base_host_id == host_ids[2]:
+                await manager.api.move_tablet(servers[0].ip_addr, ks, "tab", base_host_id, base_shard, host_ids[1], 0, 0)
+                break
+
+        for view_host_id, view_shard in view_replicas:
+            if view_host_id == host_ids[1]:
+                await manager.api.move_tablet(servers[0].ip_addr, ks, "mv_cf_view", view_host_id, view_shard, host_ids[2], 0, 0)
+                break
+
+        await manager.api.enable_injection(servers[1].ip_addr, "never_finish_remote_view_updates", one_shot=False)
+
+        # First, measure the overhead per row by checking backlog with exactly one view update
+        # Then use all rows of that size
+        row_value = 'a' * 100
+        await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES (0, 0, '{row_value}')")
+
+        # Wait until the backlog is non-zero (view update generated)
+        async def backlog_nonzero():
+            local_metrics = await manager.metrics.query(servers[1].ip_addr)
+            backlog = local_metrics.get('scylla_storage_proxy_replica_view_update_backlog')
+            return backlog or None
+
+        backlog_per_row = await wait_for(backlog_nonzero, deadline=time.time() + 10.0)
+        logger.info(f"Backlog per row (overhead): {backlog_per_row}")
+
+        await manager.api.disable_injection(servers[1].ip_addr, "never_finish_remote_view_updates")
+
+        # Populate the base table with enough data to exceed concurrency limit
+        # The concurrency limit is 128, so 200 rows should be sufficient
+        rows = 200
+        for i in range(rows):
+            await cql.run_async(f"INSERT INTO {ks}.tab (key, c, v) VALUES ({i}, {i}, '{row_value}')")
+
+        # Flush to create sstables on all replicas
+        await asyncio.gather(*(manager.api.keyspace_flush(s.ip_addr, ks) for s in servers))
+
+        # Prepare servers[1] for accepting staging sstables
+        await delete_table_sstables(manager, servers[1], ks, "tab")
+        await manager.server_stop_gracefully(servers[1].server_id)
+        await manager.server_start(servers[1].server_id)
+
+        log_file = await manager.server_open_log(servers[1].server_id)
+
+        await manager.api.enable_injection(servers[1].ip_addr, "never_finish_remote_view_updates", one_shot=False)
+        await manager.api.repair(servers[1].ip_addr, ks, "tab")
+
+        await log_file.wait_for(f"view_update_generator - Processing {ks}.tab", timeout=60)
+
+        # Check that view update backlog is bounded (not growing unbounded)
+        # The backlog should respect the concurrency limit of 128
+        local_metrics = await manager.metrics.query(servers[1].ip_addr)
+        view_backlog = local_metrics.get('scylla_storage_proxy_replica_view_update_backlog')
+
+        # With concurrency limit of 128, the backlog should be approximately 128 * backlog_per_row
+        assert view_backlog <= backlog_per_row * 128, f"View backlog {view_backlog} exceeds expected limit {backlog_per_row * 128}"
+
+        await manager.api.disable_injection(servers[1].ip_addr, "never_finish_remote_view_updates")

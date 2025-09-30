@@ -452,7 +452,8 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
         mutation_reader_opt existings,
         tracing::trace_state_ptr tr_state,
         gc_clock::time_point now,
-        db::timeout_clock::time_point timeout) {
+        db::timeout_clock::time_point timeout,
+        wait_for_all_updates synchronous) {
     auto base_token = m.token();
     auto m_schema = m.schema();
     view_update_builder builder = make_view_update_builder(
@@ -512,7 +513,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
 
         try {
             co_await mutate_MV(base, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(), tr_state,
-                std::move(memory_units), service::allow_hints::yes, wait_for_all_updates::no);
+                std::move(memory_units), service::allow_hints::yes, synchronous);
         } catch (...) {
             // Ignore exceptions: any individual failure to propagate a view update will be reported
             // by a separate mechanism in mutate_MV() function. Moreover, we should continue trying
