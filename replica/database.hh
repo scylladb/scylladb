@@ -2091,6 +2091,9 @@ public:
     // * the `locator::topology` instance corresponding to the passed `locator::token_metadata_ptr`
     //   must contain a complete list of racks and data centers in the cluster.
     void check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr) const;
+
+    bool validate_joining_node_rf_rack(locator::token_metadata_ptr, locator::host_id new_node, sstring_view datacenter, sstring_view rack) const;
+    bool validate_removing_node_rf_rack(locator::token_metadata_ptr, locator::host_id removed_node, sstring_view datacenter, sstring_view rack) const;
 private:
     // SSTable sampling might require considerable amounts of memory,
     // so we want to limit the number of concurrent sampling operations.
