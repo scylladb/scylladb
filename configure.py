@@ -526,6 +526,7 @@ scylla_tests = set([
     'test/boost/mutation_test',
     'test/boost/mvcc_test',
     'test/boost/nonwrapping_interval_test',
+    'test/boost/object_storage_upload_test',
     'test/boost/observable_test',
     'test/boost/partitioner_test',
     'test/boost/pretty_printers_test',
