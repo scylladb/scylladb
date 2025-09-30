@@ -67,6 +67,9 @@ if __name__ == '__main__':
     network_mode = args.mode if args.mode else cfg.get('NETWORK_MODE')
 
     if args.setup_nic_and_disks:
+        if not check_sysfs_numa_topology_is_valid():
+            print('NUMA topology information is corrupted, not able to enable perftune feature.')
+            sys.exit(3)
         res = out('{} --tune net --nic {} --get-cpu-mask'.format(perftune_base_command(), ifname))
         # we need to extract CPU mask from output, since perftune.py may also print warning messages (#10082)
         match = re.match('(.*\n)?(0x[0-9a-f]+(?:,0x[0-9a-f]+)*)', res, re.DOTALL)
@@ -117,6 +120,9 @@ if __name__ == '__main__':
             cfg.set('SET_NIC_AND_DISKS', bool2str(args.setup_nic_and_disks))
 
     if cfg.has_option('SET_CLOCKSOURCE') and str2bool(cfg.get('SET_CLOCKSOURCE')) != args.set_clocksource:
+        if not check_sysfs_numa_topology_is_valid():
+            print('NUMA topology information is corrupted, not able to enable perftune feature.')
+            sys.exit(3)
         cfg.set('SET_CLOCKSOURCE', bool2str(args.set_clocksource))
 
     if cfg.has_option('DISABLE_WRITEBACK_CACHE') and str2bool(cfg.get('DISABLE_WRITEBACK_CACHE')) != args.disable_writeback_cache:
