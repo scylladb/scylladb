@@ -117,17 +117,31 @@ data_value repair_scheduler_config_to_data_value(const locator::repair_scheduler
     return result;
 };
 
-future<mutation>
-tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
-                       api::timestamp_type ts, const gms::feature_service& features) {
+// Based on calibration run measuring 6ms time to freeze
+// mutation with 16K tablets (with 9 replicas each) on a
+// 3.4GHz amd64 cpu, and twice as much for unfreeze.
+// 1K tablets would take around 0.4 ms to freeze and 0.8 ms
+// to unfreeze.
+constexpr size_t min_tablets_in_mutation = 1024;
+
+future<>
+tablet_map_to_mutations(const tablet_map& tablets, table_id id, const sstring& keyspace_name, const sstring& table_name,
+                       api::timestamp_type ts, const gms::feature_service& features, std::function<future<>(mutation)> process_mutation) {
     auto s = db::system_keyspace::tablets();
     auto gc_now = gc_clock::now();
     auto tombstone_ts = ts - 1;
 
-    mutation m(s, partition_key::from_single_value(*s,
+    auto key = partition_key::from_single_value(*s,
         data_value(id.uuid()).serialize_nonnull()
-    ));
-    m.partition().apply(tombstone(tombstone_ts, gc_now));
+    );
+
+    auto make_mutation = [&] () {
+        mutation m(s, key);
+        m.partition().apply(tombstone(tombstone_ts, gc_now));
+        return m;
+    };
+
+    auto m = make_mutation();
     m.set_static_cell("tablet_count", data_value(int(tablets.tablet_count())), ts);
     m.set_static_cell("keyspace_name", data_value(keyspace_name), ts);
     m.set_static_cell("table_name", data_value(table_name), ts);
@@ -141,7 +155,13 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
     }
 
     tablet_id tid = tablets.first_tablet();
+    size_t tablets_in_mutation = 0;
     for (auto&& tablet : tablets.tablets()) {
+        if (++tablets_in_mutation >= min_tablets_in_mutation && seastar::need_preempt()) {
+            tablets_in_mutation = 0;
+            co_await coroutine::maybe_yield();
+            co_await process_mutation(std::exchange(m, make_mutation()));
+        }
         auto last_token = tablets.get_last_token(tid);
         auto ck = clustering_key::from_single_value(*s, data_value(dht::token::to_int64(last_token)).serialize_nonnull());
         m.set_clustered_cell(ck, "replicas", make_list_value(replica_set_type, replicas_to_data_value(tablet.replicas)), ts);
@@ -173,9 +193,8 @@ tablet_map_to_mutation(const tablet_map& tablets, table_id id, const sstring& ke
             }
         }
         tid = *tablets.next_tablet(tid);
-        co_await coroutine::maybe_yield();
     }
-    co_return std::move(m);
+    co_await process_mutation(std::move(m));
 }
 
 mutation
@@ -409,14 +428,15 @@ locator::repair_scheduler_config deserialize_repair_scheduler_config(cql3::untyp
 
 future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, api::timestamp_type ts) {
     tablet_logger.trace("Saving tablet metadata: {}", tm);
-    utils::chunked_vector<mutation> muts;
+    utils::chunked_vector<frozen_mutation> muts;
     muts.reserve(tm.all_tables_ungrouped().size());
     for (auto&& [base_id, tables] : tm.all_table_groups()) {
         // FIXME: Should we ignore missing tables? Currently doesn't matter because this is only used in tests.
         const auto& tablets = tm.get_tablet_map(base_id);
         auto s = db.find_schema(base_id);
-        muts.emplace_back(
-                co_await tablet_map_to_mutation(tablets, base_id, s->ks_name(), s->cf_name(), ts, db.features()));
+        co_await tablet_map_to_mutations(tablets, base_id, s->ks_name(), s->cf_name(), ts, db.features(), [&] (mutation m) -> future<> {
+            muts.emplace_back(co_await freeze_gently(m));
+        });
         for (auto id : tables) {
             if (id != base_id) {
                 auto s = db.find_schema(id);
@@ -425,7 +445,7 @@ future<> save_tablet_metadata(replica::database& db, const tablet_metadata& tm, 
             }
         }
     }
-    co_await db.apply(freeze(muts), db::no_timeout);
+    co_await db.apply(muts, db::no_timeout);
 }
 
 static table_id to_tablet_metadata_key(const schema& s, const partition_key& key) {
@@ -828,15 +848,17 @@ future<> update_tablet_metadata(replica::database& db, cql3::query_processor& qp
     tablet_logger.trace("Updated tablet metadata: {}", tm);
 }
 
-future<utils::chunked_vector<canonical_mutation>> read_tablet_mutations(seastar::sharded<replica::database>& db) {
+future<> read_tablet_mutations(seastar::sharded<replica::database>& db, std::function<void(canonical_mutation)> process_mutation) {
     auto s = db::system_keyspace::tablets();
     auto rs = co_await db::system_keyspace::query_mutations(db, db::system_keyspace::NAME, db::system_keyspace::TABLETS);
     utils::chunked_vector<canonical_mutation> result;
     result.reserve(rs->partitions().size());
+    constexpr size_t max_rows = min_tablets_in_mutation;
     for (auto& p: rs->partitions()) {
-        result.emplace_back(co_await make_canonical_mutation_gently(co_await unfreeze_gently(p.mut(), s)));
+        co_await unfreeze_and_split_gently(p.mut(), s, max_rows, [&] (mutation m) -> future<> {
+            process_mutation(co_await make_canonical_mutation_gently(m));
+        });
     }
-    co_return std::move(result);
 }
 
 // This sstable set provides access to all the stables in the table, using a snapshot of all

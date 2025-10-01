@@ -227,7 +227,7 @@ void mutation_partition_view::do_accept(const column_mapping& cm, Visitor& visit
 }
 
 template<typename Visitor>
-requires MutationViewVisitor<Visitor>
+requires (MutationViewVisitor<Visitor> && !AsyncMutationViewVisitor<Visitor>)
 future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Visitor& visitor) const {
     auto in = _in;
     auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
@@ -270,6 +270,53 @@ future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, Vis
         read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
         co_await coroutine::maybe_yield();
     }
+}
+
+template<typename AsyncVisitor>
+requires AsyncMutationViewVisitor<AsyncVisitor>
+future<> mutation_partition_view::do_accept_gently(const column_mapping& cm, AsyncVisitor& visitor) const {
+    auto in = _in;
+    auto mpv = ser::deserialize(in, std::type_identity<ser::mutation_partition_view>());
+
+    visitor.accept_partition_tombstone(mpv.tomb());
+
+    struct static_row_cell_visitor {
+        AsyncVisitor& _visitor;
+
+        void accept_atomic_cell(column_id id, atomic_cell ac) const {
+           _visitor.accept_static_cell(id, std::move(ac));
+        }
+        void accept_collection(column_id id, const collection_mutation& cm) const {
+           _visitor.accept_static_cell(id, cm);
+        }
+    };
+    read_and_visit_row(mpv.static_row(), cm, column_kind::static_column, static_row_cell_visitor{visitor});
+    co_await coroutine::maybe_yield();
+
+    for (auto rt : mpv.range_tombstones()) {
+        co_await visitor.accept_row_tombstone(rt);
+    }
+
+    for (auto cr : mpv.rows()) {
+        auto t = row_tombstone(cr.deleted_at(), shadowable_tombstone(cr.shadowable_deleted_at()));
+        auto key = cr.key();
+        co_await visitor.accept_row(position_in_partition_view::for_key(key), t, read_row_marker(cr.marker()), is_dummy::no, is_continuous::yes);
+
+        struct cell_visitor {
+            AsyncVisitor& _visitor;
+
+            void accept_atomic_cell(column_id id, atomic_cell ac) const {
+               _visitor.accept_row_cell(id, std::move(ac));
+            }
+            void accept_collection(column_id id, const collection_mutation& cm) const {
+               _visitor.accept_row_cell(id, cm);
+            }
+        };
+        read_and_visit_row(cr.cells(), cm, column_kind::regular_column, cell_visitor{visitor});
+        co_await coroutine::maybe_yield();
+    }
+
+    co_await visitor.accept_end_of_partition();
 }
 
 template <bool is_preemptible>
@@ -387,7 +434,11 @@ void mutation_partition_view::accept(const schema& s, partition_builder& visitor
     do_accept(s.get_column_mapping(), visitor);
 }
 
-future<> mutation_partition_view::accept_gently(const schema& s, partition_builder& visitor) const {
+future<> mutation_partition_view::accept_gently(const schema& s, mutation_partition_visitor& visitor) const {
+    return do_accept_gently(s.get_column_mapping(), visitor);
+}
+
+future<> mutation_partition_view::accept_gently(const schema& s, async_mutation_partition_visitor& visitor) const {
     return do_accept_gently(s.get_column_mapping(), visitor);
 }
 
