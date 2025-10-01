@@ -148,7 +148,16 @@ class rest_server():
             # only JSON-encoded payload is supported
             body = await request.json()
 
-        this_req = expected_request(request.method, request.path, params=dict(request.query), body=body)
+        params = {}
+        for key, value in request.query.items():
+            if key in params:
+                # Convert single value to list if we encounter a duplicate key
+                if not isinstance(params[key], list):
+                    params[key] = [params[key]]
+                params[key].append(value)
+            else:
+                params[key] = value
+        this_req = expected_request(request.method, request.path, params=params, body=body)
 
         if len(expected_requests) == 0:
             self.unexpected_requests += 1
