@@ -11,12 +11,15 @@
 #include <set>
 #include <unordered_set>
 
+#include <seastar/util/later.hh>
+
 #include "test/lib/scylla_test_case.hh"
 #include "test/lib/random_utils.hh"
 
 #include "utils/stall_free.hh"
 #include "utils/small_vector.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/maybe_yield.hh"
 
 SEASTAR_THREAD_TEST_CASE(test_merge1) {
     std::list<int> l1{1, 2, 5, 8};
@@ -72,15 +75,19 @@ template <typename T>
 struct clear_gently_tracker {
     std::unique_ptr<T> v;
     std::function<void (T)> on_clear;
+    utils::can_yield can_yield = utils::can_yield::yes;
+
     clear_gently_tracker() noexcept
         : on_clear([] (T) { BOOST_FAIL("clear_gently called on default-constructed clear_gently_tracker"); })
     {}
-    clear_gently_tracker(T i, std::function<void (T)> f) : v(std::make_unique<T>(std::move(i))), on_clear(std::move(f)) {}
-    clear_gently_tracker(clear_gently_tracker&& x) noexcept : v(std::move(x.v)), on_clear(std::move(x.on_clear)) {}
+    clear_gently_tracker(T i, std::function<void (T)> f, utils::can_yield y = utils::can_yield::yes)
+        : v(std::make_unique<T>(std::move(i))), on_clear(std::move(f)), can_yield(y) {}
+    clear_gently_tracker(clear_gently_tracker&& x) noexcept : v(std::move(x.v)), on_clear(std::move(x.on_clear)), can_yield(x.can_yield) {}
     clear_gently_tracker& operator=(clear_gently_tracker&& x) noexcept {
         if (&x != this) {
             std::swap(v, x.v);
             std::swap(on_clear, x.on_clear);
+            std::swap(can_yield, x.can_yield);
         }
         return *this;
     }
@@ -93,6 +100,9 @@ struct clear_gently_tracker {
     future<> clear_gently() noexcept {
         on_clear(*v);
         v.reset();
+        if (can_yield) {
+            return seastar::yield();
+        }
         return make_ready_future<>();
     }
     operator bool() const noexcept {
@@ -164,6 +174,18 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_unique_ptr_const_payload) {
     BOOST_REQUIRE_EQUAL(cleared_gently, 0);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_non_trivial_unique_ptr) {
+    int cleared_gently = 0;
+    std::unique_ptr<clear_gently_tracker<int>> p = std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    });
+
+    // The unique_ptr is expected to be destroyed by dispose_gently
+    // and the wrapped object to be reset gently before destroyed
+    utils::dispose_gently(std::move(p)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_unique_ptrs) {
     int cleared_gently = 0;
     std::vector<std::unique_ptr<clear_gently_tracker<int>>> v;
@@ -177,6 +199,23 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_unique_ptrs) {
     utils::clear_gently(v).get();
     BOOST_REQUIRE_EQUAL(v.size(), 0);
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_vector_of_unique_ptrs) {
+    int cleared_gently = 0;
+    std::vector<std::unique_ptr<clear_gently_tracker<int>>> v;
+    v.emplace_back(std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    }));
+    v.emplace_back(nullptr);
+    v.emplace_back(std::make_unique<clear_gently_tracker<int>>(2, [&cleared_gently] (int) {
+        cleared_gently++;
+    }));
+
+    // The vector is expected to be destroyed by dispose_gently
+    // and the contained objects to be cleared gently before destroyed
+    utils::dispose_gently(std::move(v)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr) {
@@ -226,6 +265,25 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_unique_ptr_const_payload) {
     // Test re-clearing the already-reset foreign unique_ptr, which should be a no-op
     utils::clear_gently(p0).get();
     BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_foreign_unique_ptr) {
+    int cleared_gently = 0;
+    auto make_foreign_ptr = [&cleared_gently] () {
+        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+            auto p = std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+                BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
+                cleared_gently++;
+            });
+            return make_foreign<std::unique_ptr<clear_gently_tracker<int>>>(std::move(p));
+        }).get();
+    };
+    foreign_ptr<std::unique_ptr<clear_gently_tracker<int>>> p0 = make_foreign_ptr();
+
+    // The foreign unique_ptr is expected to be destroyed by dispose_gently
+    // and the wrapped object to be cleared gently before destroyed
+    utils::dispose_gently(std::move(p0)).get();
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
@@ -315,6 +373,43 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_foreign_shared_ptr_const_payload) {
     BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_foreign_shared_ptr) {
+    int cleared_gently = 0;
+    auto make_foreign_ptr = [&cleared_gently] () {
+        return smp::submit_to((this_shard_id() + 1) % smp::count, [&cleared_gently] {
+            auto p = make_lw_shared<clear_gently_tracker<int>>(0, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+                BOOST_REQUIRE_EQUAL(owner_shard, this_shard_id());
+                cleared_gently++;
+            });
+            return make_foreign<lw_shared_ptr<clear_gently_tracker<int>>>(std::move(p));
+        }).get();
+    };
+    std::array<foreign_ptr<lw_shared_ptr<clear_gently_tracker<int>>>, 2> ptrs;
+    auto& p0 = ptrs[0];
+    p0 = make_foreign_ptr();
+
+    // The foreign shared ptr is expected to be destroyed by dispose_gently
+    // and the shared object to be cleared gently before destroyed
+    // since its use_count is 1
+    utils::dispose_gently(std::move(p0)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test disposing of foreign shared ptrs when the use_count is greater than 1
+    // Both are expected to be destroyed by dispose_gently, but the shared object
+    // is expected to be cleared gently only once, before destroyed,
+    // when its use_count reaches 1
+    p0 = make_foreign_ptr();
+    ptrs[1] = p0.copy().get();
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::dispose_gently(std::move(ptrs[i])).get();
+    BOOST_REQUIRE(!ptrs[i]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::dispose_gently(std::move(ptrs[i ^ 1])).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr) {
     int cleared_gently = 0;
     auto make_shared_ptr = [&cleared_gently] () {
@@ -393,6 +488,40 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_shared_ptr_const_payload) {
     BOOST_REQUIRE_EQUAL(cleared_gently, 2);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_shared_ptr) {
+    int cleared_gently = 0;
+    auto make_shared_ptr = [&cleared_gently] () {
+        return make_lw_shared<clear_gently_tracker<int>>(cleared_gently, [&cleared_gently, owner_shard = this_shard_id()] (int) {
+            cleared_gently++;
+        });
+    };
+    std::array<lw_shared_ptr<clear_gently_tracker<int>>, 2> ptrs;
+    auto& p0 = ptrs[0];
+    p0 = make_shared_ptr();
+
+    // The shared ptr is expected to be destroyed by dispose_gently
+    // and the shared object to be cleared gently before destroyed
+    // since its use_count is 1
+    utils::dispose_gently(std::move(p0)).get();
+    BOOST_REQUIRE(!p0);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    // Test disposing of shared ptrs when the use_count is greater than 1
+    // Both are expected to be destroyed by dispose_gently, but the shared object
+    // is expected to be cleared gently only once, before destroyed,
+    // when its use_count reaches 1
+    p0 = make_shared_ptr();
+    ptrs[1] = p0;
+
+    size_t i = tests::random::get_int<size_t>(0, 1);
+    utils::dispose_gently(std::move(ptrs[i])).get();
+    BOOST_REQUIRE(!ptrs[i]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+    utils::dispose_gently(std::move(ptrs[i ^ 1])).get();
+    BOOST_REQUIRE(!ptrs[i ^ 1]);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 2);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_trivial_array) {
     std::array<int, 3> a = {0, 1, 2};
     std::array<int, 3> ref = a;
@@ -437,6 +566,23 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_array_const_payload) {
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 
     BOOST_REQUIRE(std::ranges::none_of(a, std::mem_fn(&clear_gently_tracker<int>::operator bool)));
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_non_trivial_array) {
+    constexpr int count = 3;
+    std::array<std::unique_ptr<clear_gently_tracker<int>>, count> a;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < count; i++) {
+        a[i] = std::make_unique<clear_gently_tracker<int>>(i, [&cleared_gently] (int) {
+            cleared_gently++;
+        });
+    }
+
+    BOOST_REQUIRE(std::ranges::all_of(a, std::mem_fn(&clear_gently_tracker<int>::operator bool)));
+
+    utils::dispose_gently(std::move(a)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_trivial_vector) {
@@ -499,6 +645,40 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_vector) {
+    std::vector<int> res;
+    struct X {
+        int v;
+        std::vector<int>& r;
+        X(int i, std::vector<int>& res) : v(i), r(res) {}
+        X(X&& x) noexcept : v(x.v), r(x.r) {}
+        future<> clear_gently() noexcept {
+            r.push_back(v);
+            return make_ready_future<>();
+        }
+    };
+    // Make sure std::vector<X> is not considered as TriviallyClearableSequence
+    // although struct X is trivially destructible - since it also
+    // has a clear_gently method, that must be called.
+    static_assert(std::is_trivially_destructible_v<X>);
+    std::vector<X> v;
+    constexpr int count = 100;
+
+    res.reserve(count);
+    v.reserve(count);
+    for (int i = 0; i < count; i++) {
+        v.emplace_back(X(i, res));
+    }
+
+    utils::dispose_gently(std::move(v)).get();
+    BOOST_CHECK(v.empty());
+
+    // verify that the items were cleared in reverse order
+    for (int i = 0; i < count; i++) {
+        BOOST_REQUIRE_EQUAL(res[i], 99 - i);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_small_vector) {
     std::vector<int> res;
     utils::small_vector<clear_gently_tracker<int>, 1> v;
@@ -513,6 +693,28 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_small_vector) {
     }
 
     utils::clear_gently(v).get();
+    BOOST_CHECK(v.empty());
+
+    // verify that the items were cleared in reverse order
+    for (int i = 0; i < count; i++) {
+        BOOST_REQUIRE_EQUAL(res[i], 99 - i);
+    }
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_small_vector) {
+    std::vector<int> res;
+    utils::small_vector<clear_gently_tracker<int>, 1> v;
+    constexpr int count = 100;
+
+    res.reserve(count);
+    v.reserve(count);
+    for (int i = 0; i < count; i++) {
+        v.emplace_back(clear_gently_tracker<int>(i, [&res] (int i) {
+            res.emplace_back(i);
+        }));
+    }
+
+    utils::dispose_gently(std::move(v)).get();
     BOOST_CHECK(v.empty());
 
     // verify that the items were cleared in reverse order
@@ -543,6 +745,28 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_chunked_vector) {
     }
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_chunked_vector) {
+    std::vector<int> res;
+    utils::chunked_vector<clear_gently_tracker<int>> v;
+    constexpr int count = 100;
+
+    res.reserve(count);
+    v.reserve(count);
+    for (int i = 0; i < count; i++) {
+        v.emplace_back(clear_gently_tracker<int>(i, [&res] (int i) {
+            res.emplace_back(i);
+        }));
+    }
+
+    utils::dispose_gently(std::move(v)).get();
+    BOOST_CHECK(v.empty());
+
+    // verify that the items were cleared in reverse order
+    for (int i = 0; i < count; i++) {
+        BOOST_REQUIRE_EQUAL(res[i], 99 - i);
+    }
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_list) {
     constexpr int count = 100;
     std::list<clear_gently_tracker<int>> v;
@@ -559,6 +783,22 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_list) {
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_list) {
+    constexpr int count = 100;
+    std::list<clear_gently_tracker<int>> v;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < count; i++) {
+        v.emplace_back(clear_gently_tracker<int>(i, [&cleared_gently] (int) {
+            cleared_gently++;
+        }));
+    }
+
+    utils::dispose_gently(std::move(v)).get();
+    BOOST_CHECK(v.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_deque) {
     constexpr int count = 100;
     std::deque<clear_gently_tracker<int>> v;
@@ -571,6 +811,22 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_deque) {
     }
 
     utils::clear_gently(v).get();
+    BOOST_CHECK(v.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_deque) {
+    constexpr int count = 100;
+    std::deque<clear_gently_tracker<int>> v;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < count; i++) {
+        v.emplace_back(clear_gently_tracker<int>(i, [&cleared_gently] (int) {
+            cleared_gently++;
+        }));
+    }
+
+    utils::dispose_gently(std::move(v)).get();
     BOOST_CHECK(v.empty());
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 }
@@ -610,6 +866,29 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_nested_vector) {
     BOOST_REQUIRE_EQUAL(cleared_gently, top_count * count);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_nested_vector) {
+    constexpr int top_count = 10;
+    constexpr int count = 10;
+    std::vector<std::vector<clear_gently_tracker<std::pair<int, int>>>> c;
+    int cleared_gently = 0;
+
+    c.reserve(top_count);
+    for (int i = 0; i < top_count; i++) {
+        std::vector<clear_gently_tracker<std::pair<int, int>>> v;
+        v.reserve(count);
+        for (int j = 0; j < count; j++) {
+            v.emplace_back(clear_gently_tracker<std::pair<int, int>>({i, j}, [&cleared_gently] (std::pair<int, int>) {
+                cleared_gently++;
+            }));
+        }
+        c.emplace_back(std::move(v));
+    }
+
+    utils::dispose_gently(std::move(c)).get();
+    BOOST_CHECK(c.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, top_count * count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_nested_object) {
     constexpr int count = 100;
     std::vector<clear_gently_tracker<int>> v;
@@ -643,6 +922,22 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_map_object) {
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_map_object) {
+    std::map<int, clear_gently_tracker<int>> c;
+    constexpr int count = 100;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < count; i++) {
+        c.emplace(~i, clear_gently_tracker<int>(i, [&cleared_gently] (int) {
+            cleared_gently++;
+        }));
+    }
+
+    utils::dispose_gently(std::move(c)).get();
+    BOOST_CHECK(c.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_unordered_map_object) {
     constexpr int count = 100;
     std::unordered_map<int, clear_gently_tracker<int>> v;
@@ -670,6 +965,22 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_unordered_map_const_payload) {
     }
 
     utils::clear_gently(c).get();
+    BOOST_CHECK(c.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_unordered_map_object) {
+    std::unordered_map<int, clear_gently_tracker<int>> c;
+    constexpr int count = 100;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < count; i++) {
+        c.emplace(i, clear_gently_tracker<int>(i, [&cleared_gently] (int) {
+            cleared_gently++;
+        }));
+    }
+
+    utils::dispose_gently(std::move(c)).get();
     BOOST_CHECK(c.empty());
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 }
@@ -706,6 +1017,22 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_unordered_set_object) {
     BOOST_REQUIRE_EQUAL(cleared_gently, count);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_set_object) {
+    constexpr int count = 100;
+    std::set<clear_gently_tracker<int>> s;
+    int cleared_gently = 0;
+    auto tracker = [&cleared_gently] (int) { cleared_gently++; };
+
+    for (int i = 0; i < count; i++) {
+        s.insert(clear_gently_tracker<int>(i, tracker));
+    }
+    BOOST_REQUIRE_EQUAL(s.size(), count);
+
+    utils::dispose_gently(std::move(s)).get();
+    BOOST_CHECK(s.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_nested_unordered_map) {
     constexpr int top_count = 10;
     constexpr int count = 10;
@@ -728,6 +1055,28 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_nested_unordered_map) {
     BOOST_REQUIRE_EQUAL(cleared_gently, top_count * count);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_nested_unordered_map) {
+    constexpr int top_count = 10;
+    constexpr int count = 10;
+    std::unordered_map<int, std::vector<clear_gently_tracker<std::pair<int, int>>>> c;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < top_count; i++) {
+        std::vector<clear_gently_tracker<std::pair<int, int>>> v;
+        v.reserve(count);
+        for (int j = 0; j < count; j++) {
+            v.emplace_back(clear_gently_tracker<std::pair<int, int>>({i, j}, [&cleared_gently] (std::pair<int, int>) {
+                cleared_gently++;
+            }));
+        }
+        c.insert(std::pair<int, std::vector<clear_gently_tracker<std::pair<int, int>>>>(i, std::move(v)));
+    }
+
+    utils::dispose_gently(std::move(c)).get();
+    BOOST_CHECK(c.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, top_count * count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_nested_container) {
     constexpr int top_count = 10;
     constexpr int count = 10;
@@ -745,6 +1094,27 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_nested_container) {
     }
 
     utils::clear_gently(c).get();
+    BOOST_CHECK(c.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, top_count * count);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_nested_container) {
+    constexpr int top_count = 10;
+    constexpr int count = 10;
+    std::list<std::unordered_map<int, clear_gently_tracker<std::pair<int, int>>>> c;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < top_count; i++) {
+        std::unordered_map<int, clear_gently_tracker<std::pair<int, int>>> m;
+        for (int j = 0; j < count; j++) {
+            m.insert(std::pair<int, clear_gently_tracker<std::pair<int, int>>>(j, clear_gently_tracker<std::pair<int, int>>({i, j}, [&cleared_gently] (std::pair<int, int>) {
+                cleared_gently++;
+            })));
+        }
+        c.push_back(std::move(m));
+    }
+
+    utils::dispose_gently(std::move(c)).get();
     BOOST_CHECK(c.empty());
     BOOST_REQUIRE_EQUAL(cleared_gently, top_count * count);
 }
@@ -783,6 +1153,40 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_multi_nesting) {
     BOOST_REQUIRE_EQUAL(cleared_gently, top_count * mid_count * count);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_multi_nesting) {
+    struct V {
+        std::vector<clear_gently_tracker<std::tuple<int, int, int>>> v;
+        V(int i, int j, int count, std::function<void (std::tuple<int, int, int>)> f) {
+            v.reserve(count);
+            for (int k = 0; k < count; k++) {
+                v.emplace_back(clear_gently_tracker<std::tuple<int, int, int>>({i, j, k}, f));
+            }
+        }
+        future<> clear_gently() {
+            return utils::clear_gently(v);
+        }
+    };
+    constexpr int top_count = 10;
+    constexpr int mid_count = 10;
+    constexpr int count = 10;
+    std::vector<std::map<int, V>> c;
+    int cleared_gently = 0;
+
+    for (int i = 0; i < top_count; i++) {
+        std::map<int, V> m;
+        for (int j = 0; j < mid_count; j++) {
+            m.insert(std::pair<int, V>(j, V(i, j, count, [&cleared_gently] (std::tuple<int, int, int>) {
+                cleared_gently++;
+            })));
+        }
+        c.push_back(std::move(m));
+    }
+
+    utils::dispose_gently(std::move(c)).get();
+    BOOST_CHECK(c.empty());
+    BOOST_REQUIRE_EQUAL(cleared_gently, top_count * mid_count * count);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_optional) {
     int cleared_gently = 0;
     std::optional<clear_gently_tracker<int>> opt = std::make_optional<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
@@ -817,6 +1221,22 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_optional_const_payload) {
     BOOST_REQUIRE_EQUAL(cleared_gently, 0);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_optional) {
+    int cleared_gently = 0;
+    std::optional<clear_gently_tracker<int>> opt = std::make_optional<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    });
+
+    BOOST_CHECK(opt);
+    utils::dispose_gently(std::move(opt)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+
+    cleared_gently = 0;
+    opt = std::nullopt;
+    utils::dispose_gently(std::move(opt)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 0);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_optionals) {
     int cleared_gently = 0;
     std::vector<std::optional<clear_gently_tracker<int>>> v;
@@ -826,6 +1246,18 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_optionals) {
     v.emplace_back(std::nullopt);
 
     utils::clear_gently(v).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_vector_of_optionals) {
+    int cleared_gently = 0;
+    std::vector<std::optional<clear_gently_tracker<int>>> v;
+    v.emplace_back(std::make_optional<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    }));
+    v.emplace_back(std::nullopt);
+
+    utils::dispose_gently(std::move(v)).get();
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
 }
 
@@ -845,6 +1277,18 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_optimized_optional) {
     BOOST_REQUIRE_EQUAL(cleared_gently, 0);
 }
 
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_optimized_optional) {
+    int cleared_gently = 0;
+    seastar::optimized_optional<clear_gently_tracker<int>> opt(clear_gently_tracker<int>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    }));
+
+    BOOST_CHECK(opt);
+    utils::dispose_gently(std::move(opt)).get();
+    BOOST_CHECK(!opt);
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
 SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_optimized_optionals) {
     int cleared_gently = 0;
     std::vector<seastar::optimized_optional<clear_gently_tracker<int>>> v;
@@ -855,6 +1299,35 @@ SEASTAR_THREAD_TEST_CASE(test_clear_gently_vector_of_optimized_optionals) {
 
     utils::clear_gently(v).get();
     BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_vector_of_optimized_optionals) {
+    int cleared_gently = 0;
+    std::vector<seastar::optimized_optional<clear_gently_tracker<int>>> v;
+    v.emplace_back(clear_gently_tracker<int>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    }));
+    v.emplace_back(std::nullopt);
+
+    utils::dispose_gently(std::move(v)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 1);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_dispose_gently_tuple) {
+    int cleared_gently = 0;
+    auto u = std::make_unique<clear_gently_tracker<int>>(0, [&cleared_gently] (int) {
+        cleared_gently++;
+    });
+    auto s = make_lw_shared<clear_gently_tracker<int>>(1, [&cleared_gently] (int) {
+        cleared_gently++;
+    });
+    std::vector<seastar::optimized_optional<clear_gently_tracker<int>>> v;
+    v.emplace_back(clear_gently_tracker<int>(2, [&cleared_gently] (int) {
+        cleared_gently++;
+    }));
+
+    utils::dispose_gently(std::move(u), std::move(s), std::move(v)).get();
+    BOOST_REQUIRE_EQUAL(cleared_gently, 3);
 }
 
 SEASTAR_THREAD_TEST_CASE(test_reserve_gently_with_chunked_vector) {

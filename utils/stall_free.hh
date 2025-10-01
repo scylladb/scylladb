@@ -194,14 +194,6 @@ future<> clear_gently(foreign_ptr<T>& o) noexcept {
     });
 }
 
-template <typename... T>
-requires (std::is_rvalue_reference_v<T&&> && ...)
-future<> clear_gently(T&&... o) {
-    return do_with(std::move(o)..., [](auto&... args) {
-        return when_all(clear_gently(args)...).discard_result();
-    });
-}
-
 template <SharedPointer T>
 future<> clear_gently(T& ptr) noexcept {
     auto o = std::exchange(ptr, nullptr);
@@ -297,6 +289,31 @@ future<> clear_gently(seastar::optimized_optional<T>& opt) noexcept {
     } else {
         return make_ready_future<>();
     }
+}
+
+template <SmartPointer T>
+future<> dispose_gently(T&& o) noexcept {
+    // No need to extend the smart pointer's lifetime because
+    // the lower-level clear_gently implementation captures it in
+    // a continuation, if needed.
+    return clear_gently(o);
+}
+
+// Note that dispose_gently needs to extend the object's lifetime so
+// clear_gently can yield.
+// If the caller can hold on to the object while it's being cleared
+// e.g. in the coroutine frame, seastar thread, or when the containing
+// object is held by the top-most caller, it is advised to do so.
+template <typename... T>
+requires (std::is_rvalue_reference_v<T&&> && ...)
+future<> dispose_gently(T&&... o) noexcept {
+    return do_with(std::move(o)..., [] (auto&... objs) mutable {
+        return when_all(clear_gently(objs)...).then_wrapped([] (auto&& f) {
+            // Ignore exceptions because there's nothing we can do about them here
+            // and the objects are destroyed anyway.
+            f.ignore_ready_future();
+        });
+    });
 }
 
 namespace internal {
