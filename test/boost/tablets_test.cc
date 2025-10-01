@@ -2102,6 +2102,112 @@ SEASTAR_THREAD_TEST_CASE(test_replica_allocation_with_rack_list_rf) {
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_per_shard_count_respected_with_rack_list) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_initial_scale_factor.set(10);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        std::set<host_id> bad_nodes; // No replicas should be allocated there
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+        auto dc = topo.dc();
+
+        auto host1 = topo.add_node(node_state::normal, 1, rack1);
+        topo.add_node(node_state::normal, 1, rack2);
+        topo.add_node(node_state::normal, 1, rack3);
+        topo.add_node(node_state::normal, 1, rack3);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack1.rack}}});
+        auto table = add_table(e, ks_name).get();
+
+        rebalance_tablets(e);
+
+        auto& stm = e.shared_token_metadata().local();
+        auto tmptr = stm.get();
+        auto& tm_topo = tmptr->get_topology();
+
+        // Check that we respect the 10 tablets/shard goal when using a subset of racks.
+        {
+            load_sketch load(tmptr);
+            load.populate_dc(dc).get();
+            auto l = load.get_shard_minmax(host1);
+            BOOST_REQUIRE_EQUAL(l.min(), 16);
+            BOOST_REQUIRE_EQUAL(l.max(), 16);
+        }
+
+        check_rack_list(tm_topo, tmptr->tablets().get_tablet_map(table), dc, rack_list{rack1.rack}, bad_nodes);
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_per_shard_goal.set(10);
+    cfg.db_config->tablets_initial_scale_factor.set(8);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        std::set<host_id> bad_nodes; // No replicas should be allocated there
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto rack3 = topo.start_new_rack();
+        auto dc = topo.dc();
+
+        auto host1 = topo.add_node(node_state::normal, 1, rack1);
+        auto host2 = topo.add_node(node_state::normal, 1, rack2);
+        auto host3 = topo.add_node(node_state::normal, 1, rack3);
+
+        auto& stats = topo.get_shared_load_stats();
+        auto ks1 = add_keyspace_racks(e, {{dc, {rack1.rack}}});
+        // We start with 8 tablets per table. per_shard_goal / 5 = 2
+        // Should shrink to 2 tablets per table.
+        auto t1_1 = add_table(e, ks1).get();
+        auto t1_2 = add_table(e, ks1).get();
+        auto t1_3 = add_table(e, ks1).get();
+        auto t1_4 = add_table(e, ks1).get();
+        auto t1_5 = add_table(e, ks1).get();
+
+        // This table doesn't violate the per shard goal in this rack, should not be shrunk.
+        auto ks2 = add_keyspace_racks(e, {{dc, {rack2.rack}}});
+        auto t2_1 = add_table(e, ks2).get();
+
+        // Those tables violate the goal, but due to rounding up, the count won't change.
+        auto ks3 = add_keyspace_racks(e, {{dc, {rack3.rack}}});
+        auto t3_1 = add_table(e, ks3).get();
+        auto t3_2 = add_table(e, ks3).get();
+
+        stats.set_size(t1_1, 0);
+        stats.set_size(t1_2, 0);
+        stats.set_size(t1_3, 0);
+        stats.set_size(t1_4, 0);
+        stats.set_size(t1_5, 0);
+        stats.set_size(t2_1, 0);
+        stats.set_size(t3_1, 0);
+        stats.set_size(t3_2, 0);
+
+        rebalance_tablets(e, &stats);
+
+        auto& stm = e.shared_token_metadata().local();
+        auto tmptr = stm.get();
+        auto& tm_topo = tmptr->get_topology();
+
+        auto& tmeta = stm.get()->tablets();
+        BOOST_REQUIRE_EQUAL(2, tmeta.get_tablet_map(t1_1).tablet_count());
+        BOOST_REQUIRE_EQUAL(2, tmeta.get_tablet_map(t1_2).tablet_count());
+        BOOST_REQUIRE_EQUAL(2, tmeta.get_tablet_map(t1_3).tablet_count());
+        BOOST_REQUIRE_EQUAL(2, tmeta.get_tablet_map(t1_4).tablet_count());
+        BOOST_REQUIRE_EQUAL(2, tmeta.get_tablet_map(t1_5).tablet_count());
+
+        BOOST_REQUIRE_EQUAL(8, tmeta.get_tablet_map(t2_1).tablet_count());
+
+        BOOST_REQUIRE_EQUAL(8, tmeta.get_tablet_map(t3_1).tablet_count());
+        BOOST_REQUIRE_EQUAL(8, tmeta.get_tablet_map(t3_2).tablet_count());
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_merge_does_not_overload_racks) {
     cql_test_config cfg{};
     // This test relies on the fact that we use an RF strictly smaller than the number of racks.
