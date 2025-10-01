@@ -11,95 +11,56 @@
 
 namespace sstables::trie {
 
-static bytes_view bytespan_to_bytesview(std::span<const std::byte> s) {
-    return {reinterpret_cast<const bytes::value_type*>(s.data()), s.size()};
-}
-
 lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(const schema& s, dht::ring_position_view rpv)
-    : _token(rpv.token())
-    , _pk(rpv.key() ? std::optional<partition_key>(*rpv.key()) : std::optional<partition_key>())
-    // Weight <1 for maximum_token is semantically equivalent to weight 1,
-    // and `init_first_fragment` assumes that it's 1.
-    , _weight(_token.is_maximum() ? 1 : rpv.weight())
-    , _s(s)
+    : _s(s)
+    // Note about `dht::maximum_token()`: this isn't a real token.
+    // It's just a fake element greater than any real token.
+    // It is never written used during writes, but might appear as a search key during reads.
+    // So we need to encode it in a way that preserves the ordering, doesn't matter to what exactly.
+    // Here we arbitrarily encode identically to the greatest real token, with weight 1.
+    // (Weight was handled in the constructor).
+    //
+    // dht::minimum_token() also isn't a real token, but it doesn't need special handling,
+    // because its `unbias()` returns something smaller than any real token's `unbias()`.
+    , _weight(rpv.token().is_maximum() ? bound_weight::after_all_prefixed : bound_weight(rpv.weight()))
+    // If there's no key, we just eagerly translate the "key part" to the terminator byte.
+    , _pk(rpv.key()
+        ? decltype(_pk)(*rpv.key())
+        : decltype(_pk)(comparable_bytes(managed_bytes{bytes::value_type(bound_weight_to_terminator(_weight))})))
 {
-    init_first_fragment();
+    if (std::holds_alternative<comparable_bytes>(_pk)) {
+        // If we initialized `_pk` to a `comparable_bytes`, we must initialize `_size` accordingly.
+        // (operator++ expects it).
+        // This branch is only entered if there's no partition key, only a token.
+        // So the entire encoding is the nine bytes in _token_buf (leading 0x40, token), and the one terminator byte in `comparable_bytes`.
+        _size = _token_buf.size() + 1;
+    }
+    init_first_fragment(rpv.token().is_maximum() ? dht::token::last() : rpv.token());
 }
 
 lazy_comparable_bytes_from_ring_position::lazy_comparable_bytes_from_ring_position(const schema& s, dht::decorated_key dk)
-    : _token(std::move(dk._token))
+    : _s(s)
+    , _weight(bound_weight::equal)
     , _pk(std::move(dk._key))
-    , _weight(0)
-    , _s(s)
 {
-    init_first_fragment();
+    init_first_fragment(dk._token);
 }
 
-void lazy_comparable_bytes_from_ring_position::init_first_fragment() {
-    _frags.emplace_back(bytes::initialized_later(), 9);
-    auto p = _frags[0].data();
+void lazy_comparable_bytes_from_ring_position::init_first_fragment(dht::token dht_token) {
+    auto p = _token_buf.data();
     // 0x40 is the key field separator as defined by the BTI byte-comparable encoding.
     // See also https://github.com/apache/cassandra/blob/fad1f7457032544ab6a7b40c5d38ecb8b25899bb/src/java/org/apache/cassandra/utils/bytecomparable/ByteComparable.md#multi-component-sequences-partition-or-clustering-keys-tuples-bounds-and-nulls
-    p[0] = 0x40;
-    auto token = _token.is_maximum() ? std::numeric_limits<uint64_t>::max() : _token.unbias();
-    seastar::write_be<uint64_t>(reinterpret_cast<char*>(&p[1]), token);
-}
-
-void lazy_comparable_bytes_from_ring_position::advance() {
-    if (_finished) {
-        return;
-    }
-    if (_pk) {
-        if (!_gen_it.has_value()) {
-            _gen.emplace(lazy_comparable_bytes_from_compound(*_s.partition_key_type(), _pk->representation()));
-            _gen_it = _gen->begin();
-        }
-        if (*_gen_it != std::default_sentinel) {
-            _frags.emplace_back(bytespan_to_bytesview(**_gen_it));
-            ++*_gen_it;
-            return;
-        }
-    }
-    std::byte terminator;
-    // 0x20, 0x38, 0x60 are terminators defined by the BTI byte-comparable encoding.
-    // See also https://github.com/apache/cassandra/blob/fad1f7457032544ab6a7b40c5d38ecb8b25899bb/src/java/org/apache/cassandra/utils/bytecomparable/ByteComparable.md#multi-component-sequences-partition-or-clustering-keys-tuples-bounds-and-nulls
-    if (_weight < 0) {
-        terminator = std::byte(0x20);
-    } else if (_weight == 0) {
-        terminator = std::byte(0x38);
-    } else {
-        terminator = std::byte(0x60);
-    }
-    _frags.push_back(bytes{bytes::value_type(terminator)});
-    _finished = true;
-}
-
-auto lazy_comparable_bytes_from_ring_position::iterator::operator++() -> iterator& {
-    ++_i;
-    if (_i == _owner._frags.size()) {
-        if (_owner._finished) {
-            return *this;
-        }
-        _owner.advance();
-    }
-    _frag = std::as_writable_bytes(std::span(_owner._frags[_i]));
-    return *this;
+    *p++ = std::byte(0x40);
+    uint64_t token = dht_token.unbias();
+    seastar::write_be<uint64_t>(reinterpret_cast<char*>(p), token);
 }
 
 void lazy_comparable_bytes_from_ring_position::trim(const size_t n) {
-    size_t remaining = n;
-    for (size_t i = 0; i < _frags.size(); ++i) {
-        if (_frags[i].size() >= remaining) {
-            _frags[i].resize(remaining);
-            _frags.resize(i + 1);
-            break;
-        }
-        remaining -= _frags[i].size();
-    }
-    _finished = true;
+    SCYLLA_ASSERT(n <= _size);
+    _size = n;
 }
 
-static std::byte bound_weight_to_terminator(bound_weight b) {
+std::byte bound_weight_to_terminator(bound_weight b) {
     // 0x20, 0x38, 0x60 are terminators defined by the BTI byte-comparable encoding.
     // See also https://github.com/apache/cassandra/blob/fad1f7457032544ab6a7b40c5d38ecb8b25899bb/src/java/org/apache/cassandra/utils/bytecomparable/ByteComparable.md#multi-component-sequences-partition-or-clustering-keys-tuples-bounds-and-nulls
     switch (b) {
@@ -131,72 +92,43 @@ static bound_weight convert_bound_to_bound_weight(sstables::bound_kind_m b) {
     }
 }
 
-lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv)
-    : _ckp(pipv.has_key() ? std::optional<clustering_key_prefix>(pipv.key()) : std::optional<clustering_key_prefix>())
-    , _s(s) {
+static std::byte pip_to_terminator(const position_in_partition_view& pipv) {
     if (pipv.region() < partition_region::clustered) [[unlikely]] {
-        _terminator = bound_weight_to_terminator(bound_weight::before_all_prefixed);
         // This isn't defined by the BTI format docs, it's just something smaller than
         // any actual BTI-encoded clustering position.
         // It could be reasonably used during reads, but it should never be written.
-        _terminator = std::byte(0x00);
+        return std::byte(0x00);
     } else if (pipv.region() > partition_region::clustered) [[unlikely]] {
-        _terminator = bound_weight_to_terminator(bound_weight::after_all_prefixed);
         // This isn't defined by the BTI format docs, it's just something greater than
         // any actual BTI-encoded clustering position.
         // It could be reasonably used during reads, but it should never be written.
-        _terminator = std::byte(0xff);
+        return std::byte(0xff);
     } else {
-        _terminator = bound_weight_to_terminator(pipv.get_bound_weight());
+        return bound_weight_to_terminator(pipv.get_bound_weight());
     }
-    advance();
 }
 
-lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, sstables::clustering_info ci)
-    : _ckp(std::move(ci.clustering))
-    , _terminator(bound_weight_to_terminator(convert_bound_to_bound_weight(ci.kind)))
-    , _s(s) {
-    advance();
-}
+lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, position_in_partition_view pipv)
+    : _encoded(comparable_bytes_from_compound(
+        *s.clustering_key_prefix_type(),
+        pipv.has_key() ? pipv.key().representation() : managed_bytes_view(),
+        pip_to_terminator(pipv)
+    ))
+    , _size(_encoded.size())
+{}
 
-void lazy_comparable_bytes_from_clustering_position::advance() {
-    if (!_gen_it && _ckp) {
-        _gen = lazy_comparable_bytes_from_compound(*_s.clustering_key_type(), _ckp->representation());
-        _gen_it = _gen->begin();
-    }
-    if (_gen_it && *_gen_it != std::default_sentinel) {
-        _frags.emplace_back(bytespan_to_bytesview(**_gen_it));
-        ++*_gen_it;
-        return;
-    }
-    _frags.push_back(bytes{bytes::value_type(_terminator)});
-    _finished = true;
-}
+lazy_comparable_bytes_from_clustering_position::lazy_comparable_bytes_from_clustering_position(const schema& s, const sstables::clustering_info& ci)
+    : _encoded(comparable_bytes_from_compound(
+        *s.clustering_key_prefix_type(),
+        ci.clustering.representation(),
+        bound_weight_to_terminator(convert_bound_to_bound_weight(ci.kind))
+    ))
+    , _size(_encoded.size())
+{}
 
-auto lazy_comparable_bytes_from_clustering_position::iterator::operator++() -> iterator& {
-    ++_i;
-    if (_i == _owner._frags.size()) {
-        if (_owner._finished) {
-            return *this;
-        }
-        _owner.advance();
-    }
-    _frag = std::as_writable_bytes(std::span(_owner._frags[_i]));
-    return *this;
+void lazy_comparable_bytes_from_clustering_position::trim(unsigned n) {
+    SCYLLA_ASSERT(n <= _size);
+    _size = n;
 }
-
-void lazy_comparable_bytes_from_clustering_position::trim(const size_t n) {
-    size_t remaining = n;
-    for (size_t i = 0; i < _frags.size(); ++i) {
-        if (_frags[i].size() >= remaining) {
-            _frags[i].resize(remaining);
-            _frags.resize(i + 1);
-            break;
-        }
-        remaining -= _frags[i].size();
-    }
-    _finished = true;
-}
-
 
 } // namespace sstables::trie

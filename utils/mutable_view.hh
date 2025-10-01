@@ -61,4 +61,8 @@ public:
         size_t n = std::min(count, (_end - _begin) - pos);
         return basic_mutable_view{_begin + pos, n};
     }
+
+    explicit operator std::span<CharT>() const noexcept {
+        return std::span<CharT>(_begin, _end);
+    }
 };
