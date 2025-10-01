@@ -77,9 +77,13 @@ void schema_registry::attach_table(schema_registry_entry& e) noexcept {
     }
 }
 
-schema_ptr schema_registry::learn(const schema_ptr& s) {
+schema_ptr schema_registry::learn(schema_ptr s) {
+    auto learned_cdc_schema = s->cdc_schema() ? local_schema_registry().learn(s->cdc_schema()) : nullptr;
+    if (learned_cdc_schema != s->cdc_schema()) {
+        s = s->make_with_cdc(learned_cdc_schema);
+    }
     if (s->registry_entry()) {
-        return std::move(s);
+        return s;
     }
     auto i = _entries.find(s->version());
     if (i != _entries.end()) {
@@ -171,11 +175,8 @@ void schema_registry::clear() {
     _entries.clear();
 }
 
-schema_ptr schema_registry_entry::load(view_schema_and_base_info fs) {
-    _frozen_schema = std::move(fs.schema);
-    if (fs.base_info) {
-        _base_info = std::move(fs.base_info);
-    }
+schema_ptr schema_registry_entry::load(extended_frozen_schema fs) {
+    _extended_frozen_schema = std::move(fs);
     auto s = get_schema();
     if (_state == state::LOADING) {
         _schema_promise.set_value(s);
@@ -187,10 +188,7 @@ schema_ptr schema_registry_entry::load(view_schema_and_base_info fs) {
 }
 
 schema_ptr schema_registry_entry::load(schema_ptr s) {
-    _frozen_schema = frozen_schema(s);
-    if (s->is_view()) {
-        _base_info = s->view_info()->base_info();
-    }
+    _extended_frozen_schema = extended_frozen_schema(s);
     _schema = &*s;
     _schema->_registry_entry = this;
     _erase_timer.cancel();
@@ -210,7 +208,7 @@ future<schema_ptr> schema_registry_entry::start_loading(async_schema_loader load
     _state = state::LOADING;
     slogger.trace("Loading {}", _version);
     // Move to background.
-    (void)f.then_wrapped([self = shared_from_this(), this] (future<view_schema_and_base_info>&& f) {
+    (void)f.then_wrapped([self = shared_from_this(), this] (future<extended_frozen_schema>&& f) {
         _loader = {};
         if (_state != state::LOADING) {
             slogger.trace("Loading of {} aborted", _version);
@@ -236,11 +234,7 @@ schema_ptr schema_registry_entry::get_schema() {
     if (!_schema) {
         slogger.trace("Activating {}", _version);
         schema_ptr s;
-        if (_base_info) {
-            s = _frozen_schema->unfreeze(*_registry._ctxt, *_base_info);
-        } else {
-            s = _frozen_schema->unfreeze(*_registry._ctxt);
-        }
+        s = _extended_frozen_schema->unfreeze(*_registry._ctxt);
         if (s->version() != _version) {
             throw std::runtime_error(format("Unfrozen schema version doesn't match entry version ({}): {}", _version, *s));
         }
@@ -259,9 +253,14 @@ void schema_registry_entry::detach_schema() noexcept {
     _erase_timer.arm(_registry.grace_period());
 }
 
+extended_frozen_schema schema_registry_entry::extended_frozen() const {
+    SCYLLA_ASSERT(_state >= state::LOADED);
+    return *_extended_frozen_schema;
+}
+
 frozen_schema schema_registry_entry::frozen() const {
     SCYLLA_ASSERT(_state >= state::LOADED);
-    return *_frozen_schema;
+    return _extended_frozen_schema->fs;
 }
 
 future<> schema_registry_entry::maybe_sync(std::function<future<>()> syncer) {
@@ -330,18 +329,17 @@ global_schema_ptr::global_schema_ptr(global_schema_ptr&& o) noexcept {
     SCYLLA_ASSERT(o._cpu_of_origin == current);
     _ptr = std::move(o._ptr);
     _cpu_of_origin = current;
-    _base_info = std::move(o._base_info);
 }
 
 schema_ptr global_schema_ptr::get() const {
     if (this_shard_id() == _cpu_of_origin) {
         return _ptr;
     } else {
-        auto registered_schema = [](const schema_registry_entry& e, std::optional<db::view::base_dependent_view_info> base_info = std::nullopt) -> schema_ptr {
+        auto registered_schema = [](const schema_registry_entry& e) -> schema_ptr {
             schema_ptr ret = local_schema_registry().get_or_null(e.version());
             if (!ret) {
-                ret = local_schema_registry().get_or_load(e.version(), [&e, &base_info](table_schema_version) -> view_schema_and_base_info {
-                    return {e.frozen(), base_info};
+                ret = local_schema_registry().get_or_load(e.version(), [&e](table_schema_version) -> extended_frozen_schema {
+                    return e.extended_frozen();
                 });
             }
             return ret;
@@ -352,7 +350,7 @@ schema_ptr global_schema_ptr::get() const {
         // that _ptr will have a registry on the foreign shard where this
         // object originated so as long as this object lives the registry entries lives too
         // and it is safe to reference them on foreign shards.
-        schema_ptr s = registered_schema(*_ptr->registry_entry(), _base_info);
+        schema_ptr s = registered_schema(*_ptr->registry_entry());
         if (_ptr->registry_entry()->is_synced()) {
             s->registry_entry()->mark_synced();
         }
@@ -369,18 +367,11 @@ global_schema_ptr::global_schema_ptr(const schema_ptr& ptr)
         if (e) {
             return s;
         } else {
-            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> view_schema_and_base_info {
-                if (s->is_view()) {
-                    return {frozen_schema(s), s->view_info()->base_info()};
-                } else {
-                    return {frozen_schema(s)};
-                }
+            return local_schema_registry().get_or_load(s->version(), [&s] (table_schema_version) -> extended_frozen_schema {
+                return extended_frozen_schema(s);
             });
         }
     };
 
     _ptr = ensure_registry_entry(ptr);
-    if (_ptr->is_view()) {
-        _base_info = _ptr->view_info()->base_info();
-    }
 }
