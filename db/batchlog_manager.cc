@@ -173,7 +173,9 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, boo
 
     batchlog_replay_stats stats;
 
-    auto batch = [this, limiter, &stats](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+    const api::timestamp_type truncate_time = service::client_state(service::client_state::internal_tag()).get_timestamp() - 1;
+
+    auto batch = [this, limiter, &stats, cleanup](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
@@ -222,6 +224,7 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, boo
         }
 
         auto size = data.size();
+        bool batch_failed = false;
 
         try {
           if (!mutations.empty()) {
@@ -279,8 +282,19 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, boo
                 // Do _not_ remove the batch, assuning we got a node write error.
                 // Since we don't have hints (which origin is satisfied with),
                 // we have to resort to keeping this batch to next lap.
+                if (cleanup == post_replay_cleanup::yes) {
+                    batch_failed = true;
+                } else {
+                    co_return stop_iteration::no;
+                }
+            }
+
+            if (cleanup == post_replay_cleanup::yes && batch_failed) {
+                auto m = _qp.proxy().get_batchlog_mutation_for(mutations, id, netw::messaging_service::current_version, written_at);
+                co_await _qp.proxy().mutate_locally(std::move(m), tracing::trace_state_ptr(), db::commitlog::force_sync::no);
                 co_return stop_iteration::no;
             }
+
             ++stats.deleted_batches;
             // delete batch
             auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
@@ -292,7 +306,7 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, boo
             co_return stop_iteration::no;
     };
 
-    co_return co_await with_gate(_gate, [this, cleanup, trace, batch = std::move(batch), &stats] () mutable -> future<std::optional<batchlog_replay_stats>> {
+    co_return co_await with_gate(_gate, [this, cleanup, trace, batch = std::move(batch), &stats, truncate_time] () mutable -> future<std::optional<batchlog_replay_stats>> {
         blogger.debug("Started replayAllFailedBatches with cleanup: {}, trace: {}", cleanup, trace);
 
         const gc_clock::time_point replay_start = gc_clock::now();
@@ -310,9 +324,10 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, boo
         stats.replay_duration = std::chrono::duration_cast<std::chrono::milliseconds>(replay_end - replay_start);
 
         if (cleanup == post_replay_cleanup::yes) {
-            // Replaying batches could have generated tombstones, flush to disk,
-            // where they can be compacted away.
-            co_await replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
+            auto table_tombstone = tombstone(truncate_time, gc_clock::now());
+            co_await _qp.proxy().get_db().invoke_on_all([&table_tombstone] (auto& db) {
+                db.find_column_family(system_keyspace::NAME, system_keyspace::BATCHLOG).set_table_tombstone(table_tombstone);
+            });
             stats.cleanup_duration = std::chrono::duration_cast<std::chrono::milliseconds>(gc_clock::now() - replay_end);
         }
 
