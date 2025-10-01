@@ -754,14 +754,7 @@ def compare_events(expected_events, output, mode, expected_region):
             return False
     return True
 
-# Convenience function used to implement several tests below. It runs a given
-# function "updatefunc" which is supposed to do some updates to the table
-# and also return an expected_events list. do_test() then fetches the streams
-# data and compares it to the expected_events using compare_events().
-def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p = random_string(), c = random_string()):
-    table, arn = test_table_ss_stream
-    iterators = latest_iterators(dynamodbstreams, arn)
-    expected_events = updatefunc(table, p, c)
+def fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_events, mode):
     # Updating the stream is asynchronous. Moreover, it may even be delayed
     # artificially (see Alternator's alternator_streams_time_window_s config).
     # So if compare_events() reports the stream data is missing some of the
@@ -783,6 +776,25 @@ def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p
         time.sleep(0.5)
     # If we're still here, the last compare_events returned false.
     pytest.fail('missing events in output: {}'.format(output))
+
+# Convenience function used to implement several tests below. It runs a given
+# function "updatefunc" which is supposed to do some updates to the table
+# and also return an expected_events list. do_test() then fetches the streams
+# data and compares it to the expected_events using compare_events().
+def do_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, p = random_string(), c = random_string()):
+    table, arn = test_table_ss_stream
+    iterators = latest_iterators(dynamodbstreams, arn)
+    expected_events = updatefunc(table, p, c)
+    fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_events, mode)
+
+def do_batch_test(test_table_ss_stream, dynamodb, dynamodbstreams, updatefunc, mode, item_count = 3):
+    p = [random_string() for _ in range(item_count)]
+    c = [f"ck_{i}" for i in range(item_count)]
+
+    table, arn = test_table_ss_stream
+    iterators = latest_iterators(dynamodbstreams, arn)
+    expected_events = updatefunc(table, p, c)
+    fetch_and_compare_events(dynamodb, dynamodbstreams, iterators, expected_events, mode)
 
 # Test a single PutItem of a new item. Should result in a single INSERT
 # event. Reproduces #6930.
@@ -1010,6 +1022,57 @@ def test_streams_updateitem_old_image_lsi_missing_column(test_table_ss_old_image
         events.append(['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 2}, {'p': p, 'c': c, 'x': 2, 'y': 3}])
         return events
     do_test(test_table_ss_old_image_and_lsi, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+
+# In general, DynamoDB doesn't emit events if an operation is a nop. This test
+# test verifies that UpdateItem doesn't result in a log row when the updated
+# item exists and it is identical to the old one.
+# Corresponding tests for PutItem are included in tests based on do_updates_1.
+# The case for a PutItem within a BatchWriteItem is tested in
+# test_streams_batch_overwrite_identical. Reproduces #6918.
+@pytest.mark.xfail(reason="Currently fails - see #6918")
+def test_streams_updateitem_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET x = :x',
+            ExpressionAttributeValues={':x': 2})
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 2}])
+        # Overwriting the old item with an identical new item shouldn't produce
+        # any events.
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='ADD x :x',
+            ExpressionAttributeValues={':x': 0})
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='SET x = :x',
+            ExpressionAttributeValues={':x': 2})
+        return events
+    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# Tests that deleting a missing attribute with UpdateItem doesn't generate a
+# REMOVE event. Other cases are tested in test_streams_batch_delete_missing
+# and in tests based on do_updates_1. Reproduces #6918.
+@pytest.mark.xfail(reason="Currently fails - see #6918")
+def test_streams_updateitem_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, c):
+        events = []
+        # Create an item
+        table.update_item(Key={'p': p, 'c': c},
+            AttributeUpdates={'x': {'Value': 1, 'Action': 'PUT'}})
+        events.append(['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 1}])
+        # Deleting a missing attribute shouldn't produce any event for both
+        # AttributeUpdates and UpdateExpression.
+        table.update_item(Key={'p': p, 'c': c},
+            AttributeUpdates={'y': {'Action': 'DELETE'}})
+        table.update_item(Key={'p': p, 'c': c},
+            UpdateExpression='REMOVE z')
+        return events
+    do_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+    do_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Tests similar to the above tests for OLD_IMAGE, just for NEW_IMAGE mode.
 # Verify that the NEW_IMAGE includes the entire old item (including the key),
@@ -1417,6 +1480,65 @@ def test_streams_1_old_image(test_table_ss_old_image, dynamodb, dynamodbstreams)
 @pytest.mark.xfail(reason="Currently fails - because of multiple issues listed above")
 def test_streams_1_new_and_old_images(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
     do_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates_1, 'NEW_AND_OLD_IMAGES')
+
+# Tests that a DeleteItem within a BatchWriteItem that tries to remove a
+# missing item doesn't generate a REMOVE event. 
+# Reproduces #6918.
+@pytest.mark.xfail(reason="Currently fails - see #6918")
+def test_streams_batch_delete_missing(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, ps, cs):
+        # Deleting items that don't exist shouldn't produce any events.
+        table.meta.client.batch_write_item(RequestItems = {
+            table.name: [{'DeleteRequest': {'Key': {'p': p, 'c': c}}} for p, c in zip(ps, cs)]
+        })
+        return []
+    do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+    do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+# This test verifies that a PutItem within a BatchWriteItem generates no event
+# when it replaces an item with an identical one. This no-op behaviour is also
+# tested for a standard PutItem (see tests based on do_updates_1), and an
+# UpdateItem (see test_streams_updateitem_overwrite_identical). Reproduces
+# #6918.
+@pytest.mark.xfail(reason="Currently fails - see #6918")
+def test_streams_batch_overwrite_identical(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    # Batch PutItem identical items
+    def do_updates(table, ps, cs):
+        # Emit a separate event for each item in the batch.
+        table.meta.client.batch_write_item(RequestItems = {
+            table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': i}}} for p, c, i in zip(ps, cs, range(1, len(ps) + 1))]
+        })
+        events = [['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': i}] for p, c, i in zip(ps, cs, range(1, len(ps) + 1))]
+        # Overwriting with identical items shouldn't produce any events
+        table.meta.client.batch_write_item(RequestItems = {
+            table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': i}}} for p, c, i in zip(ps, cs, range(1, len(ps) + 1))]
+        })
+        return events
+    do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+    do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
+@pytest.mark.xfail(reason="Currently fails - see #6918")
+def test_streams_batch_overwrite_different(test_table_ss_keys_only, test_table_ss_new_image, test_table_ss_old_image, test_table_ss_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, ps, cs):
+        # Emit a separate event for each item in the batch.
+        table.meta.client.batch_write_item(RequestItems = {
+            table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': 1}}} for p, c in zip(ps, cs)]
+        })
+        events = [['INSERT', {'p': p, 'c': c}, None, {'p': p, 'c': c, 'x': 1}] for p, c in zip(ps, cs)]
+        # ... but overwriting with different items should be reported as MODIFY.
+        table.meta.client.batch_write_item(RequestItems = {
+            table.name: [{'PutRequest': {'Item': {'p': p, 'c': c, 'x': 2}}} for p, c in zip(ps, cs)]
+        })
+        events.extend([['MODIFY', {'p': p, 'c': c}, {'p': p, 'c': c, 'x': 1}, {'p': p, 'c': c, 'x': 2}] for p, c in zip(ps, cs)])
+        return events
+    do_batch_test(test_table_ss_keys_only, dynamodb, dynamodbstreams, do_updates, 'KEYS_ONLY')
+    do_batch_test(test_table_ss_new_image, dynamodb, dynamodbstreams, do_updates, 'NEW_IMAGE')
+    do_batch_test(test_table_ss_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
+    do_batch_test(test_table_ss_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # A fixture which creates a test table with a stream enabled, and returns a
 # bunch of interesting information collected from the CreateTable response.
