@@ -28,12 +28,11 @@
 #include "utils/hash.hh"
 
 namespace std {
-template<>
-struct hash<locator::endpoint_dc_rack> {
-    size_t operator()(const locator::endpoint_dc_rack& v) const {
-        return utils::tuple_hash()(std::tie(v.dc, v.rack));
-    }
-};
+
+size_t hash<locator::endpoint_dc_rack>::operator()(const locator::endpoint_dc_rack& v) const {
+    return utils::tuple_hash()(std::tie(v.dc, v.rack));
+}
+
 }
 
 namespace locator {
