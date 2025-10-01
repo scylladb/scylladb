@@ -11,6 +11,7 @@
 #include "dht/ring_position.hh"
 #include "dht/token-sharding.hh"
 #include "utils/interval.hh"
+#include "utils/chunked_vector.hh"
 
 #include <vector>
 
@@ -89,7 +90,7 @@ struct ring_position_range_and_shard_and_element : ring_position_range_and_shard
 //
 // During migration uses a view on shard routing for reads.
 class ring_position_range_vector_sharder {
-    using vec_type = dht::partition_range_vector;
+    using vec_type = utils::chunked_vector<dht::partition_range>;
     vec_type _ranges;
     const sharder& _sharder;
     vec_type::iterator _current_range;
@@ -104,7 +105,7 @@ public:
     // Initializes the `ring_position_range_vector_sharder` with the ranges to be processesd.
     // Input ranges should be non-overlapping (although nothing bad will happen if they do
     // overlap).
-    ring_position_range_vector_sharder(const sharder& sharder, dht::partition_range_vector ranges);
+    ring_position_range_vector_sharder(const sharder& sharder, utils::chunked_vector<dht::partition_range> ranges);
     // Fetches the next range-shard mapping. When the input range is exhausted, std::nullopt is
     // returned. Within an input range, results are contiguous and non-overlapping (but since input
     // ranges usually are discontiguous, overall the results are not contiguous). Together, the results
