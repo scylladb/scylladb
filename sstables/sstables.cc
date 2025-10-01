@@ -3048,7 +3048,7 @@ uint64_t sstable::estimated_keys_for_range(const dht::token_range& range) {
 std::vector<unsigned>
 sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
     std::unordered_set<unsigned> shards;
-    dht::partition_range_vector token_ranges;
+    utils::chunked_vector<dht::partition_range> token_ranges;
     const auto* sm = _components->scylla_metadata
             ? _components->scylla_metadata->data.get<scylla_metadata_type::Sharding, sharding_metadata>()
             : nullptr;
@@ -3066,7 +3066,7 @@ sstable::compute_shards_for_this_sstable(const dht::sharder& sharder_) const {
         };
         token_ranges = sm->token_ranges.elements
                 | std::views::transform(disk_token_range_to_ring_position_range)
-                | std::ranges::to<dht::partition_range_vector>();
+                | std::ranges::to<utils::chunked_vector<dht::partition_range>>();
     }
     sstlog.trace("{}: token_ranges={}", get_filename(), token_ranges);
     auto sharder = dht::ring_position_range_vector_sharder(sharder_, std::move(token_ranges));
