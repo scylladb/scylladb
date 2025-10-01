@@ -213,12 +213,18 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
         blogger.debug("Replaying batch {}", id);
 
         try {
-            auto fms = make_lw_shared<std::deque<canonical_mutation>>();
+            utils::chunked_vector<std::pair<canonical_mutation, schema_ptr>> fms;
+            utils::chunked_vector<mutation> mutations;
             auto in = ser::as_input_stream(data);
             while (in.size()) {
-                fms->emplace_back(ser::deserialize(in, std::type_identity<canonical_mutation>()));
-                schema_ptr s = _qp.db().find_schema(fms->back().column_family_id());
+                auto fm = ser::deserialize(in, std::type_identity<canonical_mutation>());
+                const auto& tbl = _qp.proxy().local_db().find_column_family(fm.column_family_id());
+                if (written_at <= tbl.get_truncation_time()) {
+                    continue;
+                }
+                schema_ptr s = tbl.schema();
                 timeout = std::min(timeout, std::chrono::duration_cast<db_clock::duration>(s->tombstone_gc_options().propagation_delay_in_seconds()));
+                fms.emplace_back(std::move(fm), std::move(s));
             }
 
             if (now < written_at + timeout) {
@@ -228,18 +234,10 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
             auto size = data.size();
 
-            auto mutations = co_await map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
-                const auto& cf = _qp.proxy().local_db().find_column_family(fm.column_family_id());
-                return make_ready_future<canonical_mutation*>(written_at > cf.get_truncation_time() ? &fm : nullptr);
-            },
-            utils::chunked_vector<mutation>(),
-            [this] (utils::chunked_vector<mutation> mutations, canonical_mutation* fm) {
-                if (fm) {
-                    schema_ptr s = _qp.db().find_schema(fm->column_family_id());
-                    mutations.emplace_back(fm->to_mutation(s));
-                }
-                return mutations;
-            });
+            for (const auto& [fm, s] : fms) {
+                mutations.emplace_back(fm.to_mutation(s));
+                co_await maybe_yield();
+            }
 
             if (!mutations.empty()) {
                 const auto ttl = [written_at]() -> clock_type {
