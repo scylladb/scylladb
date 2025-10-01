@@ -198,26 +198,18 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
 
         blogger.debug("Replaying batch {}", id);
 
-        auto fms = make_lw_shared<std::deque<canonical_mutation>>();
+        utils::chunked_vector<mutation> mutations;
         auto in = ser::as_input_stream(data);
         while (in.size()) {
-            fms->emplace_back(ser::deserialize(in, std::type_identity<canonical_mutation>()));
+            auto fm = ser::deserialize(in, std::type_identity<canonical_mutation>());
+            const auto& tbl = _qp.proxy().local_db().find_column_family(fm.column_family_id());
+            if (written_at <= tbl.get_truncation_time()) {
+                continue;
+            }
+            mutations.emplace_back(fm.to_mutation(tbl.schema()));
         }
 
         auto size = data.size();
-
-        auto mutations = co_await map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
-            const auto& cf = _qp.proxy().local_db().find_column_family(fm.column_family_id());
-            return make_ready_future<canonical_mutation*>(written_at > cf.get_truncation_time() ? &fm : nullptr);
-        },
-        utils::chunked_vector<mutation>(),
-        [this] (utils::chunked_vector<mutation> mutations, canonical_mutation* fm) {
-            if (fm) {
-                schema_ptr s = _qp.db().find_schema(fm->column_family_id());
-                mutations.emplace_back(fm->to_mutation(s));
-            }
-            return mutations;
-        });
 
         try {
           if (!mutations.empty()) {
