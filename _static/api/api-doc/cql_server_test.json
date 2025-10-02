@@ -1,0 +1,26 @@
+{
+    "apiVersion":"0.0.1",
+    "swaggerVersion":"1.2",
+    "basePath":"{{Protocol}}://{{Host}}",
+    "resourcePath":"/cql_server_test",
+    "produces":[
+        "application/json"
+    ],
+    "apis":[
+        {
+            "path":"/cql_server_test/connections_params",
+            "operations":[
+                {
+                    "method":"GET",
+                    "summary":"Get service level params of each CQL connection",
+                    "type":"connections_service_level_params",
+                    "nickname":"connections_params",
+                    "produces":[
+                        "application/json"
+                    ],
+                    "parameters":[]
+                }
+            ]
+        }
+    ]
+}
