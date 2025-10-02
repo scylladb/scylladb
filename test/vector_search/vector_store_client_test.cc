@@ -90,10 +90,11 @@ auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> f
 
 constexpr auto STANDARD_WAIT = std::chrono::seconds(5);
 
-struct abort_source_timeout {
+class abort_source_timeout {
     abort_source as;
     timer<> t;
 
+public:
     explicit abort_source_timeout(milliseconds timeout = STANDARD_WAIT)
         : t(timer([&]() {
             as.request_abort();
@@ -101,10 +102,11 @@ struct abort_source_timeout {
         t.arm(timeout);
     }
 
-    void reset(milliseconds timeout = STANDARD_WAIT) {
+    abort_source& reset(milliseconds timeout = STANDARD_WAIT) {
         t.cancel();
         as = abort_source();
         t.arm(timeout);
+        return as;
     }
 };
 
@@ -392,11 +394,11 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     configure(vs).with_dns({{"good.authority.here", "127.0.0.1"}});
+    auto as = abort_source_timeout();
 
     vs.start_background_tasks();
 
-    auto as = abort_source_timeout();
-    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    auto addr = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
     BOOST_REQUIRE(!addr.empty());
     BOOST_CHECK_EQUAL(print_addr(addr[0]), "127.0.0.1");
 
@@ -407,13 +409,13 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_started) {
 SEASTAR_TEST_CASE(vector_store_client_test_dns_resolve_failure) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
+    auto as = abort_source_timeout();
     auto vs = vector_store_client{cfg};
     configure(vs).with_dns({{"good.authority.here", std::nullopt}});
 
     vs.start_background_tasks();
 
-    auto as = abort_source_timeout();
-    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
 
     BOOST_CHECK(addrs.empty());
 
@@ -426,6 +428,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     auto count = 0;
+    auto as = abort_source_timeout();
     configure(vs)
             .with_dns_refresh_interval(milliseconds(10))
             .with_wait_for_client_timeout(milliseconds(20))
@@ -440,33 +443,28 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_resolving_repeated) {
 
     vs.start_background_tasks();
 
-    auto as = abort_source_timeout();
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.size() == 1;
     }));
     BOOST_CHECK_EQUAL(count, 3);
-    as.reset();
-    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
     BOOST_REQUIRE_EQUAL(addrs.size(), 1);
     BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.3");
 
     vector_store_client_tester::trigger_dns_resolver(vs);
 
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        as.reset();
-        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.empty();
     }));
 
     BOOST_CHECK(co_await repeat_until(seconds(1), [&vs, &as]() -> future<bool> {
-        as.reset();
-        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+        auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
         co_return addrs.size() == 1;
     }));
     BOOST_CHECK_EQUAL(count, 6);
-    as.reset();
-    addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
 
     BOOST_REQUIRE_EQUAL(addrs.size(), 1);
     BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.6");
@@ -480,6 +478,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
     auto vs = vector_store_client{cfg};
     auto count = 0;
+    auto as = abort_source_timeout();
     configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&count](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
         count++;
@@ -489,8 +488,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
     vs.start_background_tasks();
     co_await sleep(milliseconds(20)); // wait for the first DNS refresh
 
-    auto as = abort_source_timeout();
-    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
     BOOST_REQUIRE_EQUAL(addrs.size(), 1);
     BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.1");
     BOOST_CHECK_EQUAL(count, 1);
@@ -502,8 +500,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
     vector_store_client_tester::trigger_dns_resolver(vs);
     co_await sleep(milliseconds(100)); // wait for the next DNS refresh
 
-    as.reset();
-    addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
     BOOST_REQUIRE_EQUAL(addrs.size(), 1);
     BOOST_CHECK_EQUAL(print_addr(addrs[0]), "127.0.0.1");
     BOOST_CHECK_GE(count, 1);
@@ -516,6 +513,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
 SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
+    auto as = abort_source_timeout(milliseconds(10));
     auto vs = vector_store_client{cfg};
     configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
@@ -525,8 +523,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
 
     vs.start_background_tasks();
 
-    auto as = abort_source_timeout(milliseconds(10));
-    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
     BOOST_CHECK(addrs.empty());
 
     co_await vs.stop();
@@ -534,11 +531,11 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
 
 SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
     co_await do_with_cql_env([](cql_test_env& env) -> future<> {
+        auto as = abort_source_timeout();
         auto schema = co_await create_test_table(env, "ks", "vs");
         auto& vs = env.local_qp().vector_store_client();
 
-        auto as = abort_source_timeout();
-        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
         BOOST_REQUIRE(!keys);
         BOOST_CHECK(std::holds_alternative<vector_store_client::disabled>(keys.error()));
     });
@@ -550,13 +547,13 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
     co_await do_with_cql_env(
             [](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
+                auto as = abort_source_timeout();
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"bad.authority.here", std::nullopt}});
 
                 vs.start_background_tasks();
 
-                auto as = abort_source_timeout();
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::addr_unavailable>(keys.error()));
             },
@@ -570,13 +567,13 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
     co_await do_with_cql_env(
             [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
+                auto as = abort_source_timeout();
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", server->host()}});
 
                 vs.start_background_tasks();
 
-                auto as = abort_source_timeout();
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
             },
@@ -593,6 +590,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
     co_await do_with_cql_env(
             [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "vs");
+                auto as = abort_source_timeout();
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&server](auto const& host) -> future<std::optional<inet_address>> {
                     BOOST_CHECK_EQUAL(host, "good.authority.here");
@@ -602,8 +600,8 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
 
                 vs.start_background_tasks();
 
-                auto as = abort_source_timeout(milliseconds(10));
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset(milliseconds(10)));
+
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(keys.error()));
             },
@@ -620,6 +618,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
     co_await do_with_cql_env(
             [&server](cql_test_env& env) -> future<> {
                 auto schema = co_await create_test_table(env, "ks", "idx");
+                auto as = abort_source_timeout();
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns_refresh_interval(seconds(1)).with_dns({{"good.authority.here", "127.0.0.1"}});
 
@@ -627,8 +626,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // server responds with 404 - client should return service_error
                 server->next_ann_response({status_type::not_found, "idx2 not found"});
-                auto as = abort_source_timeout();
-                auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, as.as);
+                auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, as.reset());
                 BOOST_REQUIRE(!server->requests().empty());
                 BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
                 BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx2/ann");
@@ -639,7 +637,7 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // missing primary_keys in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!server->requests().empty());
                 BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
                 BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx/ann");
@@ -648,43 +646,37 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // missing distances in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances1":[0.1,0.2]})"});
-                as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // missing pk1 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk11":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // missing ck1 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck11":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of pk2 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // wrong size of ck2 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2]},"distances":[0.1,0.2]})"});
-                as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!keys);
                 BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
 
                 // correct reply - service should return keys
                 server->next_ann_response({status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE});
-                as.reset();
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(keys);
                 BOOST_REQUIRE_EQUAL(keys->size(), 2);
                 BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).partition.key().explode()), "[05, 07]");
@@ -791,8 +783,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update) {
 
                 // Wait until requests are handled by s2
                 BOOST_CHECK(co_await repeat_until(DNS_REFRESH_INTERVAL * 2, [&]() -> future<bool> {
-                    as.reset();
-                    co_return is_s2_response(co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as));
+                    co_return is_s2_response(co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset()));
                 }));
             },
             cfg)
@@ -821,7 +812,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
-                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return unavail_s->connections() > 1;
                 }));
 
@@ -855,7 +846,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return !s1->requests().empty() && !s2->requests().empty();
                 }));
             },
@@ -885,7 +876,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
-                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return unavail_s->connections() > 1;
                 }));
 
@@ -919,7 +910,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
                 BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
-                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.as);
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return !s1->requests().empty() && !s2->requests().empty();
                 }));
             },
@@ -944,7 +935,7 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
                 configure{vs};
                 vs.start_background_tasks();
 
-                co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+                co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
 
                 auto metrics = seastar::metrics::impl::get_values();
                 BOOST_CHECK_EQUAL(get_metrics_value("vector_store_dns_refreshes", metrics)->i(), 1);
