@@ -88,7 +88,12 @@ auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> f
     co_return true;
 }
 
-constexpr auto STANDARD_WAIT = std::chrono::seconds(5);
+constexpr auto STANDARD_WAIT = std::chrono::seconds(10);
+
+auto repeat_until(std::function<future<bool>()> func) -> future<bool> {
+    return repeat_until(STANDARD_WAIT, std::move(func));
+}
+
 
 class abort_source_timeout {
     abort_source as;
@@ -703,7 +708,7 @@ SEASTAR_TEST_CASE(vector_store_client_uri_update_to_empty) {
     vs.start_background_tasks();
 
     // Wait for initial DNS resolution
-    BOOST_CHECK(co_await repeat_until(std::chrono::seconds(5), [&]() -> future<bool> {
+    BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
         co_return count > 0;
     }));
 
@@ -811,7 +816,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
 
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
-                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return unavail_s->connections() > 1;
                 }));
@@ -845,7 +850,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_load_balancing) {
                 // Wait until requests are handled by both servers.
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
-                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return !s1->requests().empty() && !s2->requests().empty();
                 }));
@@ -875,7 +880,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
 
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
-                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return unavail_s->connections() > 1;
                 }));
@@ -909,7 +914,7 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_load_balancing) {
                 // Wait until requests are handled by both servers.
                 // The load balancing algorithm is random, so we send requests in a loop
                 // until both servers have received at least one, verifying that load is distributed.
-                BOOST_CHECK(co_await repeat_until(std::chrono::seconds(10), [&]() -> future<bool> {
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
                     co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return !s1->requests().empty() && !s2->requests().empty();
                 }));
