@@ -14,9 +14,15 @@ from typing import Any
 from test.cluster.conftest import skip_mode
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import ScyllaMetrics
 
 # main logger
 logger = logging.getLogger(__name__)
+
+async def get_metrics(manager: ManagerClient, servers: list[ServerInfo]) -> list[ScyllaMetrics]:
+    return await asyncio.gather(*[manager.metrics.query(s.ip_addr) for s in servers])
+def get_io_read_ops(metrics: list[ScyllaMetrics]) -> int:
+    return int(sum([m.get("scylla_io_queue_total_read_ops") for m in metrics]))
 
 async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: Any):
     cql, hosts = await manager.get_ready_cql(servers)
@@ -98,7 +104,9 @@ async def test_bti_index_enable(manager: ManagerClient) -> None:
 
     async def test_bti_usage_during_reads(should_use_bti: bool, use_cache: bool):
         select = select_with_cache if use_cache else select_without_cache
+        metrics_before = await get_metrics(manager, servers)
         select_result = cql.execute(select, (chosen_pk, chosen_ck), trace=True)
+        metrics_after = await get_metrics(manager, servers)
         row = select_result.one()
         assert row.pk == chosen_pk
         assert row.ck == chosen_ck
@@ -113,14 +121,25 @@ async def test_bti_index_enable(manager: ManagerClient) -> None:
             seen_partitions = seen_partitions or "Partitions.db" in event.description
             seen_rows = seen_rows or "Rows.db" in event.description
             seen_index = seen_index or "Index.db" in event.description
-        if should_use_bti:
-            assert not seen_index, "Index.db was used despite BTI preference"
-            assert seen_partitions, "Partitions.db was not used despite BTI preference"
-            assert seen_rows, "Rows.db was not used despite BTI preference"
-        else:
-            assert seen_index, "Index.db was not used despite BIG preference"
-            assert not seen_partitions, "Partitions.db was used despite BIG preference"
-            assert not seen_rows, "Rows.db was used despite BIG preference"
+
+        if not use_cache:
+            if should_use_bti:
+                assert not seen_index, "Index.db was used despite BTI preference"
+                assert seen_partitions, "Partitions.db was not used despite BTI preference"
+                assert seen_rows, "Rows.db was not used despite BTI preference"
+            else:
+                assert seen_index, "Index.db was not used despite BIG preference"
+                assert not seen_partitions, "Partitions.db was used despite BIG preference"
+                assert not seen_rows, "Rows.db was used despite BIG preference"
+
+            # Test that BYPASS CACHE does force disk reads.
+            io_read_ops = get_io_read_ops(metrics_after) - get_io_read_ops(metrics_before)
+            if should_use_bti:
+                # At least one read for Partitions.db, Rows.db, Data.db
+                assert io_read_ops >= 3
+            else:
+                # At least one read in Index.db (main index), Index.db (promoted index), Data.db
+                assert io_read_ops >= 3
 
     logger.info("Step 3: Checking for BTI files (should not exist, because cluster feature is suppressed)")
     await test_files_presence(bti_should_exist=False, big_should_exist=True)
@@ -143,7 +162,10 @@ async def test_bti_index_enable(manager: ManagerClient) -> None:
     await asyncio.gather(*[manager.api.keyspace_upgrade_sstables(s.ip_addr, ks_name) for s in servers])
     logger.info("Step 7: Checking for BTI files (should exist)")
     await test_files_presence(bti_should_exist=True, big_should_exist=False)
-    await test_bti_usage_during_reads(should_use_bti=True, use_cache=False)
-    await test_bti_usage_during_reads(should_use_bti=True, use_cache=True)
+
+    # Test that BYPASS CACHE does its thing.
+    for _ in range(3):
+        await test_bti_usage_during_reads(should_use_bti=True, use_cache=False)
+        await test_bti_usage_during_reads(should_use_bti=True, use_cache=True)
 
     manager.driver_close()
