@@ -495,3 +495,29 @@ async def test_reload_service_levels_after_auth_service_is_stopped(manager: Mana
     config = {**auth_config, "error_injections_at_startup": ["reload_service_level_cache_after_auth_service_is_stopped"]}
     s1 = await manager.server_add(config=config)
     await manager.server_stop_gracefully(s1.server_id)
+
+# Reproduces scylladb/scylladb#26190
+@pytest.mark.asyncio
+async def test_service_level_reuse_name(manager: ManagerClient):
+    servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+
+    sl1 = "sl1"
+    sl2 = "sl2"
+
+    async def create_sl_and_use(cql, name):
+        # Create a service level and attach it to the default cassandra user
+        await cql.run_async(f"CREATE SERVICE LEVEL {name}")
+        await cql.run_async(f"ATTACH SERVICE LEVEL {name} to cassandra")
+        # Reconnect the driver to make sure the new service level is used
+        cql = await reconnect_driver(manager)
+        # Run any `select` query to create a `cql3_select.{name}` execution stage
+        await cql.run_async(f"select * from system.clients;")
+        return cql
+
+    cql = await create_sl_and_use(cql, sl1)
+    await cql.run_async(f"DROP SERVICE LEVEL {sl1}")
+
+    cql = await create_sl_and_use(cql, sl2)
+    cql = await create_sl_and_use(cql, sl1)
