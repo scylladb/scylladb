@@ -3952,6 +3952,7 @@ table::mutation_query(schema_ptr query_schema,
         tracing::trace_state_ptr trace_state,
         query::result_memory_accounter accounter,
         db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled,
         std::optional<query::querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return reconcilable_result();
@@ -3972,7 +3973,7 @@ table::mutation_query(schema_ptr query_schema,
     std::exception_ptr ex;
   try {
     auto rrb = reconcilable_result_builder(*query_schema, cmd.slice, std::move(accounter));
-    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
+    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state, tombstone_gc_enabled);
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
         co_await q.close();
