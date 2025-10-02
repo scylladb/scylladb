@@ -828,7 +828,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
 
     tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
 
-    co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::SELECT);
+    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::SELECT, _stats);
 
     db::consistency_level cl = db::consistency_level::LOCAL_QUORUM;
     partition_key pk = iter.shard.id.to_partition_key(*schema);
