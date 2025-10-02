@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "vector_similarity_fcts.hh"
 #include "types/types.hh"
+#include "types/vector.hh"
 #include "exceptions/exceptions.hh"
 
 namespace cql3 {
@@ -79,5 +81,47 @@ float compute_dot_product_similarity(const std::vector<data_value>& v1, const st
 }
 
 } // namespace
+
+std::vector<data_type> retrieve_vector_arg_types(const function_name& name, const std::vector<shared_ptr<assignment_testable>>& provided_args) {
+    if (provided_args.size() != 2) {
+        throw exceptions::invalid_request_exception(fmt::format("Invalid number of arguments for function {}(vector<float, n>, vector<float, n>)", name));
+    }
+
+    auto [first_result, first_dim_opt] = provided_args[0]->test_assignment_any_size_float_vector();
+    auto [second_result, second_dim_opt] = provided_args[1]->test_assignment_any_size_float_vector();
+
+    auto invalid_type_error_message = [&name](const shared_ptr<assignment_testable>& arg) {
+        auto type = arg->assignment_testable_type_opt();
+        const auto& source_context = arg->assignment_testable_source_context();
+        if (type) {
+            return fmt::format("Function {} requires a float vector argument, but found {} of type {}", name, source_context, type.value()->cql3_type_name());
+        } else {
+            return fmt::format("Function {} requires a float vector argument, but found {}", name, source_context);
+        }
+    };
+
+    if (!is_assignable(first_result)) {
+        throw exceptions::invalid_request_exception(invalid_type_error_message(provided_args[0]));
+    }
+    if (!is_assignable(second_result)) {
+        throw exceptions::invalid_request_exception(invalid_type_error_message(provided_args[1]));
+    }
+
+    if (!first_dim_opt && !second_dim_opt) {
+        throw exceptions::invalid_request_exception(fmt::format("Cannot infer type of argument {} for function {}(vector<float, n>, vector<float, n>)",
+                provided_args[0]->assignment_testable_source_context(), name));
+    }
+    if (first_dim_opt && second_dim_opt) {
+        if (*first_dim_opt != *second_dim_opt) {
+            throw exceptions::invalid_request_exception(fmt::format(
+                    "All arguments must have the same vector dimensions, but found vector<float, {}> and vector<float, {}>", *first_dim_opt, *second_dim_opt));
+        }
+    }
+
+    size_t dimension = first_dim_opt ? *first_dim_opt : *second_dim_opt;
+    auto type = vector_type_impl::get_instance(float_type, dimension);
+    return {type, type};
+}
+
 } // namespace functions
 } // namespace cql3
