@@ -161,13 +161,20 @@ class scylla_rest_client {
     rjson::value do_request(sstring type, sstring path,
                             std::unordered_map<sstring, sstring> params,
                             std::optional<request_body> body = {}) {
+        http::request::query_parameters_type req_params;
+        for (auto& [key, value] : params) {
+            req_params[std::move(key)].push_back(std::move(value));
+        }
+        return do_request(type, path, std::move(req_params), std::move(body));
+    }
+
+    rjson::value do_request(sstring type, sstring path,
+                            http::request::query_parameters_type params,
+                            std::optional<request_body> body = {}) {
         auto req = http::request::make(type, _host_name, path);
         auto url = req.get_url();
 
-        for (const auto& [k, v] : params) {
-            req.set_query_param(k, v);
-        }
-
+        req.set_query_params(params);
         if (body) {
             req.write_body(body->content_type, body->content);
         }
@@ -218,12 +225,25 @@ public:
         return do_request("POST", std::move(path), std::move(params), std::move(body));
     }
 
+    rjson::value post(sstring path, http::request::query_parameters_type params, std::optional<request_body> body = {}) {
+        return do_request("POST", std::move(path), std::move(params), std::move(body));
+    }
+
     rjson::value get(sstring path, std::unordered_map<sstring, sstring> params = {}) {
+        return do_request("GET", std::move(path), std::move(params));
+    }
+
+    rjson::value get(sstring path, http::request::query_parameters_type params) {
         return do_request("GET", std::move(path), std::move(params));
     }
 
     // delete is a reserved keyword, using del instead
     rjson::value del(sstring path, std::unordered_map<sstring, sstring> params = {}) {
+        return do_request("DELETE", std::move(path), std::move(params));
+    }
+
+    // delete is a reserved keyword, using del instead
+    rjson::value del(sstring path, http::request::query_parameters_type params) {
         return do_request("DELETE", std::move(path), std::move(params));
     }
 };
@@ -1107,13 +1127,28 @@ void flush_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 }
 
 void getendpoints_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
-    if (!vm.contains("keyspace") || !vm.contains("table") || !vm.contains("key")) {
+    bool contains_key = vm.contains("key");
+    bool contains_key_components = vm.contains("key-components");
+
+    if (!vm.contains("keyspace") || !vm.contains("table") || !(contains_key || contains_key_components)) {
         throw std::invalid_argument("getendpoint requires keyspace, table and partition key arguments");
     }
-    auto res = client.get(seastar::format("/storage_service/natural_endpoints/{}",
-                                          vm["keyspace"].as<sstring>()),
-                          {{"cf", vm["table"].as<sstring>()},
-                           {"key", vm["key"].as<sstring>()}});
+
+    if (contains_key && contains_key_components) {
+        throw std::invalid_argument("Provide either --key or --key-components, not both");
+    }
+
+    sstring endpoint;
+    http::request::query_parameters_type params = {{"cf", {vm["table"].as<sstring>()}} };
+    if (contains_key) {
+        params["key"] = {vm["key"].as<sstring>()};
+        endpoint = seastar::format("/storage_service/natural_endpoints/{}", vm["keyspace"].as<sstring>());
+    } else {
+        params["key_component"] = vm["key-components"].as<std::vector<sstring>>();
+        endpoint = seastar::format("/storage_service/natural_endpoints/v2/{}", vm["keyspace"].as<sstring>());
+    }
+
+    auto res = client.get(endpoint, params);
     for (auto& inet_address : res.GetArray()) {
         fmt::print("{}\n", rjson::to_string_view(inet_address));
     }
@@ -4015,6 +4050,7 @@ For more information, see: {}"
                     typed_option<sstring>("keyspace", "The keyspace to query", 1),
                     typed_option<sstring>("table", "The table to query", 1),
                     typed_option<sstring>("key", "The partition key for which we need to find the endpoint", 1),
+                    typed_option<std::vector<sstring>>("key-components", "List of components of the key for which we need to find the endpoint", -1),
                 },
             },
             {

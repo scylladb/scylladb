@@ -7766,16 +7766,28 @@ storage_service::get_all_ranges(const std::vector<token>& sorted_tokens) const {
 }
 
 inet_address_vector_replica_set
-storage_service::get_natural_endpoints(const sstring& keyspace,
-        const sstring& cf, const sstring& key) const {
+storage_service::get_natural_endpoints(const sstring& keyspace, const sstring& cf, const sstring& key) const {
     auto& table = _db.local().find_column_family(keyspace, cf);
     const auto schema = table.schema();
-    partition_key pk = partition_key::from_nodetool_style_string(schema, key);
+    auto pk = partition_key::from_nodetool_style_string(schema, key);
+    return get_natural_endpoints(keyspace, schema, table, pk);
+}
+
+inet_address_vector_replica_set
+storage_service::get_natural_endpoints(const sstring& keyspace, const sstring& cf, const std::vector<sstring>& key_components) const {
+    auto& table = _db.local().find_column_family(keyspace, cf);
+    const auto schema = table.schema();
+    auto pk = partition_key::from_string_components(schema, key_components);
+    return get_natural_endpoints(keyspace, schema, table, pk);
+}
+
+inet_address_vector_replica_set
+storage_service::get_natural_endpoints(const sstring& keyspace, const schema_ptr& schema, const replica::column_family& cf, const partition_key& pk) const {
     dht::token token = schema->get_partitioner().get_token(*schema, pk.view());
     const auto& ks = _db.local().find_keyspace(keyspace);
     host_id_vector_replica_set replicas;
     if (ks.uses_tablets()) {
-        replicas = table.get_effective_replication_map()->get_natural_replicas(token);
+        replicas = cf.get_effective_replication_map()->get_natural_replicas(token);
     } else {
         replicas = ks.get_static_effective_replication_map()->get_natural_replicas(token);
     }

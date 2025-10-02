@@ -44,14 +44,19 @@ partition_key partition_key::from_nodetool_style_string(const schema_ptr s, cons
         vec.push_back(key);
     } else {
         boost::split(vec, key, boost::is_any_of(":"));
-        if (vec.size() != s->partition_key_type()->types().size()) {
-            throw std::invalid_argument(fmt::format("partition key '{}' has mismatch number of components: expected {}, got {}", key, s->partition_key_type()->types().size(), vec.size()));
-        }
     }
 
-    auto it = std::begin(vec);
+    return from_string_components(s, vec);
+}
+
+partition_key partition_key::from_string_components(const schema_ptr s, const std::vector<sstring>& components) {
+    if (components.size() != s->partition_key_type()->types().size()) {
+        throw std::invalid_argument(fmt::format("partition key '{}' has mismatch number of components: expected {}, got {}", components, s->partition_key_type()->types().size(), components.size()));
+    }
+
+    auto it = std::begin(components);
     std::vector<bytes> r;
-    r.reserve(vec.size());
+    r.reserve(components.size());
     for (auto t : s->partition_key_type()->types()) {
         r.emplace_back(t->from_string(*it++));
     }

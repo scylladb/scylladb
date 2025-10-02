@@ -704,6 +704,15 @@ public:
      */
     static partition_key from_nodetool_style_string(const schema_ptr s, const sstring& key);
 
+    /*!
+    * \brief Create a partition_key from a vector of string components.
+    * Takes a vector of string representations of each component of the partition key,
+    * and returns a partition_key.
+    * For example, if a composite key has two columns (col1, col2), and you want the partition key
+    * for col1 = "val1" and col2 = "val2", pass {"val1", "val2"} as the components.
+    */
+    static partition_key from_string_components(const schema_ptr s, const std::vector<sstring>& components);
+
     partition_key(std::vector<bytes> v)
         : compound_wrapper(managed_bytes(c_type::serialize_value(std::move(v))))
     { }
