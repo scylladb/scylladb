@@ -3642,7 +3642,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
         auto cached_partitions_file = caching == use_caching::yes
             ? _cached_partitions_file
             :  seastar::make_shared<cached_file>(
-                _partitions_file,
+                uncached_partitions_file(),
                 _manager.get_cache_tracker().get_index_cached_file_stats(),
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
@@ -3652,7 +3652,7 @@ std::unique_ptr<abstract_index_reader> sstable::make_index_reader(
             auto cached_rows_file = caching == use_caching::yes
             ? _cached_rows_file
             :  seastar::make_shared<cached_file>(
-                _rows_file,
+                uncached_rows_file(),
                 _manager.get_cache_tracker().get_index_cached_file_stats(),
                 _manager.get_cache_tracker().get_lru(),
                 _manager.get_cache_tracker().region(),
