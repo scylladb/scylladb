@@ -1434,6 +1434,112 @@ test_assignment(const expression& expr, data_dictionary::database db, const sstr
     }, expr);
 }
 
+template <cql3_type::kind... Kinds>
+assignment_testable::vector_test_result
+test_assignment_any_size_float_vector(const expression& expr) {
+    using test_result = assignment_testable::vector_test_result;
+    const test_result NOT_ASSIGNABLE = {assignment_testable::test_result::NOT_ASSIGNABLE, std::nullopt};
+    const test_result WEAKLY_ASSIGNABLE = {assignment_testable::test_result::WEAKLY_ASSIGNABLE, std::nullopt};
+    auto is_float_or_bind = [] (const expression& e) {
+        return expr::visit(overloaded_functor{
+            [] (const bind_variable&) {
+                return true;
+            },
+            [] (const untyped_constant& uc) {
+                return uc.partial_type == untyped_constant::type_class::floating_point
+                    || uc.partial_type == untyped_constant::type_class::integer;
+            },
+            [] (const constant& value) {
+                auto kind = value.type->as_cql3_type().get_kind();
+                return cql3_type::kind_enum_set::frozen<Kinds...>().contains(kind);
+            },
+            [] (const auto&) {
+                return false;
+            },
+        }, e);
+    };
+    auto validate_assignment = [&] (const data_type& dt) -> test_result {
+         auto vt = dynamic_pointer_cast<const vector_type_impl>(dt->underlying_type());
+            if (!vt) {
+                return NOT_ASSIGNABLE;
+            }
+            auto elem_kind = vt->get_elements_type()->as_cql3_type().get_kind();
+            if (cql3_type::kind_enum_set::frozen<Kinds...>().contains(elem_kind)) {
+                return {assignment_testable::test_result::WEAKLY_ASSIGNABLE, vt->get_dimension()};
+            }
+            return NOT_ASSIGNABLE;
+    };
+    return expr::visit(overloaded_functor{
+        [&] (const constant& value) -> test_result {
+            return validate_assignment(value.type);
+        },
+        [&] (const binary_operator&) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const conjunction&) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const column_value& col_val) -> test_result {
+            return validate_assignment(col_val.col->type);
+        },
+        [&] (const subscript&) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const unresolved_identifier& ui) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const column_mutation_attribute& cma) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const function_call& fc) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const cast& c) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const field_selection& fs) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const bind_variable& bv) -> test_result {
+            return WEAKLY_ASSIGNABLE;
+        },
+        [&] (const untyped_constant& uc) -> test_result {
+            return uc.partial_type == untyped_constant::type_class::null
+                ? WEAKLY_ASSIGNABLE
+                : NOT_ASSIGNABLE;
+        },
+        [&] (const tuple_constructor& tc) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const collection_constructor& c) -> test_result {
+            switch (c.style) {
+            case collection_constructor::style_type::list_or_vector: {
+                if(std::ranges::all_of(c.elements, is_float_or_bind)) {
+                    return {assignment_testable::test_result::WEAKLY_ASSIGNABLE, c.elements.size()};
+                }
+                return NOT_ASSIGNABLE;
+            }
+            case collection_constructor::style_type::set: return NOT_ASSIGNABLE;
+            case collection_constructor::style_type::map: return NOT_ASSIGNABLE;
+            case collection_constructor::style_type::vector:
+                on_internal_error(expr_logger, "vector style type found in test_assignment, should have been introduced post-prepare");
+            }
+            on_internal_error(expr_logger, fmt::format("unexpected collection_constructor style {}", static_cast<unsigned>(c.style)));
+        },
+        [&] (const usertype_constructor& uc) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+        [&] (const temporary& t) -> test_result {
+            return NOT_ASSIGNABLE;
+        },
+    }, expr);
+}
+
+assignment_testable::vector_test_result
+test_assignment_any_size_float_vector(const expression& expr) {
+    return test_assignment_any_size_float_vector<cql3_type::kind::FLOAT, cql3_type::kind::DOUBLE>(expr);
+}
+
 expression
 prepare_expression(const expression& expr, data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, lw_shared_ptr<column_specification> receiver) {
     auto e_opt = try_prepare_expression(expr, db, keyspace, schema_opt, std::move(receiver));
@@ -1466,6 +1572,9 @@ public:
     explicit assignment_testable_expression(expression e, std::optional<data_type> type_opt) : _e(std::move(e)), _type_opt(std::move(type_opt)) {}
     virtual test_result test_assignment(data_dictionary::database db, const sstring& keyspace, const schema* schema_opt, const column_specification& receiver) const override {
         return expr::test_assignment(_e, db, keyspace, schema_opt, receiver);
+    }
+    virtual vector_test_result test_assignment_any_size_float_vector() const override {
+        return expr::test_assignment_any_size_float_vector(_e);
     }
     virtual sstring assignment_testable_source_context() const override {
         return fmt::format("{}", _e);
