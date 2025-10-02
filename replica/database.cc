@@ -41,6 +41,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstables_manager.hh"
 #include <boost/container/static_vector.hpp>
+#include <boost/lexical_cast.hpp>
 #include "mutation/frozen_mutation.hh"
 #include "mutation/async_utils.hh"
 #include <seastar/core/do_with.hh>
@@ -1933,8 +1934,22 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     tracing::trace(trace_state, "Applying counter update");
     co_await apply_with_commitlog(cf, m, timeout);
 
-    if (utils::get_local_injector().enter("apply_counter_update_delay_5s")) {
-        co_await seastar::sleep(std::chrono::seconds(5));
+    if (auto delay_opt = utils::get_local_injector().inject_parameter<int64_t>("apply_counter_update_delay_ms"); delay_opt) {
+        int64_t delay = 5000;
+        if (!delay_opt) {
+            dblog.warn("apply_counter_update_delay_ms is not set. Using default value 5000 ms.");
+        } else {
+            try {
+                delay = boost::lexical_cast<int64_t>(*delay_opt);
+                if (delay < 0) {
+                    dblog.warn("Negative apply_counter_update_delay_ms value: [{}]. Using default value 5.", *delay_opt);
+                    delay = 5;
+                }
+            } catch (const boost::bad_lexical_cast&) {
+                dblog.warn("Incorrect apply_counter_update_delay_ms value: [{}]. Using default value 5.", *delay_opt);
+            }
+        }
+        co_await seastar::sleep(std::chrono::milliseconds(delay));
     }
 
     co_return m;
