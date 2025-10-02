@@ -842,6 +842,12 @@ table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexce
     return *this;
 }
 
+void tablet_load_stats::add_tablet_sizes(const tablet_load_stats& tls) {
+    for (auto& [rb_tid, tablet_size] : tls.tablet_sizes) {
+        tablet_sizes[rb_tid] = tablet_size;
+    }
+}
+
 load_stats load_stats::from_v1(load_stats_v1&& stats) {
     return { .tables = std::move(stats.tables) };
 }
@@ -856,8 +862,50 @@ load_stats& load_stats::operator+=(const load_stats& s) {
     for (auto& [host, cdu] : s.critical_disk_utilization) {
         critical_disk_utilization[host] = cdu;
     }
-
+    for (auto& [host, tablet_ls] : s.tablet_stats) {
+        tablet_stats[host].effective_capacity = tablet_ls.effective_capacity;
+        tablet_stats[host].add_tablet_sizes(tablet_ls);
+    }
     return *this;
+}
+
+uint64_t load_stats::get_tablet_size(host_id host, const range_based_tablet_id& rb_tid, uint64_t default_tablet_size) const {
+    if (auto node_i = tablet_stats.find(host); node_i != tablet_stats.end()) {
+        const tablet_load_stats& tls = node_i->second;
+        if (auto ts_i = tls.tablet_sizes.find(rb_tid); ts_i != tls.tablet_sizes.end()) {
+            return ts_i->second;
+        }
+    }
+    tablet_logger.debug("Unable to find tablet size on host: {} for tablet: {}", host, rb_tid);
+    return default_tablet_size;
+}
+
+void load_stats::reconcile_tablets_resize(token_metadata_ptr tmptr) {
+    for (auto& [host, tls] : tablet_stats) {
+        std::unordered_map<locator::range_based_tablet_id, uint64_t> reconciled_sizes;
+        for (const auto& [rb_tid, size] : tls.tablet_sizes) {
+            auto& tmap = tmptr->tablets().get_tablet_map(rb_tid.table);
+            const dht::token_range current_range = tmap.get_token_range(tmap.get_tablet_id(rb_tid.range.end()->value()));
+            if (current_range == rb_tid.range) {
+                reconciled_sizes[{rb_tid.table, current_range}] = size;
+            } else if (current_range.contains(rb_tid.range, dht::token_comparator{})) {
+                // handle merge
+                reconciled_sizes[{rb_tid.table, current_range}] += size;
+            } else if (rb_tid.range.contains(current_range, dht::token_comparator{})) {
+                // handle split
+                auto first_tablet = tmap.get_tablet_id(rb_tid.range.start()->value().next());
+                auto last_tablet = tmap.get_tablet_id(rb_tid.range.end()->value());
+                auto num_tablets = last_tablet.id - first_tablet.id + 1;
+                auto avg_size = size / num_tablets;
+                for (size_t i = first_tablet.id; i <= last_tablet.id; ++i) {
+                    auto new_range = tmap.get_token_range(tablet_id(i));
+                    reconciled_sizes[{rb_tid.table, new_range}] += avg_size;
+                }
+            }
+        }
+
+        tls.tablet_sizes = std::move(reconciled_sizes);
+    }
 }
 
 tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
