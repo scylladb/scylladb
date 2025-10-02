@@ -8,6 +8,7 @@
 
 #include "vector_search_fcts.hh"
 #include "cql3/query_options.hh"
+#include "types/vector.hh"
 
 namespace cql3 {
 namespace functions {
@@ -31,6 +32,35 @@ static size_t find_matching_key_index(const expr::evaluation_inputs& inputs, con
 }
 
 } // namespace
+
+std::vector<data_type> vector_similarity_fct::provide_arg_types(
+        const std::vector<shared_ptr<assignment_testable>>& provided_args, const data_dictionary::database& db) {
+    if (provided_args.size() != 2) {
+        throw exceptions::invalid_request_exception("vector similarity functions require exactly two arguments");
+    }
+
+    // Determine the type of the first argument (should be a vector column).
+    auto vector_column_type_opt = provided_args[0]->assignment_testable_type_opt();
+    if (!vector_column_type_opt) {
+        throw exceptions::invalid_request_exception("vector similarity functions are only valid when the first argument type is known");
+    }
+
+    auto vector_column_type = *vector_column_type_opt;
+    auto elem_type = dynamic_cast<const vector_type_impl&>(*vector_column_type).get_elements_type();
+
+    if (!vector_column_type->is_vector() || elem_type != float_type) {
+        throw exceptions::invalid_request_exception("vector similarity functions require arguments to be of type vector<float, N>");
+    }
+
+    // For the second argument, check if it can be assigned to the same vector type.
+    // The second argument is a literal vector that should match the given vector column's type.
+    if (!is_assignable(provided_args[1]->test_assignment(
+                db, {}, {}, column_specification({}, {}, ::make_shared<column_identifier>("<vector_literal>", true), vector_column_type)))) {
+        throw exceptions::invalid_request_exception("Second argument must be assignable to the same vector type as the first argument");
+    }
+
+    return {vector_column_type, vector_column_type};
+}
 
 bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) {
     auto options = inputs.options->get_specific_options();

@@ -405,7 +405,8 @@ functions::get(data_dictionary::database db,
     if (name.has_keyspace()
                 ? name == SIMILARITY_COSINE_FUNCTION_NAME
                 : name.name == SIMILARITY_COSINE_FUNCTION_NAME.name) {
-        auto fun = ::make_shared<similarity_cosine_fct>(schema);
+        auto arg_types = vector_similarity_fct::provide_arg_types(provided_args, db);
+        auto fun = ::make_shared<similarity_cosine_fct>(schema, arg_types);
         validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
         return fun;
     }
@@ -413,7 +414,8 @@ functions::get(data_dictionary::database db,
     if (name.has_keyspace()
                 ? name == SIMILARITY_EUCLIDEAN_FUNCTION_NAME
                 : name.name == SIMILARITY_EUCLIDEAN_FUNCTION_NAME.name) {
-        auto fun = ::make_shared<similarity_euclidean_fct>(schema);
+        auto arg_types = vector_similarity_fct::provide_arg_types(provided_args, db);
+        auto fun = ::make_shared<similarity_euclidean_fct>(schema, arg_types);
         validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
         return fun;
     }
@@ -421,7 +423,8 @@ functions::get(data_dictionary::database db,
     if (name.has_keyspace()
                 ? name == SIMILARITY_DOT_PRODUCT_FUNCTION_NAME
                 : name.name == SIMILARITY_DOT_PRODUCT_FUNCTION_NAME.name) {
-        auto fun = ::make_shared<similarity_dot_product_fct>(schema);
+        auto arg_types = vector_similarity_fct::provide_arg_types(provided_args, db);
+        auto fun = ::make_shared<similarity_dot_product_fct>(schema, arg_types);
         validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
         return fun;
     }
