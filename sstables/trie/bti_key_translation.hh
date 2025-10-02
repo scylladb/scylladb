@@ -73,7 +73,7 @@ public:
         lazy_comparable_bytes_from_ring_position& _owner;
         // Note: the reason we keep `_current` in a separate member
         // is because `operator*` returns a reference to the span.
-        // (Becauase the caller mutates it while it's reading the iterator,
+        // (Because the caller mutates it while it's reading the iterator,
         // for convenience.)
         std::span<std::byte> _current;
         // When `_remaining` is nullopt, it means that we haven't considered
@@ -144,7 +144,7 @@ struct lazy_comparable_bytes_from_clustering_position {
         lazy_comparable_bytes_from_clustering_position& _owner;
         // Note: the reason we keep `_current` in a separate member
         // is because `operator*` returns a reference to the span.
-        // (Becauase the caller mutates it while it's reading the iterator,
+        // (Because the caller mutates it while it's reading the iterator,
         // for convenience.)
         managed_bytes_mutable_view _remaining;
         std::span<std::byte> _current;
