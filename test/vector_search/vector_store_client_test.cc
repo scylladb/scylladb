@@ -331,6 +331,10 @@ private:
     }
 
     future<std::unique_ptr<reply>> handle_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        // Always read the request body to prevent the server from closing the connection.
+        // A close can lead to a race condition where the client attempts to reuse
+        // a closed connection from its pool.
+        co_await util::read_entire_stream_contiguous(*req->content_stream);
         _requests++;
         rep->write_body("json", CORRECT_RESPONSE_FOR_TEST_TABLE);
         rep->set_status(_status);
