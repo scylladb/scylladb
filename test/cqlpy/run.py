@@ -10,6 +10,9 @@ import atexit
 import tempfile
 import requests
 
+from test import BUILD_DIR
+
+
 # run_with_temporary_dir() is a utility function for running a process, such
 # as Scylla and Cassandra, inside its own new temporary directory,
 # and ensure that on exit for any reason - success, failure, signal or
@@ -227,7 +230,7 @@ import ssl
 # by setting a SCYLLA environment variable:
 source_path = os.path.realpath(os.path.join(__file__, '../../..'))
 scylla = None
-def find_scylla(mode:str = None):
+def find_scylla(mode: str = None):
     global scylla
     global source_path
     if scylla:
@@ -235,7 +238,7 @@ def find_scylla(mode:str = None):
     if os.getenv('SCYLLA'):
         scylla = os.path.abspath(os.getenv('SCYLLA'))
     elif mode:
-        scylla = os.path.join(source_path, f"build/{mode}/scylla")
+        scylla = os.path.join(BUILD_DIR, f"{mode}/scylla")
     else:
         scyllas = glob.glob(os.path.join(source_path, 'build/*/scylla'))
         if not scyllas:
