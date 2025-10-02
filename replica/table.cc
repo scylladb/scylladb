@@ -3909,7 +3909,7 @@ table::query(schema_ptr query_schema,
 
         if (!querier_opt) {
             query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, conf);
+            querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, get_compaction_manager().get_tombstone_gc_state(), conf);
         }
         auto& q = *querier_opt;
 
@@ -3965,7 +3965,7 @@ table::mutation_query(schema_ptr query_schema,
     }
     if (!querier_opt) {
         query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-        querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, conf);
+        querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, get_compaction_manager().get_tombstone_gc_state(), conf);
     }
     auto& q = *querier_opt;
 

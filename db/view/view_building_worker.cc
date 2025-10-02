@@ -780,7 +780,8 @@ future<> view_building_worker::do_build_range(table_id base_id, std::vector<tabl
                 now,
                 slice,
                 query::max_rows,
-                query::max_partitions);
+                query::max_partitions,
+                base_cf->get_compaction_manager().get_tombstone_gc_state());
         auto consumer = compact_for_query<view_building_worker::consumer>(compaction_state, view_building_worker::consumer(
                 _db,
                 views_ids,
