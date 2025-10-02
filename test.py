@@ -25,7 +25,6 @@ import logging
 import multiprocessing
 import os
 import pathlib
-import re
 import resource
 import signal
 import subprocess
@@ -61,7 +60,7 @@ PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost',
                              TEST_DIR / 'ldap',
                              TEST_DIR / 'raft',
                              TEST_DIR / 'unit',
-                             TEST_DIR / 'vector_search'
+                             TEST_DIR / 'vector_search',
                              TEST_DIR / 'scylla_gdb',
                              ]
 

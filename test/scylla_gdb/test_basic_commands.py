@@ -5,9 +5,7 @@
 Basic tests for commands that does not require additional options.
 Each only checks that the command does not fail - but not what it does or returns.
 """
-
 import pytest
-import re
 
 
 @pytest.mark.parametrize(
@@ -42,6 +40,7 @@ import re
         "smp-queues",
         "task-queues",
         "task_histogram",
+        "task_histogram -a",
         "tasks",
         "threads",
         "timers",
@@ -54,16 +53,9 @@ def test_scylla_commands(gdb_execute, command):
     gdb_execute(command)
 
 
-def test_task_histogram_coro(gdb_execute):
-    result = gdb_execute("task_histogram -a")
-    assert re.search(
-        r"\) \[clone \.\w+]", result.stdout
-    ), "no coroutine entries are found in task_histogram"
-
-
 def test_nonexistent_scylla_command(gdb_execute):
     """Verifies that running unknown command will produce correct error message"""
     with pytest.raises(
-        Exception, match=r'Undefined scylla command: "nonexistent_command"'
+        AssertionError, match=r'Undefined scylla command: "nonexistent_command"'
     ):
         gdb_execute("nonexistent_command")

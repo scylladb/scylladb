@@ -10,22 +10,14 @@ import pytest
 import re
 
 
-a = """python
-db = sharded(gdb.parse_and_eval("::debug::the_database")).local()
-sst = next(find_sstables())
-print(f"sst=(sstables::sstable *)", sst)
-"""
-
-
 @pytest.fixture(scope="module")
 def sstable(gdb_execute):
     """Finds sstable"""
-    args = ["-ex", a]
-    result = gdb_execute(args=args)
+    result = gdb_execute(full_command="python get_sstables()")
 
-    match = re.search(r"sst=\s*(.*)", result.stdout)
+    match = re.search(r"(\(sstables::sstable \*\) 0x)([0-9a-f]+)", result)
     assert match is not None, "No sstable was present in result.stdout"
-    sstable_pointer = match.group(1) if match else None
+    sstable_pointer = match.group(0).strip() if match else None
 
     return sstable_pointer
 
