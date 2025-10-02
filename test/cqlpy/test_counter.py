@@ -77,5 +77,5 @@ def test_blobascounter_wrong_size(cql, table1):
                          indirect=True)
 def test_counter_update_while_table_dropped(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, c counter") as table, \
-         scylla_inject_error(cql, "apply_counter_update_delay_5s", one_shot=True):
+         scylla_inject_error(cql, "apply_counter_update_delay_ms", one_shot=True, parameters={"value": "5000"}):
         cql.execute_async(f'UPDATE {table} SET c = c + 1 WHERE p = 0')
