@@ -41,6 +41,34 @@ done
 FORCE=0
 ALLOW_SUBMODULE=0
 
+function print_usage {
+cat << EOF
+Usage: ${0} [options] PR_NUMBER
+
+Script for pulling and merging a pull request.
+
+Fetches the PR locally and merges it into current branch. The branch must be named next*.
+
+PR with a single commit in it is cherry-picked and thus the merge commit is not created and
+the PR description is lost.
+
+By default, doesn't merge PR that contains a submodule update, use --allow-submodule option
+to proceed.
+
+Options:
+
+-h
+    Print this help message and exit.
+
+--force
+    Do not check current branch to be next*
+    Do not check jenkins job status
+
+--allow-submodule
+    Allow a PR to update a submudule
+EOF
+}
+
 while [[ $# -gt 0 ]]
 do
     case $1 in
@@ -55,6 +83,10 @@ do
         +([0-9]))
             PR_NUM=$1
             shift 1
+            ;;
+        "-h")
+            print_usage
+            exit 0
             ;;
         *)
             echo "error: unrecognized option: $1, see $0 -h for usage" >&2
