@@ -2459,7 +2459,35 @@ compaction_group::compaction_group(table& t, size_t group_id, dht::token_range t
     , _maintenance_sstables(make_maintenance_sstable_set())
     , _async_gate(format("[compaction_group {}.{} {}]", t.schema()->ks_name(), t.schema()->cf_name(), group_id))
 {
+<<<<<<< HEAD
     _t._compaction_manager.add(as_table_state());
+||||||| parent of 149f9d8448 (replica: Fix race between drop table and merge completion handling)
+}
+
+compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
+    return make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
+}
+
+bool compaction_group::compaction_disabled() const {
+    return std::ranges::all_of(all_views(), [this] (compaction::compaction_group_view* view) {
+        return _t._compaction_manager.compaction_disabled(*view);
+    });
+=======
+}
+
+compaction_group_ptr compaction_group::make_empty_group(const compaction_group& base) {
+    return make_lw_shared<compaction_group>(base._t, base._group_id, base._token_range, base._repair_sstable_classifier);
+}
+
+bool compaction_group::stopped() const noexcept {
+    return _async_gate.is_closed();
+}
+
+bool compaction_group::compaction_disabled() const {
+    return std::ranges::all_of(all_views(), [this] (compaction::compaction_group_view* view) {
+        return _t._compaction_manager.compaction_disabled(*view);
+    });
+>>>>>>> 149f9d8448 (replica: Fix race between drop table and merge completion handling)
 }
 
 compaction_group::~compaction_group() {
@@ -2476,8 +2504,25 @@ future<> compaction_group::stop(sstring reason) noexcept {
     }
     auto closed_gate_fut = _async_gate.close();
 
+<<<<<<< HEAD
     auto flush_future = co_await seastar::coroutine::as_future(flush());
     co_await _t._compaction_manager.remove(as_table_state(), reason);
+||||||| parent of 149f9d8448 (replica: Fix race between drop table and merge completion handling)
+    co_await _flush_gate.close();
+  // FIXME: indentation
+  _compaction_disabler_for_views.clear();
+  for (auto view : all_views()) {
+    co_await _t._compaction_manager.remove(*view, reason);
+  }
+=======
+    co_await _flush_gate.close();
+  // FIXME: indentation
+  _compaction_disabler_for_views.clear();
+  co_await utils::get_local_injector().inject("compaction_group_stop_wait", utils::wait_for_message(60s));
+  for (auto view : all_views()) {
+    co_await _t._compaction_manager.remove(*view, reason);
+  }
+>>>>>>> 149f9d8448 (replica: Fix race between drop table and merge completion handling)
 
     if (flush_future.failed()) {
         co_await seastar::coroutine::return_exception_ptr(flush_future.get_exception());
@@ -3177,8 +3222,20 @@ future<> table::clear() {
 }
 
 bool storage_group::compaction_disabled() const {
+<<<<<<< HEAD
     return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
         return cg->get_compaction_manager().compaction_disabled(cg->as_table_state()); });
+||||||| parent of 149f9d8448 (replica: Fix race between drop table and merge completion handling)
+    return std::ranges::all_of(compaction_groups(), [] (const_compaction_group_ptr& cg) {
+        return cg->compaction_disabled(); });
+=======
+    // Compaction group that has been stopped will be excluded, since the group will not be available for a caller
+    // to disable compaction explicitly on it, e.g. on truncate, and the caller might want to perform a check
+    // that compaction was disabled on all groups. Stopping a group is equivalent to disabling compaction on it.
+    return std::ranges::all_of(compaction_groups()
+            | std::views::filter(std::not_fn(&compaction_group::stopped)), [] (const_compaction_group_ptr& cg) {
+        return cg->compaction_disabled(); });
+>>>>>>> 149f9d8448 (replica: Fix race between drop table and merge completion handling)
 }
 
 // NOTE: does not need to be futurized, but might eventually, depending on
