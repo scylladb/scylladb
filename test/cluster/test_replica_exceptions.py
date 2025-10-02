@@ -39,10 +39,11 @@ def get_metric_count(metrics: list[ScyllaMetrics], metric_name: str) -> int:
 
 async def _test_impl(
         manager: ManagerClient,
+        config: dict[str, Any],
         measurement: Measurement,
         db: DB,
         injection: Injection):
-    servers = await manager.servers_add(1)
+    servers = await manager.servers_add(1, config=config if config is not None else {})
     cql, hosts = await manager.get_ready_cql(servers)
 
     host_ip = servers[0].ip_addr
@@ -95,6 +96,7 @@ async def test_replica_do_apply_rate_limit_no_cpp_exceptions(manager: ManagerCli
 
     await _test_impl(
         manager=manager,
+        config={},
         measurement=measurement,
         db=db,
         injection=injection
@@ -116,6 +118,55 @@ async def test_replica_query_rate_limit_no_cpp_exceptions(manager: ManagerClient
 
     await _test_impl(
         manager=manager,
+        config={},
+        measurement=measurement,
+        db=db,
+        injection=injection
+    )
+
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_replica_writes_apply_counter_update_timeout(manager: ManagerClient):
+    measurement = (m := Measurement())._replace(
+        cpp_exception_threshold = 20 + m.run_count * 10,
+        metric_name = "scylla_database_total_writes_timedout",
+        metric_error_threshold = m.run_count
+    )
+    db = DB(
+        tbl_schema = "p int, c counter, PRIMARY KEY (p)",
+        stmt_gen = lambda tbl, _: f"UPDATE {tbl} SET c = c + 1 WHERE p = 1"
+    )
+    injection = Injection(
+        name = "database_apply_counter_update_force_timeout"
+    )
+
+    await _test_impl(
+        manager=manager,
+        config={},
+        measurement=measurement,
+        db=db,
+        injection=injection
+    )
+
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_replica_writes_do_apply_counter_update_timeout(manager: ManagerClient):
+    config = { "counter_write_request_timeout_in_ms": 50 }
+
+    measurement = (m := Measurement())._replace(
+        cpp_exception_threshold = 20 + m.run_count * 10,
+        metric_name = "scylla_database_total_writes_timedout",
+        metric_error_threshold = m.run_count * 0.9
+    )
+    db = DB(
+        tbl_schema = "p int, c counter, PRIMARY KEY (p)",
+        stmt_gen = lambda tbl, _: f"UPDATE {tbl} SET c = c + 1 WHERE p = 1"
+    )
+    injection = Injection(
+        name = "apply_counter_update_delay_100ms",
+    )
+
+    await _test_impl(
+        manager=manager,
+        config=config,
         measurement=measurement,
         db=db,
         injection=injection
