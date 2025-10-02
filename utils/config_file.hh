@@ -205,7 +205,7 @@ public:
         }
         named_value(config_file* file, std::string_view name, liveness liveness_, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
-            : named_value(file, name, {}, liveness_, vs, t, desc) {
+            : named_value(file, name, {}, liveness_, vs, t, desc, std::move(allowed_values)) {
         }
         named_value(config_file* file, std::string_view name, std::string_view alias, value_status vs, const T& t = T(), std::string_view desc = {},
                 std::initializer_list<T> allowed_values = {})
