@@ -548,7 +548,7 @@ private:
     // If true, we don't build the bloom filter during the main pass
     // (when Data.db is written), but we instead write the murmur hashes
     // of keys to a temporary file, and later (after Data.db is written,
-    // but before the sstable is sealed) we build the bloom fitler from that.
+    // but before the sstable is sealed) we build the bloom filter from that.
     //
     // (Ideally this mechanism should only be used if the optimal size of the
     // filter can't be well estimated in advance. As of this writing we use
