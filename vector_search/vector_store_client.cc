@@ -9,6 +9,7 @@
 #include "vector_store_client.hh"
 #include "dns.hh"
 #include "load_balancer.hh"
+#include "node.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/type_json.hh"
 #include "db/config.hh"
@@ -161,10 +162,6 @@ auto ck_from_json(rjson::value const& item, std::size_t idx, schema_ptr const& s
     return clustering_key_prefix::from_exploded(raw_ck);
 }
 
-auto write_ann_json(vs_vector vs_vector, limit limit) -> json_content {
-    return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(vs_vector, ","), limit);
-}
-
 auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::expected<primary_keys, ann_error> {
     if (!json.HasMember("primary_keys")) {
         vslogger.error("Vector Store returned invalid JSON: missing 'primary_keys'");
@@ -202,63 +199,6 @@ auto read_ann_json(rjson::value const& json, schema_ptr const& schema) -> std::e
     }
     return std::move(keys);
 }
-
-class client_connection_factory : public http::experimental::connection_factory {
-    socket_address _addr;
-
-public:
-    explicit client_connection_factory(socket_address addr)
-        : _addr(addr) {
-    }
-
-    future<connected_socket> make([[maybe_unused]] abort_source* as) override {
-        auto socket = co_await seastar::connect(_addr, {}, transport::TCP);
-        socket.set_nodelay(true);
-        socket.set_keepalive_parameters(tcp_keepalive_params{
-                .idle = 60s,
-                .interval = 60s,
-                .count = 10,
-        });
-        socket.set_keepalive(true);
-        co_return socket;
-    }
-};
-
-class http_client {
-
-    uri _uri;
-    inet_address _addr;
-
-    http::experimental::client impl;
-
-public:
-    http_client(uri host_port_, inet_address addr)
-        : _uri(std::move(host_port_))
-        , _addr(std::move(addr))
-        , impl(std::make_unique<client_connection_factory>(socket_address(addr, _uri.port))) {
-    }
-
-    bool connects_to(inet_address const& a, port_number p) const {
-        return _addr == a && _uri.port == p;
-    }
-
-    seastar::future<> make_request(operation_type method, const http_path& path, const std::optional<json_content>& content,
-            http::experimental::client::reply_handler&& handle, abort_source* as) {
-        auto req = http::request::make(method, _uri.host, path);
-        if (content) {
-            req.write_body("json", *content);
-        }
-        return impl.make_request(std::move(req), std::move(handle), std::nullopt, as);
-    }
-
-    seastar::future<> close() {
-        return impl.close();
-    }
-
-    const inet_address& addr() const {
-        return _addr;
-    }
-};
 
 bool should_vector_store_service_be_disabled(std::vector<sstring> const& uris) {
     return uris.empty() || uris[0].empty();
@@ -306,7 +246,7 @@ namespace vector_search {
 
 struct vector_store_client::impl {
 
-    using clients_type = std::vector<lw_shared_ptr<http_client>>;
+    using clients_type = std::vector<lw_shared_ptr<node>>;
 
     utils::observer<sstring> uri_observer;
     clients_type current_clients;
@@ -338,9 +278,12 @@ struct vector_store_client::impl {
                 co_return current_clients;
             });
         })
-        , dns(vslogger, get_hosts(_uris), [this](auto const& addrs) -> future<> {
-            co_await handle_addresses_changed(addrs);
-        }, dns_refreshes) {
+        , dns(
+                  vslogger, get_hosts(_uris),
+                  [this](auto const& addrs) -> future<> {
+                      co_await handle_addresses_changed(addrs);
+                  },
+                  dns_refreshes) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
@@ -358,7 +301,7 @@ struct vector_store_client::impl {
             auto it = addrs.find(uri.host);
             if (it != addrs.end()) {
                 for (const auto& addr : it->second) {
-                    current_clients.push_back(make_lw_shared<http_client>(uri, addr));
+                    current_clients.push_back(make_lw_shared<node>(client::endpoint_type{uri.host, uri.port, addr}));
                 }
             }
         }
@@ -429,17 +372,10 @@ struct vector_store_client::impl {
         co_return clients;
     }
 
-    struct make_request_response {
-        http::reply::status_type status;             ///< The HTTP status of the response.
-        std::vector<temporary_buffer<char>> content; ///< The content of the response.
-    };
-
     using make_request_error = std::variant<aborted, addr_unavailable, service_unavailable, disabled>;
 
-    auto make_request(operation_type method, http_path path, std::optional<json_content> content, abort_source& as)
-            -> future<std::expected<make_request_response, make_request_error>> {
-        auto resp = make_request_response{.status = http::reply::status_type::ok, .content = std::vector<temporary_buffer<char>>()};
-
+    auto make_request(sstring keyspace, sstring name, std::vector<float> embedding, std::size_t limit, abort_source& as)
+            -> future<std::expected<client::response, make_request_error>> {
         for (auto retries = 0; retries < ANN_RETRIES; ++retries) {
             auto clients = co_await get_clients(as);
             if (!clients) {
@@ -452,24 +388,20 @@ struct vector_store_client::impl {
 
             load_balancer lb(std::move(*clients), random_engine);
             while (auto client = lb.next()) {
-                auto result = co_await coroutine::as_future(client->make_request(
-                        method, path, content,
-                        [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
-                            resp.status = reply._status;
-                            resp.content = co_await util::read_entire_stream(body);
-                        },
-                        &as));
-                if (result.failed()) {
-                    auto err = result.get_exception();
-                    if (as.abort_requested()) {
-                        co_return std::unexpected{aborted{}};
+                if (client->is_up()) {
+                    auto result = co_await coroutine::as_future(client->ann(keyspace, name, embedding, limit, as));
+                    if (result.failed()) {
+                        auto err = result.get_exception();
+                        if (as.abort_requested()) {
+                            co_return std::unexpected{aborted{}};
+                        }
+                        if (try_catch<std::system_error>(err) == nullptr) {
+                            co_await coroutine::return_exception_ptr(std::move(err));
+                        }
+                        // std::system_error means that the server is unavailable, so we retry
+                    } else {
+                        co_return co_await std::move(result);
                     }
-                    if (try_catch<std::system_error>(err) == nullptr) {
-                        co_await coroutine::return_exception_ptr(std::move(err));
-                    }
-                    // std::system_error means that the server is unavailable, so we retry
-                } else {
-                    co_return resp;
                 }
             }
 
@@ -486,10 +418,7 @@ struct vector_store_client::impl {
             co_return std::unexpected{disabled{}};
         }
 
-        auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
-        auto content = write_ann_json(std::move(vs_vector), limit);
-
-        auto resp = co_await make_request(operation_type::POST, std::move(path), std::move(content), as);
+        auto resp = co_await make_request(std::move(keyspace), std::move(name), std::move(vs_vector), limit, as);
         if (!resp) {
             co_return std::unexpected{std::visit(
                     [](auto&& err) {
@@ -564,7 +493,7 @@ auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abor
         co_return ret;
     }
     for (auto const& c : *clients) {
-        ret.push_back(c->addr());
+        ret.push_back(c->endpoint().ip);
     }
     co_return ret;
 }
