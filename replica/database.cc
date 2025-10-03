@@ -3483,6 +3483,70 @@ void database::check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces
     }
 }
 
+bool database::validate_joining_node_rf_rack(locator::token_metadata_ptr tmptr, locator::host_id new_node, sstring_view datacenter, sstring_view rack) const {
+    const auto& keyspaces = get_keyspaces();
+    std::vector<std::string_view> invalid_keyspaces{};
+    bool enforce = _cfg.rf_rack_valid_keyspaces();
+
+    for (const auto& [name, info] : keyspaces) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy(),
+                    locator::node_added{new_node, sstring(datacenter), sstring(rack)});
+        } catch (...) {
+            if (enforce) {
+                return false;
+            }
+            invalid_keyspaces.push_back(std::string_view(name));
+        }
+    }
+
+    if (invalid_keyspaces.size() != 0) {
+        const auto ks_list = invalid_keyspaces
+                | std::views::join_with(std::string_view(", "))
+                | std::ranges::to<std::string>();
+
+        dblog.warn("The joining node {} with DC='{}' and rack='{}' makes some existing keyspaces not RF-rack-valid, i.e. the replication factor "
+                "does not match the number of racks in one of the datacenters. That may reduce "
+                "availability in case of a failure (cf. "
+                "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
+                "Those keyspaces are: {}", new_node, datacenter, rack, ks_list);
+    }
+
+    return true;
+}
+
+bool database::validate_removing_node_rf_rack(locator::token_metadata_ptr tmptr, locator::host_id removed_node, sstring_view datacenter, sstring_view rack) const {
+    const auto& keyspaces = get_keyspaces();
+    std::vector<std::string_view> invalid_keyspaces{};
+    bool enforce = _cfg.rf_rack_valid_keyspaces();
+
+    for (const auto& [name, info] : keyspaces) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy(),
+                    locator::node_removed{removed_node, sstring(datacenter), sstring(rack)});
+        } catch (...) {
+            if (enforce) {
+                return false;
+            }
+            invalid_keyspaces.push_back(std::string_view(name));
+        }
+    }
+
+    if (invalid_keyspaces.size() != 0) {
+        const auto ks_list = invalid_keyspaces
+                | std::views::join_with(std::string_view(", "))
+                | std::ranges::to<std::string>();
+
+        dblog.warn("The removed node {} with DC='{}' and rack='{}' makes some existing keyspaces not RF-rack-valid, i.e. the replication factor "
+                "does not match the number of racks in one of the datacenters. That may reduce "
+                "availability in case of a failure (cf. "
+                "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
+                "Those keyspaces are: {}", removed_node, datacenter, rack, ks_list);
+    }
+
+    return true;
+}
+
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
     static thread_local std::minstd_rand rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist(0, max_value);

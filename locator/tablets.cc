@@ -1254,6 +1254,59 @@ const effective_replication_map_ptr& token_metadata_guard::get_erm() const {
 }
 
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
+    assert_rf_rack_valid_keyspace(ks, tmptr, ars,
+        tmptr->get_topology().get_datacenter_racks(),
+        [&tmptr] (host_id host) {
+            return tmptr->is_normal_token_owner(host);
+        }
+    );
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars, locator::node_added new_node) {
+    auto dc_rack_map = tmptr->get_topology().get_datacenter_racks();
+
+    if (dc_rack_map.contains(new_node.dc)) {
+        // include the new node only if it's added to an existing DC. ?
+        dc_rack_map[new_node.dc][new_node.rack].insert(new_node.id);
+        tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Including new node {} in DC '{}' and rack '{}'", new_node.id, new_node.dc, new_node.rack);
+    }
+
+    assert_rf_rack_valid_keyspace(ks, tmptr, ars,
+        dc_rack_map,
+        [&tmptr, new_node] (host_id host) {
+            if (host == new_node.id) {
+                return true;
+            }
+            return tmptr->is_normal_token_owner(host);
+        }
+    );
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars, locator::node_removed removed_node) {
+    auto dc_rack_map = tmptr->get_topology().get_datacenter_racks();
+    // remove the node from the map, if it exists
+    if (dc_rack_map.contains(removed_node.dc) && dc_rack_map[removed_node.dc].contains(removed_node.rack)) {
+        dc_rack_map[removed_node.dc][removed_node.rack].erase(removed_node.id);
+        if (dc_rack_map[removed_node.dc][removed_node.rack].empty()) {
+            dc_rack_map[removed_node.dc].erase(removed_node.rack);
+            if (dc_rack_map[removed_node.dc].empty()) {
+                dc_rack_map.erase(removed_node.dc);
+            }
+        }
+    }
+    tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Excluding removed node {} from DC '{}' and rack '{}'", removed_node.id, removed_node.dc, removed_node.rack);
+
+    assert_rf_rack_valid_keyspace(ks, tmptr, ars,
+        dc_rack_map,
+        [&tmptr] (host_id host) {
+            return tmptr->is_normal_token_owner(host);
+        }
+    );
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars,
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>& dc_rack_map,
+    std::function<bool(host_id)> is_normal_token_owner) {
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Starting verifying that keyspace '{}' is RF-rack-valid", ks);
 
     // Any keyspace that does NOT use tablets is RF-rack-valid.
@@ -1265,8 +1318,6 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     // Tablets can only be used with NetworkTopologyStrategy.
     SCYLLA_ASSERT(ars.get_type() == replication_strategy_type::network_topology);
     const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(ars));
-
-    const auto& dc_rack_map = tmptr->get_topology().get_datacenter_racks();
 
     for (const auto& dc : nts.get_datacenters()) {
         if (!dc_rack_map.contains(dc)) {
@@ -1283,8 +1334,8 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
         for (const auto& [_, rack_nodes] : rack_map) {
             // We must ignore zero-token nodes because they don't take part in replication.
             // Verify that this rack has at least one normal node.
-            const bool normal_rack = std::ranges::any_of(rack_nodes, [tmptr] (host_id host_id) {
-                return tmptr->is_normal_token_owner(host_id);
+            const bool normal_rack = std::ranges::any_of(rack_nodes, [tmptr, is_normal_token_owner] (host_id host_id) {
+                return is_normal_token_owner(host_id);
             });
             if (normal_rack) {
                 ++normal_rack_count;

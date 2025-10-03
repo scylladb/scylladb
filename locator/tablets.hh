@@ -812,6 +812,26 @@ class abstract_replication_strategy;
 /// * The keyspace need not exist. We use its name purely for informational reasons (in error messages).
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr, const abstract_replication_strategy&);
 
+struct node_added {
+    host_id id;
+    sstring dc;
+    sstring rack;
+};
+
+struct node_removed {
+    host_id id;
+    sstring dc;
+    sstring rack;
+};
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars, node_added);
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars, node_removed);
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars,
+    const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>& dc_rack_map,
+    std::function<bool(host_id)> is_normal_token_owner);
+
 }
 
 template <>

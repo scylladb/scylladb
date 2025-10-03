@@ -2885,8 +2885,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, reason);
                         break;
                         }
-                    case topology_request::leave:
+                    case topology_request::leave: {
                         SCYLLA_ASSERT(node.rs->ring);
+
+                        auto validation_result = validate_removing_node(node);
+                        if (!validation_result) {
+                            builder.with_node(node.id)
+                                .del("topology_request");
+                            rtbuilder.done("removenode rejected");
+                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
+                                                        "removenode rejected");
+                            break;
+                        }
+
                         // start decommission and put tokens of decommissioning nodes into write_both_read_old state
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
@@ -2898,8 +2909,19 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
                                                        "start decommission");
                         break;
+                        }
                     case topology_request::remove: {
                         SCYLLA_ASSERT(node.rs->ring);
+
+                        auto validation_result = validate_removing_node(node);
+                        if (!validation_result) {
+                            builder.with_node(node.id)
+                                .del("topology_request");
+                            rtbuilder.done("removenode rejected");
+                            co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
+                                                        "removenode rejected");
+                            break;
+                        }
 
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
@@ -2987,6 +3009,22 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
         }
 
+        if (*node.request == topology_request::join) {
+            bool is_zero_token_node = false;
+            if (node.req_param.has_value()) {
+                // TODO seems not to work since req_param is not set here ?
+                auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
+                auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
+                is_zero_token_node = (num_tokens == 0 && tokens_string.empty());
+            }
+
+            if (!is_zero_token_node && !_db.validate_joining_node_rf_rack(get_token_metadata_ptr(), to_host_id(node.id), node.rs->datacenter, node.rs->rack)) {
+                return join_node_response_params::rejected {
+                    .reason = "Cannot join the node because its addition would make some existing keyspace not RF-rack-valid",
+                };
+            }
+        }
+
         std::vector<sstring> unsupported_features;
         const auto& supported_features = node.rs->supported_features;
         std::ranges::set_difference(node.topology->enabled_features, supported_features, std::back_inserter(unsupported_features));
@@ -2999,6 +3037,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
 
         return join_node_response_params::accepted {};
+    }
+
+    bool validate_removing_node(const node_to_work_on& node) {
+        if (!_db.validate_removing_node_rf_rack(get_token_metadata_ptr(), to_host_id(node.id), node.rs->datacenter, node.rs->rack)) {
+            return false;
+        }
+        return true;
     }
 
     // Tries to finish accepting the joining node by updating the cluster
