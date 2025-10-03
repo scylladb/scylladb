@@ -527,11 +527,12 @@ void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_build
         });
     });
 
-    cf::get_built_indexes.set(r, [&vb](std::unique_ptr<http::request> req) {
+    cf::get_built_indexes.set(r, [&vb](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         auto [ks, cf_name] = parse_fully_qualified_cf_name(req->get_path_param("name"));
         // Use of load_built_views() as filtering table should be in sync with
         // built_indexes_virtual_reader filtering with BUILT_VIEWS table
-        return vb.local().get_sys_ks().load_built_views().then([ks, cf_name, &vb](const std::vector<db::system_keyspace::view_name>& vn) mutable {
+        std::vector<db::system_keyspace::view_name> vn = co_await vb.local().get_sys_ks().load_built_views();
+        {
             std::set<sstring> vp;
             for (auto b : vn) {
                 if (b.first == ks) {
@@ -548,8 +549,8 @@ void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_build
                     res.emplace_back(i.metadata().name());
                 }
             }
-            return make_ready_future<json::json_return_type>(res);
-        });
+            co_return res;
+        }
     });
 
 }
