@@ -181,17 +181,18 @@ entire data center, or other data centers, in that case.
 
 ## Tablets
 "Tablets" are ScyllaDB's new approach to replicating data across a cluster.
-It replaces the older approach which was named "vnodes". Compared to vnodes,
-tablets are smaller pieces of tables that are easier to move between nodes,
-and allow for faster growing or shrinking of the cluster when needed.
+It replaces the older approach which was named "vnodes". See
+[Data Distribution with Tablets](../architecture/tablets.rst) for details.
 
-In this version, tablet support is incomplete and not all of the features
-which Alternator needs are supported with tablets. So currently, new
-Alternator tables default to using vnodes - not tablets.
+In this version, tablet support is almost complete, so new
+Alternator tables default to following what the global configuration flag
+[`tablets_mode_for_new_keyspaces`](../reference/configuration-parameters.rst#confval-tablets_mode_for_new_keyspaces)
+tells them to.
 
-However, if you do want to create an Alternator table which uses tablets,
-you can do this by specifying the `experimental:initial_tablets` tag in
-the CreateTable operation. The value of this tag can be:
+If you want to influence whether a specific Alternator table is created with tablets or vnodes,
+you can do this by specifying the `system:initial_tablets` tag
+(in earlier versions of Scylla the tag was `experimental:initial_tablets`)
+in the CreateTable operation. The value of this tag can be:
 
 * Any valid integer as the value of this tag enables tablets.
   Typically the number "0" is used - which tells ScyllaDB to pick a reasonable
@@ -199,9 +200,11 @@ the CreateTable operation. The value of this tag can be:
   number overrides the default choice of initial number of tablets.
 
 * Any non-integer value - e.g., the string "none" - creates the table
-  without tablets - i.e., using vnodes.
+  without tablets - i.e., using vnodes. However, when vnodes are asked for by the tag value,
+  but tablets are `enforced` by the `tablets_mode_for_new_keyspaces` configuration flag,
+  an exception will be thrown.
 
-The `experimental:initial_tablets` tag only has any effect while creating
+The `system:initial_tablets` tag only has any effect while creating
 a new table with CreateTable - changing it later has no effect.
 
 Because the tablets support is incomplete, when tablets are enabled for an
