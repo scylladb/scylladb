@@ -52,7 +52,7 @@ sstables::shared_sstable make_sstable_containing(std::function<sstables::shared_
 }
 
 sstables::shared_sstable make_sstable_containing(sstables::shared_sstable sst, lw_shared_ptr<replica::memtable> mt) {
-    write_memtable_to_sstable(*mt, sst).get();
+    write_memtable_to_sstable(*mt, sst, {}, tombstone_gc::disabled()).get();
     sstable_open_config cfg { .load_first_and_last_position_metadata = true };
     sst->open_data(cfg).get();
     return sst;

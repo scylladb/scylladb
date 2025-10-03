@@ -17,6 +17,7 @@
 #include <seastar/core/abort_source.hh>
 
 #include "db_clock.hh"
+#include "utils/UUID.hh"
 
 #include <chrono>
 #include <limits>
@@ -41,6 +42,18 @@ struct batchlog_manager_config {
 class batchlog_manager : public peering_sharded_service<batchlog_manager> {
 public:
     using post_replay_cleanup = bool_class<class post_replay_cleanup_tag>;
+
+    struct batchlog_replay_stats {
+        uint64_t skipped_batches = 0; // not replayed at all
+        uint64_t replayed_batches = 0; // attempted to replay
+        uint64_t dropped_batches = 0; // attempted to replay but dropped due to empty or ttl
+        uint64_t deleted_batches = 0; // batches deleted at the end of replay
+        uint64_t rate_limiter_engaged = 0; // raplays for which rate limiter was engaged
+        std::chrono::milliseconds rate_limiter_total_delay{}; // total delay due to rate limiting
+        std::chrono::milliseconds replay_duration{};
+        std::chrono::milliseconds cleanup_duration{};
+        utils::UUID tracing_session_id;
+    };
 
 private:
     static constexpr std::chrono::seconds replay_interval = std::chrono::seconds(60);
@@ -69,7 +82,7 @@ private:
 
     gc_clock::time_point _last_replay;
 
-    future<> replay_all_failed_batches(post_replay_cleanup cleanup);
+    future<std::optional<batchlog_replay_stats>> replay_all_failed_batches(post_replay_cleanup cleanup, bool trace);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
@@ -80,7 +93,9 @@ public:
     future<> drain();
     future<> stop();
 
-    future<> do_batch_log_replay(post_replay_cleanup cleanup);
+    future<std::optional<batchlog_replay_stats>> do_batch_log_replay(post_replay_cleanup cleanup, bool trace = false);
+
+    future<> log_batch_traces(utils::UUID tracing_session_id);
 
     future<size_t> count_all_batches() const;
     db_clock::duration get_batch_log_timeout() const;

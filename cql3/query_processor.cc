@@ -64,8 +64,8 @@ bool query_processor::topology_global_queue_empty() {
     return remote().first.get().ss.topology_global_queue_empty();
 }
 
-static service::query_state query_state_for_internal_call() {
-    return {service::client_state::for_internal_calls(), empty_service_permit()};
+static service::query_state query_state_for_internal_call(tracing::trace_state_ptr trace_state = {}) {
+    return {service::client_state::for_internal_calls(), std::move(trace_state), empty_service_permit()};
 }
 
 query_processor::query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc, query_processor::memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm)
@@ -856,16 +856,18 @@ struct internal_query_state {
     std::unique_ptr<query_options> opts;
     statements::prepared_statement::checked_weak_ptr p;
     bool more_results = true;
+    tracing::trace_state_ptr trace_state;
 };
 
 internal_query_state query_processor::create_paged_state(
         const sstring& query_string,
         db::consistency_level cl,
         const data_value_list& values,
-        int32_t page_size) {
+        int32_t page_size,
+        tracing::trace_state_ptr trace_state) {
     auto p = prepare_internal(query_string);
     auto opts = make_internal_options(p, values, cl, page_size);
-    return internal_query_state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), true};
+    return internal_query_state{query_string, std::make_unique<cql3::query_options>(std::move(opts)), std::move(p), true, std::move(trace_state)};
 }
 
 bool query_processor::has_more_results(cql3::internal_query_state& state) const {
@@ -888,7 +890,7 @@ future<> query_processor::for_each_cql_result(
 future<::shared_ptr<untyped_result_set>>
 query_processor::execute_paged_internal(internal_query_state& state) {
     state.p->statement->validate(*this, service::client_state::for_internal_calls());
-    auto qs = query_state_for_internal_call();
+    auto qs = query_state_for_internal_call(state.trace_state);
     ::shared_ptr<cql_transport::messages::result_message> msg =
       co_await state.p->statement->execute(*this, qs, *state.opts, std::nullopt);
 
@@ -1200,6 +1202,31 @@ future<> query_processor::query_internal(
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
     auto query_state = create_paged_state(query_string, cl, values, page_size);
     co_return co_await for_each_cql_result(query_state, std::move(f));
+}
+
+future<utils::UUID> query_processor::query_internal_with_tracing(
+        const sstring& query_string,
+        db::consistency_level cl,
+        const data_value_list& values,
+        int32_t page_size,
+        bool trace,
+        noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
+
+    tracing::trace_state_ptr trace_state;
+    if (trace) {
+        tracing::trace_state_props_set trace_props;
+        trace_props.set<tracing::trace_state_props::full_tracing>();
+
+        trace_state = tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::QUERY, trace_props);
+        tracing::begin(trace_state, "Executing an internal query", service::client_state::for_internal_calls().get_client_address());
+        tracing::add_query(trace_state, query_string);
+    }
+
+    auto query_state = create_paged_state(query_string, cl, values, page_size, trace_state);
+
+    co_await for_each_cql_result(query_state, std::move(f));
+
+    co_return trace_state ? trace_state->session_id() : utils::null_uuid();
 }
 
 future<> query_processor::query_internal(

@@ -132,6 +132,7 @@ public:
         return table().get_token_range_after_split(t);
     }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
+    tombstone get_table_tombstone() const noexcept override { return {}; }
 };
 
 table_for_tests::data::data()

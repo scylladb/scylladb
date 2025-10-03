@@ -589,6 +589,7 @@ private:
     // This field cashes the last truncation time for the table.
     // The master resides in system.truncated table
     std::optional<db_clock::time_point> _truncated_at;
+    tombstone _table_tombstone;
 
     // This field is used to determine whether the table is eligible to write rejection on critical
     // disk utilization.
@@ -612,6 +613,13 @@ public:
         _truncated_at = truncated_at;
     }
     db_clock::time_point get_truncation_time() const;
+
+    void set_table_tombstone(tombstone t) {
+        _table_tombstone = t;
+    }
+    tombstone table_tombstone() const {
+        return _table_tombstone;
+    }
 
     void notify_bootstrap_or_replace_start();
 

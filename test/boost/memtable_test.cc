@@ -12,6 +12,7 @@
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/UUID_gen.hh"
+#include "utils/rjson.hh"
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
 #include <seastar/testing/thread_test_case.hh>
@@ -197,7 +198,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 testlog.info("Simple read");
                 auto mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
 
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_compacted(compacted_muts[1], now)
                     .produces_compacted(compacted_muts[2], now)
@@ -206,7 +207,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls between partition");
                 mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled()))
                     .next_partition()
                     .produces_compacted(compacted_muts[0], now)
                     .next_partition()
@@ -220,7 +221,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls inside partitions");
                 mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
                     .next_partition()
@@ -332,7 +333,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
         std::vector<size_t> unspooled_dirty_values;
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
-        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit()));
+        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit(), {}, tombstone_gc::disabled()));
         flush_reader_check.produces_partition(current_ring[0]);
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
         flush_reader_check.produces_partition(current_ring[1]);
@@ -452,7 +453,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
             mt->apply(m);
         }
 
-        auto rd = mt->make_flush_reader(s, semaphore.make_permit());
+        auto rd = mt->make_flush_reader(s, semaphore.make_permit(), {}, tombstone_gc::disabled());
         auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
@@ -521,7 +522,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
             auto revert = defer([&] {
                 mt->revert_flushed_memory();
             });
-            assert_that(mt->make_flush_reader(s, semaphore.make_permit()))
+            assert_that(mt->make_flush_reader(s, semaphore.make_permit(), {}, tombstone_gc::disabled()))
                 .produces(ms);
         });
     });
@@ -577,7 +578,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
 
     mt->apply(rt_m); // whatever
 
-    auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit());
+    auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled());
     auto close_flush_rd = defer([&] { flush_rd.close().get(); });
 
     while (!flush_rd.is_end_of_stream()) {
@@ -1600,6 +1601,336 @@ SEASTAR_TEST_CASE(memtable_reader_after_tablet_migration) {
             });
         }).get();
     }, cfg);
+}
+
+void repair_table(cql_test_env& env, table_id tid, gc_clock::time_point repair_time) {
+    const auto repair_range = dht::token_range::make(dht::first_token(), dht::last_token());
+    env.db().invoke_on_all([&] (replica::database& db) {
+        auto& tbl = db.find_column_family(tid);
+        tbl.get_compaction_manager().get_shared_tombstone_gc_state().update_repair_time(tbl.schema()->id(), repair_range, repair_time);
+    }).get();
+}
+
+SEASTAR_TEST_CASE(memtable_flush_compaction_garbage_collection) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        auto& db = env.local_db();
+
+        // Can use tablets and RF=1 after #21623 is fixed.
+        env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+
+        auto run_test = [&] (bool table_compacts_on_flush, bool make_tombstones_garbage_collectible) {
+            const sstring table_name(seastar::format("table_{}_{}", table_compacts_on_flush, make_tombstones_garbage_collectible));
+
+            testlog.info("run_test({}, {}) {}.{}", table_compacts_on_flush, make_tombstones_garbage_collectible, keyspace_name, table_name);
+
+            // Ensure the test table gets its own commitlog segment.
+            env.db().invoke_on_all([&] (replica::database& db) { return db.flush_commitlog(); }).get();
+
+            env.execute_cql(seastar::format("CREATE TABLE {}.{} (pk text, ck text, v text, PRIMARY KEY (pk, ck))"
+                    " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                    " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}"
+                    " AND memtable_compact_flushed_data = {}",
+                    keyspace_name,
+                    table_name,
+                    table_compacts_on_flush)).get();
+
+            auto& table = db.find_column_family(keyspace_name, table_name);
+            const auto table_id = table.schema()->id();
+
+            env.execute_cql(seastar::format("INSERT INTO {}.{} (pk, ck, v) VALUES ('live', 'live', 'value')", keyspace_name, table_name)).get();
+            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = 'live' AND ck = 'dead'", keyspace_name, table_name)).get();
+            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = 'dead'", keyspace_name, table_name)).get();
+
+            // Make tombstone garbage-collectible, via a repair in the future.
+            if (make_tombstones_garbage_collectible) {
+                repair_table(env, table_id, gc_clock::now() + std::chrono::seconds(10));
+            }
+
+            // Ensure that the flush below will find the test table as the only dirty one in its commitlog segment.
+            env.db().invoke_on_all([table_id] (replica::database& db) -> future<> {
+                co_await db.commitlog()->force_new_active_segment();
+                co_await db.get_tables_metadata().parallel_for_each_table([=] (::table_id tid, lw_shared_ptr<replica::table> t) {
+                    if (tid != table_id) {
+                        return t->flush();
+                    }
+                    return make_ready_future<>();
+                });
+                co_await db.commitlog()->wait_for_pending_deletes();
+            }).get();
+
+            replica::database::flush_table_on_all_shards(env.db(), keyspace_name, table_name).get();
+
+            const bool expect_tombstone_gc = table_compacts_on_flush && make_tombstones_garbage_collectible;
+
+            assert_that(env.execute_cql(seastar::format(
+                            "SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE mutation_source > 'sstable:' AND partition_region < 3 ALLOW FILTERING",
+                            keyspace_name,
+                            table_name)).get())
+                .is_rows()
+                .with_size(expect_tombstone_gc ? 2 : 4)
+                .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
+                    columns
+                        .with_typed_column<sstring>("pk", [&] (const sstring& v) {
+                            return "live" == v || !expect_tombstone_gc;
+                        })
+                        .with_typed_column<sstring>("ck", [&] (const sstring* v) {
+                            return !v || "live" == *v || !expect_tombstone_gc;
+                        });
+                });
+
+            env.execute_cql(seastar::format("DROP TABLE {}.{}", keyspace_name, table_name)).get();
+        };
+
+        run_test(false, false);
+        run_test(false, true);
+        run_test(true, false);
+        run_test(true, true);
+    });
+}
+
+SEASTAR_TEST_CASE(memtable_flush_compaction_overlap_checks) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        const auto table_name = "tbl";
+
+        // Can use tablets and RF=1 after #21623 is fixed.
+        env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+
+        env.execute_cql(seastar::format("CREATE TABLE {}.{} (pk int PRIMARY KEY, v text)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}"
+                " AND memtable_compact_flushed_data = true",
+                keyspace_name,
+                table_name)).get();
+
+        auto& db = env.local_db();
+        auto& table = db.find_column_family(keyspace_name, table_name);
+        const auto schema = table.schema();
+
+        // Create an sstable covering [dks[0], dks[1]) range.
+        // Add collectible tombstones to memtable, both overlapping and non-overlapping with the sstable.
+        // Check that only non-overlapping ones are collected.
+        const auto dks = tests::generate_partition_keys(4, schema, this_shard_id());
+        const auto key_values = dks
+            | std::views::transform([&schema] (const dht::decorated_key& dk) {
+                return value_cast<int32_t>(int32_type->deserialize(dk.key().explode(*schema).at(0)));
+            })
+            | std::ranges::to<std::vector<int32_t>>();
+
+        for (unsigned i = 0; i < key_values.size() - 1; ++i) {
+            env.execute_cql(seastar::format("INSERT INTO {}.{} (pk, v) VALUES ({}, 'value{}')", keyspace_name, table_name, key_values[i], i)).get();
+        }
+
+        env.db().invoke_on_all([&] (replica::database& db) { return db.flush_all_tables(); }).get();
+
+        {
+            auto rows = assert_that(env.execute_cql(seastar::format("SELECT * FROM {}.{} BYPASS CACHE", keyspace_name, table_name)).get()).is_rows();
+            rows.with_size(3);
+            for (unsigned i = 0; i < key_values.size() - 1; ++i) {
+                rows.with_columns_of_row(i)
+                    .with_typed_column<int32_t>("pk", key_values[i])
+                    .with_typed_column<sstring>("v", format("value{}", i));
+            }
+        }
+
+        for (unsigned i = 1; i < key_values.size(); ++i) {
+            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = {}", keyspace_name, table_name, key_values[i])).get();
+        }
+
+        // Make all tombstones eligible for GC
+        repair_table(env, table.schema()->id(), gc_clock::now() + std::chrono::seconds(10));
+
+        env.db().invoke_on_all([&] (replica::database& db) { return db.flush_all_tables(); }).get();
+
+        assert_that(env.execute_cql(seastar::format("SELECT * FROM {}.{} BYPASS CACHE", keyspace_name, table_name)).get())
+            .is_rows()
+            .with_size(1)
+            .with_columns_of_row(0)
+                .with_typed_column<int32_t>("pk", key_values[0])
+                .with_typed_column<sstring>("v", "value0");
+
+        {
+            auto rows = assert_that(env.execute_cql(seastar::format(
+                            "SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE mutation_source > 'sstable:' AND partition_region = 0 ALLOW FILTERING", keyspace_name, table_name)).get())
+                .is_rows();
+
+            std::vector<unsigned> live(3, 0);
+            std::vector<unsigned> dead(3, 0);
+            struct check_tombstone {
+                unsigned key_index;
+                std::vector<unsigned>& live;
+                std::vector<unsigned>& dead;
+
+                bool operator()(const sstring& v) const {
+                    auto metadata = rjson::parse(v);
+                    if (!metadata.IsObject() || !metadata.HasMember("tombstone")) {
+                        return false;
+                    }
+                    auto& tombstone = metadata["tombstone"];
+                    if (!tombstone.IsObject()) {
+                        return false;
+                    }
+                    if (tombstone.HasMember("timestamp")) {
+                        ++dead[key_index];
+                    } else {
+                        ++live[key_index];
+                    }
+                    return true;
+                }
+            };
+
+            rows.with_size(5);
+            rows.with_columns_of_row(0)
+                .with_typed_column<int32_t>("pk", key_values[0])
+                .with_typed_column<sstring>("metadata", check_tombstone(0, live, dead));
+            rows.with_columns_of_row(1)
+                .with_typed_column<int32_t>("pk", key_values[1])
+                .with_typed_column<sstring>("metadata", check_tombstone(1, live, dead));
+            rows.with_columns_of_row(2)
+                .with_typed_column<int32_t>("pk", key_values[1])
+                .with_typed_column<sstring>("metadata", check_tombstone(1, live, dead));
+            rows.with_columns_of_row(3)
+                .with_typed_column<int32_t>("pk", key_values[2])
+                .with_typed_column<sstring>("metadata", check_tombstone(2, live, dead));
+            rows.with_columns_of_row(4)
+                .with_typed_column<int32_t>("pk", key_values[2])
+                .with_typed_column<sstring>("metadata", check_tombstone(2, live, dead));
+
+            auto s = [] (const std::vector<unsigned>& v) {
+                return fmt::format("[{}]", fmt::join(v, ", "));
+            };
+            BOOST_REQUIRE_EQUAL(s(live), "[1, 1, 1]");
+            BOOST_REQUIRE_EQUAL(s(dead), "[0, 1, 1]");
+        }
+    });
+}
+
+SEASTAR_TEST_CASE(memtable_flush_compaction_commitlog_dirty_segment) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        const auto test_table_name = "test_tbl";
+        const auto interleaving_table_name = "dummy_tbl";
+
+        // Can use tablets and RF=1 after #21623 is fixed.
+        env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+
+        env.execute_cql(seastar::format("CREATE TABLE {}.{} (pk int PRIMARY KEY, v text)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}"
+                " AND memtable_compact_flushed_data = true",
+                keyspace_name,
+                test_table_name)).get();
+
+        env.execute_cql(seastar::format("CREATE TABLE {}.{} (pk int PRIMARY KEY, v text)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}"
+                " AND memtable_compact_flushed_data = false",
+                keyspace_name,
+                interleaving_table_name)).get();
+
+        auto& db = env.local_db();
+        auto& test_table = db.find_column_family(keyspace_name, test_table_name);
+
+        const auto schema = test_table.schema();
+
+        // Interleave writes to the two tables, so that the commitlog segments contains writes for both.
+        // Commitlog segments for the test table are pinned by the interleaving table and hence no tombstone GC is expected.
+        const auto dks = tests::generate_partition_keys(4, schema, this_shard_id());
+        const auto key_values = dks
+            | std::views::transform([&schema] (const dht::decorated_key& dk) {
+                return value_cast<int32_t>(int32_type->deserialize(dk.key().explode(*schema).at(0)));
+            })
+            | std::ranges::to<std::vector<int32_t>>();
+
+        for (unsigned i = 0; i < key_values.size(); ++i) {
+            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = {}", keyspace_name, test_table_name, key_values[i])).get();
+            env.execute_cql(seastar::format("INSERT INTO {}.{} (pk, v) VALUES ({}, 'value{}')", keyspace_name, interleaving_table_name, key_values[i], i)).get();
+        }
+
+        // Make all tombstones eligible for GC
+        repair_table(env, test_table.schema()->id(), gc_clock::now() + std::chrono::seconds(10));
+
+        // Deliberately not flusing the interleaving table, it is expected to continue pinning CL segments for the test table.
+        replica::database::flush_table_on_all_shards(env.db(), keyspace_name, test_table_name).get();
+
+        assert_that(env.execute_cql(seastar::format(
+                        "SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE mutation_source > 'sstable:' AND partition_region = 0 ALLOW FILTERING", keyspace_name, test_table_name)).get())
+            .is_rows()
+            .with_size(4)
+            .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
+                columns
+                    .with_typed_column<int32_t>("pk", [&] (int32_t v) {
+                        return std::find(key_values.begin(), key_values.end(), v) != key_values.end();
+                    })
+                    .with_typed_column<sstring>("metadata", [&] (const sstring& v) {
+                        auto metadata = rjson::parse(v);
+                        return metadata.IsObject() &&
+                                metadata.HasMember("tombstone") &&
+                                metadata["tombstone"].HasMember("timestamp"); // only non-null tombstones have timestamp field
+                    });
+            });
+    });
+}
+
+SEASTAR_TEST_CASE(memtable_flush_compaction_commitlog_allocating_segment) {
+    return do_with_cql_env_thread([] (cql_test_env& env) {
+        const auto keyspace_name = get_name();
+        const auto table_name = "test_tbl";
+
+        // Can use tablets and RF=1 after #21623 is fixed.
+        env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH"
+                " replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND"
+                " tablets = {{'enabled': 'false'}}", keyspace_name)).get();
+
+        env.execute_cql(seastar::format("CREATE TABLE {}.{} (pk int PRIMARY KEY, v text)"
+                " WITH compaction = {{'class': 'NullCompactionStrategy'}}"
+                " AND tombstone_gc = {{'mode': 'repair', 'propagation_delay_in_seconds': 0}}"
+                " AND memtable_compact_flushed_data = true",
+                keyspace_name,
+                table_name)).get();
+
+        auto& db = env.local_db();
+        auto& table = db.find_column_family(keyspace_name, table_name);
+
+        const auto schema = table.schema();
+
+        const std::vector<int32_t> key_values{1, 2, 3, 4};
+
+        for (unsigned i = 0; i < key_values.size(); ++i) {
+            env.execute_cql(seastar::format("DELETE FROM {}.{} WHERE pk = {}", keyspace_name, table_name, key_values[i])).get();
+        }
+
+        // Make all tombstones eligible for GC
+        repair_table(env, table.schema()->id(), gc_clock::now() + std::chrono::seconds(10));
+
+        // The commitlog segment should be still open for allocation when this table is flushed.
+        // This should prevent tombstone GC.
+        replica::database::flush_table_on_all_shards(env.db(), keyspace_name, table_name).get();
+
+        assert_that(env.execute_cql(seastar::format(
+                        "SELECT * FROM MUTATION_FRAGMENTS({}.{}) WHERE mutation_source > 'sstable:' AND partition_region = 0 ALLOW FILTERING", keyspace_name, table_name)).get())
+            .is_rows()
+            .with_size(4)
+            .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
+                columns
+                    .with_typed_column<int32_t>("pk", [&] (int32_t v) {
+                        return std::find(key_values.begin(), key_values.end(), v) != key_values.end();
+                    })
+                    .with_typed_column<sstring>("metadata", [&] (const sstring& v) {
+                        auto metadata = rjson::parse(v);
+                        return metadata.IsObject() &&
+                                metadata.HasMember("tombstone") &&
+                                metadata["tombstone"].HasMember("timestamp"); // only non-null tombstones have timestamp field
+                    });
+            });
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()

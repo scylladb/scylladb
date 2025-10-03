@@ -4229,6 +4229,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
             return _p.mutate_prepare(_mutations, _cl, db::write_type::BATCH, _trace_state, _permit, db::allow_per_partition_rate_limit::no, _options).then(utils::result_wrap([this] (unique_response_handler_vector ids) {
                 return sync_write_to_batchlog().then(utils::result_wrap([this, ids = std::move(ids)] () mutable {
                     tracing::trace(_trace_state, "Sending batch mutations");
+                    utils::get_local_injector().inject("storage_proxy_fail_send_batch", [] { throw std::runtime_error("Error injection: failing to send batch"); });
                     _p.register_cdc_operation_result_tracker(ids, _cdc_tracker);
                     return _p.mutate_begin(std::move(ids), _cl, _trace_state, _timeout);
                 })).then(utils::result_wrap([this] {
@@ -4397,6 +4398,8 @@ future<> storage_proxy::send_batchlog_replay_to_all_replicas(utils::chunked_vect
     utils::chunked_vector<batchlog_replay_mutation> ms = mutations | std::views::transform([] (auto&& m) {
             return batchlog_replay_mutation(std::move(m));
         }) | std::ranges::to<utils::chunked_vector<batchlog_replay_mutation>>();
+
+    utils::get_local_injector().inject("storage_proxy_fail_replay_batch", [] { throw std::runtime_error("Error injection: failing to send batch"); });
 
     return mutate_internal(std::move(ms), db::consistency_level::ALL, nullptr, empty_service_permit(), timeout, db::write_type::BATCH)
             .then(utils::result_into_future<result<>>);
