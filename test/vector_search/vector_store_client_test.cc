@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "seastar/core/future.hh"
 #include "vector_search/vector_store_client.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
@@ -67,13 +68,25 @@ auto listen_on_port(std::unique_ptr<http_server> server, sstring host, uint16_t 
     co_return std::make_tuple(std::move(server), listeners[0].local_address().port());
 }
 
-auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
-        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+auto make_http_server(std::function<void(routes& r)> set_routes) {
     static unsigned id = 0;
     auto server = std::make_unique<http_server>(fmt::format("test_vector_store_client_{}", id++));
     set_routes(server->_routes);
     server->set_content_streaming(true);
-    co_return co_await listen_on_port(std::move(server), std::move(host), port);
+    return server;
+}
+
+auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
+        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    co_return co_await listen_on_port(make_http_server(set_routes), std::move(host), port);
+}
+
+auto new_http_server(std::function<void(routes& r)> set_routes, server_socket socket) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    auto server = make_http_server(set_routes);
+    auto& listeners = http_server_tester::listeners(*server);
+    listeners.push_back(std::move(socket));
+    co_await server->do_accepts(listeners.size() - 1);
+    co_return std::make_tuple(std::move(server), listeners.back().local_address().port());
 }
 
 auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> future<bool> {
@@ -237,8 +250,10 @@ public:
     }
 
     future<> stop() {
-        _socket.abort_accept();
-        co_await _gate.close();
+        if (_socket) {
+            _socket.abort_accept();
+            co_await _gate.close();
+        }
     }
 
     sstring host() const {
@@ -251,6 +266,14 @@ public:
 
     size_t connections() const {
         return _connections;
+    }
+
+    future<seastar::server_socket> take_socket() {
+        _running = false;
+        // Make a connection to unblock accept() in run loop.
+        co_await seastar::connect(socket_address(net::inet_address(_host), _port));
+        co_await _gate.close();
+        co_return std::move(_socket);
     }
 
 private:
@@ -266,7 +289,7 @@ private:
     }
 
     future<> run() {
-        while (true) {
+        while (_running) {
             try {
                 auto s = co_await _socket.accept();
                 _connections++;
@@ -284,6 +307,7 @@ private:
     uint16_t _port;
     sstring _host;
     size_t _connections = 0;
+    bool _running = true;
 };
 
 auto make_unavailable_server(uint16_t port = 0) -> future<std::unique_ptr<unavailable_server>> {
@@ -318,6 +342,16 @@ public:
         co_await listen();
     }
 
+    future<> start(server_socket socket) {
+        auto [server, addr] = co_await new_http_server(
+                [this](auto& r) {
+                    set_routes(r);
+                },
+                std::move(socket));
+        _http_server = std::move(server);
+        _port = addr.port();
+    }
+
     future<> stop() {
         co_await _http_server->stop();
     }
@@ -342,11 +376,8 @@ private:
     future<> listen() {
         co_await try_on_loopback_address([this](auto host) -> future<> {
             auto [s, addr] = co_await new_http_server(
-                    [this](routes& r) {
-                        auto ann = [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-                            return handle_request(std::move(req), std::move(rep));
-                        };
-                        r.add(operation_type::POST, url(INDEXES_PATH).remainder("path"), new function_handler(ann, "json"));
+                    [this](auto& r) {
+                        set_routes(r);
                     },
                     host.c_str(), _port);
             _http_server = std::move(s);
@@ -355,12 +386,33 @@ private:
         });
     }
 
-    future<std::unique_ptr<reply>> handle_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+    future<std::unique_ptr<reply>> handle_ann_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
         ann_req r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
         _ann_requests.push_back(std::move(r));
         rep->set_status(_next_ann_response.status);
         rep->write_body("json", _next_ann_response.body);
         co_return rep;
+    }
+
+    future<std::unique_ptr<reply>> handle_status_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        rep->set_status(status_type::ok);
+        rep->write_body("json", "SERVING");
+        co_return rep;
+    }
+
+    void set_routes(routes& r) {
+        r.add(operation_type::POST, url(INDEXES_PATH).remainder("path"),
+                new function_handler(
+                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                            return handle_ann_request(std::move(req), std::move(rep));
+                        },
+                        "json"));
+        r.add(operation_type::GET, url("/api/v1/status").remainder("status"),
+                new function_handler(
+                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                            return handle_status_request(std::move(req), std::move(rep));
+                        },
+                        "json"));
     }
 
     uint16_t _port = 0;
