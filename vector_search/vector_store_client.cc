@@ -389,19 +389,19 @@ struct vector_store_client::impl {
             load_balancer lb(std::move(*clients), random_engine);
             while (auto client = lb.next()) {
                 if (client->is_up()) {
-                auto result = co_await coroutine::as_future(client->ann(keyspace, name, embedding, limit, as));
-                if (result.failed()) {
-                    auto err = result.get_exception();
-                    if (as.abort_requested()) {
-                        co_return std::unexpected{aborted{}};
+                    auto result = co_await coroutine::as_future(client->ann(keyspace, name, embedding, limit, as));
+                    if (result.failed()) {
+                        auto err = result.get_exception();
+                        if (as.abort_requested()) {
+                            co_return std::unexpected{aborted{}};
+                        }
+                        if (try_catch<std::system_error>(err) == nullptr) {
+                            co_await coroutine::return_exception_ptr(std::move(err));
+                        }
+                        // std::system_error means that the server is unavailable, so we retry
+                    } else {
+                        co_return co_await std::move(result);
                     }
-                    if (try_catch<std::system_error>(err) == nullptr) {
-                        co_await coroutine::return_exception_ptr(std::move(err));
-                    }
-                    // std::system_error means that the server is unavailable, so we retry
-                } else {
-                    co_return co_await std::move(result);
-                }
                 }
             }
 
