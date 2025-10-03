@@ -21,13 +21,14 @@
 class columns_assertions {
     const cql3::metadata& _metadata;
     const std::vector<managed_bytes_opt>& _columns;
+    std::source_location _loc;
 
     columns_assertions& do_with_raw_column(const char* name, std::function<void(data_type, managed_bytes_view)> func);
 
     void fail(const sstring& msg);
 
 public:
-    columns_assertions(const cql3::metadata& metadata, const std::vector<managed_bytes_opt>& columns)
+    columns_assertions(const cql3::metadata& metadata, const std::vector<managed_bytes_opt>& columns, std::source_location loc)
         : _metadata(metadata), _columns(columns)
     { }
 
@@ -73,8 +74,9 @@ public:
 
 class rows_assertions {
     shared_ptr<cql_transport::messages::result_message::rows> _rows;
+    std::source_location _loc;
 public:
-    rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows);
+    rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, std::source_location loc);
     rows_assertions with_size(size_t size);
     rows_assertions is_empty();
     rows_assertions is_not_empty();
@@ -97,12 +99,13 @@ public:
 
 class result_msg_assertions {
     shared_ptr<cql_transport::messages::result_message> _msg;
+    std::source_location _loc;
 public:
-    result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg);
+    result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc);
     rows_assertions is_rows();
 };
 
-result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg);
+result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc = std::source_location::current());
 
 template<typename T>
 void assert_that_failed(future<T>& f)
