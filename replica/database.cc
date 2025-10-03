@@ -751,17 +751,13 @@ do_parse_schema_tables(sharded<service::storage_proxy>& proxy, const sstring cf_
 
 future<> database::set_in_critical_disk_utilization_mode(sharded<database>& sharded_db, bool enabled) {
     return sharded_db.invoke_on_all([enabled] (replica::database& db) {
-        dblog.info("Setting critical disk utilization mode: {}", enabled);
-        if (enabled) {
-            ++db._critical_disk_utilization_mode_count;
-            return;
-        }
-
-        --db._critical_disk_utilization_mode_count;
-        if (db._critical_disk_utilization_mode_count > 0) {
+        dblog.debug("Asked to set critical disk utilization mode: {}", enabled);
+        db._critical_disk_utilization_mode_count += enabled ? 1 : -1;
+        if (!enabled && db._critical_disk_utilization_mode_count > 0) {
             dblog.debug("Database is still in critical disk utilization mode, requires {} more call(s) to disable it",
                         db._critical_disk_utilization_mode_count);
         }
+        dblog.info("Set critical disk utilization mode: {}", db._critical_disk_utilization_mode_count > 0);
     });
 }
 
