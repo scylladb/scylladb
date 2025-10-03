@@ -240,15 +240,18 @@ tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migra
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
 
-tablet_replica_set get_primary_replicas(const tablet_info& info, const tablet_transition_info* transition) {
+tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, tablet_id tid, std::function<bool(const tablet_replica&)> filter) {
+    const auto& info = tablet_map.get_tablet_info(tid);
+    const auto* transition = tablet_map.get_tablet_transition_info(tid);
+
     auto write_selector = [&] {
         if (!transition) {
             return write_replica_set_selector::previous;
         }
         return transition->writes;
     };
-    auto primary = [] (tablet_replica_set set) -> tablet_replica {
-        return set.front();
+    auto primary = [tid, filter = std::move(filter)] (tablet_replica_set set) -> tablet_replica {
+        return maybe_get_primary_replica(tid, set, filter).value();
     };
     auto add = [] (tablet_replica r1, tablet_replica r2) -> tablet_replica_set {
         // if primary replica is not the one leaving, then only primary will be streamed to.
