@@ -3659,7 +3659,7 @@ const std::map<operation, operation_action>& get_operations_with_func() {
                 "backup",
                 "copy SSTables from a specified keyspace's snapshot to a designated bucket in object storage",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/backup.html")),
                 {
                     typed_option<sstring>("keyspace", "Name of a keyspace to copy SSTables from"),
@@ -3758,7 +3758,7 @@ nodetool cluster repair on one node only.
 Note that nodetool cluster repair repairs only tablet keyspaces.
 To repair vnode keyspaces use nodetool repair.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/cluster/repair.html")),
                         {
                             typed_option<std::vector<sstring>>("in-dc", "Constrain repair to specific datacenter(s)"),
@@ -3922,7 +3922,7 @@ For more information, see: {}
                 "disablebinary",
                 "Disable the CQL native protocol",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/disablebinary.html")),
             },
             {
@@ -3934,7 +3934,7 @@ For more information, see: {}"
                 "disablegossip",
                 "Disable the gossip protocol",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/disablegossip.html")),
             },
             {
@@ -3953,7 +3953,7 @@ before upgrading a node to a new version or before any maintenance action is
 performed. When you want to simply flush memtables to disk, use the nodetool
 flush command.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/drain.html")),
             },
             {
@@ -3965,7 +3965,7 @@ For more information, see: {}"
                 "enableautocompaction",
                 "Enables automatic compaction for the given keyspace and table(s)",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/enableautocompaction.html")),
                 { },
                 {
@@ -3982,7 +3982,7 @@ For more information, see: {}"
                 "enablebackup",
                 "Enables incremental backup",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/enablebackup.html")),
             },
             {
@@ -3996,7 +3996,7 @@ For more information, see: {}"
 fmt::format(R"(
 The native protocol is enabled by default.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/enablebinary.html")),
             },
             {
@@ -4010,7 +4010,7 @@ For more information, see: {}"
 fmt::format(R"(
 The gossip protocol is enabled by default.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/enablegossip.html")),
             },
             {
@@ -4026,7 +4026,7 @@ Flush memtables to on-disk SSTables in the specified keyspace and table(s).
 If no keyspace is specified, all keyspaces are flushed.
 If no table(s) are specified, all tables in the specified keyspace are flushed.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/flush.html")),
                 { },
                 {
@@ -4043,7 +4043,7 @@ For more information, see: {}"
                 "getendpoints",
                 "Print the end points that owns the key",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/getendpoints.html")),
                 { },
                 {
@@ -4074,7 +4074,7 @@ Prints a table with the name and current logging level for each logger in Scylla
                 "getsstables",
                 "Get the sstables that contain the given key",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/getsstables.html")),
                 {
                     typed_option<>("hex-format", "The key is given in hex dump format"),
@@ -4096,7 +4096,7 @@ For more information, see: {}"
 fmt::format(R"(
 This value is the probability for tracing a request. To change this value see settraceprobability.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/gettraceprobability.html")),
             },
             {
@@ -4108,7 +4108,7 @@ For more information, see: {}"
                 "gossipinfo",
                 "Shows the gossip information for the cluster",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/gossipinfo.html")),
             },
             {
@@ -4134,7 +4134,7 @@ For more information, see: {}"
                 "info",
                 "Print node information (uptime, load, ...)",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/info.html")),
                 {
                     typed_option<>("tokens,T", "Display all tokens"),
@@ -4151,7 +4151,7 @@ For more information, see: {}"
 fmt::format(R"(
 Dropped tables (column family) will not be part of the listsnapshots.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/listsnapshots.html")),
                 { },
                 { },
@@ -4181,7 +4181,7 @@ This operation is not supported.
                 "netstats",
                 "Print network information on provided host (connecting node by default)",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/netstats.html")),
                 {
                     typed_option<>("human-readable,H", "Display bytes in human readable form, i.e. KiB, MiB, GiB, TiB"),
@@ -4200,7 +4200,7 @@ fmt::format(R"(
 Provide the latency request that is recorded by the coordinator.
 This command is helpful if you encounter slow node operations.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/proxyhistograms.html")),
                 { },
                 {
@@ -4222,7 +4222,7 @@ Scylla first figures out which ranges the local node (the one we want to rebuild
 is responsible for. Then which node in the cluster contains the same ranges.
 Finally, Scylla streams the data to the local node.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/rebuild.html")),
                 {
                     typed_option<>("force", "Enforce the source_dc option, even if it unsafe to use for rebuild"),
@@ -4246,7 +4246,7 @@ Materialized Views (MV) and Secondary Indexes (SI) of the upload table, and if
 they exist, they are automatically updated. Uploading MV or SI SSTables is not
 required and will fail.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/refresh.html")),
                 {
                     typed_option<>("load-and-stream", "Allows loading sstables that do not belong to this node, in which case they are automatically streamed to the owning nodes"),
@@ -4274,7 +4274,7 @@ Provide the Host ID of the node to specify which node you want to remove.
 Important: use this command *only* on nodes that are not reachable by other nodes
 by any means!
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/removenode.html")),
                 {
                     typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead node host IDs to ignore during removenode"),
@@ -4304,7 +4304,7 @@ all of the nodes in the cluster, or let ScyllaDB Manager do it for you.
 Note that nodetool repair repairs only vnode keyspaces. To repair tablet
 keyspaces use nodetool cluster repair.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/repair.html")),
                 {
                     typed_option<>("dc-parallel", "Repair datacenters in parallel"),
@@ -4349,7 +4349,7 @@ For more information, see: https://opensource.docs.scylladb.com/stable/operating
                 "restore",
                 "Copy SSTables from a designated bucket in object store to a specified keyspace or table",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/restore.html")),
                 {
                     typed_option<sstring>("endpoint", "ID of the configured object storage endpoint to copy SSTables from"),
@@ -4372,7 +4372,7 @@ For more information, see: {}"
                 "ring",
                 "Print information about the token ring",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/ring.html")),
                 {
                     typed_option<>("resolve-ip,r", "Show node domain names instead of IPs")
@@ -4391,7 +4391,7 @@ For more information, see: {}"
                 "scrub",
                 "Scrub the SSTable files in the specified keyspace or table(s)",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/scrub.html")),
                 {
                     typed_option<>("no-snapshot", "Do not take a snapshot of scrubbed tables before starting scrub (default false)"),
@@ -4418,7 +4418,7 @@ For more information, see: {}"
 fmt::format(R"(
 Resetting the log level of one or all loggers is not supported yet.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/setlogginglevel.html")),
                 { },
                 {
@@ -4439,7 +4439,7 @@ Value is trace probability between 0 and 1. 0 the trace will never happen and 1
 the trace will always happen. Anything in between is a percentage of the time,
 converted into a decimal. For example, 60% would be 0.6.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/settraceprobability.html")),
                 { },
                 {
@@ -4455,7 +4455,7 @@ For more information, see: {}"
                 "snapshot",
                 "Take a snapshot of specified keyspaces or a snapshot of the specified table",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/snapshot.html")),
                 {
                     typed_option<sstring>("table", "The table(s) to snapshot, multiple ones can be joined with ','"),
@@ -4476,7 +4476,7 @@ For more information, see: {}"
                 "sstableinfo",
                 "Information about sstables per keyspace/table",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/sstableinfo.html")),
                 { },
                 {
@@ -4493,7 +4493,7 @@ For more information, see: {}"
                 "status",
                 "Displays cluster information for a table in a keyspace, a single keyspace or all keyspaces",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/status.html")),
                 {
                     typed_option<>("resolve-ip,r", "Show node domain names instead of IPs"),
@@ -4516,7 +4516,7 @@ Results can be one of the following: `running` or `not running`.
 
 By default, the incremental backup status is `not running`.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/statusbackup.html")),
             },
             {
@@ -4535,7 +4535,7 @@ Results can be one of the following: `running` or `not running`.
 
 By default, the native transport is `running`.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/statusbinary.html")),
             },
             {
@@ -4552,7 +4552,7 @@ Results can be one of the following: `running` or `not running`.
 
 By default, the gossip protocol is `running`.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/statusgossip.html")),
             },
             {
@@ -4566,7 +4566,7 @@ For more information, see: {}"
 fmt::format(R"(
 This command is usually used to stop compaction that has a negative impact on the performance of a node.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/stop.html")),
                 {
                     typed_option<int>("id", "The id of the compaction operation to stop (not implemented)"),
@@ -4591,7 +4591,7 @@ since the last time you ran the nodetool cfhistograms command.
 
 Also invokable as "cfhistograms".
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/cfhistograms.html")),
                 { },
                 {
@@ -4608,7 +4608,7 @@ For more information, see: {}"
                 {"cfstats"},
                 "Print statistics on tables",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tablestats.html")),
                 {
                     typed_option<bool>("ignore,i", false, "Ignore the list of tables and display the remaining tables"),
@@ -4640,7 +4640,7 @@ fmt::format(R"(
 Aborts a task with given id. If the task is not abortable, appropriate message
 will be printed, depending on why the abort failed.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/abort.html")),
                             { },
                             {
@@ -4654,7 +4654,7 @@ fmt::format(R"(
 Unregisters all finished local tasks from the specified module. If a module is not specified,
 all modules are drained.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/drain.html")),
                             {
                                 typed_option<sstring>("module", "The module name; if specified, only the tasks from this module are unregistered"),
@@ -4668,7 +4668,7 @@ fmt::format(R"(
 Gets or sets the time in seconds for which tasks started by user will be kept in task manager after
 they are finished.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/user-ttl.html")),
                             {
                                 typed_option<uint32_t>("set", "New user_task_ttl value", -1),
@@ -4684,7 +4684,7 @@ keyspace, table, entity, shard, start_time, and end_time) of tasks in a specifie
 
 Allows to monitor tasks for extended time.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/list.html")),
                             {
                                 typed_option<>("internal", "Show internal tasks"),
@@ -4701,7 +4701,7 @@ For more information, see: {}"
                             "modules",
                             "Gets a list of modules supported by task manager",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/modules.html")),
                             { },
                             { },
@@ -4710,7 +4710,7 @@ For more information, see: {}"
                             "status",
                             "Gets a status of the task",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/status.html")),
                             { },
                             {
@@ -4724,7 +4724,7 @@ fmt::format(R"(
 Lists statuses of a specified task and all its descendants in BFS order.
 If id param isn't specified, trees of all non-internal tasks are listed.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/tree.html")),
                             { },
                             {
@@ -4738,7 +4738,7 @@ fmt::format(R"(
 Gets or sets the time in seconds for which tasks will be kept in task manager after
 they are finished.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/ttl.html")),
                             {
                                 typed_option<uint32_t>("set", "New task_ttl value", -1),
@@ -4758,7 +4758,7 @@ If quiet flag is set, nothing is printed. Instead the right exit code is returne
 - 124, if the operation timed out;
 - 125, if there was an error.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/tasks/wait.html")),
                             {
                                 typed_option<>("quiet,q", "If set, status isn't printed"),
@@ -4807,7 +4807,7 @@ For more information, see: {}"
                 "toppartitions",
                 "Sample and print the most active partitions for a given column family",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/toppartitions.html")),
                 {
                     typed_option<int>("duration,d", 5000, "Duration in milliseconds"),
@@ -4838,7 +4838,7 @@ Can also be used to upgrade all sstables to the latest sstable version.
 Note that this command is not needed for changes described above to take effect. They take effect gradually as new sstables are written and old ones are compacted.
 This command should be used when it is desired that such changes take effect right away.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/upgradesstables.html")),
                 {
                     typed_option<>("include-all-sstables,a", "Include all sstables, even those already on the current version"),
@@ -4858,7 +4858,7 @@ For more information, see: {}"
                 "viewbuildstatus",
                 "Show progress of a materialized view build",
 fmt::format(R"(
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/viewbuildstatus.html")),
                 {},
                 {
@@ -4878,7 +4878,7 @@ Displays the Apache Cassandra version which your version of Scylla is most
 compatible with, not your current Scylla version. To display the Scylla version,
 run `scylla --version`.
 
-For more information, see: {}"
+For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/version.html")),
             },
             {
