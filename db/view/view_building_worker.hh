@@ -111,6 +111,7 @@ class view_building_worker : public seastar::peering_sharded_service<view_buildi
         std::unordered_set<utils::UUID> finished_tasks;
         std::unordered_set<utils::UUID> aborted_tasks;
 
+        bool some_batch_finished = false;
         condition_variable state_updated_cv;
 
         // Clears completed/aborted tasks and creates batches (without starting them) for started tasks.
