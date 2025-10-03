@@ -192,11 +192,10 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
             });
 
         if (replay_fails) {
-            utils::get_local_injector().enable("storage_proxy_fail_send_batch");
+            smp::invoke_on_all([] {
+                utils::get_local_injector().enable("storage_proxy_fail_replay_batch");
+            }).get();
         }
-        auto reset_injector = defer([] {
-            utils::get_local_injector().disable("storage_proxy_fail_send_batch");
-        });
 
         bm.do_batch_log_replay(cleanup).get();
 
@@ -214,6 +213,10 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
                     return cleanup || source == "memtable:0";
                 });
             });
+
+        smp::invoke_on_all([] {
+            utils::get_local_injector().disable("storage_proxy_fail_replay_batch");
+        }).get();
     }, cfg);
 }
 

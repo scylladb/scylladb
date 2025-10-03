@@ -173,18 +173,20 @@ db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup, boo
 
     batchlog_replay_stats stats;
 
-    const api::timestamp_type truncate_time = service::client_state(service::client_state::internal_tag()).get_timestamp() - 1;
+    const api::timestamp_type truncate_time = service::client_state(service::client_state::internal_tag()).get_timestamp() - get_batch_log_timeout().count() * 1000000 - 1;
 
     auto batch = [this, limiter, &stats, cleanup](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
+        /*
         auto timeout = get_batch_log_timeout();
         if (db_clock::now() < written_at + timeout) {
             blogger.debug("Skipping replay of {}, too fresh", id);
             ++stats.skipped_batches;
             co_return stop_iteration::no;
         }
+        */
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");

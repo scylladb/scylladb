@@ -86,7 +86,7 @@ make_sstable_for_all_shards(replica::table& table, sstables::sstable_state state
         mt->apply(std::move(m));
     }
     auto sst = table.get_sstables_manager().make_sstable(s, table.get_storage_options(), generation, state);
-    write_memtable_to_sstable(*mt, sst, tombstone_gc::disabled()).get();
+    write_memtable_to_sstable(*mt, sst, {}, tombstone_gc::disabled()).get();
     mt->clear_gently().get();
     // We can't write an SSTable with bad sharding, so pretend
     // it came from Cassandra

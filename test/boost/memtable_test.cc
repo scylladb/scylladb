@@ -198,7 +198,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
                 testlog.info("Simple read");
                 auto mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
 
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), tombstone_gc::disabled()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_compacted(compacted_muts[1], now)
                     .produces_compacted(compacted_muts[2], now)
@@ -207,7 +207,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls between partition");
                 mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), tombstone_gc::disabled()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled()))
                     .next_partition()
                     .produces_compacted(compacted_muts[0], now)
                     .next_partition()
@@ -221,7 +221,7 @@ SEASTAR_TEST_CASE(test_memtable_flush_reader) {
 
                 testlog.info("Read with next_partition() calls inside partitions");
                 mt = make_memtable(mgr, table_shared_data, tbl_stats, muts);
-                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), tombstone_gc::disabled()))
+                assert_that(mt->make_flush_reader(gen.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled()))
                     .produces_compacted(compacted_muts[0], now)
                     .produces_partition_start(muts[1].decorated_key(), muts[1].partition().partition_tombstone())
                     .next_partition()
@@ -333,7 +333,7 @@ SEASTAR_TEST_CASE(test_unspooled_dirty_accounting_on_flush) {
         std::vector<size_t> unspooled_dirty_values;
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
 
-        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit(), tombstone_gc::disabled()));
+        auto flush_reader_check = assert_that(mt->make_flush_reader(s, semaphore.make_permit(), {}, tombstone_gc::disabled()));
         flush_reader_check.produces_partition(current_ring[0]);
         unspooled_dirty_values.push_back(mgr.unspooled_dirty_memory());
         flush_reader_check.produces_partition(current_ring[1]);
@@ -453,7 +453,7 @@ SEASTAR_TEST_CASE(test_segment_migration_during_flush) {
             mt->apply(m);
         }
 
-        auto rd = mt->make_flush_reader(s, semaphore.make_permit(), tombstone_gc::disabled());
+        auto rd = mt->make_flush_reader(s, semaphore.make_permit(), {}, tombstone_gc::disabled());
         auto close_rd = deferred_close(rd);
 
         for (int i = 0; i < partitions; ++i) {
@@ -522,7 +522,7 @@ SEASTAR_TEST_CASE(test_exception_safety_of_flush_reads) {
             auto revert = defer([&] {
                 mt->revert_flushed_memory();
             });
-            assert_that(mt->make_flush_reader(s, semaphore.make_permit(), tombstone_gc::disabled()))
+            assert_that(mt->make_flush_reader(s, semaphore.make_permit(), {}, tombstone_gc::disabled()))
                 .produces(ms);
         });
     });
@@ -578,7 +578,7 @@ SEASTAR_THREAD_TEST_CASE(test_tombstone_compaction_during_flush) {
 
     mt->apply(rt_m); // whatever
 
-    auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit(), tombstone_gc::disabled());
+    auto flush_rd = mt->make_flush_reader(ss.schema(), semaphore.make_permit(), {}, tombstone_gc::disabled());
     auto close_flush_rd = defer([&] { flush_rd.close().get(); });
 
     while (!flush_rd.is_end_of_stream()) {

@@ -752,7 +752,7 @@ memtable::make_mutation_reader_opt(schema_ptr query_schema,
 }
 
 mutation_reader
-memtable::make_flush_reader(schema_ptr s, reader_permit permit, tombstone_gc gc) {
+memtable::make_flush_reader(schema_ptr s, reader_permit permit, tombstone table_tombstone, tombstone_gc gc) {
     mutation_reader reader(nullptr);
     if (!_merged_into_cache) {
         revert_flushed_memory();
@@ -763,7 +763,7 @@ memtable::make_flush_reader(schema_ptr s, reader_permit permit, tombstone_gc gc)
                       query::full_partition_range, full_slice, mutation_reader::forwarding::no);
     }
     if (gc && reader.schema()->memtable_compact_flushed_data()) {
-        return make_compacting_reader(std::move(reader), gc_clock::now(), gc.get_max_purgeable_fn(), gc.get_tombstone_gc_state());
+        return make_compacting_reader(std::move(reader), gc_clock::now(), table_tombstone, gc.get_max_purgeable_fn(), gc.get_tombstone_gc_state());
     }
     return reader;
 }

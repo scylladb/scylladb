@@ -39,6 +39,7 @@ write_memtable_to_sstable(mutation_reader reader,
 seastar::future<>
 write_memtable_to_sstable(memtable& mt,
         sstables::shared_sstable sst,
+        tombstone table_tombstone,
         tombstone_gc gc);
 
 }

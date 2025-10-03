@@ -1696,6 +1696,7 @@ table::try_flush_memtable_to_sstable(compaction_group& cg, lw_shared_ptr<memtabl
         auto f = consumer(old->make_flush_reader(
             old->schema(),
             compaction_concurrency_semaphore().make_tracking_only_permit(old->schema(), "try_flush_memtable_to_sstable()", db::no_timeout, {}),
+            _table_tombstone,
             std::move(gc)));
 
         // Switch back to default scheduling group for post-flush actions, to avoid them being staved by the memtable flush
@@ -3883,7 +3884,7 @@ write_memtable_to_sstable(mutation_reader reader,
 }
 
 future<>
-write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, tombstone_gc gc) {
+write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, tombstone table_tombstone, tombstone_gc gc) {
     auto cfg = sst->manager().configure_writer("memtable");
     auto monitor = replica::permit_monitor(make_lw_shared(sstable_write_permit::unconditional()));
     auto semaphore = reader_concurrency_semaphore(reader_concurrency_semaphore::no_limits{}, "write_memtable_to_sstable",
@@ -3892,7 +3893,7 @@ write_memtable_to_sstable(memtable& mt, sstables::shared_sstable sst, tombstone_
 
     try {
         auto permit = semaphore.make_tracking_only_permit(mt.schema(), "mt_to_sst", db::no_timeout, {});
-        auto reader = mt.make_flush_reader(mt.schema(), std::move(permit), std::move(gc));
+        auto reader = mt.make_flush_reader(mt.schema(), std::move(permit), table_tombstone, std::move(gc));
         co_await write_memtable_to_sstable(std::move(reader), mt, std::move(sst), mt.partition_count(), monitor, cfg);
     } catch (...) {
         ex = std::current_exception();
