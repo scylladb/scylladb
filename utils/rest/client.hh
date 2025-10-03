@@ -17,6 +17,10 @@
 
 #include "utils/rjson.hh"
 
+namespace seastar {
+class abort_source;
+}
+
 namespace rest {
 
 /**
@@ -88,8 +92,8 @@ public:
 
     using handler_func = std::function<void(const seastar::http::reply&, std::string_view)>;
 
-    seastar::future<result_type> send();
-    seastar::future<> send(const handler_func&);
+    seastar::future<result_type> send(seastar::abort_source* = nullptr);
+    seastar::future<> send(const handler_func&, seastar::abort_source* = nullptr);
 
     const std::string& host() const {
         return _host;
@@ -109,7 +113,7 @@ private:
 
 using handler_func_ex = std::function<future<>(const seastar::http::reply&, seastar::input_stream<char>&)>;
 
-seastar::future<> simple_send(seastar::http::experimental::client&, seastar::http::request&, const handler_func_ex&);
+seastar::future<> simple_send(seastar::http::experimental::client&, seastar::http::request&, const handler_func_ex&, seastar::abort_source* = nullptr);
 
 // Interface for redacting sensitive data from HTTP requests and responses before logging.
 class http_log_filter {
@@ -168,6 +172,7 @@ future<rjson::value> send_request(std::string_view uri
     , const rjson::value& body
     , httpclient::method_type op
     , key_values headers = {}
+    , seastar::abort_source* = nullptr
 );
 
 future<rjson::value> send_request(std::string_view uri
@@ -176,6 +181,7 @@ future<rjson::value> send_request(std::string_view uri
     , std::string_view content_type
     , httpclient::method_type op
     , key_values headers = {}
+    , seastar::abort_source* = nullptr
 );
 
 future<> send_request(std::string_view uri
@@ -185,6 +191,7 @@ future<> send_request(std::string_view uri
     , const std::function<void(const httpclient::reply_type&, std::string_view)>& handler
     , httpclient::method_type op
     , key_values headers = {}
+    , seastar::abort_source* = nullptr
 );
 
 }

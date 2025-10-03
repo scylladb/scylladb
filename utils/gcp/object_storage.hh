@@ -14,10 +14,16 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/iostream.hh>
+#include <seastar/core/semaphore.hh>
 #include <seastar/net/tls.hh>
 
 #include "utils/rjson.hh"
 #include "utils/chunked_vector.hh"
+#include "utils/seekable_source.hh"
+
+namespace seastar {
+class abort_source;
+}
 
 namespace utils::gcp {
     struct google_credentials;
@@ -33,7 +39,23 @@ namespace utils::gcp::storage {
         std::string content_type;
         uint64_t size;
         uint64_t generation;
+        std::chrono::system_clock::time_point modified;
         // TODO: what info do we need?
+    };
+
+    class client;
+
+    struct bucket_paging {
+    private:
+        uint32_t max_results;
+        std::string token;
+        friend class client;
+    public:
+        bucket_paging(uint64_t max = 1000)
+            : max_results(max)
+        {}
+        bucket_paging(const bucket_paging&) = delete;
+        bucket_paging(bucket_paging&&) = default;
     };
 
     /**
@@ -56,6 +78,13 @@ namespace utils::gcp::storage {
          * using system trust iff endpoint is a https url)
          */
         client(std::string_view endpoint, std::optional<google_credentials> credentials, shared_ptr<seastar::tls::certificate_credentials> certs={});
+
+        /**
+         * Same as above, but with an additional memory limiting semaphore which will be shared across all up/download source/sinks to
+         * limit buffer memory usage.
+         */
+        client(std::string_view endpoint, std::optional<google_credentials> credentials, seastar::semaphore& memory_limit, shared_ptr<seastar::tls::certificate_credentials> certs={});
+
         ~client();
 
         /**
@@ -76,6 +105,13 @@ namespace utils::gcp::storage {
          * List objects in bucket. Optionally applies the @prefix as filter
          */
         future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix = {});
+
+        /**
+         * List objects in bucket. Optionally applies the @prefix as filter. Uses page size and offset as defined by 
+         * the bucket_pager
+         */
+        future<utils::chunked_vector<object_info>> list_objects(std::string_view bucket, std::string_view prefix, bucket_paging&);
+
         /**
          * Deletes a named object from bucket
          */
@@ -98,6 +134,12 @@ namespace utils::gcp::storage {
         future<> copy_object(std::string_view bucket, std::string_view object_name, std::string_view new_bucket, std::string_view to_name);
 
         /**
+         * Merges sub-objects into a new destination. Actual file will be composed in order of subobject in `source_object`.
+         * @return info of the created, merged object.
+         */
+        future<object_info> merge_objects(std::string_view bucket, std::string_view dest_object_name, std::vector<std::string> source_objects, rjson::value metadata = {}, seastar::abort_source* = nullptr);
+
+        /**
          * Creates a data_sink for uploading data to a given name in bucket.
          *
          * @name - name of object to create/overwrite
@@ -105,11 +147,11 @@ namespace utils::gcp::storage {
          * 
          * Note: this will overwrite any existing object of the same name.
          */
-        seastar::data_sink create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata = {}) const;
+        seastar::data_sink create_upload_sink(std::string_view bucket, std::string_view object_name, rjson::value metadata = {}, seastar::abort_source* = nullptr) const;
         /**
          * Creates a data_source for reading from a named object.
          */
-        seastar::data_source create_download_source(std::string_view bucket, std::string_view object_name) const;
+        seekable_data_source create_download_source(std::string_view bucket, std::string_view object_name, seastar::abort_source* = nullptr) const;
 
         /**
          * Destroys resources. Must be called before releasing object
