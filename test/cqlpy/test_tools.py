@@ -311,7 +311,7 @@ def test_scylla_sstable_write(cql, test_keyspace, scylla_path, scylla_data_dir, 
 
             subprocess.check_call([scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-file", input_file, "--output-dir", tmp_dir, '--logger-log-level', 'scylla-sstable=trace'])
 
-            sstable_files = glob.glob(os.path.join(tmp_dir, f"me-*-big-Data.db"))
+            sstable_files = glob.glob(os.path.join(tmp_dir, f"ms-*-big-Data.db"))
             assert len(sstable_files) == 1
             sstable_file = sstable_files[0]
 
@@ -1368,8 +1368,8 @@ def test_scylla_sstable_format_version(cql, test_keyspace, scylla_data_dir):
             matched = sstable_re.match(stem)
             assert matched is not None, f"unmatched sstable component path: {fn}"
             sstable_version = matched["version"]
-            # "me" is currently the default sstable format version.
-            assert sstable_version == "me", f"unexpected sstable format: {sstable_version}"
+            # "ms" is currently the default sstable format version.
+            assert sstable_version == "ms", f"unexpected sstable format: {sstable_version}"
 
 def test_create_local_key_file(scylla_path):
     with tempfile.TemporaryDirectory() as dir:
