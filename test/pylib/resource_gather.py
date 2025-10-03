@@ -88,6 +88,9 @@ class ResourceGather(ABC):
                     cwd: Path | None = None,
                     env: dict | None = None) -> subprocess.Popen[str]:
 
+        # Make sure the output directory exists
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
         args = shlex.split(subprocess.list2cmdline(args))
         if env:
             env.update(os.environ)
