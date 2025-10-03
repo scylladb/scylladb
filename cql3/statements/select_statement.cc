@@ -2016,15 +2016,15 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
 future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
 
-    return measure_index_latency(*_schema, _index, [this, &qp, &state, &options](this auto) -> future<shared_ptr<cql_transport::messages::result_message>> {
+    auto limit = get_limit(options, _limit);
+
+    auto result = co_await measure_index_latency(*_schema, _index, [this, &qp, &state, &options, &limit](this auto) -> future<shared_ptr<cql_transport::messages::result_message>> {
         tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
         validate_for_read(options.get_consistency());
 
         _query_start_time_point = gc_clock::now();
 
         update_stats();
-
-        auto limit = get_limit(options, _limit);
 
         if (limit > max_ann_query_limit) {
             co_await coroutine::return_exception(exceptions::invalid_request_exception(
@@ -2040,6 +2040,12 @@ future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table
 
         co_return co_await query_base_table(qp, state, options, pkeys.value());
     });
+
+    auto page_size = options.get_page_size();
+    if (page_size > 0 && (uint64_t) page_size < limit) {
+        result->add_warning("Paging is not supported for Vector Search queries. The entire result set has been returned.");
+    }
+    co_return result;
 }
 
 void vector_indexed_table_select_statement::update_stats() const {
