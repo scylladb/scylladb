@@ -330,9 +330,12 @@ struct tablet_migration_info {
     locator::tablet_replica dst;
 };
 
+class tablet_map;
+
 /// Returns the replica set which will become the replica set of the tablet after executing a given tablet transition.
 tablet_replica_set get_new_replicas(const tablet_info&, const tablet_migration_info&);
-tablet_replica_set get_primary_replicas(const tablet_info&, const tablet_transition_info*);
+// If filter returns true, the replica can be chosen as primary replica.
+tablet_replica_set get_primary_replicas(const locator::tablet_map&, tablet_id, std::function<bool(const tablet_replica&)> filter);
 tablet_transition_info migration_to_transition_info(const tablet_info&, const tablet_migration_info&);
 
 /// Describes streaming required for a given tablet transition.
