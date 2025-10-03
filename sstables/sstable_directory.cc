@@ -184,7 +184,7 @@ void sstable_directory::filesystem_components_lister::handle(sstables::entry_des
     }
 
     dirlog.trace("for SSTable directory, scanning {}", filename);
-    _state->generations_found.emplace(desc.generation, filename);
+    auto generations_found_it = _state->generations_found.emplace(desc.generation, filename);
 
     switch (desc.component) {
     case component_type::TemporaryStatistics:
@@ -202,7 +202,7 @@ void sstable_directory::filesystem_components_lister::handle(sstables::entry_des
         // This file isn't included in the TOC, so we can't remove on the "usual"
         // mechanism for partially-written components, and instead we have to explicitly
         // mark it for removal here.
-        _state->generations_found.erase(desc.generation);
+        _state->generations_found.erase(generations_found_it);
         _state->files_for_removal.insert(filename.native());
         break;
     case component_type::TOC:
