@@ -1182,6 +1182,9 @@ future<shared_ptr<cql_transport::messages::result_message>> indexed_table_select
         if (stats) {
             stats->add_latency(duration);
         }
+        if (_prepared_ann_ordering.has_value() && options.get_page_size() >= 0) {
+            result->add_warning("Paging is not supported for Vector Search queries. The entire result set has been returned.");
+        }
         co_return result;
 }
 
