@@ -18,7 +18,6 @@
 #include "utils/assert.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
-#include "db/system_keyspace.hh"
 #include "db/data_listeners.hh"
 #include "storage_service.hh"
 #include "compaction/compaction_manager.hh"
@@ -336,7 +335,7 @@ uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<
     return ret;
 }
 
-void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks) {
+void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db) {
     cf::get_column_family_name.set(r, [&db] (const_req req){
         std::vector<sstring> res;
         const replica::database::tables_metadata& meta = db.local().get_tables_metadata();
