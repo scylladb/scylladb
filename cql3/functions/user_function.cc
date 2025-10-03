@@ -36,7 +36,7 @@ bool user_function::is_aggregate() const { return false; }
 
 bool user_function::requires_thread() const { return true; }
 
-bytes_opt user_function::execute(std::span<const bytes_opt> parameters) {
+bytes_opt user_function::execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) {
     const auto& types = arg_types();
     if (parameters.size() != types.size()) {
         throw std::logic_error("Wrong number of parameters");

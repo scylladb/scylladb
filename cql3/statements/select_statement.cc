@@ -1016,6 +1016,20 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
     auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
 
     if (prepared_ann_ordering.has_value()) {
+
+        // Add partition and clustering key columns to process ANN ordering.
+        // They are needed to compare the result row primary key with ann result to return distance properly.
+        for (const auto& cdef : schema->partition_key_columns()) {
+            if (!selection->has_column(cdef)) {
+                selection->add_column_for_post_processing(cdef);
+            }
+        }
+        for (const auto& cdef : schema->clustering_key_columns()) {
+            if (!selection->has_column(cdef)) {
+                selection->add_column_for_post_processing(cdef);
+            }
+        }
+
         auto indexes = sim.list_indexes();
         auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
             return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name)
@@ -1221,23 +1235,30 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
         auto ann_vector = util::to_vector<float>(values);
 
         auto as = abort_source();
-        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, as);
-        if (!pkeys.has_value()) {
+        auto ann_results = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, as);
+        if (!ann_results.has_value()) {
             co_await coroutine::return_exception(
-                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, ann_results.error())));
         }
+
+        auto [pkeys, distances] = ann_results.value();
+
+        std::unique_ptr<cql3::query_options> internal_options = std::make_unique<cql3::query_options>(
+            std::make_unique<cql3::query_options>(options),
+            std::move(ann_results).value()
+        );
 
         // If there are no clustering columns, we have to convert the partition keys to partition ranges.
         if (_schema->clustering_key_size() == 0) {
             std::vector<dht::partition_range> partition_ranges;
-            std::ranges::transform(pkeys.value(), std::back_inserter(partition_ranges), [](const auto& pkey) {
+            std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
                     return dht::partition_range::make_singular(pkey.partition);
                 });
 
-            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, nullptr);
+            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, *internal_options, now, nullptr);
         }
 
-        co_return co_await this->execute_base_query(qp, std::move(*pkeys), state, options, now, nullptr);
+        co_return co_await this->execute_base_query(qp, std::move(pkeys), state, *internal_options, now, nullptr);
     }
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
