@@ -1504,6 +1504,7 @@ SEASTAR_TEST_CASE(database_drop_column_family_clears_querier_cache) {
                 database_test_wrapper(db).get_user_read_concurrency_semaphore().make_tracking_only_permit(s, "test", db::no_timeout, {}),
                 query::full_partition_range,
                 s->full_slice(),
+                {},
                 nullptr);
 
         auto f = replica::database::legacy_drop_table_on_all_shards(e.db(), e.get_system_keyspace(), "ks", "cf");

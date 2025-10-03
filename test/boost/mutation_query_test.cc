@@ -84,10 +84,10 @@ query::result_set to_result_set(const reconcilable_result& r, schema_ptr s, cons
 static reconcilable_result mutation_query(schema_ptr s, reader_permit permit, const mutation_source& source, const dht::partition_range& range,
         const query::partition_slice& slice, uint64_t row_limit, uint32_t partition_limit, gc_clock::time_point query_time) {
 
-    auto querier = query::querier(source, s, std::move(permit), range, slice, {});
+    auto querier = query::querier(source, s, std::move(permit), range, slice, {}, {});
     auto close_querier = deferred_close(querier);
     auto rrb = reconcilable_result_builder(*s, slice, make_accounter());
-    return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time).get();
+    return querier.consume_page(std::move(rrb), row_limit, partition_limit, query_time, {}).get();
 }
 
 SEASTAR_TEST_CASE(test_reading_from_single_partition) {
@@ -538,10 +538,10 @@ SEASTAR_TEST_CASE(test_partition_limit) {
 
 static void data_query(schema_ptr s, reader_permit permit, const mutation_source& source, const dht::partition_range& range,
         const query::partition_slice& slice, query::result::builder& builder) {
-    auto querier = query::querier(source, s, std::move(permit), range, slice, {});
+    auto querier = query::querier(source, s, std::move(permit), range, slice, {}, {});
     auto close_querier = deferred_close(querier);
     auto qrb = query_result_builder(*s, builder);
-    querier.consume_page(std::move(qrb), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
+    querier.consume_page(std::move(qrb), std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max(), gc_clock::now(), {}).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_result_size_calculation) {

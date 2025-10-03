@@ -38,11 +38,12 @@ auto consume_page(mutation_reader& reader,
         Consumer&& consumer,
         uint64_t row_limit,
         uint32_t partition_limit,
-        gc_clock::time_point query_time) {
+        gc_clock::time_point query_time,
+        tombstone table_tombstone) {
     return reader.peek().then([=, &reader, consumer = std::move(consumer)] (
                 mutation_fragment_v2* next_fragment) mutable {
         const auto next_fragment_region = next_fragment ? next_fragment->position().region() : partition_region::partition_start;
-        compaction_state->start_new_page(row_limit, partition_limit, query_time, next_fragment_region, consumer);
+        compaction_state->start_new_page(row_limit, partition_limit, query_time, table_tombstone, next_fragment_region, consumer);
 
         auto reader_consumer = compact_for_query<Consumer>(compaction_state, std::move(consumer));
 
@@ -159,10 +160,11 @@ public:
             reader_permit permit,
             dht::partition_range range,
             query::partition_slice slice,
+            tombstone table_tombstone,
             tracing::trace_state_ptr trace_ptr,
             querier_config config = {})
         : querier_base(schema, permit, std::move(range), std::move(slice), ms, std::move(trace_ptr), std::move(config))
-        , _compaction_state(make_lw_shared<compact_for_query_state>(*schema, gc_clock::time_point{}, *_slice, 0, 0)) {
+        , _compaction_state(make_lw_shared<compact_for_query_state>(*schema, gc_clock::time_point{}, *_slice, 0, 0, table_tombstone)) {
     }
 
     bool are_limits_reached() const {
@@ -175,9 +177,10 @@ public:
             uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
+            tombstone table_tombstone,
             tracing::trace_state_ptr trace_ptr = {}) {
         return ::query::consume_page(std::get<mutation_reader>(_reader), _compaction_state, *_slice, std::move(consumer), row_limit,
-                partition_limit, query_time).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
+                partition_limit, query_time, table_tombstone).then_wrapped([this, trace_ptr = std::move(trace_ptr)] (auto&& fut) {
             const auto& cstats = _compaction_state->stats();
             tracing::trace(trace_ptr, "Page stats: {} partition(s), {} static row(s) ({} live, {} dead), {} clustering row(s) ({} live, {} dead), {} range tombstone(s) and {} cell(s) ({} live, {} dead)",
                     cstats.partitions,

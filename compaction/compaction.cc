@@ -966,7 +966,7 @@ private:
             });
         });
         const auto& gc_state = get_tombstone_gc_state();
-        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, max_purgeable_func(), gc_state,
+        return consumer(make_compacting_reader(setup_sstable_reader(), compaction_time, _table_s.get_table_tombstone(), max_purgeable_func(), gc_state,
                                                streamed_mutation::forwarding::no, &_tombstone_purge_stats));
     }
 
@@ -986,6 +986,7 @@ private:
                 if (enable_garbage_collected_sstable_writer()) {
                     using compact_mutations = compact_for_compaction<compacted_fragments_writer, compacted_fragments_writer>;
                     auto cfc = compact_mutations(*schema(), now,
+                        _table_s.get_table_tombstone(),
                         max_purgeable_func(),
                         get_tombstone_gc_state(),
                         get_compacted_fragments_writer(),
@@ -997,6 +998,7 @@ private:
                 }
                 using compact_mutations = compact_for_compaction<compacted_fragments_writer, noop_compacted_fragments_consumer>;
                 auto cfc = compact_mutations(*schema(), now,
+                    _table_s.get_table_tombstone(),
                     max_purgeable_func(),
                     get_tombstone_gc_state(),
                     get_compacted_fragments_writer(),

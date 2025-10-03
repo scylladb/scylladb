@@ -129,6 +129,7 @@ public:
     virtual seastar::condition_variable& get_staging_done_condition() noexcept override { return _staging_done_condition; }
     dht::token_range get_token_range_after_split(const dht::token& t) const noexcept override { return dht::token_range(); }
     int64_t get_sstables_repaired_at() const noexcept override { return 0; }
+    tombstone get_table_tombstone() const noexcept override { return {}; }
 };
 
 SEASTAR_TEST_CASE(basic_compaction_group_splitting_test) {

@@ -59,6 +59,7 @@ public:
     virtual seastar::condition_variable& get_staging_done_condition() noexcept = 0;
     virtual dht::token_range get_token_range_after_split(const dht::token& t) const noexcept = 0;
     virtual int64_t get_sstables_repaired_at() const noexcept = 0;
+    virtual tombstone get_table_tombstone() const noexcept = 0;
 };
 
 } // namespace compaction

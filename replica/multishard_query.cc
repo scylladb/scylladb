@@ -717,12 +717,13 @@ template <typename ResultBuilder>
 future<page_consume_result<ResultBuilder>> read_page(
         shared_ptr<read_context> ctx,
         schema_ptr s,
+        table& table,
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto compaction_state = make_lw_shared<compact_for_query_state>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
-            cmd.partition_limit);
+            cmd.partition_limit, table.table_tombstone());
 
     auto reader = make_multishard_combining_reader(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,
             trace_state, mutation_reader::forwarding(ranges.size() > 1));
@@ -732,7 +733,7 @@ future<page_consume_result<ResultBuilder>> read_page(
 
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, result_builder_factory(), cmd.get_row_limit(),
-                cmd.partition_limit, cmd.timestamp));
+                cmd.partition_limit, cmd.timestamp, table.table_tombstone()));
     if (!f.failed()) {
         // no exceptions are thrown in this block
         auto result = std::move(f).get();
@@ -774,7 +775,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
 
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {
-        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, std::move(result_builder_factory));
+        return read_page<ResultBuilder>(ctx, s, table, cmd, ranges, trace_state, std::move(result_builder_factory));
     }).then([&] (page_consume_result<ResultBuilder> r) -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
             // Must call before calling `detach_state()`.

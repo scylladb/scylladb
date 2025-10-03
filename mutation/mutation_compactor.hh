@@ -162,6 +162,7 @@ struct compaction_stats {
 template<compact_for_sstables SSTableCompaction>
 class compact_mutation_state {
     const schema& _schema;
+    tombstone _table_tombstone;
     gc_clock::time_point _query_time;
     max_purgeable_fn _get_max_purgeable;
     can_gc_fn _can_gc;
@@ -211,7 +212,9 @@ private:
         _validator(mutation_fragment_v2::kind::range_tombstone_change, rtc.position(), rtc.tombstone());
         stop_iteration gc_consumer_stop = stop_iteration::no;
         stop_iteration consumer_stop = stop_iteration::no;
-        if (rtc.tombstone() <= _partition_tombstone) {
+        auto current_tombstone = _table_tombstone;
+        current_tombstone.apply(_partition_tombstone);
+        if (rtc.tombstone() <= current_tombstone) {
             rtc.set_tombstone({});
         }
         _effective_tombstone = rtc.tombstone();
@@ -346,8 +349,9 @@ public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
 
     compact_mutation_state(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
-              uint32_t partition_limit, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
+              uint32_t partition_limit, tombstone table_tombstone, mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
         : _schema(s)
+        , _table_tombstone(table_tombstone)
         , _query_time(query_time)
         , _can_gc(always_gc)
         , _slice(slice)
@@ -362,10 +366,12 @@ public:
     }
 
     compact_mutation_state(const schema& s, gc_clock::time_point compaction_time,
+            tombstone table_tombstone,
             max_purgeable_fn get_max_purgeable,
             const tombstone_gc_state& gc_state,
             tombstone_purge_stats* tombstone_stats = nullptr)
         : _schema(s)
+        , _table_tombstone(table_tombstone)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
         , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable).can_purge; })
@@ -408,6 +414,9 @@ public:
     template <typename Consumer, typename GCConsumer>
     requires CompactedFragmentsConsumer<Consumer> && CompactedFragmentsConsumer<GCConsumer>
     void consume(tombstone t, Consumer& consumer, GCConsumer& gc_consumer) {
+        if (t < _table_tombstone) {
+            return;
+        }
         _partition_tombstone = t;
         if (can_purge_tombstone(t)) {
             partition_is_not_empty_for_gc_consumer(gc_consumer);
@@ -428,7 +437,8 @@ public:
         _validator(mutation_fragment_v2::kind::static_row, sr.position(), {});
         _last_static_row = static_row(_schema, sr);
         _last_pos = position_in_partition(position_in_partition::static_row_tag_t());
-        auto current_tombstone = _partition_tombstone;
+        auto current_tombstone = _table_tombstone;
+        current_tombstone.apply(_partition_tombstone);
         if constexpr (sstable_compaction()) {
             _collector->start_collecting_static_row();
         }
@@ -463,7 +473,8 @@ public:
         if (!sstable_compaction()) {
             _last_pos = cr.position();
         }
-        auto current_tombstone = std::max(_partition_tombstone, _effective_tombstone);
+        auto current_tombstone = _table_tombstone;
+        current_tombstone.apply(std::max(_partition_tombstone, _effective_tombstone));
         auto t = cr.tomb();
         t.apply(current_tombstone);
 
@@ -612,8 +623,10 @@ public:
     void start_new_page(uint64_t row_limit,
             uint32_t partition_limit,
             gc_clock::time_point query_time,
+            tombstone table_tombstone,
             partition_region next_fragment_region,
             Consumer& consumer) {
+        _table_tombstone = table_tombstone;
         _empty_partition = true;
         _static_row_live = false;
         _row_limit = row_limit;
@@ -695,19 +708,20 @@ public:
     // Can only be used for compact_for_sstables::no
     compact_mutation(const schema& s, gc_clock::time_point query_time, const query::partition_slice& slice, uint64_t limit,
               uint32_t partition_limit,
+              tombstone table_tombstone,
               Consumer consumer, GCConsumer gc_consumer = GCConsumer())
-        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, query_time, slice, limit, partition_limit))
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, query_time, slice, limit, partition_limit, table_tombstone))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }
 
     // Can only be used for compact_for_sstables::yes
     compact_mutation(const schema& s, gc_clock::time_point compaction_time,
+            tombstone table_tombstone,
             max_purgeable_fn get_max_purgeable,
-
             const tombstone_gc_state& gc_state,
             Consumer consumer, GCConsumer gc_consumer = GCConsumer(), tombstone_purge_stats* tombstone_stats = nullptr)
-        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, get_max_purgeable, gc_state, tombstone_stats))
+        : _state(make_lw_shared<compact_mutation_state<SSTableCompaction>>(s, compaction_time, table_tombstone, get_max_purgeable, gc_state, tombstone_stats))
         , _consumer(std::move(consumer))
         , _gc_consumer(std::move(gc_consumer)) {
     }

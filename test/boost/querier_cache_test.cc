@@ -116,6 +116,7 @@ private:
             _sem.make_tracking_only_permit(_s.schema(), "make-querier", timeout, {}),
             range,
             _s.schema()->full_slice(),
+            tombstone{},
             nullptr);
     }
 
@@ -222,7 +223,7 @@ public:
         const auto cache_key = make_cache_key(key);
 
         auto querier = make_querier<Querier>(range, timeout);
-        auto dk_ck = querier.consume_page(dummy_result_builder{}, row_limit, std::numeric_limits<uint32_t>::max(), gc_clock::now()).get();
+        auto dk_ck = querier.consume_page(dummy_result_builder{}, row_limit, std::numeric_limits<uint32_t>::max(), gc_clock::now(), {}).get();
         auto&& dk = dk_ck.first;
         auto&& ck = dk_ck.second;
         auto permit = querier.permit();

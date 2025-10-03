@@ -35,6 +35,7 @@ struct tombstone_purge_stats;
 /// Intra-partition forwarding: `fast_forward_to(position_range)` is supported
 /// if the source reader supports it
 mutation_reader make_compacting_reader(mutation_reader source, gc_clock::time_point compaction_time,
+        tombstone table_tombstone,
         max_purgeable_fn get_max_purgeable,
         const tombstone_gc_state& gc_state,
         streamed_mutation::forwarding fwd = streamed_mutation::forwarding::no,

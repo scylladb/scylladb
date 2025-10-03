@@ -396,6 +396,7 @@ void do_test(const test_config& cfg) {
             auto r = make_mutation_reader_from_mutations(adjusted_schema, env.make_reader_permit(), mutations);
             return make_compacting_reader(std::move(r),
                 gc_clock::now(),
+                {},
                 can_never_purge,
                 tombstone_gc_state(nullptr));
         };

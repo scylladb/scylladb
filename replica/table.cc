@@ -285,7 +285,7 @@ sstables::shared_sstable table::make_streaming_staging_sstable() {
 }
 
 static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, const compaction::compaction_manager& cm,
-        gc_clock::time_point compaction_time, bool compaction_enabled, bool compaction_can_gc) {
+        gc_clock::time_point compaction_time, tombstone table_tombstone, bool compaction_enabled, bool compaction_can_gc) {
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_enabled", fmt::to_string(compaction_enabled));
     utils::get_local_injector().set_parameter("maybe_compact_for_streaming", "compaction_can_gc", fmt::to_string(compaction_can_gc));
     if (!compaction_enabled) {
@@ -294,6 +294,7 @@ static mutation_reader maybe_compact_for_streaming(mutation_reader underlying, c
     return make_compacting_reader(
             std::move(underlying),
             compaction_time,
+            table_tombstone,
             compaction_can_gc ? can_always_purge : can_never_purge,
             cm.get_tombstone_gc_state(),
             streamed_mutation::forwarding::no);
@@ -319,6 +320,7 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
             make_multi_range_reader(s, std::move(permit), std::move(source), ranges, slice, nullptr, mutation_reader::forwarding::no),
             get_compaction_manager(),
             compaction_time,
+            _table_tombstone,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
 }
@@ -337,6 +339,7 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
             make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr),
             get_compaction_manager(),
             compaction_time,
+            _table_tombstone,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
 }
@@ -352,6 +355,7 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
                     std::move(trace_state), fwd, fwd_mr),
             get_compaction_manager(),
             compaction_time,
+            _table_tombstone,
             _config.enable_compacting_data_for_streaming_and_repair(),
             _config.enable_tombstone_gc_for_streaming_and_repair());
 }
@@ -2668,6 +2672,11 @@ public:
     int64_t get_sstables_repaired_at() const noexcept override {
         return _cg.get_sstables_repaired_at();
     }
+
+    tombstone get_table_tombstone() const noexcept override {
+        return _t.table_tombstone();
+    }
+
 };
 
 std::unique_ptr<compaction_group::compaction_group_view> compaction_group::make_compacting_view() {
@@ -3165,6 +3174,7 @@ table::sstables_as_snapshot_source() {
             return make_compacting_reader(
                 std::move(reader),
                 gc_clock::now(),
+                _table_tombstone,
                 get_max_purgeable_fn_for_cache_underlying_reader(),
                 _compaction_manager.get_tombstone_gc_state().with_commitlog_check_disabled(),
                 fwd);
@@ -3552,12 +3562,14 @@ future<db::replay_position> table::discard_sstables(db_clock::time_point truncat
                                             replica::enable_backlog_tracker enable_backlog_tracker) mutable {
                 pruning->for_each_sstable([&] (const sstables::shared_sstable& p) mutable {
                     if (p->max_data_age() <= truncated_at) {
+                        tlogger.info("prune sstable {}, max_data_age={}, truncated_at={} => REMOVE", p->component_basename(sstables::component_type::Data), p->max_data_age(), truncated_at);
                         if (p->originated_on_this_node().value_or(false) && p->get_stats_metadata().position.shard_id() == this_shard_id()) {
                             rp = std::max(p->get_stats_metadata().position, rp);
                         }
                         remove.emplace_back(removed_sstable{cg, p, enable_backlog_tracker});
                         return;
                     }
+                    tlogger.info("prune sstable {}, max_data_age={}, truncated_at={} => KEEP", p->component_basename(sstables::component_type::Data), p->max_data_age(), truncated_at);
                     pruned->insert(p);
                 });
             };
@@ -3930,13 +3942,13 @@ table::query(schema_ptr query_schema,
 
         if (!querier_opt) {
             query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, conf);
+            querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, _table_tombstone, trace_state, conf);
         }
         auto& q = *querier_opt;
 
         std::exception_ptr ex;
       try {
-        co_await q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, trace_state);
+        co_await q.consume_page(query_result_builder(*query_schema, qs.builder), qs.remaining_rows(), qs.remaining_partitions(), qs.cmd.timestamp, _table_tombstone, trace_state);
       } catch (...) {
         ex = std::current_exception();
       }
@@ -3986,14 +3998,14 @@ table::mutation_query(schema_ptr query_schema,
     }
     if (!querier_opt) {
         query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-        querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, conf);
+        querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, cmd.slice, _table_tombstone, trace_state, conf);
     }
     auto& q = *querier_opt;
 
     std::exception_ptr ex;
   try {
     auto rrb = reconcilable_result_builder(*query_schema, cmd.slice, std::move(accounter));
-    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, trace_state);
+    auto r = co_await q.consume_page(std::move(rrb), cmd.get_row_limit(), cmd.partition_limit, cmd.timestamp, _table_tombstone, trace_state);
 
     if (!saved_querier || (!q.are_limits_reached() && !r.is_short_read())) {
         co_await q.close();
