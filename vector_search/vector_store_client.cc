@@ -9,7 +9,7 @@
 #include "vector_store_client.hh"
 #include "dns.hh"
 #include "load_balancer.hh"
-#include "client.hh"
+#include "node.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/type_json.hh"
 #include "db/config.hh"
@@ -246,7 +246,7 @@ namespace vector_search {
 
 struct vector_store_client::impl {
 
-    using clients_type = std::vector<lw_shared_ptr<client>>;
+    using clients_type = std::vector<lw_shared_ptr<node>>;
 
     utils::observer<sstring> uri_observer;
     clients_type current_clients;
@@ -301,7 +301,7 @@ struct vector_store_client::impl {
             auto it = addrs.find(uri.host);
             if (it != addrs.end()) {
                 for (const auto& addr : it->second) {
-                    current_clients.push_back(make_lw_shared<client>(client::endpoint_type{uri.host, uri.port, addr}));
+                    current_clients.push_back(make_lw_shared<node>(client::endpoint_type{uri.host, uri.port, addr}));
                 }
             }
         }
@@ -388,6 +388,7 @@ struct vector_store_client::impl {
 
             load_balancer lb(std::move(*clients), random_engine);
             while (auto client = lb.next()) {
+                if (client->is_up()) {
                 auto result = co_await coroutine::as_future(client->ann(keyspace, name, embedding, limit, as));
                 if (result.failed()) {
                     auto err = result.get_exception();
@@ -400,6 +401,7 @@ struct vector_store_client::impl {
                     // std::system_error means that the server is unavailable, so we retry
                 } else {
                     co_return co_await std::move(result);
+                }
                 }
             }
 

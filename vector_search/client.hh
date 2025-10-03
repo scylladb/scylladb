@@ -34,6 +34,8 @@ public:
 
     explicit client(endpoint_type endpoint_);
 
+    seastar::future<> status(seastar::abort_source& as);
+
     seastar::future<response> ann(seastar::sstring keyspace, seastar::sstring name, std::vector<float> embedding, std::size_t limit, seastar::abort_source& as);
 
     seastar::future<> close();
@@ -43,11 +45,10 @@ public:
     }
 
 private:
-    seastar::future<response> request(seastar::http::request req, seastar::abort_source& as);
+    seastar::future<response> request(seastar::http::request req, std::optional<seastar::http::reply::status_type> expected_status, seastar::abort_source& as);
 
     endpoint_type _endpoint;
     seastar::http::experimental::client _http_client;
 };
-
 
 } // namespace vector_search

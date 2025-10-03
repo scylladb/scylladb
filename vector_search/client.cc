@@ -52,23 +52,28 @@ client::client(endpoint_type endpoint_)
     , _http_client(std::make_unique<client_connection_factory>(socket_address(_endpoint.ip, _endpoint.port))) {
 }
 
+seastar::future<void> client::status(seastar::abort_source& as) {
+    co_await request(http::request::make(httpd::operation_type::GET, _endpoint.host, "/api/v1/status"), http::reply::status_type::ok, as);
+}
+
 seastar::future<client::response> client::ann(
         seastar::sstring keyspace, seastar::sstring name, std::vector<float> embedding, std::size_t limit, seastar::abort_source& as) {
     auto path = format("/api/v1/indexes/{}/{}/ann", keyspace, name);
     auto content = write_ann_json(std::move(embedding), limit);
     auto req = http::request::make(httpd::operation_type::POST, _endpoint.host, std::move(path));
     req.write_body("json", std::move(content));
-    co_return co_await request(std::move(req), as);
+    co_return co_await request(std::move(req), std::nullopt, as);
 }
 
-seastar::future<client::response> client::request(http::request req, seastar::abort_source& as) {
+seastar::future<client::response> client::request(
+        http::request req, std::optional<seastar::http::reply::status_type> expected_status, seastar::abort_source& as) {
     auto resp = response{seastar::http::reply::status_type::ok, std::vector<seastar::temporary_buffer<char>>()};
     auto handler = [&resp](http::reply const& reply, input_stream<char> body) -> future<> {
         resp.status = reply._status;
         resp.content = co_await util::read_entire_stream(body);
     };
 
-    co_await _http_client.make_request(std::move(req), std::move(handler), std::nullopt, &as);
+    co_await _http_client.make_request(std::move(req), std::move(handler), std::move(expected_status), &as);
     co_return resp;
 }
 
