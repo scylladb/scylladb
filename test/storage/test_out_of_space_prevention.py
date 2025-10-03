@@ -70,7 +70,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
                 disk_info = psutil.disk_usage(workdir)
                 with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
-                        mark, _ = await log.wait_for("database - Setting critical disk utilization mode: true", from_mark=mark)
+                        mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
                     logger.info("Write data and verify it did not reach the target node")
                     query = next(write_generator(cf, 1))
@@ -89,10 +89,10 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
                     mark = await log.mark()
                     await manager.server_restart(servers[0].server_id)
                     for _ in range(2):
-                        mark, _ = await log.wait_for("database - Setting critical disk utilization mode: true", from_mark=mark)
+                        mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
                     time.sleep(1) # Let the cluster run for a sec to grep for potential errors
-                    assert await log.grep("database - Setting critical disk utilization mode: false", from_mark=mark) == []
+                    assert await log.grep("database - Set critical disk utilization mode: false", from_mark=mark) == []
 
                     try:
                         cql.execute(f"INSERT INTO {cf} (pk, t) VALUES (-1, 'x')", host=host[0], execution_profile=cl_one_profile).result()
@@ -103,7 +103,7 @@ async def test_user_writes_rejection(manager: ManagerClient, volumes_factory: Ca
 
                 logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
                 for _ in range(2):
-                    mark, _ = await log.wait_for("database - Setting critical disk utilization mode: false", from_mark=mark)
+                    mark, _ = await log.wait_for("database - Set critical disk utilization mode: false", from_mark=mark)
 
                 logger.info("Write more data and expect it to succeed")
                 cl_all_profile = cql.execution_profile_clone_update(EXEC_PROFILE_DEFAULT, consistency_level = ConsistencyLevel.ALL)
@@ -317,7 +317,7 @@ async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, vol
                 disk_info = psutil.disk_usage(workdir)
                 with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
                     for _ in range(2):
-                        mark, _ = await log.wait_for("database - Setting critical disk utilization mode: true", from_mark=mark)
+                        mark, _ = await log.wait_for("database - Set critical disk utilization mode: true", from_mark=mark)
 
                     logger.info("Migrate a tablet to the target node and expect a failure")
                     await manager.api.move_tablet(node_ip=servers[0].ip_addr, ks=ks, table=table, src_host=source_host,
@@ -327,7 +327,7 @@ async def test_autotoogle_reject_incoming_migrations(manager: ManagerClient, vol
 
                 logger.info("With blob file removed, wait for DB to drop below the critical disk utilization level")
                 for _ in range(2):
-                    mark, _ = await log.wait_for("database - Setting critical disk utilization mode: false", from_mark=mark)
+                    mark, _ = await log.wait_for("database - Set critical disk utilization mode: false", from_mark=mark)
 
                 logger.info("Migrate a tablet to the target node and expect a success")
                 await manager.api.move_tablet(node_ip=servers[0].ip_addr, ks=ks, table=table, src_host=source_host,
