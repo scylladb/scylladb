@@ -240,15 +240,18 @@ tablet_replica_set get_new_replicas(const tablet_info& tinfo, const tablet_migra
     return replace_replica(tinfo.replicas, mig.src, mig.dst);
 }
 
-tablet_replica_set get_primary_replicas(const tablet_info& info, const tablet_transition_info* transition) {
+tablet_replica_set get_primary_replicas(const locator::tablet_map& tablet_map, tablet_id tid, std::function<bool(const tablet_replica&)> filter) {
+    const auto& info = tablet_map.get_tablet_info(tid);
+    const auto* transition = tablet_map.get_tablet_transition_info(tid);
+
     auto write_selector = [&] {
         if (!transition) {
             return write_replica_set_selector::previous;
         }
         return transition->writes;
     };
-    auto primary = [] (tablet_replica_set set) -> tablet_replica {
-        return set.front();
+    auto primary = [tid, filter = std::move(filter)] (tablet_replica_set set) -> std::optional<tablet_replica> {
+        return maybe_get_primary_replica(tid, set, filter);
     };
     auto add = [] (tablet_replica r1, tablet_replica r2) -> tablet_replica_set {
         // if primary replica is not the one leaving, then only primary will be streamed to.
@@ -256,9 +259,27 @@ tablet_replica_set get_primary_replicas(const tablet_info& info, const tablet_tr
     };
 
     switch (write_selector()) {
-        case write_replica_set_selector::previous: return {primary(info.replicas)};
-        case write_replica_set_selector::both: return add(primary(info.replicas), primary(transition->next));
-        case write_replica_set_selector::next: return {primary(transition->next)};
+        case write_replica_set_selector::previous: {
+            auto primary_opt = primary(info.replicas);
+            return primary_opt.has_value() ? tablet_replica_set{primary_opt.value()} : tablet_replica_set{};
+        }
+        case write_replica_set_selector::both: {
+            auto previous_primary = primary(info.replicas);
+            auto next_primary = primary(transition->next);
+            if (previous_primary.has_value() && next_primary.has_value()) {
+                return add(previous_primary.value(), next_primary.value());
+            } else if (previous_primary.has_value()) {
+                return tablet_replica_set{previous_primary.value()};
+            } else if (next_primary.has_value()) {
+                return tablet_replica_set{next_primary.value()};
+            } else {
+                return tablet_replica_set{};
+            }
+        }
+        case write_replica_set_selector::next: {
+            auto primary_opt = primary(transition->next);
+            return primary_opt.has_value() ? tablet_replica_set{primary_opt.value()} : tablet_replica_set{};
+        }
     }
 }
 
