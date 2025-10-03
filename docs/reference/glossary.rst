@@ -129,7 +129,8 @@ Glossary
 
     RF-rack-valid keyspace
       A keyspace with :doc:`tablets </architecture/tablets>` enabled is RF-rack-valid if all of its data centers
-      have the :term:`Replication Factor (RF) <Replication Factor (RF)>` of 0, 1, or the number of racks in that data center.
+      have the :term:`Replication Factor (RF) <Replication Factor (RF)>`, which is either a rack list, or numerical
+      of value 0, 1, or the number of racks in that data center.
 
       Keyspaces with tablets disabled are always deemed RF-rack-valid, even if they do not satisfy the aforementioned condition.
 

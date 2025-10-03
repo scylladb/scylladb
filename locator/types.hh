@@ -34,3 +34,12 @@ struct endpoint_dc_rack {
 using dc_rack_fn = seastar::noncopyable_function<std::optional<endpoint_dc_rack>(host_id)>;
 
 } // namespace locator
+
+namespace std {
+
+template<>
+struct hash<locator::endpoint_dc_rack> {
+    size_t operator()(const locator::endpoint_dc_rack& v) const;
+};
+
+} // namespace std

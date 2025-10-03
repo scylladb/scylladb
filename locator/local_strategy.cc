@@ -15,7 +15,7 @@
 
 namespace locator {
 
-local_strategy::local_strategy(replication_strategy_params params) :
+local_strategy::local_strategy(replication_strategy_params params, const topology*) :
         abstract_replication_strategy(params, replication_strategy_type::local) {
     _natural_endpoints_depend_on_token = false;
 }
@@ -102,7 +102,7 @@ future<dht::token_range_vector> local_effective_replication_map::get_ranges(host
     return make_ready_future<dht::token_range_vector>();
 }
 
-using registry = class_registrator<abstract_replication_strategy, local_strategy, replication_strategy_params>;
+using registry = class_registrator<abstract_replication_strategy, local_strategy, replication_strategy_params, const topology*>;
 static registry registrator("org.apache.cassandra.locator.LocalStrategy");
 static registry registrator_short_name("LocalStrategy");
 

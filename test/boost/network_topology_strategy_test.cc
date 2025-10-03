@@ -10,7 +10,9 @@
 #include <fmt/ranges.h>
 #include "db/tablet_options.hh"
 #include "gms/inet_address.hh"
+#include "gms/feature_service.hh"
 #include "inet_address_vectors.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "locator/host_id.hh"
 #include "locator/types.hh"
 #include "locator/snitch_base.hh"
@@ -41,8 +43,10 @@
 #include "test/lib/key_utils.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
+#include "test/lib/topology_builder.hh"
 #include <seastar/core/coroutine.hh>
 #include "db/schema_tables.hh"
+#include "db/config.hh"
 
 using namespace locator;
 
@@ -84,7 +88,7 @@ static future<> check_ranges_are_sorted(static_effective_replication_map_ptr erm
 void strategy_sanity_check(
     replication_strategy_ptr ars_ptr,
     const token_metadata_ptr& tm,
-    const std::map<sstring, sstring>& options) {
+    const replication_strategy_config_options& options) {
 
     const network_topology_strategy* nts_ptr =
         dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
@@ -95,7 +99,7 @@ void strategy_sanity_check(
     //
     size_t total_rf = 0;
     for (auto& val : options) {
-        size_t rf = std::stol(val.second);
+        auto rf = locator::get_replication_factor(val.second);
         BOOST_CHECK(nts_ptr->get_replication_factor(val.first) == rf);
 
         total_rf += rf;
@@ -157,7 +161,7 @@ void endpoints_check(
  * Run in a seastar thread.
  */
 void full_ring_check(const std::vector<ring_point>& ring_points,
-                     const std::map<sstring, sstring>& options,
+                     replication_strategy_config_options& options,
                      replication_strategy_ptr ars_ptr,
                      locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
@@ -310,7 +314,7 @@ void simple_test() {
 
     /////////////////////////////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options323 = {
+    std::map<sstring, replication_strategy_config_option> options323 = {
         {"100", "3"},
         {"101", "2"},
         {"102", "3"}
@@ -318,13 +322,13 @@ void simple_test() {
     locator::replication_strategy_params params323(options323, std::nullopt);
 
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params323);
+        "NetworkTopologyStrategy", params323, stm.get()->get_topology());
 
     full_ring_check(ring_points, options323, ars_ptr, stm.get());
 
     ///////////////
     // Create the replication strategy
-    std::map<sstring, sstring> options320 = {
+    std::map<sstring, replication_strategy_config_option> options320 = {
         {"100", "3"},
         {"101", "2"},
         {"102", "0"}
@@ -332,7 +336,7 @@ void simple_test() {
     locator::replication_strategy_params params320(options320, std::nullopt);
 
     ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params320);
+        "NetworkTopologyStrategy", params320, stm.get()->get_topology());
 
     full_ring_check(ring_points, options320, ars_ptr, stm.get());
 
@@ -371,7 +375,7 @@ void heavy_origin_test() {
     std::vector<int> dc_endpoints = {128, 256, 512};
     std::vector<int> dc_replication = {2, 6, 6};
 
-    std::map<sstring, sstring> config_options;
+    replication_strategy_config_options config_options;
     std::unordered_map<inet_address, std::unordered_set<token>> tokens;
     std::vector<ring_point> ring_points;
 
@@ -419,7 +423,7 @@ void heavy_origin_test() {
 
     locator::replication_strategy_params params(config_options, std::nullopt);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-        "NetworkTopologyStrategy", params);
+        "NetworkTopologyStrategy", params, stm.get()->get_topology());
 
     full_ring_check(ring_points, config_options, ars_ptr, stm.get());
 }
@@ -490,6 +494,9 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
             }
         }).get();
 
+        auto tmptr = stm.get();
+        const auto& topo = tmptr->get_topology();
+
         auto s = schema_builder("ks", "tb")
             .with_column("pk", utf8_type, column_kind::partition_key)
             .with_column("v", utf8_type)
@@ -497,7 +504,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
 
         auto make_random_options = [&] () {
             auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
-            std::map<sstring, sstring> options;
+            std::map<sstring, replication_strategy_config_option> options;
             std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
             size_t num_option_dcs = 1 + tests::random::get_int(option_dcs.size() - 1);
             for (size_t i = 0; i < num_option_dcs; ++i) {
@@ -514,7 +521,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
         locator::replication_strategy_params params(options, tablet_count);
         auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(tab_awr_ptr);
         auto tmap = tab_awr_ptr->allocate_tablets_for_new_table(s, stm.get(), tablet_count).get();
@@ -524,7 +531,7 @@ SEASTAR_THREAD_TEST_CASE(NetworkTopologyStrategy_tablets_test) {
         auto realloc_options = make_random_options();
         locator::replication_strategy_params realloc_params(realloc_options, tablet_count);
         auto realloc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto realloc_tab_awr_ptr = realloc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(realloc_tab_awr_ptr);
         auto realloc_tmap = tab_awr_ptr->reallocate_tablets(s, stm.get(), std::move(tmap)).get();
@@ -593,7 +600,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     auto rf_per_dc = tests::random::get_int<size_t>(1, nodes_per_dc, rand);
 
     auto make_options = [&] (size_t rf_per_dc) {
-        std::map<sstring, sstring> options;
+        replication_strategy_config_options options;
         for (const auto& dc : dcs) {
             options.emplace(dc, fmt::to_string(rf_per_dc));
         }
@@ -606,7 +613,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
     testlog.debug("tablet_count={} options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params);
+            "NetworkTopologyStrategy", params, topo);
     auto nts_ptr = dynamic_cast<const network_topology_strategy*>(ars_ptr.get());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
@@ -619,7 +626,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
         locator::replication_strategy_params inc_params(inc_options, tablet_count);
         auto inc_ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto inc_nts_ptr = dynamic_cast<const network_topology_strategy*>(inc_ars_ptr.get());
         auto inc_tab_awr_ptr = inc_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(inc_tab_awr_ptr);
@@ -633,7 +640,7 @@ static void test_random_balancing(sharded<snitch_ptr>& snitch, gms::inet_address
         testlog.debug("Increasing rf_per_dc={}", rf_per_dc);
         locator::replication_strategy_params dec_params(dec_options, tablet_count);
         auto dec_ars_ptr = abstract_replication_strategy::create_replication_strategy(
-                "NetworkTopologyStrategy", params);
+                "NetworkTopologyStrategy", params, topo);
         auto dec_nts_ptr = dynamic_cast<const network_topology_strategy*>(dec_ars_ptr.get());
         auto dec_tab_awr_ptr = dec_ars_ptr->maybe_as_tablet_aware();
         BOOST_REQUIRE(dec_tab_awr_ptr);
@@ -825,8 +832,9 @@ static void test_equivalence(const shared_token_metadata& stm, const locator::to
                                                                     [](const std::pair<sstring, size_t>& p) {
                                                                         return std::make_pair(p.first, to_sstring(p.second));
                                                                     })
-                                                | std::ranges::to<std::map<sstring, sstring>>(),
-                                    std::nullopt));
+                                                | std::ranges::to<std::map<sstring, replication_strategy_config_option>>(),
+                                    std::nullopt),
+                                    &topo);
 
     const token_metadata& tm = *stm.get();
     for (size_t i = 0; i < 1000; ++i) {
@@ -941,6 +949,144 @@ SEASTAR_TEST_CASE(test_invalid_dcs) {
                     exceptions::configuration_exception);
         };
     });
+}
+
+static
+sstring describe(cql_test_env& e, sstring ks_name) {
+    auto& ks = e.local_db().find_keyspace(ks_name);
+    cql3::description desc = ks.metadata()->describe(e.local_db(), cql3::with_create_statement::yes);
+    auto result = desc.create_statement->linearize();
+    testlog.info("DESCRIBE KEYSPACE {}: {}", ks_name, result);
+    return result;
+}
+
+SEASTAR_TEST_CASE(test_rack_list_rf) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    return do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        unsigned shard_count = 2;
+        topo.start_new_dc({"dc1", "rack1a"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack1b");
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_dc({"dc2", "rack2a"});
+        topo.add_node(service::node_state::normal, shard_count);
+        topo.start_new_rack("rack2b");
+        topo.add_node(service::node_state::normal, shard_count);
+
+        // Single rack
+        e.execute_cql("CREATE KEYSPACE ks11 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a']}").get();
+        BOOST_REQUIRE(describe(e, "ks11").contains("'dc1': ['rack1a']"));
+
+        // Two racks
+        e.execute_cql("CREATE KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b']}").get();
+        BOOST_REQUIRE(describe(e, "ks12").contains("'dc1': ['rack1a', 'rack1b']"));
+
+        // Two DCs, two racks each
+        {
+            e.execute_cql("CREATE KEYSPACE ks22 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b'], "
+                "'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}").get();
+            auto& opts = e.local_db().find_keyspace("ks22").get_replication_strategy().get_config_options();
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).get_rack_list(),
+                                std::vector<sstring>({"rack1a", "rack1b"}));
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).get_rack_list(),
+                                std::vector<sstring>({"rack2a", "rack2b"}));
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).count(), 2);
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).count(), 2);
+            BOOST_REQUIRE(describe(e, "ks22").contains("'dc1': ['rack1a', 'rack1b']"));
+            BOOST_REQUIRE(describe(e, "ks22").contains("'dc2': ['rack2a', 'rack2b']"));
+        }
+
+        // Two DCs, one using rack list, one using numeric RF
+        // No auto-expansion to rack list.
+        {
+            e.execute_cql("CREATE KEYSPACE ks2n2 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 2, "
+                "'dc2': ['rack2a', 'rack2b']} AND tablets = {'enabled':true}").get();
+            auto& opts = e.local_db().find_keyspace("ks2n2").get_replication_strategy().get_config_options();
+            BOOST_REQUIRE(replication_factor_data(opts.at("dc1")).is_numeric());
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).get_rack_list(),
+                                std::vector<sstring>({"rack2a", "rack2b"}));
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc1")).count(), 2);
+            BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at("dc2")).count(), 2);
+            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc1': '2'"));
+            BOOST_REQUIRE(describe(e, "ks2n2").contains("'dc2': ['rack2a', 'rack2b']"));
+        }
+
+        // Non-existent DC
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc3': ['rack2a']}").get(),
+            exceptions::configuration_exception);
+
+        // Rack from the wrong DC
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack2a']}").get(),
+            exceptions::configuration_exception);
+
+        // Duplicated racks
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1b', 'rack1a']}").get(),
+            exceptions::configuration_exception);
+
+        // Duplicated racks
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "CREATE KEYSPACE fail WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': ['rack1a', 'rack1a']}").get(),
+            exceptions::configuration_exception);
+
+        // Alter to numeric with different count
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "ALTER KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 3}").get(),
+            exceptions::configuration_exception);
+        BOOST_REQUIRE_THROW(e.execute_cql(
+            "ALTER KEYSPACE ks12 WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'dc1': 1}").get(),
+            exceptions::configuration_exception);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_rack_list_rejected_when_feature_not_enabled) {
+    auto cfg = cql_test_config();
+    cfg.db_config->tablets_mode_for_new_keyspaces(db::tablets_mode_t::mode::enabled);
+    cfg.disabled_features.insert("RACK_LIST_RF");
+    return do_with_cql_env_thread([] (auto& e) {
+        auto& topo = e.get_shared_token_metadata().local().get()->get_topology();
+        auto loc = topo.get_location();
+        auto create_stmt = fmt::format("CREATE KEYSPACE test WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
+                    " '{}': ['{}']}}", loc.dc, loc.rack);
+        BOOST_REQUIRE_THROW(e.execute_cql(create_stmt).get(), exceptions::configuration_exception);
+
+        // Auto-expansion to numeric RF should not happen
+        e.execute_cql(fmt::format("CREATE KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy', '{}': 1}}", loc.dc)).get();
+        auto& opts = e.local_db().find_keyspace("test2").get_replication_strategy().get_config_options();
+        BOOST_REQUIRE(replication_factor_data(opts.at(loc.dc)).is_numeric());
+        BOOST_REQUIRE_EQUAL(replication_factor_data(opts.at(loc.dc)).count(), 1);
+        BOOST_REQUIRE(describe(e, "test2").contains(fmt::format("'{}': '1'", loc.dc)));
+
+        // When feature is enabled, rack list is accepted.
+        e.get_feature_service().local().rack_list_rf.enable();
+        e.execute_cql(create_stmt).get();
+
+        // Altering numeric RF to rack list is not supported yet.
+        BOOST_REQUIRE_THROW(e.execute_cql(fmt::format("ALTER KEYSPACE test2 WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
+                                                      " '{}': ['{}']}}", loc.dc, loc.rack)).get(),
+                            exceptions::configuration_exception);
+    }, cfg);
+}
+
+SEASTAR_TEST_CASE(test_rack_list_rejected_when_using_vnodes) {
+    auto cfg = cql_test_config();
+    return do_with_cql_env_thread([] (auto& e) {
+        auto& topo = e.get_shared_token_metadata().local().get()->get_topology();
+        auto loc = topo.get_location();
+        auto create_stmt = [&] (bool tablets) {
+            return fmt::format("CREATE KEYSPACE abc WITH REPLICATION = {{'class': 'NetworkTopologyStrategy',"
+                               " '{}': ['{}']}} and TABLETS = {{'enabled': {}}}",
+                               loc.dc, loc.rack, tablets ? "true" : "false");
+        };
+
+        BOOST_REQUIRE_THROW(e.execute_cql(create_stmt(false)).get(), exceptions::configuration_exception);
+        e.execute_cql(create_stmt(true)).get();
+    }, cfg);
 }
 
 } // namespace network_topology_strategy_test
@@ -1285,7 +1431,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     auto make_random_options = [&] () {
         auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
         std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-        std::map<sstring, sstring> options;
+        std::map<sstring, replication_strategy_config_option> options;
         for (const auto& dc : option_dcs) {
             auto num_racks = node_count_per_rack.at(dc).size();
             auto max_rf_factor = std::ranges::min(std::ranges::views::transform(node_count_per_rack.at(dc), [] (auto& x) { return x.second; }));
@@ -1300,7 +1446,7 @@ SEASTAR_THREAD_TEST_CASE(tablets_simple_rack_aware_view_pairing_test) {
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params);
+            "NetworkTopologyStrategy", params, tmptr->get_topology());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
     auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1).get();
@@ -1437,7 +1583,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     auto make_random_options = [&] () {
         auto option_dcs = node_count_per_dc | std::views::keys | std::ranges::to<std::vector>();
         std::shuffle(option_dcs.begin(), option_dcs.end(), random_engine);
-        std::map<sstring, sstring> options;
+        std::map<sstring, replication_strategy_config_option> options;
         for (const auto& dc : option_dcs) {
             auto num_racks = node_count_per_rack.at(dc).size();
             auto rf = more_or_less ?
@@ -1453,7 +1599,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
     testlog.debug("tablet_count={} rf_options={}", tablet_count, options);
     locator::replication_strategy_params params(options, tablet_count);
     auto ars_ptr = abstract_replication_strategy::create_replication_strategy(
-            "NetworkTopologyStrategy", params);
+            "NetworkTopologyStrategy", params, tmptr->get_topology());
     auto tab_awr_ptr = ars_ptr->maybe_as_tablet_aware();
     BOOST_REQUIRE(tab_awr_ptr);
     auto base_tmap = tab_awr_ptr->allocate_tablets_for_new_table(base_schema, tmptr, 1).get();
@@ -1525,7 +1671,7 @@ void test_complex_rack_aware_view_pairing_test(bool more_or_less) {
         }
     }
     for (const auto& [dc, rf_opt] : options) {
-        auto rf = std::stol(rf_opt);
+        auto rf = locator::get_replication_factor(rf_opt);
         BOOST_REQUIRE_EQUAL(same_rack_pairs[dc] + cross_rack_pairs[dc], rf);
     }
 }
@@ -1536,6 +1682,49 @@ SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_lt_rack
 
 SEASTAR_THREAD_TEST_CASE(tablets_complex_rack_aware_view_pairing_test_rf_gt_racks) {
     test_complex_rack_aware_view_pairing_test(true);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_rack_diff) {
+    BOOST_REQUIRE(diff_racks({}, {}).empty());
+
+    {
+        rack_list l1 = {"rack1", "rack2", "rack3"};
+        rack_list l2 = {"rack1", "rack2", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE(diff.empty());
+    }
+
+    {
+        rack_list l1 = {"rack3", "rack2", "rack1"};
+        rack_list l2 = {"rack1", "rack2", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE(diff.empty());
+    }
+
+    {
+        rack_list l1 = {"rack1", "rack2"};
+        rack_list l2 = {"rack1", "rack2", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE_EQUAL(diff.added, rack_list{"rack3"});
+        BOOST_REQUIRE(diff.removed.empty());
+    }
+
+    {
+        rack_list l1 = {"rack1", "rack2", "rack3"};
+        rack_list l2 = {"rack1", "rack3"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE_EQUAL(diff.removed, rack_list{"rack2"});
+        BOOST_REQUIRE(diff.added.empty());
+    }
+
+    {
+        rack_list l1 = {"rack3", "rack2", "rack1"};
+        rack_list l2 = {"rack4", "rack2"};
+        auto diff = diff_racks(l1, l2);
+        BOOST_REQUIRE_EQUAL(diff.added, rack_list{"rack4"});
+        BOOST_REQUIRE_EQUAL(diff.removed | std::ranges::to<std::unordered_set<sstring>>(),
+                            std::unordered_set<sstring>({"rack1", "rack3"}));
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

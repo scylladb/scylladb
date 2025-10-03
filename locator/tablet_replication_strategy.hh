@@ -47,11 +47,19 @@ public:
     /// Runs under group0 guard.
     virtual future<tablet_map> reallocate_tablets(schema_ptr, token_metadata_ptr, tablet_map cur_tablets) const = 0;
 
-    /// Returns replication factor in a given DC.
+    /// Returns replication factor (as replica count) in a given DC.
     /// Note that individual tablets may lag behind desired replication factor in their
     /// current replica list, as replication factor changes involve table rebuilding transitions
     /// which are not instantaneous.
     virtual size_t get_replication_factor(const sstring& dc) const = 0;
+
+    /// Returns replication factor in a given DC, or nullptr if not specified for this DC.
+    /// Note that individual tablets may lag behind desired replication factor in their
+    /// current replica list, as replication factor changes involve table rebuilding transitions
+    /// which are not instantaneous.
+    virtual const replication_factor_data* get_replication_factor_data(const sstring& dc) const = 0;
+
+    virtual bool is_rack_based(const sstring& dc) const = 0;
 };
 
 } // namespace locator

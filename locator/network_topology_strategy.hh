@@ -23,7 +23,7 @@ class load_sketch;
 class network_topology_strategy : public abstract_replication_strategy
                                 , public tablet_aware_replication_strategy {
 public:
-    network_topology_strategy(replication_strategy_params params);
+    network_topology_strategy(replication_strategy_params params, const topology* topo);
 
     virtual size_t get_replication_factor(const token_metadata&) const override {
         return _rep_factor;
@@ -31,7 +31,22 @@ public:
 
     size_t get_replication_factor(const sstring& dc) const override {
         auto dc_factor = _dc_rep_factor.find(dc);
-        return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second;
+        return (dc_factor == _dc_rep_factor.end()) ? 0 : dc_factor->second.count();
+    }
+
+    const replication_factor_data* get_replication_factor_data(const sstring& dc) const override {
+        auto dc_factor = _dc_rep_factor.find(dc);
+        if (dc_factor == _dc_rep_factor.end()) {
+            return nullptr;
+        }
+        return &dc_factor->second;
+    }
+
+    bool is_rack_based(const sstring& dc) const override {
+        if (auto rf = get_replication_factor_data(dc)) {
+            return rf->is_rack_based();
+        }
+        return false;
     }
 
     const std::vector<sstring>& get_datacenters() const {
@@ -58,6 +73,9 @@ protected:
 
     virtual void validate_options(const gms::feature_service&, const locator::topology& topology) const override;
 
+public:
+    using dc_rep_factor_map = std::unordered_map<sstring, replication_factor_data>;
+
 private:
     future<tablet_replica_set> reallocate_tablets(schema_ptr, token_metadata_ptr, load_sketch&, const tablet_map& cur_tablets, tablet_id tb) const;
     future<tablet_replica_set> add_tablets_in_dc(schema_ptr, token_metadata_ptr, load_sketch&, tablet_id,
@@ -68,8 +86,24 @@ private:
             const tablet_replica_set& cur_replicas,
             sstring dc, size_t dc_node_count, size_t dc_rf) const;
 
+    tablet_replica_set drop_tablets_in_racks(schema_ptr,
+                                             token_metadata_ptr,
+                                             load_sketch&,
+                                             tablet_id,
+                                             const tablet_replica_set& cur_replicas,
+                                             const sstring& dc,
+                                             const rack_list& racks_to_drop) const;
+
+    tablet_replica_set add_tablets_in_racks(schema_ptr,
+                                            token_metadata_ptr,
+                                            load_sketch&,
+                                            tablet_id,
+                                            const tablet_replica_set& cur_replicas,
+                                            const sstring& dc,
+                                            const rack_list& racks_to_add) const;
+
     // map: data centers -> replication factor
-    std::unordered_map<sstring, size_t> _dc_rep_factor;
+    dc_rep_factor_map _dc_rep_factor;
 
     std::vector<sstring> _datacenteres;
     size_t _rep_factor;
