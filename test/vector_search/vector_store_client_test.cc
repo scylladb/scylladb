@@ -1002,3 +1002,47 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
             },
             cfg);
 }
+
+SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
+    {
+
+        auto s1 = co_await make_unavailable_server();
+        auto s2 = co_await make_vs_mock_server();
+        std::unique_ptr<vs_mock_server> s1_available;
+
+        auto cfg = cql_test_config();
+        cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{},http://s2.node:{}", s1->port(), s2->port()));
+        co_await do_with_cql_env(
+                [&](cql_test_env& env) -> future<> {
+                    auto as = abort_source_timeout();
+                    auto schema = co_await create_test_table(env, "ks", "idx");
+                    auto& vs = env.local_qp().vector_store_client();
+                    configure(vs).with_dns({{"s1.node", std::vector<std::string>{s1->host()}}, {"s2.node", std::vector<std::string>{s2->host()}}});
+                    vs.start_background_tasks();
+
+                    // Wait until a request is sent to s1. On failure, it is placed into backoff.
+                    BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                        co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                        co_return s1->connections() > 0;
+                    }));
+
+                    // Make s1 available
+                    s1_available = std::make_unique<vs_mock_server>();
+                    co_await s1_available->start(co_await s1->take_socket());
+
+                    // Wait until s1 is taken out of the backoff state and used for requests again.
+                    BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                        co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                        co_return !s1_available->requests().empty();
+                    }));
+                },
+                cfg)
+                .finally(coroutine::lambda([&] -> future<> {
+                    co_await s1->stop();
+                    co_await s2->stop();
+                    if (s1_available) {
+                        co_await s1_available->stop();
+                    }
+                }));
+    }
+}
