@@ -527,10 +527,35 @@ void set_view_builder(http_context& ctx, routes& r, sharded<db::view::view_build
         });
     });
 
+    cf::get_built_indexes.set(r, [&vb](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
+        auto [ks, cf_name] = parse_fully_qualified_cf_name(req->get_path_param("name"));
+        // Use of load_built_views() as filtering table should be in sync with
+        // built_indexes_virtual_reader filtering with BUILT_VIEWS table
+        std::vector<db::system_keyspace::view_name> vn = co_await vb.local().get_sys_ks().load_built_views();
+        std::set<sstring> vp;
+        for (auto b : vn) {
+            if (b.first == ks) {
+                vp.insert(b.second);
+            }
+        }
+        std::vector<sstring> res;
+        replica::database& db = vb.local().get_db();
+        auto uuid = validate_table(db, ks, cf_name);
+        replica::column_family& cf = db.find_column_family(uuid);
+        res.reserve(cf.get_index_manager().list_indexes().size());
+        for (auto&& i : cf.get_index_manager().list_indexes()) {
+            if (vp.contains(secondary_index::index_table_name(i.metadata().name()))) {
+                res.emplace_back(i.metadata().name());
+            }
+        }
+        co_return res;
+    });
+
 }
 
 void unset_view_builder(http_context& ctx, routes& r) {
     ss::view_build_statuses.unset(r);
+    cf::get_built_indexes.unset(r);
 }
 
 static future<json::json_return_type> describe_ring_as_json(sharded<service::storage_service>& ss, sstring keyspace) {
