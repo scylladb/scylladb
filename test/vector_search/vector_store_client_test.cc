@@ -952,3 +952,79 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
             },
             cfg);
 }
+
+SEASTAR_TEST_CASE(vector_store_client_test_paging_warning) {
+    auto s1 = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{}", s1->port()));
+    co_await do_with_cql_env(
+            [&s1](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"s1.node", std::vector<std::string>{s1->host()}}});
+
+                vs.start_background_tasks();
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+                auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                        cql3::query_options::specific_options{5, nullptr, {}, api::new_timestamp()});
+                auto msg = co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 100;", std::move(qo));
+                auto warns = msg->warnings();
+                BOOST_REQUIRE_EQUAL(warns.size(), 1);
+                BOOST_CHECK(warns[0] == "Paging is not supported for Vector Search queries. The entire result set has been returned.");
+            },
+            cfg)
+            .finally([&s1] {
+                return s1->stop();
+            });
+}
+
+SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_paging_disabled) {
+    auto s1 = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{}", s1->port()));
+    co_await do_with_cql_env(
+            [&s1](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"s1.node", std::vector<std::string>{s1->host()}}});
+
+                vs.start_background_tasks();
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+                auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                        cql3::query_options::specific_options{0, nullptr, {}, api::new_timestamp()});
+                auto msg = co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 100;", std::move(qo));
+                auto warns = msg->warnings();
+                BOOST_REQUIRE_EQUAL(warns.size(), 0);
+            },
+            cfg)
+            .finally([&s1] {
+                return s1->stop();
+            });
+}
+
+SEASTAR_TEST_CASE(vector_store_client_test_paging_warning_doesnt_show_when_limit_less_than_page_size) {
+    auto s1 = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{}", s1->port()));
+    co_await do_with_cql_env(
+            [&s1](cql_test_env& env) -> future<> {
+                auto schema = co_await create_test_table(env, "ks", "test");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"s1.node", std::vector<std::string>{s1->host()}}});
+
+                vs.start_background_tasks();
+                auto result = co_await env.execute_cql("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index'");
+                auto qo = std::make_unique<cql3::query_options>(db::consistency_level::LOCAL_ONE, std::vector<cql3::raw_value>{},
+                        cql3::query_options::specific_options{100, nullptr, {}, api::new_timestamp()});
+                auto msg = co_await env.execute_cql("SELECT * FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 5;", std::move(qo));
+                auto warns = msg->warnings();
+                BOOST_REQUIRE_EQUAL(warns.size(), 0);
+            },
+            cfg)
+            .finally([&s1] {
+                return s1->stop();
+            });
+}
