@@ -11,7 +11,8 @@ target_sources(replica
     dirty_memory_manager.cc
     multishard_query.cc
     mutation_dump.cc
-    schema_describe_helper.cc)
+    schema_describe_helper.cc
+    querier.cc)
 target_include_directories(replica
   PUBLIC
     ${CMAKE_SOURCE_DIR})

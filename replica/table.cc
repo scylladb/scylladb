@@ -3879,7 +3879,7 @@ table::query(schema_ptr query_schema,
         tracing::trace_state_ptr trace_state,
         query::result_memory_limiter& memory_limiter,
         db::timeout_clock::time_point timeout,
-        std::optional<query::querier>* saved_querier) {
+        std::optional<querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return make_lw_shared<query::result>();
     }
@@ -3899,7 +3899,7 @@ table::query(schema_ptr query_schema,
 
     query_state qs(query_schema, cmd, opts, partition_ranges, std::move(accounter));
 
-    std::optional<query::querier> querier_opt;
+    std::optional<querier> querier_opt;
     if (saved_querier) {
         querier_opt = std::move(*saved_querier);
     }
@@ -3908,8 +3908,8 @@ table::query(schema_ptr query_schema,
         auto&& range = *qs.current_partition_range++;
 
         if (!querier_opt) {
-            query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-            querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, conf);
+            querier_base::querier_config conf(_config.tombstone_warn_threshold);
+            querier_opt = querier(as_mutation_source(), query_schema, permit, range, qs.cmd.slice, trace_state, conf);
         }
         auto& q = *querier_opt;
 
@@ -3952,20 +3952,20 @@ table::mutation_query(schema_ptr query_schema,
         tracing::trace_state_ptr trace_state,
         query::result_memory_accounter accounter,
         db::timeout_clock::time_point timeout,
-        std::optional<query::querier>* saved_querier) {
+        std::optional<querier>* saved_querier) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return reconcilable_result();
     }
 
     const auto table_async_gate_holder = _async_gate.hold();
 
-    std::optional<query::querier> querier_opt;
+    std::optional<querier> querier_opt;
     if (saved_querier) {
         querier_opt = std::move(*saved_querier);
     }
     if (!querier_opt) {
-        query::querier_base::querier_config conf(_config.tombstone_warn_threshold);
-        querier_opt = query::querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, conf);
+        querier_base::querier_config conf(_config.tombstone_warn_threshold);
+        querier_opt = querier(as_mutation_source(), query_schema, permit, range, cmd.slice, trace_state, conf);
     }
     auto& q = *querier_opt;
 

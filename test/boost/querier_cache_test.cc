@@ -8,7 +8,7 @@
 
 #include <algorithm>
 
-#include "querier.hh"
+#include "replica/querier.hh"
 #include "mutation_query.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "test/lib/simple_schema.hh"
@@ -74,11 +74,11 @@ public:
 
 private:
     // Expected value of the above counters, updated by this.
-    query::querier_cache::stats _expected_stats;
+    replica::querier_cache::stats _expected_stats;
 
     simple_schema _s;
     reader_concurrency_semaphore _sem;
-    query::querier_cache _cache;
+    replica::querier_cache _cache;
     const utils::chunked_vector<mutation> _mutations;
     const mutation_source _mutation_source;
 
@@ -159,7 +159,7 @@ public:
     };
 
     test_querier_cache(const noncopyable_function<sstring(size_t)>& external_make_value, std::chrono::seconds entry_ttl = 24h,
-            ssize_t max_memory = std::numeric_limits<ssize_t>::max(), query::querier_cache::is_user_semaphore_func is_user_semaphore = {})
+            ssize_t max_memory = std::numeric_limits<ssize_t>::max(), replica::querier_cache::is_user_semaphore_func is_user_semaphore = {})
         : _sem(reader_concurrency_semaphore::for_tests{}, "test_querier_cache", std::numeric_limits<int>::max(), max_memory)
         , _cache(is_user_semaphore ? std::move(is_user_semaphore) : [] (const reader_concurrency_semaphore&) { return true; }, entry_ttl)
         , _mutations(make_mutations(_s, external_make_value))
@@ -174,7 +174,7 @@ public:
         : test_querier_cache(test_querier_cache::make_value, entry_ttl) {
     }
 
-    test_querier_cache(query::querier_cache::is_user_semaphore_func is_user_semaphore)
+    test_querier_cache(replica::querier_cache::is_user_semaphore_func is_user_semaphore)
         : test_querier_cache(test_querier_cache::make_value, 24h, std::numeric_limits<ssize_t>::max(), std::move(is_user_semaphore))
     { }
 
@@ -217,7 +217,7 @@ public:
     }
 
     template <typename Querier>
-    entry_info produce_first_page_and_save_querier(void(query::querier_cache::*insert_mem_ptr)(query_id, Querier&&, tracing::trace_state_ptr), unsigned key,
+    entry_info produce_first_page_and_save_querier(void(replica::querier_cache::*insert_mem_ptr)(query_id, Querier&&, tracing::trace_state_ptr), unsigned key,
             const dht::partition_range& range, const query::partition_slice& slice, uint64_t row_limit, db::timeout_clock::time_point timeout = db::no_timeout) {
         const auto cache_key = make_cache_key(key);
 
@@ -267,7 +267,7 @@ public:
 
     entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range,
             const query::partition_slice& slice, uint64_t row_limit = 5) {
-        return produce_first_page_and_save_querier<query::querier>(&query::querier_cache::insert_data_querier, key, range, slice, row_limit);
+        return produce_first_page_and_save_querier<replica::querier>(&replica::querier_cache::insert_data_querier, key, range, slice, row_limit);
     }
 
     entry_info produce_first_page_and_save_data_querier(unsigned key, const dht::partition_range& range, uint64_t row_limit = 5) {
@@ -291,7 +291,7 @@ public:
 
     entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range,
             const query::partition_slice& slice, uint64_t row_limit = 5, db::timeout_clock::time_point timeout = db::no_timeout) {
-        return produce_first_page_and_save_querier<query::querier>(&query::querier_cache::insert_mutation_querier, key, range, slice, row_limit, timeout);
+        return produce_first_page_and_save_querier<replica::querier>(&replica::querier_cache::insert_mutation_querier, key, range, slice, row_limit, timeout);
     }
 
     entry_info produce_first_page_and_save_mutation_querier(unsigned key, const dht::partition_range& range, uint64_t row_limit = 5,
