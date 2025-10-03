@@ -113,6 +113,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         await manager.server_update_config(srv.server_id, 'recovery_leader', recovery_leader_id)
 
     logging.info(f'Restarting {live_servers} with recovery leader {live_servers[0].server_id}')
+    manager.ignore_log_patterns.extend([
+        "Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        "ignore outdated snapshot",
+    ])
     await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
 
     # We reconnect the driver before we send ALTER KEYSPACE requests below (if remove_dead_nodes_with == "remove") due
@@ -141,6 +145,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         # For now, we do not have a specific API to mark nodes as dead, so we use a workaround.
         # FIXME: use the specific API once scylladb/scylladb#21281 is fixed.
         logging.info(f'Marking {dead_servers} as permanently dead')
+        manager.ignore_log_patterns.append("There are nodes with tablets to drain but no candidate nodes in DC")
         await manager.remove_node(live_servers[0].server_id, dead_servers[0].server_id,
                                   [dead_srv.ip_addr for dead_srv in dead_servers[1:]],
                                   expected_error='Removenode failed')

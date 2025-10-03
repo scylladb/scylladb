@@ -56,6 +56,7 @@ async def test_cleanup_stop(manager: ManagerClient):
         stop_cleanup = asyncio.create_task(manager.api.stop_compaction(servers[0].ip_addr, "CLEANUP"))
         time.sleep(1)
 
+        manager.ignore_log_patterns.append("sstables::compaction_stopped_exception .* due to: user request")
         await manager.api.message_injection(servers[0].ip_addr, "sstable_cleanup_wait")
         await stop_cleanup
         caught_exception = False

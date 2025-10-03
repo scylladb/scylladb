@@ -228,6 +228,7 @@ async def test_memtable_flush_retries(manager: ManagerClient, tmpdir, s3_server)
     res = cql.execute(f"SELECT * FROM {ks}.{cf};")
     rows = {x.name: x.value for x in res}
 
+    manager.ignore_log_patterns.append("EACCESS fault injected to simulate authorization failure")
     with scylla_inject_error(cql, "s3_client_fail_authorization"):
         print(f'Flush keyspace')
         flush = asyncio.create_task(manager.api.flush_keyspace(server.ip_addr, ks))
