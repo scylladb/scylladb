@@ -7,12 +7,15 @@
  */
 
 #include "client.hh"
+#include "util.hh"
+#include <optional>
 #include <seastar/core/format.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/common.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/api.hh>
+#include <seastar/json/json_elements.hh>
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -23,6 +26,24 @@ namespace {
 auto write_ann_json(std::vector<float> embedding, std::size_t limit) -> seastar::sstring {
     return seastar::format(R"({{"vector":[{}],"limit":{}}})", fmt::join(embedding, ","), limit);
 }
+
+auto read_status(const sstring& body) -> client::status_type {
+
+    if (body == "INITIALIZING") {
+        return client::status_type::initializing;
+    }
+    if (body == "CONNECTING_TO_DB") {
+        return client::status_type::connecting_to_db;
+    }
+    if (body == "BOOTSTRAPPING") {
+        return client::status_type::bootstrapping;
+    }
+    if (body == "SERVING") {
+        return client::status_type::serving;
+    }
+    return client::status_type::unknown;
+}
+
 
 class client_connection_factory : public http::experimental::connection_factory {
     socket_address _addr;
@@ -52,8 +73,9 @@ client::client(endpoint_type endpoint_)
     , _http_client(std::make_unique<client_connection_factory>(socket_address(_endpoint.ip, _endpoint.port))) {
 }
 
-seastar::future<void> client::status(seastar::abort_source& as) {
-    co_await request(http::request::make(httpd::operation_type::GET, _endpoint.host, "/api/v1/status"), http::reply::status_type::ok, as);
+seastar::future<client::status_type> client::status(seastar::abort_source& as) {
+    auto resp = co_await request(http::request::make(httpd::operation_type::GET, _endpoint.host, "/api/v1/status"), http::reply::status_type::ok, as);
+    co_return read_status(response_content_to_sstring(resp.content));
 }
 
 seastar::future<client::response> client::ann(

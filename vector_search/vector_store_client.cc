@@ -10,6 +10,7 @@
 #include "dns.hh"
 #include "load_balancer.hh"
 #include "node.hh"
+#include "util.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/type_json.hh"
 #include "db/config.hh"
@@ -222,14 +223,6 @@ auto parse_uris(std::string_view uris_csv) -> std::vector<uri> {
 
     vslogger.info("Vector Store service URIs set to: '{}'", uris_csv);
     return ret;
-}
-
-sstring response_content_to_sstring(const std::vector<temporary_buffer<char>>& buffers) {
-    sstring result;
-    for (const auto& buf : buffers) {
-        result.append(buf.get(), buf.size());
-    }
-    return result;
 }
 
 std::vector<sstring> get_hosts(const std::vector<uri>& uris) {
