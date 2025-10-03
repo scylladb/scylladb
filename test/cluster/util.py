@@ -548,6 +548,7 @@ async def new_test_table(manager: ManagerClient, keyspace, schema, extra="", hos
     This function can be used in a "async with", as:
        async with create_table(cql, test_keyspace, '...') as table:
     """
+    print(f"DSZ: new_test_table: keyspace='{keyspace}', schema='{schema}', extra='{extra}', host='{host}', reuse_tables='{reuse_tables}'")
     global previously_used_table_names
     if reuse_tables:
         if not previously_used_table_names:
