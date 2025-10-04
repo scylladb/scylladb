@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 import sys
 from argparse import BooleanOptionalAction
@@ -25,14 +26,11 @@ from test.pylib.suite.base import (
     SUITE_CONFIG_FILENAME,
     TestSuite,
     get_testpy_test,
-    init_testsuite_globals,
-    prepare_dirs,
-    start_3rd_party_services,
+    prepare_environment, init_testsuite_globals,
 )
 from test.pylib.util import get_modes_to_run
 
 if TYPE_CHECKING:
-    from asyncio import AbstractEventLoop
     from collections.abc import Generator
 
     import _pytest.nodes
@@ -166,33 +164,55 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     if not session.config.getoption("--test-py-init"):
         return
 
-    init_testsuite_globals()
-    TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+    # Check if this is an xdist worker
+    is_xdist_worker = "xdist" in sys.modules and sys.modules["xdist"].is_xdist_worker(request_or_session=session)
 
-    # Run stuff just once for the pytest session even running under xdist.
-    if "xdist" not in sys.modules or not sys.modules["xdist"].is_xdist_worker(request_or_session=session):
+    # Always initialize globals in xdist workers (they run in separate processes)
+    # For the main process, only init if test.py hasn't done so already
+    if is_xdist_worker or 'TEST_ENVIRONMENT_PREPARED' not in os.environ:
+        init_testsuite_globals()
+        TestSuite.artifacts.add_exit_artifact(None, TestSuite.hosts.cleanup)
+
+    # Run stuff just once for the main pytest process (not in xdist workers).
+    # Only prepare the environment if it hasn't been prepared by test.py
+    if not is_xdist_worker and 'TEST_ENVIRONMENT_PREPARED' not in os.environ:
         temp_dir = pathlib.Path(session.config.getoption("--tmpdir")).absolute()
-        prepare_dirs(
+
+        prepare_environment(
             tempdir_base=temp_dir,
             modes=get_modes_to_run(session.config),
             gather_metrics=session.config.getoption("--gather-metrics"),
             save_log_on_success=session.config.getoption("--save-log-on-success"),
-        )
-        start_3rd_party_services(
-            tempdir_base=temp_dir,
             toxiproxy_byte_limit=session.config.getoption("--byte-limit"),
         )
 
+        # Mark that we need to cleanup in pytest_unconfigure
+        session.config._needs_pytest_cleanup = True
 
-def pytest_sessionfinish(session: pytest.Session) -> None:
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    # test.py handles cleanup by itself, so we only cleanup when running with pure pytest
+    # If TEST_ENVIRONMENT_PREPARED is set, it means test.py prepared the environment and will handle cleanup
+    if TEST_RUNNER != "pytest" or session.config.getoption("--collect-only"):
+        return
+
     if not session.config.getoption("--test-py-init"):
         return
-    if getattr(TestSuite, "artifacts", None) is not None:
-        loop: AbstractEventLoop = asyncio.get_event_loop()
-        if not loop.is_running():
-            loop.run_until_complete(TestSuite.artifacts.cleanup_before_exit())
-        else:
-            loop.create_task(TestSuite.artifacts.cleanup_before_exit())
+
+    # Only cleanup if pytest itself prepared the environment (not test.py)
+    # We know test.py prepared it if the environment variable was already set when pytest started
+    if os.environ.get('TEST_ENVIRONMENT_PREPARED') == 'true':
+        return
+
+    # Check if this is an xdist worker - workers should not clean up (only the main process should)
+    is_xdist_worker = "xdist" in sys.modules and sys.modules["xdist"].is_xdist_worker(request_or_session=session)
+    if is_xdist_worker:
+        return
+
+    # Cleanup is handled in pytest_unconfigure instead of here because:
+    # 1. pytest-asyncio's event loop may still be running at this point
+    # 2. pytest_unconfigure runs after the event loop is closed, allowing safe cleanup
+    # This hook is kept for documentation and to show the intended cleanup logic flow
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -204,6 +224,30 @@ def pytest_configure(config: pytest.Config) -> None:
         config.run_ids = (testpy_run_id,)
     else:
         config.run_ids = tuple(range(1, config.getoption("--repeat") + 1))
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    """Cleanup hook that runs after all tests and after pytest-asyncio closes its event loop.
+
+    This hook is called after pytest_sessionfinish, and after pytest-asyncio has closed
+    its event loop, making it safe to run async cleanup with asyncio.run().
+    """
+    # Only cleanup if we set up the environment
+    if not getattr(config, '_needs_pytest_cleanup', False):
+        return
+
+    if getattr(TestSuite, "artifacts", None) is not None:
+        try:
+            # Check if there's a running event loop (there shouldn't be at this point)
+            asyncio.get_running_loop()
+            # If we get here, there's still a running loop - skip cleanup to avoid issues
+            logging.warning("pytest_unconfigure: Event loop still running, skipping cleanup")
+        except RuntimeError:
+            # No running loop, safe to clean up
+            try:
+                asyncio.run(TestSuite.artifacts.cleanup_before_exit())
+            except Exception as e:
+                logging.error(f"pytest_unconfigure: Cleanup failed: {e}", exc_info=True)
 
 
 @pytest.hookimpl(wrapper=True)
