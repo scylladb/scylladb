@@ -3,10 +3,13 @@ import requests
 import time
 
 from ..cqlpy.util import new_test_table, new_test_keyspace
+from test.cluster.conftest import skip_mode
 from test.rest_api.rest_util import new_test_module, new_test_task, set_tmp_task_ttl, ThreadWrapper, scylla_inject_error, set_tmp_user_task_ttl
 from test.rest_api.task_manager_utils import check_field_correctness, check_status_correctness, assert_task_does_not_exist, list_modules, get_task_status, list_tasks, get_task_status_recursively, wait_for_task, drain_module_tasks, abort_task
 
 long_time = 1000000000
+
+pytestmark = skip_mode('release')
 
 def check_sequence_number(rest_api, task_id, expected):
     status = get_task_status(rest_api, task_id)
