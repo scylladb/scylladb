@@ -18,6 +18,9 @@
 #include "db/config.hh"
 #include "mutation/tombstone.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "query/query-result.hh"
+#include "seastar/core/future.hh"
+#include "seastar/core/sstring.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -2624,6 +2627,33 @@ static future<uint64_t> get_previous_item_size(
     co_return item_length;
 }
 
+inline future<executor::request_return_type> rmw_operation::mutate_and_return(service::storage_proxy& proxy, mutation m, tracing::trace_state_ptr trace_state,
+        service_permit permit, uint64_t& wcu_total, cdc::per_request_options cdc_opts) {
+    co_await proxy.mutate(utils::chunked_vector<mutation>{std::move(m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(),
+            std::move(trace_state), std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts));
+    co_return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+}
+
+inline future<executor::request_return_type> rmw_operation::mutate_and_return_with_read_before_write(service::storage_proxy& proxy,
+        service::client_state& client_state, tracing::trace_state_ptr trace_state, service_permit permit, uint64_t& wcu_total, bool propagate_failures,
+        cdc::per_request_options cdc_opts) {
+    auto selection = cql3::selection::selection::wildcard(schema());
+    auto command = previous_item_read_command(proxy, schema(), _ck, selection);
+    command->allow_limit = db::allow_per_partition_rate_limit::yes;
+    auto qr = co_await proxy.query(schema(), command, to_partition_ranges(*schema(), _pk), db::consistency_level::LOCAL_QUORUM,
+            service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state));
+    lw_shared_ptr<query::result> qr_ptr = make_lw_shared<query::result>(std::move(*qr.query_result));
+    std::optional<mutation> m = apply(make_foreign(qr_ptr), command->slice, api::new_timestamp(), cdc_opts);
+    if (!m && propagate_failures) {
+        co_return api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes));
+    }
+    SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
+    if (qr_ptr->row_count() > 0) {
+        cdc_opts.preimage = make_lw_shared<cql3::untyped_result_set>(*schema(), make_foreign(qr_ptr), *selection, command->slice);
+    }
+    co_return co_await mutate_and_return(proxy, std::move(*m), trace_state, permit, wcu_total, std::move(cdc_opts));
+}
+
 future<executor::request_return_type> rmw_operation::execute(service::storage_proxy& proxy,
         std::optional<service::cas_shard> cas_shard,
         service::client_state& client_state,
@@ -2635,6 +2665,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         uint64_t& wcu_total) {
     auto cdc_opts = cdc::per_request_options{
         .alternator = true,
+        .alternator_streams_strict_compatibility = schema()->cdc_options().enabled() && _proxy.data_dictionary().get_config().alternator_streams_strict_compatibility(),
     };
     if (needs_read_before_write) {
         if (_write_isolation == write_isolation::FORBID_RMW) {
@@ -2645,23 +2676,15 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         if (_write_isolation == write_isolation::UNSAFE_RMW) {
             // This is the old, unsafe, read before write which does first
             // a read, then a write. TODO: remove this mode entirely.
-            return get_previous_item(proxy, client_state, schema(), _pk, _ck, permit, global_stats, per_table_stats, _consumed_capacity._total_bytes).then(
-                    [this, &proxy, &wcu_total, trace_state, permit = std::move(permit), cdc_opts = std::move(cdc_opts)] (std::unique_ptr<rjson::value> previous_item) mutable {
-                std::optional<mutation> m = apply(std::move(previous_item), api::new_timestamp(), cdc_opts);
-                if (!m) {
-                    return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
-                }
-                return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this,&wcu_total] () mutable {
-                    return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
-                });
-            });
+            return mutate_and_return_with_read_before_write(proxy, client_state, std::move(trace_state), std::move(permit), wcu_total, true, std::move(cdc_opts));
         }
     } else if (_write_isolation != write_isolation::LWT_ALWAYS) {
+        if (cdc_opts.alternator_streams_strict_compatibility) {
+            return mutate_and_return_with_read_before_write(proxy, client_state, std::move(trace_state), std::move(permit), wcu_total, true, std::move(cdc_opts));
+        }
         std::optional<mutation> m = apply(nullptr, api::new_timestamp(), cdc_opts);
         SCYLLA_ASSERT(m); // !needs_read_before_write, so apply() did not check a condition
-        return proxy.mutate(utils::chunked_vector<mutation>{std::move(*m)}, db::consistency_level::LOCAL_QUORUM, executor::default_timeout(), trace_state, std::move(permit), db::allow_per_partition_rate_limit::yes, false, std::move(cdc_opts)).then([this, &wcu_total] () mutable {
-            return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
-        });
+        return mutate_and_return(proxy, std::move(*m), trace_state, permit, wcu_total, std::move(cdc_opts));
     }
     if (!cas_shard) {
         on_internal_error(elogger, "cas_shard is not set");
@@ -2671,7 +2694,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
     per_table_stats.write_using_lwt++;
     auto timeout = executor::default_timeout();
     auto selection = cql3::selection::selection::wildcard(schema());
-    auto read_command = needs_read_before_write ?
+    auto read_command = needs_read_before_write || cdc_opts.alternator_streams_strict_compatibility ?
             previous_item_read_command(proxy, schema(), _ck, selection) :
             nullptr;
     return proxy.cas(schema(), std::move(*cas_shard), shared_from_this(), read_command, to_partition_ranges(*schema(), _pk),
