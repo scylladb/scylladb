@@ -2203,7 +2203,6 @@ public:
     bool is_put_item() noexcept {
         return _cells.has_value();
     }
-    friend class put_item_operation;
 };
 
 put_or_delete_item::put_or_delete_item(const rjson::value& key, schema_ptr schema, delete_item)

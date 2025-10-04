@@ -903,9 +903,6 @@ static managed_bytes merge(const abstract_type& type, const managed_bytes_opt& p
     throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
 }
 
-using cell_map = std::unordered_map<const column_definition*, managed_bytes_opt>;
-using row_states_map = std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality>;
-
 static managed_bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) {
     if (state) {
         if (auto it = state->find(&cdef); it != state->end()) {
@@ -915,7 +912,7 @@ static managed_bytes_opt get_col_from_row_state(const cell_map* state, const col
     return std::nullopt;
 }
 
-static cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck) {
+cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck) {
     auto it = row_states.find(ck);
     return it == row_states.end() ? nullptr : &it->second;
 }
@@ -1715,6 +1712,10 @@ public:
         _builder->end_record();
     }
 
+    row_states_map& clustering_row_states() override {
+        return _clustering_row_states;
+    }
+
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
     // The `transformer` object on which this method was called on should not be used anymore.
     std::tuple<utils::chunked_vector<mutation>, stats::part_type_set> finish() && {
@@ -1925,15 +1926,17 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 return make_ready_future<>();
             }
 
+            bool alternator_strict_compatibility =
+                    options && options->alternator && _ctxt._proxy.data_dictionary().get_config().alternator_streams_strict_compatibility();
             transformer trans(_ctxt, s, m.decorated_key(), options);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
             if (options && options->preimage && !options->preimage->empty()) {
                 // Preimage has been fetched by upper layers.
                 tracing::trace(tr_state, "CDC: Using a prefetched preimage");
+                // TODO: ten kod jest wykonywany wiele razy (dla kazdej mutacji), a ponizej jest move preimage!
                 f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(std::move(options->preimage));
-            } else if (s->cdc_options().preimage() || s->cdc_options().postimage() ||
-                        (options && options->alternator && _ctxt._proxy.data_dictionary().get_config().alternator_streams_strict_compatibility())) {
+            } else if (s->cdc_options().preimage() || s->cdc_options().postimage() || alternator_strict_compatibility) {
                 // Note: further improvement here would be to coalesce the pre-image selects into one
                 // iff a batch contains several modifications to the same table. Otoh, batch is rare(?)
                 // so this is premature.
@@ -1950,7 +1953,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 tracing::trace(tr_state, "CDC: Preimage not enabled for the table, not querying current value of {}", m.decorated_key());
             }
 
-            return f.then([trans = std::move(trans), &mutations, idx, tr_state, &details, &options] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
+            return f.then([alternator_strict_compatibility, trans = std::move(trans), &mutations, idx, tr_state, &details, &options] (lw_shared_ptr<cql3::untyped_result_set> rs) mutable {
                 auto& m = mutations[idx];
                 auto& s = m.schema();
 
@@ -1968,10 +1971,10 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 if (should_split(m, options)) {
                     tracing::trace(tr_state, "CDC: Splitting {}", m.decorated_key());
                     details.was_split = true;
-                    process_changes_with_splitting(m, trans, preimage, postimage);
+                    process_changes_with_splitting(m, trans, preimage, postimage, alternator_strict_compatibility);
                 } else {
                     tracing::trace(tr_state, "CDC: No need to split {}", m.decorated_key());
-                    process_changes_without_splitting(m, trans, preimage, postimage);
+                    process_changes_without_splitting(m, trans, preimage, postimage, alternator_strict_compatibility);
                 }
                 auto [log_mut, touched_parts] = std::move(trans).finish();
                 const int generated_count = log_mut.size();
