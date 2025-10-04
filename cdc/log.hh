@@ -21,6 +21,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 
+#include "cql3/untyped_result_set.hh"
 #include "mutation/timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
@@ -51,6 +52,32 @@ class database;
 
 namespace cdc {
 
+using cell_map = std::unordered_map<const column_definition*, managed_bytes_opt>;
+using row_states_map = std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality>;
+
+// cdc log table operation
+enum class operation : int8_t {
+    // note: these values will eventually be read by a third party, probably not privvy to this
+    // enum decl, so don't change the constant values (or the datatype).
+    pre_image = 0, update = 1, insert = 2, row_delete = 3, partition_delete = 4,
+    range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
+    post_image = 9,
+};
+
+struct per_request_options {
+    // The value of the base row before current operation, queried by higher
+    // layers than CDC. We assume that CDC could have seen the row in this
+    // state, i.e. the value isn't 'stale'/'too recent'.
+    lw_shared_ptr<cql3::untyped_result_set> preimage;
+    // CAS may optionally read the db before it commits an operation. This
+    // option controls if CAS should fill the preimage.
+    bool fill_preimage = false;
+    // Don't generate log rows for this mutation.
+    bool skip_cdc = false;
+    // True if this mutation was emitted by Alternator.
+    const bool alternator = false;
+};
+
 struct operation_result_tracker;
 class db_context;
 class metadata;
@@ -80,9 +107,10 @@ public:
         lowres_clock::time_point timeout,
         utils::chunked_vector<mutation>&& mutations,
         tracing::trace_state_ptr tr_state,
-        db::consistency_level write_cl
-        );
-    bool needs_cdc_augmentation(const utils::chunked_vector<mutation>&) const;
+        db::consistency_level write_cl,
+        std::optional<per_request_options> options = {}
+    );
+    bool needs_cdc_augmentation(const utils::chunked_vector<mutation>&, const std::optional<per_request_options>&) const;
 };
 
 struct db_context final {
@@ -91,15 +119,6 @@ struct db_context final {
     cdc::metadata& _cdc_metadata;
     db_context(service::storage_proxy& proxy, cdc::metadata& cdc_meta, service::migration_notifier& notifier) noexcept
         : _proxy(proxy), _migration_notifier(notifier), _cdc_metadata(cdc_meta) {}
-};
-
-// cdc log table operation
-enum class operation : int8_t {
-    // note: these values will eventually be read by a third party, probably not privvy to this
-    // enum decl, so don't change the constant values (or the datatype).
-    pre_image = 0, update = 1, insert = 2, row_delete = 3, partition_delete = 4,
-    range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
-    post_image = 9,
 };
 
 bool is_log_for_some_table(const replica::database& db, const sstring& ks_name, const std::string_view& table_name);
@@ -125,5 +144,7 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name);
 bool is_cdc_metacolumn_name(const sstring& name);
 
 utils::UUID generate_timeuuid(api::timestamp_type t);
+
+cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck);
 
 } // namespace cdc
