@@ -905,9 +905,6 @@ static managed_bytes merge(const abstract_type& type, const managed_bytes_opt& p
     throw std::runtime_error(format("cdc merge: unknown type {}", type.name()));
 }
 
-using cell_map = std::unordered_map<const column_definition*, managed_bytes_opt>;
-using row_states_map = std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality>;
-
 static managed_bytes_opt get_col_from_row_state(const cell_map* state, const column_definition& cdef) {
     if (state) {
         if (auto it = state->find(&cdef); it != state->end()) {
@@ -917,7 +914,7 @@ static managed_bytes_opt get_col_from_row_state(const cell_map* state, const col
     return std::nullopt;
 }
 
-static cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck) {
+cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck) {
     auto it = row_states.find(ck);
     return it == row_states.end() ? nullptr : &it->second;
 }
@@ -1715,6 +1712,10 @@ public:
     void end_record() override {
         SCYLLA_ASSERT(_builder);
         _builder->end_record();
+    }
+
+    row_states_map& clustering_row_states() override {
+        return _clustering_row_states;
     }
 
     // Takes and returns generated cdc log mutations and associated statistics about parts touched during transformer's lifetime.
