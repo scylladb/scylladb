@@ -129,6 +129,11 @@ public:
 
 private:
     inline bool should_fill_preimage() const { return _schema->cdc_options().enabled(); }
+
+    future<executor::request_return_type> mutate_and_return(service::storage_proxy& proxy, mutation m, tracing::trace_state_ptr trace_state,
+            service_permit permit, uint64_t& wcu_total, cdc::per_request_options cdc_opts);
+    future<executor::request_return_type> mutate_and_return_with_read_before_write(service::storage_proxy& proxy, service::client_state& client_state,
+            tracing::trace_state_ptr trace_state, service_permit permit, uint64_t& wcu_total, bool propagate_failures, cdc::per_request_options cdc_opts);
 };
 
 } // namespace alternator
