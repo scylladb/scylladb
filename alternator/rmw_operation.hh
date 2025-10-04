@@ -126,6 +126,12 @@ public:
             stats& per_table_stats,
             uint64_t& wcu_total);
     std::optional<service::cas_shard> shard_for_execute(bool needs_read_before_write);
+
+private:
+    future<executor::request_return_type> mutate_and_return(service::storage_proxy& proxy, std::optional<mutation> m, tracing::trace_state_ptr trace_state,
+            service_permit permit, uint64_t& wcu_total, std::optional<cdc::per_request_options> cdc_opts);
+    future<executor::request_return_type> mutate_and_return_with_read_before_write(service::storage_proxy& proxy, service::client_state& client_state,
+            tracing::trace_state_ptr trace_state, service_permit permit, uint64_t& wcu_total, bool propagate_failures, std::optional<cdc::per_request_options> cdc_opts);
 };
 
 } // namespace alternator
