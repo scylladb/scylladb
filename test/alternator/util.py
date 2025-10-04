@@ -355,6 +355,10 @@ def scylla_config_write(dynamodb, name, value):
 # because the changed configuration will affect the other workload too.
 @contextmanager
 def scylla_config_temporary(dynamodb, name, value):
+    # Ignore this option on AWS.
+    if is_aws(dynamodb):
+        yield
+        return
     original_value = scylla_config_read(dynamodb, name)
     scylla_config_write(dynamodb, name, value)
     try:
