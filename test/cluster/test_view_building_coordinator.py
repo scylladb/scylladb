@@ -903,7 +903,7 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         await manager.server_start(servers[1].server_id)
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode("release", "error injections are not supported in release mode")
 async def test_tablet_migration_during_view_building(manager: ManagerClient):
     node_count = 1
     server = new_server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
@@ -934,7 +934,7 @@ async def test_tablet_migration_during_view_building(manager: ManagerClient):
         await check_view_contents(cql, ks, "tab", "mv_cf_view1")
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode("release", "error injections are not supported in release mode")
 async def test_tablet_merge_during_view_building(manager: ManagerClient):
     node_count = 3
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
