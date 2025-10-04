@@ -52,6 +52,9 @@ class database;
 
 namespace cdc {
 
+using cell_map = std::unordered_map<const column_definition*, managed_bytes_opt>;
+using row_states_map = std::unordered_map<clustering_key, cell_map, clustering_key::hashing, clustering_key::equality>;
+
 // cdc log table operation
 enum class operation : int8_t {
     // note: these values will eventually be read by a third party, probably not privvy to this
@@ -149,5 +152,8 @@ bytes log_data_column_deleted_elements_name_bytes(const bytes& column_name);
 bool is_cdc_metacolumn_name(const sstring& name);
 
 utils::UUID generate_timeuuid(api::timestamp_type t);
+
+cell_map* get_row_state(row_states_map& row_states, const clustering_key& ck);
+const cell_map* get_row_state(const row_states_map& row_states, const clustering_key& ck);
 
 } // namespace cdc

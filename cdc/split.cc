@@ -6,15 +6,28 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "bytes.hh"
+#include "bytes_fwd.hh"
+#include "mutation/atomic_cell.hh"
+#include "mutation/atomic_cell_or_collection.hh"
+#include "mutation/collection_mutation.hh"
 #include "mutation/mutation.hh"
+#include "mutation/tombstone.hh"
 #include "schema/schema.hh"
 
+#include "seastar/core/sstring.hh"
 #include "types/concrete_types.hh"
+#include "types/types.hh"
 #include "types/user.hh"
 
 #include "split.hh"
 #include "log.hh"
 #include "change_visitor.hh"
+#include "utils/managed_bytes.hh"
+#include <string_view>
+#include <unordered_map>
+
+extern logging::logger cdc_log;
 
 struct atomic_column_update {
     column_id id;
@@ -597,8 +610,86 @@ bool should_split(const mutation& m, const per_request_options& options) {
         || v._ts == api::missing_timestamp;
 }
 
+// Returns true if the row state and the atomic and nonatomic entries represent
+// an equivalent item.
+static bool entries_match_row_state(const schema_ptr& base_schema, const cell_map& row_state, const std::vector<atomic_column_update>& atomic_entries,
+        std::vector<nonatomic_column_update>& nonatomic_entries) {
+    for (const auto& update : atomic_entries) {
+        const column_definition& cdef = base_schema->column_at(column_kind::regular_column, update.id);
+        const auto it = row_state.find(&cdef);
+        if (it == row_state.end()) {
+            return false;
+        }
+        if (to_managed_bytes_opt(update.cell.value().linearize()) != it->second) {
+            return false;
+        }
+    }
+
+    for (const auto& update : nonatomic_entries) {
+        const column_definition& cdef = base_schema->column_at(column_kind::regular_column, update.id);
+        const auto it = row_state.find(&cdef);
+        if (it == row_state.end()) {
+            return false;
+        }
+
+        // The only collection used by Alternator is a non-frozen map.
+        auto current_raw_map = cdef.type->deserialize(*it->second);
+        map_type_impl::native_type current_values = value_cast<map_type_impl::native_type>(current_raw_map);
+
+        if (current_values.size() != update.cells.size()) {
+            return false;
+        }
+        
+        std::unordered_map<sstring_view, bytes> current_values_map;
+        for (const auto& entry : current_values) {
+            const auto attr_name = std::string_view(value_cast<sstring>(entry.first));
+            current_values_map[attr_name] = value_cast<bytes>(entry.second);
+        }
+
+        for (const auto& [key, value] : update.cells) {
+            const auto key_str = to_string_view(key);
+            if (current_values_map[key_str] != value.value().linearize()) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool should_skip(batch& changes, const mutation& base_mutation, change_processor& processor) {
+    const schema_ptr& base_schema = base_mutation.schema();
+    // Alternator doesn't use static updates and clustered range deletions.
+    if (!changes.static_updates.empty() || changes.partition_deletions.has_value() || !changes.clustered_range_deletions.empty()
+        || !changes.clustered_row_deletions.empty()) {
+        return false;
+    }
+
+    for (clustered_row_insert& u : changes.clustered_inserts) {
+        const cell_map* row_state = get_row_state(processor.clustering_row_states(), u.key);
+        if (!row_state) {
+            return false;
+        }
+        if (!entries_match_row_state(base_schema, *row_state, u.atomic_entries, u.nonatomic_entries)) {
+            return false;
+        }
+    }
+
+    for (clustered_row_update& u : changes.clustered_updates) {
+        const cell_map* row_state = get_row_state(processor.clustering_row_states(), u.key);
+        if (!row_state) {
+            return false;
+        }
+        if (!entries_match_row_state(base_schema, *row_state, u.atomic_entries, u.nonatomic_entries)) {
+            return false;
+        }
+    }
+
+    cdc_log.trace("Skipping CDC log for mutation {}", base_mutation);
+    return true;
+}
+
 void process_changes_with_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage) {
+        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
     const auto base_schema = base_mutation.schema();
     auto changes = extract_changes(base_mutation);
     auto pk = base_mutation.key();
@@ -610,9 +701,6 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
     const auto last_timestamp = changes.rbegin()->first;
 
     for (auto& [change_ts, btch] : changes) {
-        const bool is_last = change_ts == last_timestamp;
-        processor.begin_timestamp(change_ts, is_last);
-
         clustered_column_set affected_clustered_columns_per_row{clustering_key::less_compare(*base_schema)};
         one_kind_column_set affected_static_columns{base_schema->static_columns_count()};
 
@@ -621,6 +709,12 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             affected_clustered_columns_per_row = btch.get_affected_clustered_columns_per_row(*base_mutation.schema());
         }
 
+        if (alternator_strict_compatibility && should_skip(btch, base_mutation, processor)) {
+            continue;
+        }
+
+        const bool is_last = change_ts == last_timestamp;
+        processor.begin_timestamp(change_ts, is_last);
         if (enable_preimage) {
             if (affected_static_columns.count() > 0) {
                 processor.produce_preimage(nullptr, affected_static_columns);
@@ -708,7 +802,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
 }
 
 void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage) {
+        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
+    if (alternator_strict_compatibility) {
+        auto changes = extract_changes(base_mutation);
+        if (should_skip(changes.begin()->second, base_mutation, processor)) {
+            return;
+        }
+    }
     auto ts = find_timestamp(base_mutation);
     processor.begin_timestamp(ts, true);
 
