@@ -7246,7 +7246,7 @@ future<> storage_proxy::abort_batch_writes() {
 
 future<>
 storage_proxy::stop() {
-    return make_ready_future<>();
+    co_await utils::get_local_injector().inject("storage_proxy::stop", utils::wait_for_message(5min));
 }
 
 locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexcept {
