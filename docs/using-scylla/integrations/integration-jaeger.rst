@@ -13,7 +13,7 @@ The Jaeger Query service offers a web-based UI and API for users to explore, vis
 Jaeger also supports integration with other observability tools like Prometheus and Grafana,
 making it a popular choice for monitoring modern distributed applications.
 
-Jaeger Server `can also be run <https://github.com/jaegertracing/jaeger/tree/main/plugin/storage/scylladb>`_ with ScyllaDB as the storage backend, thanks to ScyllaDB's compatibility with Cassandra.
+Jaeger Server `can also be run <https://www.jaegertracing.io/docs/2.11/storage/cassandra/#compatible-backends>`_ with ScyllaDB as the storage backend, thanks to ScyllaDB's compatibility with Cassandra.
 As a drop-in replacement for Cassandra, ScyllaDB implements the same protocol and provides a high-performance,
 low-latency alternative. This compatibility allows Jaeger users to easily switch to ScyllaDB without making significant changes to their setup.
 
