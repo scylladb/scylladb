@@ -118,7 +118,8 @@ public:
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
-        const sstable_predicate&) const;
+        const sstable_predicate&,
+        sstables::integrity_check integrity = sstables::integrity_check::no) const;
 };
 
 class sstable_set : public enable_lw_shared_from_this<sstable_set> {
@@ -215,7 +216,8 @@ public:
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
-        const sstable_predicate& p = default_sstable_predicate()) const;
+        const sstable_predicate& p = default_sstable_predicate(),
+        sstables::integrity_check integrity = sstables::integrity_check::no) const;
 
     /// Read a range from the sstable set.
     ///

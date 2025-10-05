@@ -934,7 +934,8 @@ public:
             tracing::trace_state_ptr,
             streamed_mutation::forwarding,
             mutation_reader::forwarding,
-            const sstables::sstable_predicate&) const override;
+            const sstables::sstable_predicate&,
+            sstables::integrity_check integrity = sstables::integrity_check::no) const override;
 
     // Will always return an engaged sstable set ptr.
     const lw_shared_ptr<const sstables::sstable_set>& find_sstable_set(size_t i) const {
@@ -1171,7 +1172,8 @@ tablet_sstable_set::create_single_key_sstable_reader(
         tracing::trace_state_ptr trace_state,
         streamed_mutation::forwarding fwd,
         mutation_reader::forwarding fwd_mr,
-        const sstables::sstable_predicate& predicate) const {
+        const sstables::sstable_predicate& predicate,
+        sstables::integrity_check integrity) const {
     // The singular partition_range start bound must be engaged.
     auto idx = group_of(pr.start()->value().token());
     const auto& set = find_sstable_set(idx);
