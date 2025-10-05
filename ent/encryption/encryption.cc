@@ -550,14 +550,17 @@ public:
     future<std::tuple<::shared_ptr<symmetric_key>, opt_bytes>> key_for_write(opt_bytes id = {}) const {
         return _provider->key(_info, std::move(id));
     }
+    future<std::tuple<::shared_ptr<symmetric_key>, opt_bytes>> key_for_write(utils::chunked_vector<mutation>& muts, api::timestamp_type timestamp, opt_bytes id = {}) const {
+        return _provider->key(_info, std::move(id), muts, timestamp);
+    }
 
     bytes serialize() const override {
         return ser::serialize_to_buffer<bytes>(_options, 0);
     }
-    future<> validate(const schema& s) const override {
+    future<> validate(const schema& s, utils::chunked_vector<mutation>& muts, api::timestamp_type timestamp) const override {
         try {
             co_await _provider->validate();
-            auto k = co_await key_for_write();
+            auto k = co_await key_for_write(muts, timestamp);
             logg.info("Added encryption extension to {}.{}", s.ks_name(), s.cf_name());
             logg.info("   Options: {}", _options);
             logg.info("   Key Algorithm: {}", _info);

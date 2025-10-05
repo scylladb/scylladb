@@ -35,6 +35,8 @@
 #include "schema_fwd.hh"
 #include "db/view/base_info.hh"
 
+class mutation;
+
 namespace dht {
 
 class i_partitioner;
@@ -477,7 +479,9 @@ public:
     [[deprecated("Use dedicated columns in system_schema.scylla_tables instead")]]
     schema_extension() = default;
 
-    virtual future<> validate(const schema&) const {
+    // Validates the schema extension and optionally generates mutations for group0.
+    // The mutations will be using the provided timestamp and will be added to the provided vector.
+    virtual future<> validate(const schema&, utils::chunked_vector<mutation>& muts, api::timestamp_type timestamp) const {
         return make_ready_future<>();
     }
     virtual bytes serialize() const = 0;

@@ -662,8 +662,10 @@ utils::chunked_vector<mutation> prepare_new_keyspace_announcement(replica::datab
 
 static
 future<> validate(schema_ptr schema) {
-    return do_for_each(schema->extensions(), [schema](auto & p) {
-        return p.second->validate(*schema);
+    utils::chunked_vector<mutation> mutations{};
+    api::timestamp_type ts{};
+    return do_for_each(schema->extensions(), [schema, &mutations, ts](auto & p) {
+        return p.second->validate(*schema, mutations, ts);
     });
 }
 
