@@ -7147,12 +7147,24 @@ void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstra
     SCYLLA_ASSERT(thread::running_in_thread());
     auto it = _cancellable_write_handlers_list->begin();
     while (it != _cancellable_write_handlers_list->end()) {
-        auto guard = it->shared_from_this();
+        // timeout_cb() may destroy the current handler. Since the list uses
+        // bi::link_mode<bi::auto_unlink>, destruction automatically unlinks the
+        // element. To avoid accessing an invalidated iterator, we cache `next`
+        // before invoking timeout_cb().
+        const auto next = std::next(it);
+
         if (filter_fun(*it) && _response_handlers.contains(it->id())) {
             it->timeout_cb();
         }
-        ++it;
+        it = next;
         if (need_preempt() && it != _cancellable_write_handlers_list->end()) {
+            // Save the iterator position. If the handler is destroyed during yield(),
+            // the iterator will be updated to point to the next item in the list.
+            //
+            // Handler destruction triggers sending a response to the client.
+            // To avoid delaying that, we don’t hold a strong reference here; instead,
+            // iterator_guard handles safe iterator updates while allowing prompt
+            // handler destruction and client response.
             cancellable_write_handlers_list::iterator_guard ig{*_cancellable_write_handlers_list, it};
             seastar::thread::yield();
         }
