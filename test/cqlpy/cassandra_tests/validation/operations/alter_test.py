@@ -163,11 +163,13 @@ def testAlterIndexInterval(cql, test_keyspace):
         assert options['max_index_interval'] == 512
 
 # Migrated from cql_tests.py:TestCQL.create_alter_options_test()
-# Reproduces #9929
+# Reproduces #9935
 @pytest.mark.xfail(reason="Issue #9935")
 def testCreateAlterKeyspaces(cql, test_keyspace, this_dc):
-    assert_invalid_throw(cql, test_keyspace, SyntaxException, "CREATE KEYSPACE ks1")
-    assert_invalid_throw(cql, test_keyspace, ConfigurationException, "CREATE KEYSPACE ks1 WITH replication= { 'replication_factor' : 1 }")
+    # ScyllaDB allows default parameters on CREATE KEYSPACE, so these checks
+    # are no longer valid:
+    #assert_invalid_throw(cql, test_keyspace, SyntaxException, "CREATE KEYSPACE ks1")
+    #assert_invalid_throw(cql, test_keyspace, ConfigurationException, "CREATE KEYSPACE ks1 WITH replication= { 'replication_factor' : 1 }")
 
     with create_keyspace(cql, "replication={ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }") as ks1:
         with create_keyspace(cql, "replication={ 'class' : 'SimpleStrategy', 'replication_factor' : 1 } AND durable_writes=false") as ks2:
