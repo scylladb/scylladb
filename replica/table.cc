@@ -311,7 +311,8 @@ table::make_streaming_reader(schema_ptr s, reader_permit permit,
         add_memtables_to_reader_list(readers, s, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
             readers.reserve(memtable_count + 1);
         });
-        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
+        readers.emplace_back(make_sstable_reader(s, permit, _sstables, range, slice,
+            std::move(trace_state), fwd, fwd_mr, sstables::default_sstable_predicate(), sstables::integrity_check::yes));
         return make_combined_reader(s, std::move(permit), std::move(readers), fwd, fwd_mr);
     });
 
@@ -332,7 +333,8 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
     add_memtables_to_reader_list(readers, schema, permit, range, slice, trace_state, fwd, fwd_mr, [&] (size_t memtable_count) {
         readers.reserve(memtable_count + 1);
     });
-    readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice, std::move(trace_state), fwd, fwd_mr));
+    readers.emplace_back(make_sstable_reader(schema, permit, _sstables, range, slice,
+        std::move(trace_state), fwd, fwd_mr, sstables::default_sstable_predicate(), sstables::integrity_check::yes));
     return maybe_compact_for_streaming(
             make_combined_reader(std::move(schema), std::move(permit), std::move(readers), fwd, fwd_mr),
             get_compaction_manager(),
@@ -349,7 +351,7 @@ mutation_reader table::make_streaming_reader(schema_ptr schema, reader_permit pe
     const auto fwd_mr = mutation_reader::forwarding::no;
     return maybe_compact_for_streaming(
             sstables->make_range_sstable_reader(std::move(schema), std::move(permit), range, slice,
-                    std::move(trace_state), fwd, fwd_mr),
+                    std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), sstables::integrity_check::yes),
             get_compaction_manager(),
             compaction_time,
             _config.enable_compacting_data_for_streaming_and_repair(),
