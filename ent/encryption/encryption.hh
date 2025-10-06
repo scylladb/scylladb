@@ -20,7 +20,10 @@
 #include <fmt/ostream.h>
 
 #include "../../bytes.hh"
+#include "mutation/timestamp.hh"
+#include "utils/chunked_vector.hh"
 
+class mutation;
 class service_set;
 
 namespace replica {
@@ -120,6 +123,9 @@ public:
     virtual ~key_provider()
     {}
     virtual future<std::tuple<key_ptr, opt_bytes>> key(const key_info&, opt_bytes = {}) = 0;
+    virtual future<std::tuple<key_ptr, opt_bytes>> key(const key_info& info, opt_bytes id, utils::chunked_vector<mutation>& muts, api::timestamp_type ts) {
+        return key(info, std::move(id));
+    }
     virtual future<> validate() const {
         return make_ready_future<>();
     }
