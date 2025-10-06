@@ -10,6 +10,7 @@
 #include "vector_search/vector_store_client.hh"
 #include "vs_mock_server.hh"
 #include "db/config.hh"
+#include "util.hh"
 #include "exceptions/exceptions.hh"
 #include "cql3/statements/select_statement.hh"
 #include "test/lib/cql_test_env.hh"
@@ -33,7 +34,6 @@
 #include <seastar/net/tcp.hh>
 #include <variant>
 #include <vector>
-
 
 namespace {
 
@@ -67,31 +67,9 @@ auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> f
     co_return true;
 }
 
-constexpr auto STANDARD_WAIT = std::chrono::seconds(10);
-
 auto repeat_until(std::function<future<bool>()> func) -> future<bool> {
     return repeat_until(STANDARD_WAIT, std::move(func));
 }
-
-class abort_source_timeout {
-    abort_source as;
-    timer<> t;
-
-public:
-    explicit abort_source_timeout(milliseconds timeout = STANDARD_WAIT)
-        : t(timer([&]() {
-            as.request_abort();
-        })) {
-        t.arm(timeout);
-    }
-
-    abort_source& reset(milliseconds timeout = STANDARD_WAIT) {
-        t.cancel();
-        as = abort_source();
-        t.arm(timeout);
-        return as;
-    }
-};
 
 auto print_addr(const inet_address& addr) -> sstring {
     return format("{}", addr);

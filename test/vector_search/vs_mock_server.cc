@@ -7,7 +7,7 @@
  */
 
 #include "vs_mock_server.hh"
-#include "util.h"
+#include "util.hh"
 
 using namespace seastar;
 using namespace seastar::httpd;
