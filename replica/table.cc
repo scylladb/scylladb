@@ -92,17 +92,18 @@ table::make_sstable_reader(schema_ptr s,
                                    tracing::trace_state_ptr trace_state,
                                    streamed_mutation::forwarding fwd,
                                    mutation_reader::forwarding fwd_mr,
-                                   const sstables::sstable_predicate& predicate) const {
+                                   const sstables::sstable_predicate& predicate,
+                                   sstables::integrity_check integrity) const {
     // CAVEAT: if make_sstable_reader() is called on a single partition
     // we want to optimize and read exactly this partition. As a
     // consequence, fast_forward_to() will *NOT* work on the result,
     // regardless of what the fwd_mr parameter says.
     if (pr.is_singular() && pr.start()->value().has_key()) {
         return sstables->create_single_key_sstable_reader(const_cast<column_family*>(this), std::move(s), std::move(permit),
-                _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate);
+                _stats.estimated_sstable_per_read, pr, slice, std::move(trace_state), fwd, fwd_mr, predicate, integrity);
     } else {
         return sstables->make_local_shard_sstable_reader(std::move(s), std::move(permit), pr, slice,
-                std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate);
+                std::move(trace_state), fwd, fwd_mr, sstables::default_read_monitor_generator(), predicate, nullptr, integrity);
     }
 }
 
