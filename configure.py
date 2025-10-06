@@ -1658,7 +1658,7 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/lib/log.cc',
                                      'service/raft/discovery.cc'] + scylla_raft_dependencies
 
-deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc', 'test/vector_search/vs_mock_server.cc'] + scylla_tests_dependencies
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
 
 wasm_deps = {}
