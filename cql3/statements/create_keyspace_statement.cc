@@ -22,6 +22,7 @@
 #include "cql3/query_processor.hh"
 #include "db/config.hh"
 #include "gms/feature_service.hh"
+#include "replica/database.hh"
 
 #include <boost/regex.hpp>
 #include <stdexcept>
@@ -109,7 +110,8 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
         // remove this check.
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(
             ksm->strategy_name(),
-            locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()));
+            locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()),
+            tmptr->get_topology());
         if (rs->uses_tablets()) {
             warnings.push_back(
                 "Tables in this keyspace will be replicated using Tablets "
@@ -204,7 +206,8 @@ std::vector<sstring> check_against_restricted_replication_strategies(
     locator::replication_strategy_params params(opts, std::nullopt);
     auto replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(
             locator::abstract_replication_strategy::to_qualified_class_name(
-                    *attrs.get_replication_strategy_class()), params)->get_type();
+                    *attrs.get_replication_strategy_class()), params,
+                    qp.db().real_database().get_token_metadata().get_topology())->get_type();
     auto rs_warn_list = qp.db().get_config().replication_strategy_warn_list();
     auto rs_fail_list = qp.db().get_config().replication_strategy_fail_list();
 
@@ -248,7 +251,12 @@ std::vector<sstring> check_against_restricted_replication_strategies(
     // these are checked and reported elsewhere.
     for (auto opt : attrs.get_replication_options()) {
         try {
-            auto rf = std::stol(opt.second);
+            long rf = 0;
+            try {
+                rf = locator::get_replication_factor(opt.second);
+            } catch (const exceptions::configuration_exception&) {
+            }
+
             if (rf > 0) {
                 if (auto min_fail = qp.proxy().data_dictionary().get_config().minimum_replication_factor_fail_threshold();
                     min_fail >= 0 && rf < min_fail) {

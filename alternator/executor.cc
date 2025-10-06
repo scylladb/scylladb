@@ -17,6 +17,7 @@
 #include "auth/service.hh"
 #include "db/config.hh"
 #include "mutation/tombstone.hh"
+#include "locator/abstract_replication_strategy.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
 #include "exceptions/exceptions.hh"
@@ -1730,7 +1731,8 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             auto stream_enabled = rjson::find(*stream_specification, "StreamEnabled");
             if (stream_enabled && stream_enabled->IsBool() && stream_enabled->GetBool()) {
                 locator::replication_strategy_params params(ksm->strategy_options(), ksm->initial_tablets());
-                auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params);
+                const auto& topo = sp.local_db().get_token_metadata().get_topology();
+                auto rs = locator::abstract_replication_strategy::create_replication_strategy(ksm->strategy_name(), params, topo);
                 if (rs->uses_tablets()) {
                     co_return api_error::validation("Streams not yet supported on a table using tablets (issue #23838). "
                     "If you want to use streams, create a table with vnodes by setting the tag 'experimental:initial_tablets' set to 'none'.");
@@ -2376,7 +2378,7 @@ mutation put_or_delete_item::build(schema_ptr schema, api::timestamp_type ts) co
     //    tables created in the past may still have them.
     // 2) We use a collection tombstone for the :attrs column instead of a row
     //    tombstone. While a row tombstone would also replace the data, it has
-    //    an undesirable side effect for CDC, which would report it as a 
+    //    an undesirable side effect for CDC, which would report it as a
     //    separate deletion event. To model PutItem's "replace" semantic, we
     //    leverage a corner case: a collection tombstone at ts-1 paired with an
     //    upsert at ts is not reported by CDC as a separate REMOVE event. We
@@ -5829,8 +5831,8 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
     co_return rjson::print(std::move(response));
 }
 
-static std::map<sstring, sstring> get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
-    std::map<sstring, sstring> options;
+static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
+    locator::replication_strategy_config_options options;
     for (const auto& dc : sp.get_token_metadata_ptr()->get_topology().get_datacenters()) {
         options.emplace(dc, std::to_string(rf));
     }

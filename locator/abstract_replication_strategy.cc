@@ -68,17 +68,19 @@ abstract_replication_strategy::abstract_replication_strategy(
     }
 }
 
-abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params) {
+abstract_replication_strategy::ptr_type abstract_replication_strategy::create_replication_strategy(const sstring& strategy_name, replication_strategy_params params, const locator::topology* topo) {
     try {
-        return create_object<abstract_replication_strategy, replication_strategy_params>(strategy_name, std::move(params));
+        return create_object<abstract_replication_strategy, replication_strategy_params, const locator::topology*>(strategy_name, std::move(params), std::move(topo));
     } catch (const no_such_class& e) {
         throw exceptions::configuration_exception(e.what());
     }
 }
 
+// class registry signature must match the actual replication strategies' signature
 using strategy_class_registry = class_registry<
     locator::abstract_replication_strategy,
-    replication_strategy_params>;
+    replication_strategy_params,
+    const topology*>;
 
 sstring abstract_replication_strategy::to_qualified_class_name(std::string_view strategy_class_name) {
     return strategy_class_registry::to_qualified_class_name(strategy_class_name);
@@ -154,8 +156,7 @@ const tablet_aware_replication_strategy* abstract_replication_strategy::maybe_as
     return dynamic_cast<const tablet_aware_replication_strategy*>(this);
 }
 
-long abstract_replication_strategy::parse_replication_factor(sstring rf)
-{
+size_t replication_factor_data::parse(const sstring& rf) {
     if (rf.empty() || std::any_of(rf.begin(), rf.end(), [] (char c) {return !isdigit(c);})) {
         throw exceptions::configuration_exception(
                 format("Replication factor must be numeric and non-negative, found '{}'", rf));
@@ -166,6 +167,53 @@ long abstract_replication_strategy::parse_replication_factor(sstring rf)
         throw exceptions::configuration_exception(
             sstring("Replication factor must be numeric; found ") + rf);
     }
+}
+
+replication_factor_data abstract_replication_strategy::parse_replication_factor(const replication_strategy_config_option& rf)
+{
+    return replication_factor_data(rf);
+}
+
+size_t get_replication_factor(const replication_strategy_config_option& opt) {
+    return replication_factor_data(opt).count();
+}
+
+replication_factor_data::replication_factor_data(const replication_strategy_config_option& rf) {
+    std::visit(overloaded_functor {
+            [&] (const sstring& rf) {
+                auto rf_value = parse(rf);
+                _data.emplace<size_t>(rf_value);
+                _count = rf_value;
+            },
+            [&] (const std::vector<sstring>& racks) {
+                _data.emplace<std::vector<sstring>>(racks);
+                _count = racks.size();
+            }
+    }, rf);
+}
+
+void replication_factor_data::validate(const std::unordered_set<sstring>& allowed_racks) {
+    std::visit(overloaded_functor {
+            [&] (const size_t& rf) {},
+            [&] (const std::vector<sstring>& racks) {
+                for (const auto& rack : racks) {
+                    if (!allowed_racks.contains(rack)) {
+                        throw exceptions::configuration_exception(
+                                fmt::format("Unrecognized rack name '{}'. allowed_racks={}", rack, allowed_racks));
+                    }
+                }
+            }
+    }, _data);
+}
+
+rack_diff diff_racks(const rack_list& old_racks, const rack_list& new_racks) {
+    std::set<sstring> old_racks_set(old_racks.begin(), old_racks.end());
+    std::set<sstring> new_racks_set(new_racks.begin(), new_racks.end());
+
+    rack_diff diff;
+    std::ranges::set_difference(new_racks_set, old_racks_set, std::back_inserter(diff.added));
+    std::ranges::set_difference(old_racks_set, new_racks_set, std::back_inserter(diff.removed));
+    return diff;
 }
 
 static
@@ -711,4 +759,8 @@ auto fmt::formatter<locator::static_effective_replication_map::factory_key>::for
         sep = ',';
     }
     return out;
+}
+
+auto fmt::formatter<locator::replication_factor_data>::format(const locator::replication_factor_data& rf, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    return fmt::format_to(ctx.out(), "{}", rf.count());
 }

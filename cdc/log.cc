@@ -23,6 +23,7 @@
 #include "bytes.hh"
 #include "index/vector_index.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "locator/topology.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "gms/feature_service.hh"
@@ -62,9 +63,9 @@ logging::logger cdc_log("cdc");
 
 namespace {
 
-shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy(const keyspace_metadata& ksm) {
+shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy(const keyspace_metadata& ksm, const locator::topology& topo) {
     locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
-    return locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params);
+    return locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, topo);
 }
 
 } // anonymous namespace
@@ -197,7 +198,7 @@ public:
             check_that_cdc_log_table_does_not_exist(db, schema, logname);
             ensure_that_table_has_no_counter_columns(schema);
             if (!db.features().cdc_with_tablets) {
-                ensure_that_table_uses_vnodes(ksm, schema);
+                ensure_that_table_uses_vnodes(ksm, schema, db.get_token_metadata().get_topology());
             }
 
             // in seastar thread
@@ -244,7 +245,7 @@ public:
             check_for_attempt_to_create_nested_cdc_log(db, new_schema);
             ensure_that_table_has_no_counter_columns(new_schema);
             if (!db.features().cdc_with_tablets) {
-                ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema);
+                ensure_that_table_uses_vnodes(*keyspace.metadata(), new_schema, db.get_token_metadata().get_topology());
             }
 
             std::optional<table_id> maybe_id = log_schema ? std::make_optional(log_schema->id()) : std::nullopt;
@@ -345,8 +346,8 @@ private:
     // Until we support CDC with tablets (issue #16317), we can't allow this
     // to be attempted - in particular the log table we try to create will not
     // have tablets, and will cause a failure.
-    static void ensure_that_table_uses_vnodes(const keyspace_metadata& ksm, const schema& schema) {
-        auto rs = generate_replication_strategy(ksm);
+    static void ensure_that_table_uses_vnodes(const keyspace_metadata& ksm, const schema& schema, const locator::topology& topo) {
+        auto rs = generate_replication_strategy(ksm, topo);
         if (rs->uses_tablets()) {
             throw exceptions::invalid_request_exception(format("Cannot create CDC log for a table {}.{}, because the keyspace uses tablets, and not all nodes support the CDC with tablets feature.",
                 schema.ks_name(), schema.cf_name()));
@@ -668,7 +669,7 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
         b.set_uuid(*uuid);
     }
 
-    auto rs = generate_replication_strategy(ksm);
+    auto rs = generate_replication_strategy(ksm, db.get_token_metadata().get_topology());
     auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(*rs, db.get_token_metadata()));
     b.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 

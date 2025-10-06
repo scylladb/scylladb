@@ -18,14 +18,14 @@
 
 namespace locator {
 
-simple_strategy::simple_strategy(replication_strategy_params params) :
+simple_strategy::simple_strategy(replication_strategy_params params, const locator::topology*) :
         abstract_replication_strategy(params, replication_strategy_type::simple) {
     for (auto& config_pair : _config_options) {
         auto& key = config_pair.first;
         auto& val = config_pair.second;
 
         if (boost::iequals(key, "replication_factor")) {
-            _replication_factor = parse_replication_factor(val);
+            _replication_factor = parse_replication_factor(val).count();
             break;
         }
     }
@@ -70,7 +70,10 @@ void simple_strategy::validate_options(const gms::feature_service&, const locato
     if (it == _config_options.end()) {
         throw exceptions::configuration_exception("SimpleStrategy requires a replication_factor strategy option.");
     }
-    parse_replication_factor(it->second);
+    auto rf = parse_replication_factor(it->second);
+    if (!rf.is_numeric()) {
+        throw exceptions::configuration_exception("'replication_factor' option must be numeric.");
+    }
     if (_uses_tablets) {
         throw exceptions::configuration_exception("SimpleStrategy doesn't support tablet replication");
     }
@@ -86,7 +89,8 @@ sstring simple_strategy::sanity_check_read_replicas(const effective_replication_
     return {};
 }
 
-using registry = class_registrator<abstract_replication_strategy, simple_strategy, replication_strategy_params>;
+// Note: signature must match the class_registry signature defined and used by abstract_replication_strategy::to_qualified_class_name
+using registry = class_registrator<abstract_replication_strategy, simple_strategy, replication_strategy_params, const locator::topology*>;
 static registry registrator("org.apache.cassandra.locator.SimpleStrategy");
 static registry registrator_short_name("SimpleStrategy");
 
