@@ -238,6 +238,16 @@ void keyspace_metadata::validate(const gms::feature_service& fs, const locator::
     strategy->validate_options(fs, topology);
 }
 
+locator::replication_strategy_config_options keyspace_metadata::strategy_options_v1() const {
+    auto opts = _strategy_options;
+    for (auto& [key, value] : opts) {
+        if (std::holds_alternative<locator::rack_list>(value)) {
+            opts[key] = to_sstring(std::get<locator::rack_list>(value).size());
+        }
+    }
+    return opts;
+}
+
 lw_shared_ptr<keyspace_metadata>
 keyspace_metadata::new_keyspace(std::string_view name,
                                 std::string_view strategy_name,
