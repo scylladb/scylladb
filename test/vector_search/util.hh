@@ -13,6 +13,8 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/timer.hh>
+#include <seastar/core/lowres_clock.hh>
+#include <seastar/util/later.hh>
 #include <functional>
 #include <chrono>
 
@@ -40,6 +42,21 @@ public:
     }
 };
 
+inline auto repeat_until(std::chrono::milliseconds timeout, std::function<seastar::future<bool>()> func) -> seastar::future<bool> {
+    auto begin = seastar::lowres_clock::now();
+    while (!co_await func()) {
+        if (seastar::lowres_clock::now() - begin > timeout) {
+            co_return false;
+        }
+        co_await seastar::yield();
+    }
+    co_return true;
+}
+
+inline auto repeat_until(std::function<seastar::future<bool>()> func) -> seastar::future<bool> {
+    return repeat_until(STANDARD_WAIT, std::move(func));
+}
+
 inline seastar::future<> try_on_loopback_address(std::function<seastar::future<>(seastar::sstring)> func) {
     constexpr size_t MAX_LOCALHOST_ADDR_TO_TRY = 127;
     for (size_t i = 1; i < MAX_LOCALHOST_ADDR_TO_TRY; i++) {
@@ -52,6 +69,5 @@ inline seastar::future<> try_on_loopback_address(std::function<seastar::future<>
     }
     throw std::runtime_error("unable to perform action on any 127.0.0.x address");
 }
-
 
 } // namespace test::vector_search
