@@ -544,7 +544,7 @@ future<> read_context::save_reader(shard_id shard, full_position_view last_pos) 
 
             const auto size_after = reader->buffer_size();
 
-            auto querier = query::shard_mutation_querier(
+            auto querier = shard_mutation_querier(
                     std::move(query_ranges),
                     std::move(rparts->range),
                     std::move(rparts->slice),
@@ -731,7 +731,7 @@ future<page_consume_result<ResultBuilder>> read_page(
     }
 
     // Use coroutine::as_future to prevent exception on timesout.
-    auto f = co_await coroutine::as_future(query::consume_page(reader, compaction_state, cmd.slice, result_builder_factory(), cmd.get_row_limit(),
+    auto f = co_await coroutine::as_future(consume_page(reader, compaction_state, cmd.slice, result_builder_factory(), cmd.get_row_limit(),
                 cmd.partition_limit, cmd.timestamp));
     if (!f.failed()) {
         // no exceptions are thrown in this block
