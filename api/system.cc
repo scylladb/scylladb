@@ -54,7 +54,8 @@ void set_system(http_context& ctx, routes& r) {
 
     hm::set_metrics_config.set(r, [](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         rapidjson::Document doc;
-        doc.Parse(req->content.c_str());
+        auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
+        doc.Parse(content.c_str());
         if (!doc.IsArray()) {
             throw bad_param_exception("Expected a json array");
         }

@@ -24,7 +24,7 @@ void set_error_injection(http_context& ctx, routes& r) {
     hf::enable_injection.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
         sstring injection = req->get_path_param("injection");
         bool one_shot = req->get_query_param("one_shot") == "True";
-        auto params = req->content;
+        auto params = co_await util::read_entire_stream_contiguous(*req->content_stream);
 
         const size_t max_params_size = 1024 * 1024;
         if (params.size() > max_params_size) {
