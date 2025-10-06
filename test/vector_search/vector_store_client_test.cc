@@ -56,21 +56,6 @@ using reply = http::reply;
 using request = http::request;
 using status_type = http::reply::status_type;
 
-auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> future<bool> {
-    auto begin = lowres_clock::now();
-    while (!co_await func()) {
-        if (lowres_clock::now() - begin > timeout) {
-            co_return false;
-        }
-        co_await seastar::yield();
-    }
-    co_return true;
-}
-
-auto repeat_until(std::function<future<bool>()> func) -> future<bool> {
-    return repeat_until(STANDARD_WAIT, std::move(func));
-}
-
 auto print_addr(const inet_address& addr) -> sstring {
     return format("{}", addr);
 }
