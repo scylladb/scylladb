@@ -3684,6 +3684,143 @@ SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) 
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile) {
+    auto cfg = tablet_cql_test_config();
+
+    // This test checks the correctness of the load_stats reconciliation algorithm.
+    // We only attempt to reconcile tablet_sizes after a merge or a split.
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+
+        sstring table_name = "table_1";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        table_id table = e.local_db().find_schema(ks_name, table_name)->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        token_metadata_ptr old_tmptr = stm.get();
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+
+        auto set_tablet_count = [&] (size_t new_tablet_count) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map new_tmap(new_tablet_count);
+                tmeta.set_tablet_map(table, std::move(new_tmap));
+                return make_ready_future<>();
+            });
+        };
+
+        // This checks if the tablet sizes have been correctly reconciled after a merge
+        {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+                tls.tablet_sizes[table][range] = i;
+            }
+
+            size_t tablet_count_after_merge = tablet_count / 2;
+            set_tablet_count(tablet_count_after_merge);
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count_after_merge);
+
+            locator::tablet_map tmap_after_merge(tablet_count_after_merge);
+            for (size_t i = 0; i < tablet_count_after_merge; ++i) {
+                dht::token_range trange {tmap_after_merge.get_token_range(locator::tablet_id{i})};
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(trange);
+                uint64_t expected_sum = 0;
+                for (uint64_t i_sum = 0; i_sum < 2; ++i_sum) {
+                    expected_sum += i * 2 + i_sum;
+                }
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, expected_sum);
+            }
+        }
+
+        // This checks if the tablet sizes have been correctly reconciled after a split
+        {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+                tls.tablet_sizes[table][range] = i * 2;
+            }
+
+            size_t tablet_count_after_split = tablet_count * 2;
+            set_tablet_count(tablet_count_after_split);
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tmptr, *stm.get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count_after_split);
+
+            locator::tablet_map tmap_after_split(tablet_count_after_split);
+            for (size_t i = 0; i < tablet_count_after_split; ++i) {
+                dht::token_range trange {tmap_after_split.get_token_range(locator::tablet_id{i})};
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(trange);
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, i / 2);
+            }
+        }
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile_tablet_not_found) {
+    auto cfg = tablet_cql_test_config();
+
+    // This test checks if the reconcile tablet algorithm returns nullptr when it
+    // can't find all the tablet sizes in load_stats
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+
+        sstring table_name = "table_1";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        table_id table = e.local_db().find_schema(ks_name, table_name)->id();
+
+        auto& stm = e.shared_token_metadata().local();
+        auto& tmap = stm.get()->tablets().get_tablet_map(table);
+
+        locator::load_stats stats;
+        locator::tablet_load_stats& tls = stats.tablet_stats[host];
+        // Add all tablet sizes except the last one. This will cause reconcile to return a nullptr
+        for (size_t i = 0; i < tablet_count - 1; ++i) {
+            const dht::token_range range {tmap.get_token_range(tablet_id(i))};
+            tls.tablet_sizes[table][range] = i;
+        }
+
+        token_metadata_ptr old_tm { stm.get() };
+
+        auto set_tablet_count = [&] (size_t new_tablet_count) {
+            mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
+                tablet_map new_tmap(new_tablet_count);
+                tmeta.set_tablet_map(table, std::move(new_tmap));
+                return make_ready_future<>();
+            });
+        };
+
+        // Test if merge reconcile detects a missing sibling tablet in load_stats
+        set_tablet_count(tablet_count / 2);
+        auto reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
+
+        // Test if split reconcile detects a missing tablet in load_stats
+        set_tablet_count(tablet_count * 2);
+        reconciled_stats_ptr = stats.reconcile_tablets_resize({ table }, *old_tm, *stm.get());
+        BOOST_REQUIRE_EQUAL(reconciled_stats_ptr.get(), nullptr);
+    }, cfg).get();
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);

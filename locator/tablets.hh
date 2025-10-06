@@ -480,6 +480,12 @@ struct load_stats {
     }
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
+
+    // Modifies the tablet sizes in load_stats for the given table after a split or merge. The old_tm argument has
+    // to contain the token_metadata pre-resize. The function returns load_stats with tablet token ranges
+    // corresponding to the post-resize tablet_map.
+    // In case any pre-resize tablet replica is not found, the function returns nullptr
+    lw_shared_ptr<load_stats> reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const;
 };
 
 using load_stats_v2 = load_stats;

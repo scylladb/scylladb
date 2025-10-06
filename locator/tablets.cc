@@ -888,6 +888,74 @@ std::optional<uint64_t> load_stats::get_tablet_size(host_id host, const range_ba
     return std::nullopt;
 }
 
+lw_shared_ptr<load_stats> load_stats::reconcile_tablets_resize(const std::unordered_set<table_id>& tables, const token_metadata& old_tm, const token_metadata& new_tm) const {
+    lw_shared_ptr<load_stats> reconciled_stats { make_lw_shared<load_stats>(*this) };
+    load_stats& new_stats = *reconciled_stats;
+
+    for (table_id table : tables) {
+        if (!new_tm.tablets().has_tablet_map(table)) {
+            // Table has been dropped, remove it from stats
+            for (auto& [host, tls] : new_stats.tablet_stats) {
+                tls.tablet_sizes.erase(table);
+            }
+            continue;
+        }
+        const auto& old_tmap = old_tm.tablets().get_tablet_map(table);
+        const auto& new_tmap = new_tm.tablets().get_tablet_map(table);
+        size_t old_tablet_count = old_tmap.tablet_count();
+        size_t new_tablet_count = new_tmap.tablet_count();
+        if (old_tablet_count == new_tablet_count * 2) {
+            // Reconcile for merge
+            for (size_t i = 0; i < old_tablet_count; i += 2) {
+                range_based_tablet_id rb_tid1 { table, old_tmap.get_token_range(tablet_id(i)) };
+                range_based_tablet_id rb_tid2 { table, old_tmap.get_token_range(tablet_id(i + 1)) };
+                auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
+                for (auto& replica : tinfo.replicas) {
+                    auto tablet_size_opt1 = new_stats.get_tablet_size(replica.host, rb_tid1);
+                    auto tablet_size_opt2 = new_stats.get_tablet_size(replica.host, rb_tid2);
+                    if (!tablet_size_opt1 || !tablet_size_opt2) {
+                        if (!tablet_size_opt1) {
+                            tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid1, replica.host);
+                        }
+                        if (!tablet_size_opt2) {
+                            tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid2, replica.host);
+                        }
+                        return nullptr;
+                    }
+                    dht::token_range new_range { new_tmap.get_token_range(tablet_id(i / 2)) };
+                    auto& sizes_for_table = new_stats.tablet_stats.at(replica.host).tablet_sizes.at(table);
+                    uint64_t merged_tablet_size = *tablet_size_opt1 + *tablet_size_opt2;
+                    sizes_for_table[new_range] = merged_tablet_size;
+                    sizes_for_table.erase(rb_tid1.range);
+                    sizes_for_table.erase(rb_tid2.range);
+                }
+            }
+        } else if (old_tablet_count == new_tablet_count / 2) {
+            // Reconcile for split
+            for (size_t i = 0; i < old_tablet_count; i++) {
+                range_based_tablet_id rb_tid { table, old_tmap.get_token_range(tablet_id(i)) };
+                auto& tinfo = old_tmap.get_tablet_info(tablet_id(i));
+                for (auto& replica : tinfo.replicas) {
+                    auto tablet_size_opt = new_stats.get_tablet_size(replica.host, rb_tid);
+                    if (!tablet_size_opt) {
+                        tablet_logger.debug("Unable to find tablet size in stats for table resize reconcile for tablet {} on host {}", rb_tid, replica.host);
+                        return nullptr;
+                    }
+                    dht::token_range new_range1 { new_tmap.get_token_range(tablet_id(i * 2)) };
+                    dht::token_range new_range2 { new_tmap.get_token_range(tablet_id(i * 2 + 1)) };
+                    auto& sizes_for_table = new_stats.tablet_stats.at(replica.host).tablet_sizes.at(table);
+                    uint64_t split_tablet_size = *tablet_size_opt / 2;
+                    sizes_for_table[new_range1] = split_tablet_size;
+                    sizes_for_table[new_range2] = split_tablet_size;
+                    sizes_for_table.erase(rb_tid.range);
+                }
+            }
+        }
+    }
+
+    return reconciled_stats;
+}
+
 tablet_range_splitter::tablet_range_splitter(schema_ptr schema, const tablet_map& tablets, host_id host, const dht::partition_range_vector& ranges)
     : _schema(std::move(schema))
     , _ranges(ranges)
