@@ -22,12 +22,12 @@ namespace test::vector_search {
 
 class vs_mock_server {
 public:
-    struct ann_req {
+    struct request {
         seastar::sstring path;
         seastar::sstring body;
     };
 
-    struct ann_resp {
+    struct response {
         seastar::http::reply::status_type status;
         seastar::sstring body;
     };
@@ -38,9 +38,13 @@ public:
 
     uint16_t port() const;
 
-    const std::vector<ann_req>& requests() const;
+    const std::vector<request>& ann_requests() const;
 
-    void next_ann_response(ann_resp response);
+    const std::vector<request>& status_requests() const;
+
+    void next_ann_response(response response);
+
+    void next_status_response(response response);
 
     template <typename... Args>
     static auto create(Args&&... args) -> seastar::future<std::unique_ptr<vs_mock_server>> {
@@ -59,7 +63,7 @@ public:
 private:
     explicit vs_mock_server(uint16_t port);
 
-    explicit vs_mock_server(ann_resp next_ann_response);
+    explicit vs_mock_server(response next_ann_response);
 
     vs_mock_server() = default;
 
@@ -79,8 +83,10 @@ private:
     std::uint16_t _port = 0;
     seastar::sstring _host;
     std::unique_ptr<seastar::httpd::http_server> _http_server;
-    std::vector<ann_req> _ann_requests;
-    ann_resp _next_ann_response{seastar::http::reply::status_type::ok, ""};
+    std::vector<request> _ann_requests;
+    std::vector<request> _status_requests;
+    response _next_ann_response{seastar::http::reply::status_type::ok, ""};
+    response _next_status_response{seastar::http::reply::status_type::ok, "SERVING"};
     const seastar::sstring INDEXES_PATH = "/api/v1/indexes";
 };
 
