@@ -54,7 +54,7 @@ vs_mock_server::vs_mock_server(uint16_t port)
     : _port(port) {
 }
 
-vs_mock_server::vs_mock_server(ann_resp next_ann_response)
+vs_mock_server::vs_mock_server(response next_ann_response)
     : _next_ann_response{std::move(next_ann_response)} {
 }
 
@@ -84,12 +84,20 @@ uint16_t vs_mock_server::port() const {
     return _port;
 }
 
-const std::vector<vs_mock_server::ann_req>& vs_mock_server::requests() const {
+const std::vector<vs_mock_server::request>& vs_mock_server::ann_requests() const {
     return _ann_requests;
 }
 
-void vs_mock_server::next_ann_response(ann_resp response) {
+const std::vector<vs_mock_server::request>& vs_mock_server::status_requests() const {
+    return _status_requests;
+}
+
+void vs_mock_server::next_ann_response(response response) {
     _next_ann_response = std::move(response);
+}
+
+void vs_mock_server::next_status_response(response response) {
+    _next_status_response = std::move(response);
 }
 
 seastar::future<> vs_mock_server::listen() {
@@ -107,7 +115,7 @@ seastar::future<> vs_mock_server::listen() {
 
 seastar::future<std::unique_ptr<seastar::http::reply>> vs_mock_server::handle_ann_request(
         std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
-    ann_req r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await seastar::util::read_entire_stream_contiguous(*req->content_stream)};
+    request r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await seastar::util::read_entire_stream_contiguous(*req->content_stream)};
     _ann_requests.push_back(std::move(r));
     rep->set_status(_next_ann_response.status);
     rep->write_body("json", _next_ann_response.body);
@@ -116,8 +124,9 @@ seastar::future<std::unique_ptr<seastar::http::reply>> vs_mock_server::handle_an
 
 seastar::future<std::unique_ptr<seastar::http::reply>> vs_mock_server::handle_status_request(
         std::unique_ptr<seastar::http::request> req, std::unique_ptr<seastar::http::reply> rep) {
-    rep->set_status(seastar::http::reply::status_type::ok);
-    rep->write_body("json", "SERVING");
+    _status_requests.push_back(request{.path = "/api/v1/status", .body = co_await seastar::util::read_entire_stream_contiguous(*req->content_stream)});
+    rep->set_status(_next_status_response.status);
+    rep->write_body("json", _next_status_response.body);
     co_return rep;
 }
 
