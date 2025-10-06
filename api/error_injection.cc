@@ -21,7 +21,7 @@ namespace hf = httpd::error_injection_json;
 
 void set_error_injection(http_context& ctx, routes& r) {
 
-    hf::enable_injection.set(r, [](std::unique_ptr<request> req) {
+    hf::enable_injection.set(r, [](std::unique_ptr<request> req) -> future<json::json_return_type> {
         sstring injection = req->get_path_param("injection");
         bool one_shot = req->get_query_param("one_shot") == "True";
         auto params = req->content;
@@ -39,12 +39,11 @@ void set_error_injection(http_context& ctx, routes& r) {
                 : rjson::parse_to_map<utils::error_injection_parameters>(params);
 
             auto& errinj = utils::get_local_injector();
-            return errinj.enable_on_all(injection, one_shot, std::move(parameters)).then([] {
-                return make_ready_future<json::json_return_type>(json::json_void());
-            });
+            co_await errinj.enable_on_all(injection, one_shot, std::move(parameters));
         } catch (const rjson::error& e) {
             throw httpd::bad_param_exception(format("Failed to parse injections parameters: {}", e.what()));
         }
+        co_return json::json_void();
     });
 
     hf::get_enabled_injections_on_all.set(r, [](std::unique_ptr<request> req) {
