@@ -87,23 +87,19 @@ void set_system(http_context& ctx, routes& r) {
                 relabels[i].expr = element["regex"].GetString();
             }
         }
-        {
-            bool failed = false;
-            co_await smp::invoke_on_all([&relabels, &failed] {
-                return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
-                    if (result.metrics_relabeled_due_to_collision > 0) {
-                        failed = true;
-                    }
-                    return;
-                });
-            });
-            {
-                if (failed) {
-                    throw bad_param_exception("conflicts found during relabeling");
+        bool failed = false;
+        co_await smp::invoke_on_all([&relabels, &failed] {
+            return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
+                if (result.metrics_relabeled_due_to_collision > 0) {
+                    failed = true;
                 }
-                co_return seastar::json::json_void();
-            }
+                return;
+            });
+        });
+        if (failed) {
+            throw bad_param_exception("conflicts found during relabeling");
         }
+        co_return seastar::json::json_void();
     });
 
     hs::get_system_uptime.set(r, [](const_req req) {
