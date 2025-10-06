@@ -40,6 +40,24 @@ struct shared_load_stats {
 
     void set_capacity(locator::host_id host, size_t capacity) {
         stats.capacity[host] = capacity;
+        stats.tablet_stats[host].effective_capacity = capacity;
+    }
+
+    void set_tablet_size(locator::host_id host, const locator::range_based_tablet_id& rb_tid, uint64_t tablet_size) {
+        stats.tablet_stats[host].tablet_sizes[rb_tid] = tablet_size;
+    }
+
+    void migrate_tablet_size(locator::host_id src_host, locator::host_id dst_host, const locator::range_based_tablet_id& rb_tid) {
+        auto src_host_i = stats.tablet_stats.find(src_host);
+        auto dst_host_i = stats.tablet_stats.find(dst_host);
+        if (src_host_i != stats.tablet_stats.end() && dst_host_i != stats.tablet_stats.end()) {
+            auto& src_sizes = src_host_i->second.tablet_sizes;
+            auto& dst_sizes = dst_host_i->second.tablet_sizes;
+            if (src_sizes.contains(rb_tid) && !dst_sizes.contains(rb_tid)) {
+                auto handle = src_sizes.extract(rb_tid);
+                dst_sizes.insert(std::move(handle));
+            }
+        }
     }
 };
 
