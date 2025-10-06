@@ -20,7 +20,10 @@ Columns:
 
 * `keyspace_name` - name of the keyspace
 * `durable_writes` - whether writes to the keyspace are using commitlog.
-* `replication` - replication settings for the keyspace. The value for the `"class"` key determines
+* `replication` - Deprecated replication settings for the keyspace. Contains the same options as
+                  the `replication_v2` column, but rack lists are replaced with replica count (numeric RF)
+                  for backwards compatibility with drivers which don't recognize rack lists here.
+* `replication_v2` - replication settings for the keyspace. The value for the `"class"` key determines
    replication strategy name. The structure of other options depends
    on the replication strategy.
 
