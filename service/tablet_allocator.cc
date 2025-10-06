@@ -673,6 +673,7 @@ class load_balancer {
     std::unordered_set<host_id> _skiplist;
     bool _use_table_aware_balancing = true;
     double _initial_scale = 1;
+    std::unordered_set<host_id> _hosts_with_missing_tablet_sizes;
 private:
     tablet_replica_set get_replicas_for_tablet_load(const tablet_info& ti, const tablet_transition_info* trinfo) const {
         // We reflect migrations in the load as if they already happened,
@@ -759,6 +760,24 @@ public:
     future<migration_plan> make_plan() {
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
+
+        // Collect the host_ids for which we don't have all the tablets in load_stats.
+        // These hosts will be excluded from the balancing set, unless we are performing a decommission
+        if (_table_load_stats) {
+            for (auto&& [table, tmap] : _tm->tablets().all_tables_ungrouped()) {
+                co_await tmap->for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
+                    range_based_tablet_id rb_tid {table, tmap->get_token_range(tid)};
+                    for (auto& replica: tinfo.replicas) {
+                        if (!_table_load_stats->get_tablet_size(replica.host, rb_tid)) {
+                            if (_hosts_with_missing_tablet_sizes.insert(replica.host).second) {
+                                lblogger.debug("Host {} has missing tablet sizes", replica.host);
+                            }
+                        }
+                    }
+                    return make_ready_future<>();
+                });
+            }
+        }
 
         if (!utils::get_local_injector().enter("tablet_migration_bypass")) {
             // Prepare plans for each DC separately and combine them to be executed in parallel.
@@ -2170,7 +2189,7 @@ public:
         migration_plan plan;
 
         for (auto&& [host, node_load] : nodes) {
-            if (skip_nodes.contains(host)) {
+            if (skip_nodes.contains(host) || _hosts_with_missing_tablet_sizes.contains(host)) {
                 lblogger.debug("Skipped balancing of node {}", host);
                 continue;
             }
@@ -2609,6 +2628,12 @@ public:
         };
 
         for (auto&& [host, node_load] : nodes) {
+            // When not draining, ignore nodes which don't have all tablet sizes in load_stats
+            if (nodes_to_drain.empty() && _hosts_with_missing_tablet_sizes.contains(host)) {
+                lblogger.info("Ignoring node {} for internode balancing due to missing tablet sizes", host);
+                continue;
+            }
+
             if (lblogger.is_enabled(seastar::log_level::debug)) {
                 shard_id shard = 0;
                 for (auto&& shard_load : node_load.shards) {
@@ -3100,7 +3125,7 @@ public:
             load.update(_target_tablet_size);
             _stats.for_node(dc, host).load = load.avg_load;
 
-            if (!load.drained) {
+            if (!load.drained && (!nodes_to_drain.empty() || !_hosts_with_missing_tablet_sizes.contains(host))) {
                 if (!min_load_node || load.avg_load < min_load) {
                     min_load = load.avg_load;
                     min_load_node = host;
