@@ -661,9 +661,7 @@ utils::chunked_vector<mutation> prepare_new_keyspace_announcement(replica::datab
 }
 
 static
-future<> validate(schema_ptr schema) {
-    utils::chunked_vector<mutation> mutations{};
-    api::timestamp_type ts{};
+future<> validate(schema_ptr schema, utils::chunked_vector<mutation>& mutations, api::timestamp_type ts) {
     return do_for_each(schema->extensions(), [schema, &mutations, ts](auto & p) {
         return p.second->validate(*schema, mutations, ts);
     });
@@ -715,15 +713,19 @@ static future<utils::chunked_vector<mutation>> do_prepare_new_column_family_anno
 }
 
 future<utils::chunked_vector<mutation>> prepare_new_column_family_announcement(storage_proxy& sp, schema_ptr cfm, api::timestamp_type timestamp) {
-  return validate(cfm).then([&sp, cfm, timestamp] {
+    utils::chunked_vector<mutation> extension_mutations;
+    co_await validate(cfm, extension_mutations, timestamp);
     try {
         auto& db = sp.get_db().local();
         auto ksm = db.find_keyspace(cfm->ks_name()).metadata();
-        return do_prepare_new_column_family_announcement(sp, *ksm, cfm, timestamp);
+        auto mutations = co_await do_prepare_new_column_family_announcement(sp, *ksm, cfm, timestamp);
+        if (!mutations.empty()) {
+            std::ranges::move(extension_mutations, std::back_inserter(mutations));
+        }
+        co_return mutations;
     } catch (const replica::no_such_keyspace& e) {
         throw exceptions::configuration_exception(format("Cannot add table '{}' to non existing keyspace '{}'.", cfm->cf_name(), cfm->ks_name()));
     }
-  });
 }
 
 future<> prepare_new_column_family_announcement(utils::chunked_vector<mutation>& mutations,
@@ -733,9 +735,10 @@ future<> prepare_new_column_family_announcement(utils::chunked_vector<mutation>&
 
 future<> prepare_new_column_families_announcement(utils::chunked_vector<mutation>& mutations,
         storage_proxy& sp, const keyspace_metadata& ksm, std::vector<schema_ptr> cfms, api::timestamp_type timestamp) {
+    utils::chunked_vector<mutation> extension_mutations;
     for (auto cfm : cfms) {
         try {
-            co_await validate(cfm);
+            co_await validate(cfm, extension_mutations, timestamp);
         } catch (...) {
             std::throw_with_nested(std::runtime_error(seastar::format("Validation of schema extensions failed for ColumnFamily: {}", cfm)));
         }
@@ -744,13 +747,18 @@ future<> prepare_new_column_families_announcement(utils::chunked_vector<mutation
     // If the keyspace exists, ensure that we use the current metadata.
     const auto& current_ksm = db.has_keyspace(ksm.name()) ? *db.find_keyspace(ksm.name()).metadata() : ksm;
     auto new_mutations = co_await do_prepare_new_column_families_announcement(sp, current_ksm, cfms, timestamp);
-    std::move(new_mutations.begin(), new_mutations.end(), std::back_inserter(mutations));
+    if (new_mutations.empty()) {
+        co_return;
+    }
+    std::ranges::move(new_mutations, std::back_inserter(mutations));
+    std::ranges::move(extension_mutations, std::back_inserter(mutations));
 }
 
 future<utils::chunked_vector<mutation>> prepare_column_family_update_announcement(storage_proxy& sp,
         schema_ptr cfm, std::vector<view_ptr> view_updates, api::timestamp_type ts) {
     warn(unimplemented::cause::VALIDATION);
-    co_await validate(cfm);
+    utils::chunked_vector<mutation> extension_mutations;
+    co_await validate(cfm, extension_mutations, ts);
     try {
         auto& db = sp.local_db();
         auto&& old_schema = db.find_column_family(cfm->ks_name(), cfm->cf_name()).schema(); // FIXME: Should we lookup by id?
@@ -771,6 +779,9 @@ future<utils::chunked_vector<mutation>> prepare_column_family_update_announcemen
         co_await seastar::async([&] {
             db.get_notifier().before_update_column_family(*cfm, *old_schema, mutations, ts);
         });
+        if (!mutations.empty()) {
+            std::ranges::move(extension_mutations, std::back_inserter(mutations));
+        }
         co_return co_await include_keyspace(sp, *keyspace, std::move(mutations));
     } catch (const replica::no_such_column_family& e) {
         auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot update non existing table '{}' in keyspace '{}'.",
@@ -971,7 +982,8 @@ static future<> add_view_building_tasks_mutations(storage_proxy& sp, view_ptr vi
 }
 
 future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
-    co_await validate(view);
+    utils::chunked_vector<mutation> extension_mutations;
+    co_await validate(view, extension_mutations, ts);
     auto& db = sp.local_db();
 
     try {
@@ -980,7 +992,7 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
             throw exceptions::already_exists_exception(view->ks_name(), view->cf_name());
         }
         mlogger.info("Create new view: {}", view);
-        co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts] {
+        co_return co_await seastar::async([&db, keyspace = std::move(keyspace), &sp, view = std::move(view), ts, extension_mutations = std::move(extension_mutations)] {
             auto mutations = db::schema_tables::make_create_view_mutations(keyspace, view, ts);
             if (sp.features().view_building_coordinator && keyspace->uses_tablets()) {
                 add_view_building_tasks_mutations(sp, view, mutations, ts).get();
@@ -990,6 +1002,9 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
             // the on_before_create_column_family listener - notably, to
             // create tablets for the new view table.
             db.get_notifier().before_create_column_family(*keyspace, *view, mutations, ts);
+            if (!mutations.empty()) {
+                std::ranges::move(extension_mutations, std::back_inserter(mutations));
+            }
             return include_keyspace(sp, *keyspace, std::move(mutations)).get();
         });
     } catch (const replica::no_such_keyspace& e) {
@@ -1000,7 +1015,8 @@ future<utils::chunked_vector<mutation>> prepare_new_view_announcement(storage_pr
 }
 
 future<utils::chunked_vector<mutation>> prepare_view_update_announcement(storage_proxy& sp, view_ptr view, api::timestamp_type ts) {
-    co_await validate(view);
+    utils::chunked_vector<mutation> extension_mutations;
+    co_await validate(view, extension_mutations, ts);
     auto db = sp.data_dictionary();
     try {
         auto&& keyspace = db.find_keyspace(view->ks_name()).metadata();
@@ -1010,6 +1026,9 @@ future<utils::chunked_vector<mutation>> prepare_view_update_announcement(storage
         }
         mlogger.info("Update view '{}.{}' From {} To {}", view->ks_name(), view->cf_name(), *old_view, *view);
         auto mutations = db::schema_tables::make_update_view_mutations(keyspace, view_ptr(old_view), std::move(view), ts, true);
+        if (!mutations.empty()) {
+            std::ranges::move(extension_mutations, std::back_inserter(mutations));
+        }
         co_return co_await include_keyspace(sp, *keyspace, std::move(mutations));
     } catch (const std::out_of_range& e) {
         auto&& ex = std::make_exception_ptr(exceptions::configuration_exception(format("Cannot update non existing materialized view '{}' in keyspace '{}'.",
