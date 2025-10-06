@@ -37,7 +37,7 @@ struct tablet_load_stats final {
     // Sum of all tablet sizes on a node and available disk space.
     uint64_t effective_capacity;
 
-    std::unordered_map<locator::range_based_tablet_id, uint64_t> tablet_sizes;
+    std::unordered_map<::table_id, std::unordered_map<dht::token_range, uint64_t>> tablet_sizes;
 };
 
 struct load_stats {

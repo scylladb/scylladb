@@ -3684,6 +3684,95 @@ SEASTAR_THREAD_TEST_CASE(test_creating_lots_of_tables_doesnt_overflow_metadata) 
     }, cfg).get();
 }
 
+SEASTAR_THREAD_TEST_CASE(test_load_stats_tablet_reconcile) {
+    auto cfg = tablet_cql_test_config();
+
+    // This test checks the correctness of the load_stats reconciliation algorithm.
+    // We only attempt to reconcile tablet_sizes after a merge or a split.
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+        auto dc = topo.dc();
+        const size_t tablet_count = 16;
+
+        auto host = topo.add_node(node_state::normal, 4);
+        auto ks_name = add_keyspace(e, {{dc, 1}}, tablet_count);
+
+        sstring table_name = "table_1";
+        e.execute_cql(fmt::format("CREATE TABLE {}.{} (p1 text, r1 int, PRIMARY KEY (p1))", ks_name, table_name)).get();
+        table_id table = e.local_db().find_schema(ks_name, table_name)->id();
+
+        auto get_token_range = [] (size_t id, size_t tablet_count) {
+            const auto log2_tablets = log2ceil(tablet_count);
+
+            if (id == 0) {
+                return dht::token_range::make({dht::minimum_token(), false}, {dht::last_token_of_compaction_group(log2_tablets, id), true});
+            } else {
+                return dht::token_range::make({dht::last_token_of_compaction_group(log2_tablets, id - 1), false}, {dht::last_token_of_compaction_group(log2_tablets, id), true});
+            }
+        };
+
+        auto& tmap = e.shared_token_metadata().local().get()->tablets().get_tablet_map(table);
+
+        // This checks if the tablet sizes have been correctly reconciled after a merge
+        auto check_merge = [&] (size_t merge_factor) {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            const size_t before_merge_tablet_count = tablet_count * merge_factor;
+            for (size_t i = 0; i < before_merge_tablet_count; ++i) {
+                const dht::token_range range {get_token_range(i, before_merge_tablet_count)};
+                tls.tablet_sizes[table][range] = i;
+            }
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize(e.shared_token_metadata().local().get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count);
+
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(tmap.get_token_range(locator::tablet_id{i}));
+                uint64_t expected_sum = 0;
+                for (uint64_t i_sum = 0; i_sum < merge_factor; ++i_sum) {
+                    expected_sum += i * merge_factor + i_sum;
+                }
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, expected_sum);
+            }
+        };
+        check_merge(2);
+        check_merge(4);
+        check_merge(8);
+        check_merge(16);
+
+        // This checks if the tablet sizes have been correctly reconciled after a split
+        auto check_split = [&] (size_t split_factor) {
+            locator::load_stats stats;
+            locator::tablet_load_stats& tls = stats.tablet_stats[host];
+            const size_t before_split_tablet_count = tablet_count / split_factor;
+            for (size_t i = 0; i < before_split_tablet_count; ++i) {
+                const dht::token_range range {get_token_range(i, before_split_tablet_count)};
+                tls.tablet_sizes[table][range] = i * split_factor;
+            }
+
+            auto reconciled_stats_ptr = stats.reconcile_tablets_resize(e.shared_token_metadata().local().get());
+            BOOST_REQUIRE(reconciled_stats_ptr);
+            locator::tablet_load_stats& reconciled_tls = reconciled_stats_ptr->tablet_stats[host];
+
+            BOOST_REQUIRE_EQUAL(reconciled_tls.tablet_sizes.at(table).size(), tablet_count);
+
+            for (size_t i = 0; i < tablet_count; ++i) {
+                const uint64_t reconciled_tablet_size = reconciled_tls.tablet_sizes.at(table).at(tmap.get_token_range(locator::tablet_id{i}));
+                BOOST_REQUIRE_EQUAL(reconciled_tablet_size, i / split_factor);
+            }
+        };
+
+        check_split(2);
+        check_split(4);
+        check_split(8);
+        check_split(16);
+
+    }, cfg).get();
+}
+
 SEASTAR_TEST_CASE(test_tablet_id_and_range_side) {
     static constexpr size_t tablet_count = 128;
     locator::tablet_map tmap(tablet_count);

@@ -760,6 +760,12 @@ public:
         const locator::topology& topo = _tm->get_topology();
         migration_plan plan;
 
+        if (_table_load_stats) {
+            if (auto reconciled_stats = _table_load_stats->reconcile_tablets_resize(_tm)) {
+                _table_load_stats = reconciled_stats;
+            }
+        }
+
         // Prepare plans for each DC separately and combine them to be executed in parallel.
         for (auto&& dc : topo.get_datacenters()) {
             if (_db.get_config().rf_rack_valid_keyspaces()) {

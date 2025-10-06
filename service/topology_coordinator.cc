@@ -1618,6 +1618,12 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     }
                     break;
                 case locator::tablet_transition_stage::end_migration: {
+                    // Move the tablet size in load_stats
+                    auto leaving = locator::get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                    auto pending = trinfo.pending_replica;
+                    const dht::token_range trange {tmap.get_token_range(gid.tablet)};
+                    handle_tablet_size_migration(leaving->host, pending->host, gid, trange);
+
                     // Need a separate stage and a barrier after cleanup RPC to cut off stale RPCs.
                     // See do_tablet_operation() doc.
                     bool defer_transition = utils::get_local_injector().enter("handle_tablet_migration_end_migration");
@@ -1835,6 +1841,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     .build());
         }
         co_await update_topology_state(std::move(guard), std::move(updates), "Finished tablet migration");
+    }
+
+    void handle_tablet_size_migration(locator::host_id leaving, locator::host_id pending, locator::global_tablet_id gid, const dht::token_range trange) {
+        auto has_tablet_size = [&] (const locator::load_stats& stats, locator::host_id host) {
+            if (auto host_i = stats.tablet_stats.find(host); host_i != stats.tablet_stats.end()) {
+                auto& tables = host_i->second.tablet_sizes;
+                if (auto table_i = tables.find(gid.table); table_i != tables.find(gid.table)) {
+                    if (auto size_i = table_i->second.find(trange); size_i != table_i->second.find(trange)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+
+        if (leaving != pending) {
+            auto old_load_stats = _tablet_allocator.get_load_stats();
+            if (old_load_stats) {
+                const locator::load_stats& stats = *old_load_stats;
+                if (has_tablet_size(stats, leaving) && !has_tablet_size(stats, pending)) {
+                    rtlogger.debug("Moving tablet size for tablet: {} from: {} to: {}", gid, leaving, pending);
+                    auto new_load_stats = make_lw_shared<locator::load_stats>(*old_load_stats);
+                    auto& new_leaving_ts = new_load_stats->tablet_stats.at(leaving);
+                    auto& new_pending_ts = new_load_stats->tablet_stats.at(pending);
+                    auto map_node = new_leaving_ts.tablet_sizes.at(gid.table).extract(trange);
+                    new_pending_ts.tablet_sizes[gid.table].insert(std::move(map_node));
+                    if (new_leaving_ts.tablet_sizes.at(gid.table).empty()) {
+                        new_leaving_ts.tablet_sizes.erase(gid.table);
+                    }
+                    _tablet_allocator.set_load_stats(std::move(new_load_stats));
+                }
+            }
+        }
     }
 
     future<> handle_tablet_resize_finalization(group0_guard g) {
