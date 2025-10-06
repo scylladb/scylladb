@@ -2812,6 +2812,8 @@ locator::combined_load_stats tablet_storage_group_manager::table_load_stats(std:
             const uint64_t tablet_size = sg.live_disk_space_used();
             table_stats.size_in_bytes += tablet_size;
             const locator::range_based_tablet_id rb_tid {gid.table, _tablet_map->get_token_range(gid.tablet)};
+            // Make sure the token range is in the form (a, b]
+            SCYLLA_ASSERT(!rb_tid.range.start()->is_inclusive() && rb_tid.range.end()->is_inclusive());
             tablet_stats.tablet_sizes[rb_tid] = tablet_size;
         }
     });
