@@ -502,7 +502,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     // Retires (times out) write response handlers which were constructed as `cancellable` and pass the given filter.
-    void cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+    future<> cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 
     /**
      * Returns whether for a range query doing a query against merged is likely

@@ -7145,8 +7145,7 @@ void storage_proxy::on_released(const locator::host_id& hid) {
     }
 }
 
-void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
-    SCYLLA_ASSERT(thread::running_in_thread());
+future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
     auto it = _cancellable_write_handlers_list->begin();
     while (it != _cancellable_write_handlers_list->end()) {
         // timeout_cb() may destroy the current handler. Since the list uses
@@ -7168,37 +7167,32 @@ void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstra
             // iterator_guard handles safe iterator updates while allowing prompt
             // handler destruction and client response.
             cancellable_write_handlers_list::iterator_guard ig{*_cancellable_write_handlers_list, it};
-            seastar::thread::yield();
+            co_await maybe_yield();
         }
     }
 }
 
 void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id id) {
-    // FIXME: make gossiper notifictaions to pass host ids
-    return cancel_write_handlers([id] (const abstract_write_response_handler& handler) {
+    cancel_write_handlers([id] (const abstract_write_response_handler& handler) {
         const auto& targets = handler.get_targets();
         return std::ranges::find(targets, id) != targets.end();
-    });
+    }).get();
 };
 
 future<> storage_proxy::drain_on_shutdown() {
-    //NOTE: the thread is spawned here because there are delicate lifetime issues to consider
-    // and writing them down with plain futures is error-prone.
-    return async([this] {
-        cancel_all_write_response_handlers().get();
-        _hints_resource_manager.stop().get();
-    });
+    co_await cancel_all_write_response_handlers();
+    co_await _hints_resource_manager.stop();
 }
 
 future<> storage_proxy::abort_view_writes() {
-    return async([this] {
-        cancel_write_handlers([] (const abstract_write_response_handler& handler) { return handler.is_view(); });
+    return cancel_write_handlers([] (const abstract_write_response_handler& handler) { 
+        return handler.is_view();
     });
 }
 
 future<> storage_proxy::abort_batch_writes() {
-    return async([this] {
-        cancel_write_handlers([] (const abstract_write_response_handler& handler) { return handler.is_batch(); });
+    return cancel_write_handlers([] (const abstract_write_response_handler& handler) { 
+        return handler.is_batch();
     });
 }
 
