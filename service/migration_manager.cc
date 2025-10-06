@@ -716,6 +716,13 @@ future<> prepare_new_column_family_announcement(utils::chunked_vector<mutation>&
 
 future<> prepare_new_column_families_announcement(utils::chunked_vector<mutation>& mutations,
         storage_proxy& sp, const keyspace_metadata& ksm, std::vector<schema_ptr> cfms, api::timestamp_type timestamp) {
+    for (auto cfm : cfms) {
+        try {
+            co_await validate(cfm);
+        } catch (...) {
+            std::throw_with_nested(std::runtime_error(seastar::format("Validation of schema extensions failed for ColumnFamily: {}", cfm)));
+        }
+    }
     auto& db = sp.local_db();
     // If the keyspace exists, ensure that we use the current metadata.
     const auto& current_ksm = db.has_keyspace(ksm.name()) ? *db.find_keyspace(ksm.name()).metadata() : ksm;
