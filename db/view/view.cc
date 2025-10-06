@@ -26,6 +26,7 @@
 #include <seastar/coroutine/maybe_yield.hh>
 #include <flat_map>
 
+#include "db/config.hh"
 #include "db/view/base_info.hh"
 #include "db/view/view_build_status.hh"
 #include "db/view/view_consumer.hh"
@@ -3713,6 +3714,23 @@ sstring build_status_to_sstring(build_status status) {
         return "SUCCESS";
     }
     on_internal_error(vlogger, fmt::format("Unknown view build status: {}", (int)status));
+}
+
+void validate_view_keyspace(const data_dictionary::database& db, std::string_view keyspace_name) {
+    const bool tablet_views_enabled = db.features().views_with_tablets;
+    // Note: if the configuration option `rf_rack_valid_keyspaces` is enabled, we can be
+    //       sure that all tablet-based keyspaces are RF-rack-valid. We check that
+    //       at start-up and then we don't allow for creating RF-rack-invalid keyspaces.
+    const bool rf_rack_valid_keyspaces = db.get_config().rf_rack_valid_keyspaces();
+    const bool required_config = tablet_views_enabled && rf_rack_valid_keyspaces;
+
+    const bool uses_tablets = db.find_keyspace(keyspace_name).get_replication_strategy().uses_tablets();
+
+    if (!required_config && uses_tablets) {
+        throw std::logic_error("Materialized views and secondary indexes are not supported on base tables with tablets. "
+                "To be able to use them, enable the configuration option `rf_rack_valid_keyspaces` and make sure "
+                "that the cluster feature `VIEWS_WITH_TABLETS` is enabled.");
+    }
 }
 
 } // namespace view

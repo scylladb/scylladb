@@ -1098,6 +1098,11 @@ private:
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             _db.local().check_rf_rack_validity(cfg->rf_rack_valid_keyspaces(), _token_metadata.local().get());
 
+            // Materialized views and secondary indexes are still restricted and require specific configuration
+            // options to work. Make sure that if there are existing views or indexes, they don't violate
+            // the requirements imposed on them.
+            _db.local().validate_tablet_views_indexes();
+
             utils::loading_cache_config perm_cache_config;
             perm_cache_config.max_size = cfg->permissions_cache_max_entries();
             perm_cache_config.expiry = std::chrono::milliseconds(cfg->permissions_validity_in_ms());
