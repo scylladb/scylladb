@@ -302,6 +302,9 @@ if __name__ == '__main__':
     opt_discard = ''
     if args.online_discard:
         opt_discard = ',discard'
+    opt_lazytime = ''
+    if is_kernel_version_at_least(4, 17):
+        opt_lazytime = ',lazytime'
     unit_data = f'''
 [Unit]
 Description=Scylla data directory
@@ -314,7 +317,7 @@ DefaultDependencies=no
 What={mount_dev}
 Where={mount_at}
 Type=xfs
-Options=noatime{opt_discard}
+Options=noatime{opt_discard}{opt_lazytime}
 
 [Install]
 WantedBy=local-fs.target
