@@ -36,6 +36,7 @@
 #include "gms/gossiper.hh"
 #include "db/system_keyspace.hh"
 #include <seastar/http/exception.hh>
+#include <seastar/http/short_streams.hh>
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/exception.hh>
@@ -497,9 +498,8 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto prefix = req->get_query_param("prefix");
         auto scope = parse_stream_scope(req->get_query_param("scope"));
 
-        // TODO: the http_server backing the API does not use content streaming
-        // should use it for better performance
-        rjson::value parsed = rjson::parse(req->content);
+        rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
+        rjson::value parsed = rjson::parse(std::move(content));
         if (!parsed.IsArray()) {
             throw httpd::bad_param_exception("malformatted sstables in body");
         }

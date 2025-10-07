@@ -54,7 +54,8 @@ void set_system(http_context& ctx, routes& r) {
 
     hm::set_metrics_config.set(r, [](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
         rapidjson::Document doc;
-        doc.Parse(req->content.c_str());
+        auto content = co_await util::read_entire_stream_contiguous(*req->content_stream);
+        doc.Parse(content.c_str());
         if (!doc.IsArray()) {
             throw bad_param_exception("Expected a json array");
         }
@@ -87,21 +88,19 @@ void set_system(http_context& ctx, routes& r) {
                 relabels[i].expr = element["regex"].GetString();
             }
         }
-        return do_with(std::move(relabels), false, [](const std::vector<seastar::metrics::relabel_config>& relabels, bool& failed) {
-            return smp::invoke_on_all([&relabels, &failed] {
-                return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
-                    if (result.metrics_relabeled_due_to_collision > 0) {
-                        failed = true;
-                    }
-                    return;
-                });
-            }).then([&failed](){
-                if (failed) {
-                    throw bad_param_exception("conflicts found during relabeling");
+        bool failed = false;
+        co_await smp::invoke_on_all([&relabels, &failed] {
+            return metrics::set_relabel_configs(relabels).then([&failed](const metrics::metric_relabeling_result& result) {
+                if (result.metrics_relabeled_due_to_collision > 0) {
+                    failed = true;
                 }
-                return make_ready_future<json::json_return_type>(seastar::json::json_void());
+                return;
             });
         });
+        if (failed) {
+            throw bad_param_exception("conflicts found during relabeling");
+        }
+        co_return seastar::json::json_void();
     });
 
     hs::get_system_uptime.set(r, [](const_req req) {

@@ -1371,6 +1371,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             }).get();
 
             stop_signal.check();
+            ctx.http_server.server().invoke_on_all([] (auto& server) { server.set_content_streaming(true); }).get();
             with_scheduling_group(maintenance_scheduling_group, [&] {
                 return ctx.http_server.listen(socket_address{api_addr, cfg->api_port()});
             }).get();
