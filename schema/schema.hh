@@ -531,26 +531,26 @@ public:
     ///
     /// Note that ID is absent. That's because it cannot be changed.
     struct user_properties {
-        sstring _comment;
-        gc_clock::duration _default_time_to_live = gc_clock::duration::zero();
-        double _bloom_filter_fp_chance = 0.01;
-        compression_parameters _compressor_params;
-        extensions_map _extensions;
-        int32_t _gc_grace_seconds = DEFAULT_GC_GRACE_SECONDS;
+        sstring comment;
+        gc_clock::duration default_time_to_live = gc_clock::duration::zero();
+        double bloom_filter_fp_chance = 0.01;
+        compression_parameters compressor_params;
+        extensions_map extensions;
+        int32_t gc_grace_seconds = DEFAULT_GC_GRACE_SECONDS;
         std::optional<int32_t> _paxos_grace_seconds;
-        double _crc_check_chance = 1;
-        int32_t _min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
-        int32_t _max_compaction_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
-        int32_t _min_index_interval = DEFAULT_MIN_INDEX_INTERVAL;
-        int32_t _max_index_interval = 2048;
-        int32_t _memtable_flush_period = 0;
-        ::speculative_retry _speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
+        double crc_check_chance = 1;
+        int32_t min_compaction_threshold = DEFAULT_MIN_COMPACTION_THRESHOLD;
+        int32_t max_compaction_threshold = DEFAULT_MAX_COMPACTION_THRESHOLD;
+        int32_t min_index_interval = DEFAULT_MIN_INDEX_INTERVAL;
+        int32_t max_index_interval = 2048;
+        int32_t memtable_flush_period = 0;
+        ::speculative_retry speculative_retry = ::speculative_retry(speculative_retry::type::PERCENTILE, 0.99);
         // This is the compaction strategy that will be used by default on tables which don't have one explicitly specified.
-        compaction::compaction_strategy_type _compaction_strategy = compaction::compaction_strategy_type::incremental;
-        std::map<sstring, sstring> _compaction_strategy_options;
-        bool _compaction_enabled = true;
-        ::caching_options _caching_options;
-        std::optional<std::map<sstring, sstring>> _tablet_options;
+        compaction::compaction_strategy_type compaction_strategy = compaction::compaction_strategy_type::incremental;
+        std::map<sstring, sstring> compaction_strategy_options;
+        bool compaction_enabled = true;
+        ::caching_options caching_options;
+        std::optional<std::map<sstring, sstring>> tablet_options;
 
         const cdc::options& get_cdc_options() const;
         gc_clock::duration get_paxos_grace_seconds() const;
@@ -613,7 +613,7 @@ private:
     std::vector<const column_definition*> _all_columns_in_select_order;
 
     extensions_map& extensions() {
-        return _raw._props._extensions;
+        return _raw._props.extensions;
     }
 
     friend class db::extensions;
@@ -671,13 +671,13 @@ public:
         return _raw._version;
     }
     double bloom_filter_fp_chance() const {
-        return _raw._props._bloom_filter_fp_chance;
+        return _raw._props.bloom_filter_fp_chance;
     }
     const compression_parameters& get_compressor_params() const {
-        return _raw._props._compressor_params;
+        return _raw._props.compressor_params;
     }
     const extensions_map& extensions() const {
-        return _raw._props._extensions;
+        return _raw._props.extensions;
     }
     bool is_dense() const {
         return _raw._is_dense;
@@ -701,7 +701,7 @@ public:
         return _raw._id;
     }
     const sstring& comment() const {
-        return _raw._props._comment;
+        return _raw._props.comment;
     }
     bool is_counter() const {
         return _raw._is_counter;
@@ -716,7 +716,7 @@ public:
     }
 
     gc_clock::duration gc_grace_seconds() const {
-        auto seconds = std::chrono::seconds(_raw._props._gc_grace_seconds);
+        auto seconds = std::chrono::seconds(_raw._props.gc_grace_seconds);
         return std::chrono::duration_cast<gc_clock::duration>(seconds);
     }
 
@@ -725,43 +725,43 @@ public:
     }
 
     double crc_check_chance() const {
-        return _raw._props._crc_check_chance;
+        return _raw._props.crc_check_chance;
     }
 
     int32_t min_compaction_threshold() const {
-        return _raw._props._min_compaction_threshold;
+        return _raw._props.min_compaction_threshold;
     }
 
     int32_t max_compaction_threshold() const {
-        return _raw._props._max_compaction_threshold;
+        return _raw._props.max_compaction_threshold;
     }
 
     int32_t min_index_interval() const {
-        return _raw._props._min_index_interval;
+        return _raw._props.min_index_interval;
     }
 
     int32_t max_index_interval() const {
-        return _raw._props._max_index_interval;
+        return _raw._props.max_index_interval;
     }
 
     int32_t memtable_flush_period() const {
-        return _raw._props._memtable_flush_period;
+        return _raw._props.memtable_flush_period;
     }
 
     compaction::compaction_strategy_type configured_compaction_strategy() const {
-        return _raw._props._compaction_strategy;
+        return _raw._props.compaction_strategy;
     }
 
     compaction::compaction_strategy_type compaction_strategy() const {
-        return _raw._props._compaction_enabled ? _raw._props._compaction_strategy : compaction::compaction_strategy_type::null;
+        return _raw._props.compaction_enabled ? _raw._props.compaction_strategy : compaction::compaction_strategy_type::null;
     }
 
     const std::map<sstring, sstring>& compaction_strategy_options() const {
-        return _raw._props._compaction_strategy_options;
+        return _raw._props.compaction_strategy_options;
     }
 
     bool compaction_enabled() const {
-        return _raw._props._compaction_enabled;
+        return _raw._props.compaction_enabled;
     }
 
     const cdc::options& cdc_options() const {
@@ -777,11 +777,11 @@ public:
     }
 
     const ::speculative_retry& speculative_retry() const {
-        return _raw._props._speculative_retry;
+        return _raw._props.speculative_retry;
     }
 
     const ::caching_options& caching_options() const {
-        return _raw._props._caching_options;
+        return _raw._props.caching_options;
     }
 
     // Returns true iff the _tablet_options are initialized.
@@ -879,7 +879,7 @@ public:
     }
 
     gc_clock::duration default_time_to_live() const {
-        return _raw._props._default_time_to_live;
+        return _raw._props.default_time_to_live;
     }
 
     data_type make_legacy_default_validator() const;
