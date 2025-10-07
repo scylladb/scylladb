@@ -30,6 +30,9 @@
 #include "utils/assert.hh"
 #include "idl/view.dist.hh"
 
+using namespace std::chrono_literals;
+
+static constexpr auto min_time_between_rcm_notifications = 1s;
 static logging::logger vbc_logger("view_building_coordinator");
 
 namespace db {
@@ -769,6 +772,46 @@ future<> view_building_coordinator::remove_view_build_statuses_on_left_node(util
             auto mut = co_await _sys_ks.make_remove_view_build_status_on_host_mutation(guard.write_timestamp(), view_name, host_id);
             out.emplace_back(std::move(mut));
             vbc_logger.debug("Removed view build status for view {} on node {}", view_name, host_id);
+        }
+    }
+}
+
+view_building_coordinator::rpc_callback_manager::rpc_callback_manager(view_building_coordinator& vbc)
+    : _timer(std::bind(&rpc_callback_manager::notify_coordinator, this))
+    , _vbc(vbc) {}
+
+view_building_coordinator::rpc_callback_manager::~rpc_callback_manager() {
+    _timer.cancel();
+}
+
+void view_building_coordinator::rpc_callback_manager::notify_coordinator() {
+    _vbc._vb_sm.event.broadcast();
+}
+
+void view_building_coordinator::rpc_callback_manager::mark_successful_group0_commit() {
+    _previous_iteration = lowres_clock::now();
+}
+
+future<> view_building_coordinator::rpc_callback_manager::mark_rpc_started(locator::tablet_replica replica) {
+    auto lock = co_await get_units(_mutex, 1, _vbc._as);
+    _working_rpcs.insert(replica);
+}
+
+future<> view_building_coordinator::rpc_callback_manager::mark_rpc_done(locator::tablet_replica replica) {
+    auto lock = co_await get_units(_mutex, 1, _vbc._as);
+    _working_rpcs.erase(replica);
+
+    if (_working_rpcs.empty()) {
+        // If there are no more RPCs to wait for,
+        // cancel the timer and notify the coordinator immediately
+        _timer.cancel();
+        notify_coordinator();
+    } else if (!_timer.armed()) {
+        auto wait_until = _previous_iteration + min_time_between_rcm_notifications;
+        if (wait_until > lowres_clock::now()) {
+            _timer.arm(wait_until);
+        } else {
+            notify_coordinator();
         }
     }
 }
