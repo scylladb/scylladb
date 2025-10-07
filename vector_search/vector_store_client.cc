@@ -9,14 +9,13 @@
 #include "vector_store_client.hh"
 #include "dns.hh"
 #include "load_balancer.hh"
-#include "node.hh"
+#include "client_manager.hh"
 #include "seastar/core/abort_source.hh"
 #include "util.hh"
 #include "cql3/statements/select_statement.hh"
 #include "cql3/type_json.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
-#include "utils/sequential_producer.hh"
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
 #include "utils/rjson.hh"
@@ -58,9 +57,7 @@ using primary_keys = vector_search::vector_store_client::primary_keys;
 using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
 using tcp_keepalive_params = net::tcp_keepalive_params;
 using time_point = lowres_clock::time_point;
-
-/// Timeout for waiting for a new client to be available
-constexpr auto WAIT_FOR_CLIENT_TIMEOUT = std::chrono::seconds(5);
+using uri = vector_search::client_manager::uri;
 
 /// The number of times to retry an /ann request if all nodes fail with a system error.
 constexpr auto ANN_RETRIES = 3;
@@ -79,11 +76,6 @@ auto parse_port(std::string const& port_txt) -> std::optional<port_number> {
     return port;
 }
 
-struct uri {
-    host_name host;
-    port_number port;
-};
-
 auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
     constexpr auto URI_REGEX = R"(^http:\/\/([a-z0-9._-]+):([0-9]+)$)";
     auto const uri_regex = std::regex(URI_REGEX);
@@ -99,20 +91,6 @@ auto parse_service_uri(std::string_view uri_) -> std::optional<uri> {
         return {};
     }
     return {{host, *port}};
-}
-
-
-/// Wait for a condition variable to be signaled or timeout.
-auto wait_for_signal(condition_variable& cv, time_point timeout) -> future<void> {
-    auto result = co_await coroutine::as_future(cv.wait(timeout));
-    if (result.failed()) {
-        auto err = result.get_exception();
-        if (try_catch<condition_variable_timed_out>(err) != nullptr) {
-            co_return;
-        }
-        co_await coroutine::return_exception_ptr(std::move(err));
-    }
-    co_return;
 }
 
 auto get_key_column_value(const rjson::value& item, std::size_t idx, const column_definition& column) -> std::expected<bytes, ann_error> {
@@ -226,17 +204,6 @@ auto parse_uris(std::string_view uris_csv) -> std::vector<uri> {
     return ret;
 }
 
-std::vector<sstring> get_hosts(const std::vector<uri>& primary, const std::vector<uri>& secondary) {
-    std::vector<sstring> ret;
-    for (const auto& uri : primary) {
-        ret.push_back(uri.host);
-    }
-    for (const auto& uri : secondary) {
-        ret.push_back(uri.host);
-    }
-    return ret;
-}
-
 } // namespace
 
 namespace vector_search {
@@ -248,167 +215,55 @@ struct vector_store_client::impl {
     config const& _cfg;
     utils::observer<sstring> primary_uri_observer;
     utils::observer<sstring> secondary_uri_observer;
-    clients_type primary_clients;
-    clients_type secondary_clients;
-    clients_type old_clients;
-    std::vector<uri> _primary_uris;
-    std::vector<uri> _secondary_uris;
-    gate client_producer_gate;
-    condition_variable refresh_client_cv;
-    milliseconds wait_for_client_timeout = WAIT_FOR_CLIENT_TIMEOUT;
-    sequential_producer<void> refresh_clients;
-    dns dns;
     uint64_t dns_refreshes = 0;
     seastar::metrics::metric_groups _metrics;
+    client_manager _clients_manager;
 
     impl(config const& cfg)
         : _cfg(cfg)
-        , primary_uri_observer(cfg.vector_store_primary_uri.observe([this](seastar::sstring uris_csv) {
+        , primary_uri_observer(cfg.vector_store_primary_uri.observe([this](auto) {
             handle_uris_changed();
         }))
-        , secondary_uri_observer(cfg.vector_store_secondary_uri.observe([this](seastar::sstring uris_csv) {
+        , secondary_uri_observer(cfg.vector_store_secondary_uri.observe([this](auto) {
             handle_uris_changed();
         }))
-        , _primary_uris(parse_uris(cfg.vector_store_primary_uri()))
-        , _secondary_uris(parse_uris(cfg.vector_store_secondary_uri()))
-        , refresh_clients([&]() -> future<> {
-            return try_with_gate(client_producer_gate, [this] -> future<> {
-                dns.trigger_refresh();
-                co_await wait_for_signal(refresh_client_cv, lowres_clock::now() + wait_for_client_timeout);
-            });
-        })
-        , dns(
-                  vslogger, get_hosts(_primary_uris, _secondary_uris),
-                  [this](auto const& addrs) -> future<> {
-                      co_await handle_addresses_changed(addrs);
-                  },
-                  dns_refreshes) {
+        , _clients_manager(parse_uris(cfg.vector_store_primary_uri()), parse_uris(cfg.vector_store_secondary_uri()), vslogger, dns_refreshes) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
     }
 
     void handle_uris_changed() {
-        clear_clients();
-
-        auto parse_and_update_uris = [](std::vector<uri>& uris, sstring uris_csv, const char* type) {
+        auto parse_and_update_uris = [](sstring uris_csv, const char* type) {
             try {
-                uris = parse_uris(std::move(uris_csv));
+                return parse_uris(std::move(uris_csv));
             } catch (const configuration_exception& e) {
                 vslogger.error("Failed to parse Vector Store {} service URI: {}", type, e.what());
-                uris.clear();
+                return std::vector<uri>{};
             }
         };
 
-        parse_and_update_uris(_primary_uris, _cfg.vector_store_primary_uri(), "primary");
-        parse_and_update_uris(_secondary_uris, _cfg.vector_store_secondary_uri(), "secondary");
-
-        dns.hosts(get_hosts(_primary_uris, _secondary_uris));
-    }
-
-    auto handle_addresses_changed(const dns::host_address_map& addrs) -> future<> {
-        auto populate_clients = [&](clients_type& clients, const std::vector<uri>& uris) {
-            for (const auto& uri : uris) {
-                if (auto it = addrs.find(uri.host); it != addrs.end()) {
-                    for (const auto& addr : it->second) {
-                        clients.push_back(make_lw_shared<node>(client::endpoint_type{uri.host, uri.port, addr}));
-                    }
-                }
-            }
-        };
-
-        clear_clients();
-
-        populate_clients(primary_clients, _primary_uris);
-        populate_clients(secondary_clients, _secondary_uris);
-
-        refresh_client_cv.broadcast();
-        co_await cleanup_old_clients();
+        _clients_manager.clear();
+        _clients_manager.update_uris(
+                parse_and_update_uris(_cfg.vector_store_primary_uri(), "primary"), parse_and_update_uris(_cfg.vector_store_secondary_uri(), "secondary"));
     }
 
     auto is_disabled() const -> bool {
-        return _primary_uris.empty() && _secondary_uris.empty();
-    }
-
-    void clear_clients() {
-        auto move_to_old = [&](clients_type& clients) {
-            old_clients.insert(old_clients.end(), std::make_move_iterator(clients.begin()), std::make_move_iterator(clients.end()));
-            clients.clear();
-        };
-        move_to_old(primary_clients);
-        move_to_old(secondary_clients);
-    }
-
-    /// Cleanup current clients
-    auto cleanup_clients() -> future<> {
-        auto close_and_clear = [](clients_type& clients) -> future<> {
-            for (auto& client : clients) {
-                co_await client->close();
-            }
-            clients.clear();
-        };
-
-        co_await close_and_clear(primary_clients);
-        co_await close_and_clear(secondary_clients);
-    }
-
-    /// Cleanup old clients that are no longer used.
-    auto cleanup_old_clients() -> future<> {
-        // iterate over old clients and close them. There is a co_await in the loop
-        // so we need to use [] accessor and copying clients to avoid dangling references of iterators.
-        // NOLINTNEXTLINE(modernize-loop-convert)
-        for (auto it = 0U; it < old_clients.size(); ++it) {
-            auto& client = old_clients[it];
-            if (client && client.owned()) {
-                auto client_cloned = client;
-                co_await client_cloned->close();
-                client_cloned = nullptr;
-            }
-        }
-        std::erase_if(old_clients, [](auto const& client) {
-            return !client;
-        });
-    }
-
-    using get_client_error = std::variant<addr_unavailable>;
-
-    auto get_or_refresh_if_empty(const clients_type& clients, abort_source& as) -> future<std::expected<clients_type, get_client_error>> {
-        if (!clients.empty()) {
-            co_return clients;
-        }
-
-        auto fut = co_await coroutine::as_future(refresh_clients(as));
-
-        if (fut.failed()) {
-            auto err = fut.get_exception();
-            co_await coroutine::return_exception_ptr(std::move(err));
-        }
-
-        if (clients.empty()) {
-            co_return std::unexpected{addr_unavailable{}};
-        }
-        co_return clients;
-    }
-
-    auto get_clients(abort_source& as) -> future<std::expected<clients_type, get_client_error>> {
-        return get_or_refresh_if_empty(primary_clients, as);
+        return _clients_manager.empty();
     }
 
     using make_request_error = std::variant<addr_unavailable, service_unavailable>;
+    using clients_factory = std::function<seastar::future<clients_type>(seastar::abort_source& as)>;
 
-    auto make_request(const clients_type& prospect_clients, const sstring& keyspace, const sstring& name, const std::vector<float>& embedding,
-            std::size_t limit, abort_source& as) -> future<std::expected<client::response, make_request_error>> {
+    auto make_request(const clients_factory& get_clients, const sstring& keyspace, const sstring& name, const std::vector<float>& embedding, std::size_t limit,
+            abort_source& as) -> future<std::expected<client::response, make_request_error>> {
         for (auto retries = 0; retries < ANN_RETRIES; ++retries) {
-            auto clients = co_await get_or_refresh_if_empty(prospect_clients, as);
-            if (!clients) {
-                co_return std::unexpected{std::visit(
-                        [](auto&& err) {
-                            return make_request_error{err};
-                        },
-                        clients.error())};
+            auto clients = co_await get_clients(as);
+            if (clients.empty()) {
+                co_return std::unexpected{addr_unavailable{}};
             }
 
-            load_balancer lb(std::move(*clients), random_engine);
+            load_balancer lb(std::move(clients), random_engine);
             while (auto client = lb.next()) {
                 if (client->is_up()) {
                     auto result = co_await coroutine::as_future(client->ann(keyspace, name, embedding, limit, as));
@@ -424,22 +279,29 @@ struct vector_store_client::impl {
                 }
             }
 
-            dns.trigger_refresh();
+            _clients_manager.trigger_refresh();
         }
         co_return std::unexpected{service_unavailable{}};
     }
 
     auto make_request(sstring keyspace, sstring name, std::vector<float> embedding, std::size_t limit, abort_source& as)
             -> future<std::expected<client::response, make_request_error>> {
-        if (!_primary_uris.empty()) {
-            auto result = co_await make_request(primary_clients, keyspace, name, embedding, limit, as);
-            if (result || _secondary_uris.empty()) {
+        auto get_primary = [this](auto& as) -> future<clients_type> {
+            return _clients_manager.get_primary_clients(as);
+        };
+        auto get_secondary = [this](auto& as) -> future<clients_type> {
+            return _clients_manager.get_secondary_clients(as);
+        };
+
+        if (_clients_manager.has_primay()) {
+            auto result = co_await make_request(get_primary, keyspace, name, embedding, limit, as);
+            if (result || !_clients_manager.has_secondary()) {
                 co_return result;
             }
         }
 
-        if (!_secondary_uris.empty()) {
-            co_return co_await make_request(secondary_clients, keyspace, name, embedding, limit, as);
+        if (_clients_manager.has_secondary()) {
+            co_return co_await make_request(get_secondary, keyspace, name, embedding, limit, as);
         }
 
         co_return std::unexpected{service_unavailable{}};
@@ -493,15 +355,11 @@ vector_store_client::vector_store_client(config const& cfg)
 vector_store_client::~vector_store_client() = default;
 
 void vector_store_client::start_background_tasks() {
-    _impl->dns.start_background_tasks();
+    _impl->_clients_manager.start_background_tasks();
 }
 
 auto vector_store_client::stop() -> future<> {
-    _impl->refresh_client_cv.signal();
-    co_await _impl->client_producer_gate.close();
-    co_await _impl->dns.stop();
-    co_await _impl->cleanup_old_clients();
-    co_await _impl->cleanup_clients();
+    return _impl->_clients_manager.stop();
 }
 
 auto vector_store_client::is_disabled() const -> bool {
@@ -514,29 +372,27 @@ auto vector_store_client::ann(keyspace_name keyspace, index_name name, schema_pt
 }
 
 void vector_store_client_tester::set_dns_refresh_interval(vector_store_client& vsc, std::chrono::milliseconds interval) {
-    vsc._impl->dns.refresh_interval(interval);
+    vsc._impl->_clients_manager.get_dns().refresh_interval(interval);
 }
 
 void vector_store_client_tester::set_wait_for_client_timeout(vector_store_client& vsc, std::chrono::milliseconds timeout) {
-    vsc._impl->wait_for_client_timeout = timeout;
+    vsc._impl->_clients_manager.timeout(timeout);
 }
 
 void vector_store_client_tester::set_dns_resolver(vector_store_client& vsc, std::function<future<std::vector<inet_address>>(sstring const&)> resolver) {
-    vsc._impl->dns.resolver(std::move(resolver));
+    vsc._impl->_clients_manager.get_dns().resolver(std::move(resolver));
 }
 
 void vector_store_client_tester::trigger_dns_resolver(vector_store_client& vsc) {
-    vsc._impl->dns.trigger_refresh();
+    vsc._impl->_clients_manager.get_dns().trigger_refresh();
 }
 
 auto vector_store_client_tester::resolve_hostname(vector_store_client& vsc, abort_source& as) -> future<std::vector<inet_address>> {
-    auto clients = co_await vsc._impl->get_clients(as);
+    auto clients = co_await vsc._impl->_clients_manager.get_primary_clients(as);
     std::vector<inet_address> ret;
-    if (!clients) {
-        co_return ret;
-    }
-    for (auto const& c : *clients) {
-        ret.push_back(c->endpoint().ip);
+    for (auto const& c : clients) {
+        auto ip = c->endpoint().ip;
+        ret.push_back(ip);
     }
     co_return ret;
 }
