@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "cdc/cdc_options.hh"
 #include "cdc/log.hh"
 #include "seastarx.hh"
 #include "service/paxos/cas_request.hh"
@@ -125,6 +126,9 @@ public:
             stats& per_table_stats,
             uint64_t& wcu_total);
     std::optional<service::cas_shard> shard_for_execute(bool needs_read_before_write);
+
+private:
+    inline bool should_fill_preimage() const { return _schema->cdc_options().enabled(); }
 };
 
 } // namespace alternator
