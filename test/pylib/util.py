@@ -256,12 +256,31 @@ async def wait_for_view(cql: Session, name: str, node_count: int, timeout: int =
     await wait_for(view_is_built, deadline)
 
 
-async def wait_for_first_completed(coros: list[Coroutine]):
-    done, pending = await asyncio.wait([asyncio.create_task(c) for c in coros], return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    for t in done:
-        await t
+async def wait_for_first_completed(coros: list[Coroutine], timeout: int|None = None):
+    tasks = [asyncio.create_task(c) for c in coros]
+    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED, timeout=timeout)
+    if not done:
+        # Timeout occurred, cancel all
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise asyncio.TimeoutError("No task completed within timeout")
+
+    # Cancel pending tasks
+    for task in pending:
+        task.cancel()
+
+    # Get first result
+    list_done = list(done)
+    first_task = list_done.pop(0)
+    result = await first_task
+
+    # Clean up
+    cleanup = list(pending) + list_done
+    if cleanup:
+        await asyncio.gather(*cleanup, return_exceptions=True)
+
+    return result
 
 
 def execute_with_tracing(cql : Session, statement : str | Statement, log : bool = False, *cql_execute_extra_args, **cql_execute_extra_kwargs):

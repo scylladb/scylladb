@@ -11,7 +11,7 @@ from test.pylib.repair import create_table_insert_data_for_repair
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas
-from test.pylib.util import unique_name
+from test.pylib.util import unique_name, wait_for_first_completed
 from test.topology.conftest import skip_mode
 from test.topology.util import new_test_keyspace, wait_for_cql_and_get_hosts, create_new_test_keyspace, reconnect_driver
 from test.topology_custom.test_tablets2 import safe_rolling_restart
@@ -938,9 +938,7 @@ async def test_two_tablets_concurrent_repair_and_migration(manager: ManagerClien
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", repair_replicas.last_token)
 
     async def migration_task():
-        done, pending = await asyncio.wait([asyncio.create_task(log.wait_for('Started to repair', from_mark=mark)) for log, mark in zip(logs, marks)], return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
+        await wait_for_first_completed([log.wait_for('Started to repair', from_mark=mark) for log, mark in zip(logs, marks)])
         await manager.api.move_tablet(servers[0].ip_addr, ks, "test", migration_replicas.replicas[0][0], migration_replicas.replicas[0][1], migration_replicas.replicas[0][0], 0 if migration_replicas.replicas[0][1] != 0 else 1, migration_replicas.last_token)
         [await manager.api.message_injection(s.ip_addr, injection) for s in servers]
         [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
