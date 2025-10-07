@@ -34,6 +34,7 @@ async def test_start_bootstrapped_with_invalid_seed(manager: ManagerClient):
     s1 = await manager.server_add(start=False)
 
     # Start the node with an invalid seed and make sure it fails with an error message.
+    manager.ignore_log_patterns.append("Startup failed: bad_configuration_error")
     await manager.server_start(s1.server_id, seeds=[IPAddress("no_address")],
                                expected_error="Bad configuration: invalid value in 'seeds'", wait_interval=20)
 

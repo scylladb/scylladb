@@ -45,6 +45,7 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     logging.info(f'removenode {servers[0]} using {servers[1]}')
     # removenode will fail after removing the server from the token ring,
     # but before removing it from group 0
+    manager.ignore_log_patterns.append("removenode_fail_before_remove_from_group0")
     await inject_error_one_shot(manager.api, servers[1].ip_addr,
                                 'removenode_fail_before_remove_from_group0')
     try:
@@ -105,6 +106,7 @@ async def test_remove_garbage_group0_members(manager: ManagerClient):
     # and will be able to perform removenode alone.
 
     decommissioned_host_id = await manager.get_host_id(servers[2].server_id)
+    manager.ignore_log_patterns.append("decommission_fail_before_leave_group0")
     await manager.api.enable_injection(
         servers[2].ip_addr, 'decommission_fail_before_leave_group0', one_shot=True)
     logging.info(f'decommission {servers[2]}')

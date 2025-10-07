@@ -68,6 +68,7 @@ async def test_tablet_drain_failure_during_decommission(manager: ManagerClient):
         keys = range(256)
         await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in keys])
 
+        manager.ignore_log_patterns.append("stream_tablet failed due to error injection")
         await inject_error_on(manager, "stream_tablet_fail_on_drain", servers)
 
         await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
@@ -87,6 +88,10 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     servers = await get_running_servers(manager)
     logs = [await manager.server_open_log(srv.server_id) for srv in servers]
     marks = [await log.mark() for log in logs]
+    manager.ignore_log_patterns.extend([
+        "stream_range failed due to error injection",
+        r"send_raft_topology_cmd\(stream_ranges\) failed with exception"
+    ])
     await manager.api.enable_injection(servers[2].ip_addr, 'stream_ranges_fail', one_shot=True)
     await manager.decommission_node(servers[2].server_id, expected_error="Decommission failed. See earlier errors")
     servers = await get_running_servers(manager)
@@ -110,6 +115,11 @@ async def test_topology_streaming_failure(request, manager: ManagerClient):
     marks = [await log.mark() for log in logs]
     servers = await get_running_servers(manager)
     s = await manager.server_add(start=False)
+    manager.ignore_log_patterns.extend([
+        "raft topology barrier failed due to error injection",
+        "transition_state::commit_cdc_generation, raft_topology_cmd::command::barrier failed",
+        "raft_topology_cmd barrier failed with: service::raft_group_not_found"
+    ])
     await inject_error_on(manager, "raft_topology_barrier_fail", servers)
     try:
         await manager.server_start(s.server_id, expected_error="Bootstrap failed. See earlier errors")

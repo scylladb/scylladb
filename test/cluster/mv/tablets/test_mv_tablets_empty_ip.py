@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 @skip_mode('release', 'error injections are not supported in release mode')
 @skip_mode('debug', 'node replace needs to wait for tablet rebuild, which takes a lot of time in debug mode')
 async def test_mv_tablets_empty_ip(manager: ManagerClient):
+    manager.ignore_log_patterns.append("data_dictionary::no_such_column_family")
     cfg = {'tablets_mode_for_new_keyspaces': 'enabled'}
     servers = await manager.servers_add(4, config = cfg, property_file=[
         {"dc": "dc1", "rack": "r1"},
