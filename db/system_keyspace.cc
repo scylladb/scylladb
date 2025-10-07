@@ -191,11 +191,11 @@ schema_ptr system_keyspace::batchlog() {
     static thread_local auto batchlog = [] {
         schema_builder builder(generate_legacy_id(NAME, BATCHLOG), NAME, BATCHLOG,
         // partition key
-        {{"id", uuid_type}},
+        {{"version", int32_type}, {"stage", int32_type}, {"shard", byte_type}},
         // clustering key
-        {},
+        {{"written_at", timestamp_type}, {"id", uuid_type}},
         // regular columns
-        {{"data", bytes_type}, {"version", int32_type}, {"written_at", timestamp_type}},
+        {{"data", bytes_type}},
         // static columns
         {},
         // regular column name type

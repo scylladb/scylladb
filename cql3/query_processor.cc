@@ -1204,29 +1204,16 @@ future<> query_processor::query_internal(
     co_return co_await for_each_cql_result(query_state, std::move(f));
 }
 
-future<utils::UUID> query_processor::query_internal_with_tracing(
+future<> query_processor::query_internal_with_tracing(
         const sstring& query_string,
         db::consistency_level cl,
         const data_value_list& values,
         int32_t page_size,
-        bool trace,
+        tracing::trace_state_ptr trace_state,
         noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f) {
-
-    tracing::trace_state_ptr trace_state;
-    if (trace) {
-        tracing::trace_state_props_set trace_props;
-        trace_props.set<tracing::trace_state_props::full_tracing>();
-
-        trace_state = tracing::tracing::get_local_tracing_instance().create_session(tracing::trace_type::QUERY, trace_props);
-        tracing::begin(trace_state, "Executing an internal query", service::client_state::for_internal_calls().get_client_address());
-        tracing::add_query(trace_state, query_string);
-    }
-
-    auto query_state = create_paged_state(query_string, cl, values, page_size, trace_state);
+    auto query_state = create_paged_state(query_string, cl, values, page_size, std::move(trace_state));
 
     co_await for_each_cql_result(query_state, std::move(f));
-
-    co_return trace_state ? trace_state->session_id() : utils::null_uuid();
 }
 
 future<> query_processor::query_internal(

@@ -1148,8 +1148,9 @@ private:
 
             db::batchlog_manager_config bmcfg;
             bmcfg.replay_rate = 100000000;
-            bmcfg.write_request_timeout = 2s;
+            bmcfg.replay_timeout = cfg_in.batchlog_replay_timeout.value_or(2s);
             bmcfg.delay = 0ms;
+            bmcfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
             _batchlog_manager.start(std::ref(_qp), std::ref(_sys_ks), bmcfg).get();
             auto stop_bm = defer_verbose_shutdown("batchlog manager", [this] {
                 _batchlog_manager.stop().get();

@@ -16,6 +16,7 @@
 #include "utils/assert.hh"
 #include "utils/to_string.hh"
 #include "bytes.hh"
+#include "cql3/query_result_printer.hh"
 
 static inline void fail(std::string_view msg, std::source_location loc) {
     throw std::runtime_error(std::format("assertion at {}:{} failed: {}", loc.file_name(), loc.line(), msg));
@@ -72,7 +73,9 @@ rows_assertions::with_size(size_t size) {
     const auto& rs = _rows->rs().result_set();
     auto row_count = rs.size();
     if (row_count != size) {
-        fail(format("Expected {:d} row(s) but got {:d}", size, row_count), _loc);
+        std::stringstream ss;
+        cql3::print_query_results_text(ss, _rows->rs());
+        fail(format("Expected {:d} row(s) but got {:d}:\n{}", size, row_count, ss.str()), _loc);
     }
     return {*this};
 }
@@ -82,8 +85,9 @@ rows_assertions::is_empty() {
     const auto& rs = _rows->rs().result_set();
     auto row_count = rs.size();
     if (row_count != 0) {
-        auto&& first_row = *rs.rows().begin();
-        fail(seastar::format("Expected no rows, but got {:d}. First row: {}", row_count, first_row), _loc);
+        std::stringstream ss;
+        cql3::print_query_results_text(ss, _rows->rs());
+        fail(seastar::format("Expected no rows, but got {:d}:\n{}", row_count, ss.str()), _loc);
     }
     return {*this};
 }

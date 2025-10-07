@@ -106,6 +106,7 @@ public:
     bool run_with_raft_recovery = false;
     bool clean_data_dir_before_test = true;
 
+    std::optional<db_clock::duration> batchlog_replay_timeout;
     std::optional<timeout_config> query_timeout;
 
     cql_test_config();

@@ -332,12 +332,12 @@ public:
             int32_t page_size,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
-    future<utils::UUID> query_internal_with_tracing(
+    future<> query_internal_with_tracing(
             const sstring& query_string,
             db::consistency_level cl,
             const data_value_list& values,
             int32_t page_size,
-            bool trace,
+            tracing::trace_state_ptr trace_state,
             noncopyable_function<future<stop_iteration>(const cql3::untyped_result_set_row&)> f);
 
     /*

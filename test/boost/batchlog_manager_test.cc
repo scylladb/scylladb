@@ -52,7 +52,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             using namespace std::chrono_literals;
 
             auto version = netw::messaging_service::current_version;
-            auto bm = qp.proxy().get_batchlog_mutation_for({ m }, s->id().uuid(), version, db_clock::now() - db_clock::duration(3h));
+            auto bm = qp.proxy().get_batchlog_mutation_for({ m }, s->id().uuid(), version, db_clock::now() - db_clock::duration(3h), db::batchlog_stage::initial);
 
             return qp.proxy().mutate_locally(bm, tracing::trace_state_ptr(), db::commitlog::force_sync::no).then([&bp] () mutable {
                 return bp.count_all_batches().then([](auto n) {
@@ -71,65 +71,6 @@ SEASTAR_TEST_CASE(test_execute_batch) {
     });
 }
 
-SEASTAR_TEST_CASE(test_batchlog_cleanup) {
-    cql_test_config cfg;
-    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
-
-    return do_with_cql_env_thread([] (cql_test_env& env) -> void {
-        auto& bm = env.batchlog_manager().local();
-
-        env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
-
-        const uint64_t batch_count = 8;
-
-        for (uint64_t i = 0; i != batch_count; ++i) {
-            std::vector<sstring> queries;
-            std::vector<std::string_view> query_views;
-            for (uint64_t j = 0; j != i+2; ++j) {
-                queries.emplace_back(format("INSERT INTO tbl (pk, v) VALUES ({}, 'value');", j));
-                query_views.emplace_back(queries.back());
-            }
-            env.execute_batch(
-                    query_views,
-                    cql3::statements::batch_statement::type::LOGGED,
-                    std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
-        }
-
-        const auto fragments_query = "SELECT mutation_source FROM MUTATION_FRAGMENTS(system.batchlog) WHERE partition_region = 0 ALLOW FILTERING";
-
-        assert_that(env.execute_cql("SELECT id FROM system.batchlog").get())
-            .is_rows()
-            .is_empty();
-        assert_that(env.execute_cql(fragments_query).get())
-            .is_rows()
-            .with_size(batch_count)
-            .assert_for_columns_of_each_row([] (columns_assertions& columns) {
-                columns.with_typed_column<sstring>("mutation_source", "memtable:0");
-            });
-
-        bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::no).get();
-
-        assert_that(env.execute_cql(fragments_query).get())
-            .is_rows()
-            .with_size(batch_count)
-            .assert_for_columns_of_each_row([] (columns_assertions& columns) {
-                columns.with_typed_column<sstring>("mutation_source", "memtable:0");
-            });
-
-        // Make all tombstones purgeable.
-        // Batchlog table tombston GC settings are hardcoded and the table is a local one too,
-        // so we cannot work around sleeps with using repair-mode here.
-        sleep(std::chrono::seconds(1)).get();
-
-        bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes).get();
-
-        assert_that(env.execute_cql(fragments_query).get())
-            .is_rows()
-            .is_empty();
-
-    }, cfg);
-}
-
 future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::batchlog_manager::post_replay_cleanup cleanup) {
 #ifndef SCYLLA_ENABLE_ERROR_INJECTION
     return make_ready_future<>();
@@ -137,11 +78,14 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
 
     cql_test_config cfg;
     cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.batchlog_replay_timeout = 0s;
 
     return do_with_cql_env_thread([=] (cql_test_env& env) -> void {
         auto& bm = env.batchlog_manager().local();
 
         env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
+
+        const auto shard_count = 256;
 
         const uint64_t batch_count = 8;
         uint64_t failed_batches = 0;
@@ -178,7 +122,7 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
             utils::get_local_injector().disable("storage_proxy_fail_send_batch");
         }
 
-        const auto fragments_query = "SELECT mutation_source FROM MUTATION_FRAGMENTS(system.batchlog) WHERE partition_region = 0 ALLOW FILTERING";
+        const auto fragments_query = "SELECT * FROM MUTATION_FRAGMENTS(system.batchlog) WHERE partition_region = 2 ALLOW FILTERING";
 
         assert_that(env.execute_cql("SELECT id FROM system.batchlog").get())
             .is_rows()
@@ -206,7 +150,7 @@ future<> run_batchlog_cleanup_with_failed_batches_test(bool replay_fails, db::ba
         assert_that(env.execute_cql(fragments_query).get())
             .is_rows()
             .with_size(cleanup
-                    ? (replay_fails ? failed_batches : 0)
+                    ? (replay_fails ? failed_batches + 2 * shard_count : 2 * shard_count)
                     : batch_count)
             .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
                 columns.with_typed_column<sstring>("mutation_source", [&] (const sstring& source) {
@@ -234,6 +178,85 @@ SEASTAR_TEST_CASE(test_batchlog_replay_no_cleanup) {
 
 SEASTAR_TEST_CASE(test_batchlog_replay_with_cleanup) {
     return run_batchlog_cleanup_with_failed_batches_test(false, db::batchlog_manager::post_replay_cleanup::yes);
+}
+
+SEASTAR_TEST_CASE(test_batchlog_cleanup_replay_timeout) {
+#ifndef SCYLLA_ENABLE_ERROR_INJECTION
+    return make_ready_future<>();
+#endif
+
+    cql_test_config cfg;
+    cfg.db_config->batchlog_replay_cleanup_after_replays.set_value("9999999", utils::config_file::config_source::Internal);
+    cfg.batchlog_replay_timeout = 1s;
+
+    return do_with_cql_env_thread([] (cql_test_env& env) -> void {
+        auto& bm = env.batchlog_manager().local();
+
+        env.execute_cql("CREATE TABLE tbl (pk bigint PRIMARY KEY, v text)").get();
+
+        const auto shard_count = 256;
+
+        const uint64_t batch_count = 8;
+
+        utils::get_local_injector().enable("storage_proxy_fail_send_batch");
+
+        auto send_batches = [&] {
+            for (uint64_t i = 0; i != batch_count; ++i) {
+                std::vector<sstring> queries;
+                std::vector<std::string_view> query_views;
+                for (uint64_t j = 0; j != i+2; ++j) {
+                    queries.emplace_back(format("INSERT INTO tbl (pk, v) VALUES ({}, 'value');", j));
+                    query_views.emplace_back(queries.back());
+                }
+                try {
+                    env.execute_batch(
+                            query_views,
+                            cql3::statements::batch_statement::type::LOGGED,
+                            std::make_unique<cql3::query_options>(db::consistency_level::ONE, std::vector<cql3::raw_value>())).get();
+                } catch (std::runtime_error& ex) {
+                    BOOST_REQUIRE_EQUAL(std::string(ex.what()), "Error injection: failing to send batch");
+                }
+            }
+        };
+
+        send_batches();
+        sleep(1s).get();
+        send_batches();
+
+        utils::get_local_injector().disable("storage_proxy_fail_send_batch");
+
+        bm.do_batch_log_replay(db::batchlog_manager::post_replay_cleanup::yes).get();
+
+        const auto fragments_query = "SELECT * FROM MUTATION_FRAGMENTS(system.batchlog) WHERE partition_region = 2 ALLOW FILTERING";
+
+        assert_that(env.execute_cql("SELECT id FROM system.batchlog").get())
+            .is_rows()
+            .with_size(batch_count); // half of the batches are too fresh to be replayed
+
+        size_t rows = 0;
+        size_t range_tombstone_changes = 0;
+
+        assert_that(env.execute_cql(fragments_query).get())
+            .is_rows()
+            .with_size(batch_count + 2 * shard_count) // half of the entries should be gone, +2*shard_count for range tombstone covering replayed entries
+            .assert_for_columns_of_each_row([&] (columns_assertions& columns) {
+                columns
+                    .with_typed_column<sstring>("mutation_source", "memtable:0")
+                    .with_typed_column<sstring>("mutation_fragment_kind", [&] (std::string_view mutation_fragment_kind) {
+                        if (mutation_fragment_kind == "clustering row") {
+                            ++rows;
+                        } else if (mutation_fragment_kind == "range tombstone change") {
+                            ++range_tombstone_changes;
+                        } else {
+                            return false;
+                        }
+                        return true;
+                    });
+            });
+
+        BOOST_REQUIRE_EQUAL(rows, batch_count);
+        BOOST_REQUIRE_EQUAL(range_tombstone_changes, 2*shard_count);
+    }, cfg);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
