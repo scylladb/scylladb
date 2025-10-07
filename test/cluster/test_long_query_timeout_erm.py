@@ -6,7 +6,7 @@ from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, Column, IntType
 from test.pylib.rest_client import inject_error_one_shot
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_first_completed
 
 import asyncio
 from datetime import datetime, timedelta
@@ -183,11 +183,7 @@ async def test_long_query_timeout_without_failure_erm(request, manager: ManagerC
         server_log = await manager.server_open_log(server.server_id)
         await server_log.wait_for("mapreduce_pause_parallel_dispatch: waiting for message")
 
-    async with asyncio.TaskGroup() as tg:
-        log_watch_tasks = [tg.create_task(wait_for_log_on_any_node(server)) for server in servers]
-        _, pending = await asyncio.wait(log_watch_tasks, return_when=asyncio.FIRST_COMPLETED)
-        for t in pending:
-            t.cancel()
+    await wait_for_first_completed([wait_for_log_on_any_node(server) for server in servers])
 
     if enable_tablets:
         logger.info("Add new node - ERM should not be blocked")
