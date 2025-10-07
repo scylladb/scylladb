@@ -86,6 +86,7 @@ private:
 
     using remote_work_results = std::vector<std::pair<utils::UUID, db::view::view_task_result>>;
     std::unordered_map<locator::tablet_replica, shared_future<std::optional<remote_work_results>>> _remote_work;
+    rpc_callback_manager _rcm;
 
 public:
     view_building_coordinator(replica::database& db, raft::server& raft, service::raft_group0& group0,
