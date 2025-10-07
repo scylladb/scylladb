@@ -17,12 +17,10 @@
 #include "test/lib/log.hh"
 #include <functional>
 #include <chrono>
-#include <iostream>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/metrics_api.hh>
 #include <seastar/net/api.hh>
-#include <seastar/http/function_handlers.hh>
 #include <seastar/http/httpd.hh>
 #include <seastar/json/json_elements.hh>
 #include <seastar/net/dns.hh>
@@ -45,15 +43,8 @@ using vector_store_client_tester = vector_search::vector_store_client_tester;
 using config = vector_store_client::config;
 using configuration_exception = exceptions::configuration_exception;
 using inet_address = seastar::net::inet_address;
-using function_handler = httpd::function_handler;
-using http_server = httpd::http_server;
-using http_server_tester = httpd::http_server_tester;
 using milliseconds = std::chrono::milliseconds;
 using seconds = std::chrono::seconds;
-using operation_type = httpd::operation_type;
-using port_number = vector_store_client::port_number;
-using reply = http::reply;
-using request = http::request;
 using status_type = http::reply::status_type;
 
 auto print_addr(const inet_address& addr) -> sstring {

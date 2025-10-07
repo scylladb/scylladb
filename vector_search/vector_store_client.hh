@@ -38,11 +38,9 @@ class vector_store_client final {
 public:
     using config = db::config;
     using vs_vector = std::vector<float>;
-    using host_name = sstring;
     using index_name = sstring;
     using keyspace_name = sstring;
     using limit = std::size_t;
-    using port_number = std::uint16_t;
     using primary_key = cql3::statements::primary_key;
     using primary_keys = std::vector<primary_key>;
     using schema_ptr = lw_shared_ptr<schema const>;
