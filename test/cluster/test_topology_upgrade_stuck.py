@@ -14,7 +14,7 @@ from typing import List
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import gather_safely
-from test.pylib.util import wait_for_cql_and_get_hosts
+from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_first_completed
 from test.cluster.conftest import skip_mode
 from test.cluster.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
@@ -26,11 +26,7 @@ async def wait_for_log_on_any_node(logs: List[ScyllaLogFile], marks: List[int], 
     Waits until a given line appears on any node in the cluster.
     """
     assert len(logs) == len(marks)
-    async with asyncio.TaskGroup() as tg:
-        log_watch_tasks = [tg.create_task(l.wait_for(pattern)) for l, m in zip(logs, marks)]
-        _, pending = await asyncio.wait(log_watch_tasks, return_when=asyncio.FIRST_COMPLETED)
-        for t in pending:
-            t.cancel()
+    await wait_for_first_completed([l.wait_for(pattern) for l, m in zip(logs, marks)])
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
@@ -67,14 +63,14 @@ async def test_topology_upgrade_stuck(request, manager: ManagerClient):
 
     logging.info("Waiting until upgrade gets stuck due to error injection")
     logs = await gather_safely(*(manager.server_open_log(s.server_id) for s in servers))
-    marks = [l.mark() for l in logs]
+    marks = await gather_safely(*(l.mark() for l in logs))
     await wait_for_log_on_any_node(logs, marks, "failed to build topology coordinator state due to error injection")
 
     logging.info("Isolate one of the nodes via error injection")
     await manager.api.enable_injection(to_be_isolated_node.ip_addr, "raft_drop_incoming_append_entries", one_shot=False)
 
     logging.info("Disable the error injection that causes upgrade to get stuck")
-    marks = [l.mark() for l in logs]
+    marks = await gather_safely(*(l.mark() for l in logs))
     await gather_safely(*(manager.api.disable_injection(s.ip_addr, "topology_coordinator_fail_to_build_state_during_upgrade") for s in servers))
 
     logging.info("Wait for the topology coordinator to observe upgrade as finished")
