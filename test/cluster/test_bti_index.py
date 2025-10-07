@@ -45,7 +45,18 @@ async def test_bti_index_enable(manager: ManagerClient) -> None:
     ks_name = "ks"
     cf_name = "t"
 
-    servers = await manager.servers_add(n_servers, config = {
+    # We run with `--smp=1` because the test uses CQL tracing.
+    #
+    # Trace events are written to trace tables asynchronously w.r.t.
+    # the traced statements, and AFAIU there's currently no way
+    # (other than polling) to wait for them to appear.
+    #
+    # The Python driver has a polling mechanism for traces,
+    # but it is only reliable if the entire statement runs on a single shard.
+    # (Because it only waits for the coordinator, and not for replicas, to write their events).
+    # So let's just make this a single-shard test, we aren't testing
+    # any multi-shard mechanisms here anyway.
+    servers = await manager.servers_add(n_servers, cmdline=['--smp=1'], config = {
         'error_injections_at_startup': [
             {
                 'name': 'suppress_features',
