@@ -902,3 +902,75 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         # And also fails here because not all staging sstables are processed after tablet merge. (#2)
         await assert_row_count_on_host(cql, new_hosts[0], ks, "mv", 1000)
         await manager.server_start(servers[1].server_id)
+
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_tablet_migration_during_view_building(manager: ManagerClient):
+    node_count = 1
+    server = new_server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
+    cql, _ = await manager.get_ready_cql([server])
+    await disable_tablet_load_balancing_on_all_servers(manager)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 1}} AND tablets = {{'enabled': true}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c)) WITH tablets = {{'min_tablet_count': 1}}")
+        await populate_base_table(cql, ks, "tab")
+
+        new_server = await manager.server_add(cmdline=cmdline_loggers, property_file={"dc": "dc1", "rack": "r1"})
+
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+
+        s2_host_id = await manager.get_host_id(new_server.server_id)
+        replica = await get_tablet_replica(manager, server, ks, "tab", 0)
+        await manager.api.move_tablet(server.ip_addr, ks, "tab", replica[0], replica[1], s2_host_id, replica[1], 0)
+
+        await unpause_view_building_tasks(manager)
+
+        await wait_for_view(cql, 'mv_cf_view1', 2)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view1")
+
+@pytest.mark.asyncio
+@skip_mode("release", "error injections are not supported in release mode")
+async def test_tablet_merge_during_view_building(manager: ManagerClient):
+    node_count = 3
+    servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+    ], config={
+        'error_injections_at_startup': ['allow_tablet_merge_with_views'],
+    })
+    cql, _ = await manager.get_ready_cql(servers)
+    await disable_tablet_load_balancing_on_all_servers(manager)
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 3}} AND tablets = {{'enabled': true}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key, c)) WITH tablets = {{'min_tablet_count': 2}}")
+        await populate_base_table(cql, ks, "tab")
+
+        marks = await mark_all_servers(manager)
+        await pause_view_building_tasks(manager)
+
+        await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv_cf_view1 AS SELECT * FROM {ks}.tab "
+                        "WHERE c IS NOT NULL and key IS NOT NULL AND v IS NOT NULL PRIMARY KEY (c, key, v) ")
+
+        await wait_for_some_view_build_tasks_to_get_stuck(manager, marks)
+
+        async def tablet_count_is(expected_tablet_count):
+            new_tablet_count = await get_tablet_count(manager, servers[0], ks, 'tab')
+            if new_tablet_count == expected_tablet_count:
+                return True
+
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+        assert await get_tablet_count(manager, servers[0], ks, "tab") == 2
+        await cql.run_async(f"ALTER TABLE {ks}.tab WITH tablets = {{'min_tablet_count': 1}}")
+        await wait_for(lambda: tablet_count_is(1), time.time() + 60)
+
+        await unpause_view_building_tasks(manager)
+
+        await wait_for_view(cql, 'mv_cf_view1', node_count)
+        await check_view_contents(cql, ks, "tab", "mv_cf_view1")
