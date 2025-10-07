@@ -45,7 +45,7 @@ Estimating Compression Ratios
 
 To choose the best compression configuration, you can estimate compression ratios using the REST API::
 
-    curl -X GET "http://node-address:10000/storage_service/estimate_compression_ratios?keyspace=mykeyspace&table=mytable"
+    curl -X GET "http://node-address:10000/storage_service/estimate_compression_ratios?keyspace=mykeyspace&cf=mytable"
 
 This will return a report with estimated compression ratios for various combinations of compression
 parameters (algorithm, chunk size, zstd level, dictionary).
