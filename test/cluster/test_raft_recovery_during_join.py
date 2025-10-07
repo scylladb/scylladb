@@ -86,8 +86,7 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     dead_hosts.append(failed_server_host)
 
     logging.info(f'Killing {dead_servers}')
-    for srv in dead_servers:
-        await manager.server_stop(server_id=srv.server_id)
+    await asyncio.gather(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
 
     logging.info(f'Unblocking the topology coordinator on server {coordinator}')
     await manager.api.message_injection(coordinator.ip_addr, 'delay_node_bootstrap')

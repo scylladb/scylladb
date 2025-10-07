@@ -84,8 +84,7 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     await asyncio.sleep(1)
 
     logging.info(f'Killing {dead_servers}')
-    for srv in dead_servers:
-        await manager.server_stop(server_id=srv.server_id)
+    await asyncio.gather(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
 
     logging.info('Starting the recovery procedure')
 
