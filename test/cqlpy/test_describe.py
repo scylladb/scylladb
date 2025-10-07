@@ -46,8 +46,12 @@ def filter_grant_roles(desc_result_iter: Iterable[DescRowType]) -> Iterable[Desc
 def filter_grant_permissions(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "grant_permission", desc_result_iter)
 
-def filter_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
-    return filter(lambda result: result.type == "service_level", desc_result_iter)
+def filter_service_levels(desc_result_iter: Iterable[DescRowType], filter_driver: bool = True) -> Iterable[DescRowType]:
+    # Filter out driver service level, which is created by the system automatically
+    f = lambda result: result.type == "service_level"
+    if filter_driver:
+        f = (lambda result: result.type == "service_level" and result.name != "driver")
+    return filter(f, desc_result_iter)
 
 def filter_attached_service_levels(desc_result_iter: Iterable[DescRowType]) -> Iterable[DescRowType]:
     return filter(lambda result: result.type == "service_level_attachment", desc_result_iter)
@@ -1609,6 +1613,7 @@ class AuthSLContext:
     def __enter__(self):
         if self.ks:
             self.cql.execute(f"CREATE KEYSPACE {self.ks} WITH REPLICATION = {{ 'class': 'SimpleStrategy', 'replication_factor': 1 }}")
+        self.driver_sl = self.cql.execute("LIST SERVICE LEVEL driver").one()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
@@ -1626,6 +1631,9 @@ class AuthSLContext:
             service_levels = [record.service_level for record in service_levels_iter]
             for sl in service_levels:
                 self.cql.execute(f"DROP SERVICE LEVEL {make_identifier(sl, quotation_mark='"')}")
+            # Restore driver service level if it was removed by the test
+            self.cql.execute(f"CREATE SERVICE LEVEL {self.driver_sl.service_level} WITH WORKLOAD_TYPE = '{self.driver_sl.workload_type}' AND SHARES = {self.driver_sl.shares}")
+
 
 class ServiceLevel:
     default_shares_value = 1000

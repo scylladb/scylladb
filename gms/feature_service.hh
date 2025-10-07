@@ -173,6 +173,7 @@ public:
     gms::feature view_building_coordinator { *this, "VIEW_BUILDING_COORDINATOR"sv };
     gms::feature ms_sstable { *this, "MS_SSTABLE_FORMAT"sv };
     gms::feature rack_list_rf { *this, "RACK_LIST_RF"sv };
+    gms::feature driver_service_level { *this, "DRIVER_SERVICE_LEVEL"sv };
 public:
 
     const std::unordered_map<sstring, std::reference_wrapper<feature>>& registered_features() const;
