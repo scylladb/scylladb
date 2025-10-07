@@ -705,9 +705,16 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
         const keyspace_metadata& ksm, api::timestamp_type timestamp, std::optional<table_id> uuid, schema_ptr old)
 {
     schema_builder b(s.ks_name(), log_name(s.cf_name()));
+
     b.with_partitioner(cdc::cdc_partitioner::classname);
 
-    set_default_properties_log_table(b, s, db, ksm);
+    if (old) {
+        // If the user reattaches the log table, do not change its properties.
+        b.set_properties(old->get_properties());
+    } else {
+        set_default_properties_log_table(b, s, db, ksm);
+    }
+
     add_columns_to_cdc_log(b, s, timestamp, old);
 
     if (uuid) {
