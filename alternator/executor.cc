@@ -2580,14 +2580,14 @@ std::optional<service::cas_shard> rmw_operation::shard_for_execute(bool needs_re
 // Build the return value from the different RMW operations (UpdateItem,
 // PutItem, DeleteItem). All these return nothing by default, but can
 // optionally return Attributes if requested via the ReturnValues option.
-static future<executor::request_return_type> rmw_operation_return(rjson::value&& attributes, const consumed_capacity_counter& consumed_capacity, uint64_t& metric) {
+static executor::request_return_type rmw_operation_return(rjson::value&& attributes, const consumed_capacity_counter& consumed_capacity, uint64_t& metric) {
     rjson::value ret = rjson::empty_object();
     consumed_capacity.add_consumed_capacity_to_response_if_needed(ret);
     metric += consumed_capacity.get_consumed_capacity_units();
     if (!attributes.IsNull()) {
         rjson::add(ret, "Attributes", std::move(attributes));
     }
-    return make_ready_future<executor::request_return_type>(rjson::print(std::move(ret)));
+    return rjson::print(std::move(ret));
 }
 
 static future<std::unique_ptr<rjson::value>> get_previous_item(
@@ -2701,7 +2701,7 @@ future<executor::request_return_type> rmw_operation::execute(service::storage_pr
         if (!is_applied) {
             return make_ready_future<executor::request_return_type>(api_error::conditional_check_failed("The conditional request failed", std::move(_return_attributes)));
         }
-        return rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total);
+        return make_ready_future<executor::request_return_type>(rmw_operation_return(std::move(_return_attributes), _consumed_capacity, wcu_total));
     });
 }
 
