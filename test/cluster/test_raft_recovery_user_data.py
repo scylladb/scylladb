@@ -52,13 +52,9 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # Workaround for https://github.com/scylladb/scylladb/issues/25163.
     # It makes the test ~170 s faster with remove_dead_nodes_with == "replace".
     tablet_load_stats_cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
-    # Decrease failure_detector_timeout_in_ms from the default 20 s to speed up some graceful shutdowns in the test.
-    # Shutting down the CQL server can hang for failure_detector_timeout_in_ms in the presence of dead nodes and
-    # CQL requests.
     cfg = {
         'endpoint_snitch': 'GossipingPropertyFileSnitch',
         'tablets_mode_for_new_keyspaces': 'enabled',
-        'failure_detector_timeout_in_ms': 2000,
     } | rf_rack_cfg | hints_cfg | tablet_load_stats_cfg
 
     property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
