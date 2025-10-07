@@ -809,6 +809,10 @@ public:
         return _raw._in_memory;
     }
 
+    const properties& get_properties() const {
+        return _raw._props;
+    }
+
     const column_definition* get_column_definition(const bytes& name) const;
     const column_definition& column_at(column_kind, column_id) const;
     // Find a column definition given column ordinal id in the schema
