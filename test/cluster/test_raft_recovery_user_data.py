@@ -124,9 +124,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # only after increasing RF to 3, which we do - see finish_writes_dc2.
     await finish_writes()
     ccluster_all_nodes.shutdown()
-    dc1_cql = cluster_con(
+    ccluster_dc1 = cluster_con(
             [srv.ip_addr for srv in live_servers],
-            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers])).connect()
+            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers]))
+    dc1_cql = ccluster_dc1.connect()
     finish_writes_dc1 = await start_writes(dc1_cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=3, ks_name=ks_name)
 
     new_servers: list[ServerInfo] = []
@@ -191,9 +192,10 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
                                 {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""")
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
-    dc2_cql = cluster_con(
+    ccluster_dc2 = cluster_con(
             [srv.ip_addr for srv in new_servers],
-            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in new_servers])).connect()
+            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in new_servers]))
+    dc2_cql = ccluster_dc2.connect()
     finish_writes_dc2 = await start_writes(dc2_cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=3, ks_name=ks_name)
 
     # Send some writes to dc2.
@@ -207,3 +209,5 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     await finish_writes_dc1()
     await finish_writes_dc2()
+    ccluster_dc1.shutdown()
+    ccluster_dc2.shutdown()
