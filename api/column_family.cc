@@ -18,7 +18,6 @@
 #include "utils/assert.hh"
 #include "utils/estimated_histogram.hh"
 #include <algorithm>
-#include "db/system_keyspace.hh"
 #include "db/data_listeners.hh"
 #include "storage_service.hh"
 #include "compaction/compaction_manager.hh"
@@ -336,7 +335,7 @@ uint64_t accumulate_on_active_memtables(replica::table& t, noncopyable_function<
     return ret;
 }
 
-void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db, sharded<db::system_keyspace>& sys_ks) {
+void set_column_family(http_context& ctx, routes& r, sharded<replica::database>& db) {
     cf::get_column_family_name.set(r, [&db] (const_req req){
         std::vector<sstring> res;
         const replica::database::tables_metadata& meta = db.local().get_tables_metadata();
@@ -937,30 +936,6 @@ void set_column_family(http_context& ctx, routes& r, sharded<replica::database>&
         return set_tables_tombstone_gc(db, std::move(tables), false);
     });
 
-    cf::get_built_indexes.set(r, [&db, &sys_ks](std::unique_ptr<http::request> req) {
-        auto [ks, cf_name] = parse_fully_qualified_cf_name(req->get_path_param("name"));
-        // Use of load_built_views() as filtering table should be in sync with
-        // built_indexes_virtual_reader filtering with BUILT_VIEWS table
-        return sys_ks.local().load_built_views().then([ks, cf_name, &db](const std::vector<db::system_keyspace::view_name>& vb) mutable {
-            std::set<sstring> vp;
-            for (auto b : vb) {
-                if (b.first == ks) {
-                    vp.insert(b.second);
-                }
-            }
-            std::vector<sstring> res;
-            auto uuid = validate_table(db.local(), ks, cf_name);
-            replica::column_family& cf = db.local().find_column_family(uuid);
-            res.reserve(cf.get_index_manager().list_indexes().size());
-            for (auto&& i : cf.get_index_manager().list_indexes()) {
-                if (vp.contains(secondary_index::index_table_name(i.metadata().name()))) {
-                    res.emplace_back(i.metadata().name());
-                }
-            }
-            return make_ready_future<json::json_return_type>(res);
-        });
-    });
-
     cf::get_compression_metadata_off_heap_memory_used.set(r, [](const_req) {
         // FIXME
         // Currently there are no information on the compression
@@ -1215,7 +1190,6 @@ void unset_column_family(http_context& ctx, routes& r) {
     cf::disable_tombstone_gc.unset(r);
     ss::enable_tombstone_gc.unset(r);
     ss::disable_tombstone_gc.unset(r);
-    cf::get_built_indexes.unset(r);
     cf::get_compression_metadata_off_heap_memory_used.unset(r);
     cf::get_compression_parameters.unset(r);
     cf::get_compression_ratio.unset(r);
