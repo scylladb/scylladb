@@ -18,8 +18,10 @@
 #include "test/lib/cql_test_env.hh"
 #include "service/storage_proxy.hh"
 #include "test/lib/reader_concurrency_semaphore.hh"
+#include <boost/lexical_cast.hpp>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
+#include <seastar/util/short_streams.hh>
 #include "test/lib/sstable_utils.hh"
 #include "readers/mutation_fragment_v1_stream.hh"
 #include "schema/schema_registry.hh"
@@ -242,6 +244,75 @@ SEASTAR_TEST_CASE(test_reader_with_different_strategies) {
             repair_reader::read_strategy::local,
             repair_reader::read_strategy::multishard_split);
     });
+}
+
+static future<> corrupt_data_component(sstables::shared_sstable sst) {
+    auto f = co_await open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo);
+    const auto align = f.memory_dma_alignment();
+    const auto len = f.disk_write_dma_alignment();
+    auto wbuf = seastar::temporary_buffer<char>::aligned(align, len);
+    std::fill(wbuf.get_write(), wbuf.get_write() + len, 0xba);
+    co_await f.dma_write(0, wbuf.get(), len);
+    co_await f.close();
+}
+
+static future<> run_repair_reader_corruption_test(random_mutation_generator::compress compress, const sstring& expected_error_msg) {
+    return do_with_cql_env([=](cql_test_env& e) -> future<> {
+        random_mutation_generator gen{random_mutation_generator::generate_counters::no, local_shard_only::no,
+            random_mutation_generator::generate_uncompactable::no, std::nullopt, "ks", "cf", compress};
+
+        co_await e.db().invoke_on_all([gs = global_schema_ptr(gen.schema())](replica::database& db) -> future<> {
+            co_await db.add_column_family_and_make_directory(gs.get(), replica::database::is_new_cf::yes);
+        });
+
+        auto& cf = e.local_db().find_column_family(gen.schema());
+        const auto& local_sharder = cf.schema()->get_sharder();
+
+        auto mutations = gen(30);
+        auto& storage_proxy = e.get_storage_proxy().local();
+        co_await storage_proxy.mutate_locally(std::move(mutations), tracing::trace_state_ptr());
+
+        co_await cf.flush();
+
+        auto sstables = cf.get_sstables();
+        BOOST_REQUIRE_GT(sstables->size(), 0);
+        auto sst = *sstables->begin();
+
+        co_await corrupt_data_component(sst);
+
+        bool caught_expected_error = false;
+        auto test_range = dht::token_range::make_open_ended_both_sides();
+        auto reader = repair_reader(e.db(), cf, cf.schema(), make_reader_permit(e),
+            test_range, local_sharder, 0, 0, repair_reader::read_strategy::local,
+            gc_clock::now(), incremental_repair_meta());
+
+        try {
+            while (auto mf = co_await reader.read_mutation_fragment()) {
+                // Read until error occurs
+            }
+            co_await reader.on_end_of_stream();
+        } catch (const malformed_sstable_exception& e) {
+            caught_expected_error = (sstring(e.what()).find(expected_error_msg) != sstring::npos);
+        }
+
+        co_await reader.close();
+
+        BOOST_REQUIRE(caught_expected_error);
+    });
+}
+
+SEASTAR_TEST_CASE(test_repair_reader_checksum_mismatch_compressed) {
+    return run_repair_reader_corruption_test(
+        random_mutation_generator::compress::yes,
+        "failed checksum"
+    );
+}
+
+SEASTAR_TEST_CASE(test_repair_reader_checksum_mismatch_uncompressed) {
+    return run_repair_reader_corruption_test(
+        random_mutation_generator::compress::no,
+        "failed checksum"
+    );
 }
 
 SEASTAR_TEST_CASE(repair_rows_size_considers_external_memory) {
