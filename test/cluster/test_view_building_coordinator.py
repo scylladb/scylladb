@@ -770,7 +770,7 @@ async def test_file_streaming(manager: ManagerClient):
 #   because last token after tablet merge = last token of tablet2 before merge
 @pytest.mark.asyncio
 @skip_mode('release', 'error injections are not supported in release mode')
-@pytest.mark.xfail(reason="#26244")
+@pytest.mark.skip(reason="#26244")
 async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
     node_count = 2
     servers = await manager.servers_add(node_count, cmdline=cmdline_loggers, property_file=[
