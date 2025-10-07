@@ -1275,7 +1275,8 @@ schema_builder& schema_builder::with_sharder(unsigned shard_count, unsigned shar
 
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
-        std::optional<table_id> id, data_type rct)
+        std::optional<table_id> id, data_type rct,
+        std::optional<std::reference_wrapper<const schema::properties>> initial_properties)
         : _raw(id ? *id : table_id(utils::UUID_gen::get_time_UUID()))
 {
     // Various schema-creation commands (creating tables, indexes, etc.)
@@ -1297,6 +1298,10 @@ schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_nam
     _raw._ks_name = sstring(ks_name);
     _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;
+
+    if (initial_properties) {
+        _raw._props = *initial_properties;
+    }
 }
 
 schema_builder::schema_builder(const schema_ptr s)
