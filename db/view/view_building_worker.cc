@@ -309,7 +309,10 @@ std::unordered_map<table_id, std::vector<view_building_worker::staging_sstable_t
             return;
         }
 
-        auto& tablet_map = _db.get_token_metadata().tablets().get_tablet_map(table_id);
+        // scylladb/scylladb#26403: Make sure to access the tablets map via the effective replication map of the table object.
+        // The token metadata object pointed to by the database (`_db.get_token_metadata()`) may not contain
+        // the tablets map of the currently processed table yet. After #24414 is fixed, this should not matter anymore.
+        auto& tablet_map = table->get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(table_id);
         auto sstables = table->get_sstables();
         for (auto sstable: *sstables) {
             if (!sstable->requires_view_building()) {
