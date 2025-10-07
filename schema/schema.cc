@@ -567,34 +567,37 @@ schema::has_multi_cell_collections() const {
     });
 }
 
+bool operator==(const schema::properties& lhs, const schema::properties& rhs) {
+    return lhs.comment == rhs.comment
+        && lhs.default_time_to_live == rhs.default_time_to_live
+        && lhs.bloom_filter_fp_chance == rhs.bloom_filter_fp_chance
+        && lhs.compressor_params == rhs.compressor_params
+        && lhs.gc_grace_seconds == rhs.gc_grace_seconds
+        && lhs.min_compaction_threshold == rhs.min_compaction_threshold
+        && lhs.max_compaction_threshold == rhs.max_compaction_threshold
+        && lhs.min_index_interval == rhs.min_index_interval
+        && lhs.max_index_interval == rhs.max_index_interval
+        && lhs.memtable_flush_period == rhs.memtable_flush_period
+        && lhs.speculative_retry == rhs.speculative_retry
+        && lhs.compaction_strategy == rhs.compaction_strategy
+        && lhs.compaction_strategy_options == rhs.compaction_strategy_options
+        && lhs.compaction_enabled == rhs.compaction_enabled
+        && lhs.caching_options == rhs.caching_options
+        && lhs.get_paxos_grace_seconds() == rhs.get_paxos_grace_seconds()
+        && lhs.get_cdc_options() == rhs.get_cdc_options()
+        && lhs.get_tombstone_gc_options() == rhs.get_tombstone_gc_options();
+}
+
 bool operator==(const schema& x, const schema& y)
 {
     return x._raw._id == y._raw._id
         && x._raw._ks_name == y._raw._ks_name
         && x._raw._cf_name == y._raw._cf_name
         && x._raw._columns == y._raw._columns
-        && x._raw._comment == y._raw._comment
-        && x._raw._default_time_to_live == y._raw._default_time_to_live
         && x._raw._regular_column_name_type == y._raw._regular_column_name_type
-        && x._raw._bloom_filter_fp_chance == y._raw._bloom_filter_fp_chance
-        && x._raw._compressor_params == y._raw._compressor_params
         && x._raw._is_dense == y._raw._is_dense
         && x._raw._is_compound == y._raw._is_compound
         && x._raw._type == y._raw._type
-        && x._raw._gc_grace_seconds == y._raw._gc_grace_seconds
-        && x.paxos_grace_seconds() == y.paxos_grace_seconds()
-        && x._raw._min_compaction_threshold == y._raw._min_compaction_threshold
-        && x._raw._max_compaction_threshold == y._raw._max_compaction_threshold
-        && x._raw._min_index_interval == y._raw._min_index_interval
-        && x._raw._max_index_interval == y._raw._max_index_interval
-        && x._raw._memtable_flush_period == y._raw._memtable_flush_period
-        && x._raw._speculative_retry == y._raw._speculative_retry
-        && x._raw._compaction_strategy == y._raw._compaction_strategy
-        && x._raw._compaction_strategy_options == y._raw._compaction_strategy_options
-        && x._raw._compaction_enabled == y._raw._compaction_enabled
-        && x.cdc_options() == y.cdc_options()
-        && x.tombstone_gc_options() == y.tombstone_gc_options()
-        && x._raw._caching_options == y._raw._caching_options
         && x._raw._dropped_columns == y._raw._dropped_columns
         && x._raw._collections == y._raw._collections
         && indirect_equal_to<std::unique_ptr<::view_info>>()(x._view_info, y._view_info)
@@ -602,6 +605,7 @@ bool operator==(const schema& x, const schema& y)
         && x._raw._is_counter == y._raw._is_counter
         && x._raw._in_memory == y._raw._in_memory
         && x._raw._tablet_options == y._raw._tablet_options
+        && x._raw._props == y._raw._props
         ;
 }
 
@@ -660,32 +664,32 @@ table_schema_version schema::calculate_digest(const schema::raw_schema& r) {
     feed_hash(h, r._ks_name);
     feed_hash(h, r._cf_name);
     feed_hash(h, r._columns);
-    feed_hash(h, r._comment);
-    feed_hash(h, r._default_time_to_live.count());
+    feed_hash(h, r._props.comment);
+    feed_hash(h, r._props.default_time_to_live.count());
     feed_hash(h, r._regular_column_name_type);
-    feed_hash(h, r._bloom_filter_fp_chance);
-    feed_hash(h, r._compressor_params.get_options());
+    feed_hash(h, r._props.bloom_filter_fp_chance);
+    feed_hash(h, r._props.compressor_params.get_options());
     feed_hash(h, r._is_dense);
     feed_hash(h, r._is_compound);
-    feed_hash(h, r._gc_grace_seconds);
-    feed_hash(h, r._paxos_grace_seconds);
-    feed_hash(h, r._min_compaction_threshold);
-    feed_hash(h, r._max_compaction_threshold);
-    feed_hash(h, r._min_index_interval);
-    feed_hash(h, r._max_index_interval);
-    feed_hash(h, r._memtable_flush_period);
-    feed_hash(h, r._speculative_retry.to_sstring());
-    feed_hash(h, r._compaction_strategy);
-    feed_hash(h, r._compaction_strategy_options);
-    feed_hash(h, r._compaction_enabled);
-    feed_hash(h, r._caching_options.to_map());
+    feed_hash(h, r._props.gc_grace_seconds);
+    feed_hash(h, r._props._paxos_grace_seconds);
+    feed_hash(h, r._props.min_compaction_threshold);
+    feed_hash(h, r._props.max_compaction_threshold);
+    feed_hash(h, r._props.min_index_interval);
+    feed_hash(h, r._props.max_index_interval);
+    feed_hash(h, r._props.memtable_flush_period);
+    feed_hash(h, r._props.speculative_retry.to_sstring());
+    feed_hash(h, r._props.compaction_strategy);
+    feed_hash(h, r._props.compaction_strategy_options);
+    feed_hash(h, r._props.compaction_enabled);
+    feed_hash(h, r._props.caching_options.to_map());
     feed_hash(h, r._dropped_columns);
     feed_hash(h, r._collections);
     feed_hash(h, r._view_info);
     feed_hash(h, r._indices_by_name);
     feed_hash(h, r._is_counter);
 
-    for (auto&& [name, ext] : r._extensions) {
+    for (auto&& [name, ext] : r._props.extensions) {
         feed_hash(h, name);
         feed_hash(h, ext->options_to_string());
     }
@@ -815,11 +819,11 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, ",cfName={}", s._raw._cf_name);
     out = fmt::format_to(out, ",cfType={}", cf_type_to_sstring(s._raw._type));
     out = fmt::format_to(out, ",comparator={}", cell_comparator::to_sstring(s));
-    out = fmt::format_to(out, ",comment={}", s._raw._comment);
+    out = fmt::format_to(out, ",comment={}", s._raw._props.comment);
     out = fmt::format_to(out, ",tombstoneGcOptions={}", s.tombstone_gc_options().to_sstring());
-    out = fmt::format_to(out, ",gcGraceSeconds={}", s._raw._gc_grace_seconds);
-    out = fmt::format_to(out, ",minCompactionThreshold={}", s._raw._min_compaction_threshold);
-    out = fmt::format_to(out, ",maxCompactionThreshold={}", s._raw._max_compaction_threshold);
+    out = fmt::format_to(out, ",gcGraceSeconds={}", s._raw._props.gc_grace_seconds);
+    out = fmt::format_to(out, ",minCompactionThreshold={}", s._raw._props.min_compaction_threshold);
+    out = fmt::format_to(out, ",maxCompactionThreshold={}", s._raw._props.max_compaction_threshold);
     out = fmt::format_to(out, ",columnMetadata=[");
     int n = 0;
     for (auto& cdef : s._raw._columns) {
@@ -831,20 +835,20 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     out = fmt::format_to(out, "]");
 
     out = fmt::format_to(out, ",compactionStrategyClass=class org.apache.cassandra.db.compaction.{}",
-                         compaction::compaction_strategy::name(s._raw._compaction_strategy));
+                         compaction::compaction_strategy::name(s._raw._props.compaction_strategy));
 
     out = fmt::format_to(out, ",compactionStrategyOptions={{");
     n = 0;
-    for (auto& p : s._raw._compaction_strategy_options) {
+    for (auto& p : s._raw._props.compaction_strategy_options) {
         out = fmt::format_to(out, "{}={}", p.first, p.second);
         out = fmt::format_to(out, ", ");
     }
-    out = fmt::format_to(out, "enabled={}", s._raw._compaction_enabled);
+    out = fmt::format_to(out, "enabled={}", s._raw._props.compaction_enabled);
     out = fmt::format_to(out, "}}");
 
     out = fmt::format_to(out, ",compressionParameters={{");
     n = 0;
-    for (auto& p : s._raw._compressor_params.get_options() ) {
+    for (auto& p : s._raw._props.compressor_params.get_options() ) {
         if (n++ != 0) {
             out = fmt::format_to(out, ", ");
         }
@@ -852,14 +856,14 @@ auto fmt::formatter<schema>::format(const schema& s, fmt::format_context& ctx) c
     }
     out = fmt::format_to(out, "}}");
 
-    out = fmt::format_to(out, ",bloomFilterFpChance={}", s._raw._bloom_filter_fp_chance);
-    out = fmt::format_to(out, ",memtableFlushPeriod={}", s._raw._memtable_flush_period);
-    out = fmt::format_to(out, ",caching={}", s._raw._caching_options.to_sstring());
+    out = fmt::format_to(out, ",bloomFilterFpChance={}", s._raw._props.bloom_filter_fp_chance);
+    out = fmt::format_to(out, ",memtableFlushPeriod={}", s._raw._props.memtable_flush_period);
+    out = fmt::format_to(out, ",caching={}", s._raw._props.caching_options.to_sstring());
     out = fmt::format_to(out, ",cdc={}", s.cdc_options().to_sstring());
-    out = fmt::format_to(out, ",defaultTimeToLive={}", s._raw._default_time_to_live.count());
-    out = fmt::format_to(out, ",minIndexInterval={}", s._raw._min_index_interval);
-    out = fmt::format_to(out, ",maxIndexInterval={}", s._raw._max_index_interval);
-    out = fmt::format_to(out, ",speculativeRetry={}", s._raw._speculative_retry.to_sstring());
+    out = fmt::format_to(out, ",defaultTimeToLive={}", s._raw._props.default_time_to_live.count());
+    out = fmt::format_to(out, ",minIndexInterval={}", s._raw._props.min_index_interval);
+    out = fmt::format_to(out, ",maxIndexInterval={}", s._raw._props.max_index_interval);
+    out = fmt::format_to(out, ",speculativeRetry={}", s._raw._props.speculative_retry.to_sstring());
     out = fmt::format_to(out, ",tablets={{");
     if (s._raw._tablet_options) {
         n = 0;
@@ -1255,7 +1259,7 @@ generate_legacy_id(const sstring& ks_name, const sstring& cf_name) {
 }
 
 schema_builder& schema_builder::set_compaction_strategy_options(std::map<sstring, sstring>&& options) {
-    _raw._compaction_strategy_options = std::move(options);
+    _raw._props.compaction_strategy_options = std::move(options);
     return *this;
 }
 
@@ -1271,7 +1275,8 @@ schema_builder& schema_builder::with_sharder(unsigned shard_count, unsigned shar
 
 
 schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_name,
-        std::optional<table_id> id, data_type rct)
+        std::optional<table_id> id, data_type rct,
+        std::optional<std::reference_wrapper<const schema::properties>> initial_properties)
         : _raw(id ? *id : table_id(utils::UUID_gen::get_time_UUID()))
 {
     // Various schema-creation commands (creating tables, indexes, etc.)
@@ -1293,6 +1298,10 @@ schema_builder::schema_builder(std::string_view ks_name, std::string_view cf_nam
     _raw._ks_name = sstring(ks_name);
     _raw._cf_name = sstring(cf_name);
     _raw._regular_column_name_type = rct;
+
+    if (initial_properties) {
+        _raw._props = *initial_properties;
+    }
 }
 
 schema_builder::schema_builder(const schema_ptr s)
@@ -1623,13 +1632,13 @@ schema_ptr schema_builder::build(schema::raw_schema& new_raw) {
     prepare_dense_schema(new_raw);
 
     // cache `paxos_grace_seconds` value for fast access through the schema object, which is immutable
-    if (auto it = new_raw._extensions.find(db::paxos_grace_seconds_extension::NAME); it != new_raw._extensions.end()) {
-        new_raw._paxos_grace_seconds =
+    if (auto it = new_raw._props.extensions.find(db::paxos_grace_seconds_extension::NAME); it != new_raw._props.extensions.end()) {
+        new_raw._props._paxos_grace_seconds =
             dynamic_pointer_cast<db::paxos_grace_seconds_extension>(it->second)->get_paxos_grace_seconds();
     }
 
     // cache the `per_partition_rate_limit` parameters for fast access through the schema object.
-    if (auto it = new_raw._extensions.find(db::per_partition_rate_limit_extension::NAME); it != new_raw._extensions.end()) {
+    if (auto it = new_raw._props.extensions.find(db::per_partition_rate_limit_extension::NAME); it != new_raw._props.extensions.end()) {
         new_raw._per_partition_rate_limit_options =
             dynamic_pointer_cast<db::per_partition_rate_limit_extension>(it->second)->get_options();
     }
@@ -1668,9 +1677,9 @@ int schema_builder::register_static_configurator(static_configurator&& configura
     return 0;
 }
 
-const cdc::options& schema::cdc_options() const {
+const cdc::options& schema::properties::get_cdc_options() const {
     static const cdc::options default_cdc_options;
-    const auto& schema_extensions = _raw._extensions;
+    const auto& schema_extensions = extensions;
 
     if (auto it = schema_extensions.find(cdc::cdc_extension::NAME); it != schema_extensions.end()) {
         return dynamic_pointer_cast<cdc::cdc_extension>(it->second)->get_options();
@@ -1678,9 +1687,9 @@ const cdc::options& schema::cdc_options() const {
     return default_cdc_options;
 }
 
-const ::tombstone_gc_options& schema::tombstone_gc_options() const {
+const ::tombstone_gc_options& schema::properties::get_tombstone_gc_options() const {
     static const ::tombstone_gc_options default_tombstone_gc_options;
-    const auto& schema_extensions = _raw._extensions;
+    const auto& schema_extensions = extensions;
 
     if (auto it = schema_extensions.find(tombstone_gc_extension::NAME); it != schema_extensions.end()) {
         return dynamic_pointer_cast<tombstone_gc_extension>(it->second)->get_options();
@@ -1729,10 +1738,10 @@ schema_builder& schema_builder::set_tablet_options(std::map<sstring, sstring>&& 
     return *this;
 }
 
-gc_clock::duration schema::paxos_grace_seconds() const {
+gc_clock::duration schema::properties::get_paxos_grace_seconds() const {
     return std::chrono::duration_cast<gc_clock::duration>(
         std::chrono::seconds(
-            _raw._paxos_grace_seconds ? *_raw._paxos_grace_seconds : DEFAULT_GC_GRACE_SECONDS
+            _paxos_grace_seconds ? *_paxos_grace_seconds : DEFAULT_GC_GRACE_SECONDS
         )
     );
 }
