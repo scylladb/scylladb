@@ -615,14 +615,7 @@ static void set_default_properties_log_table(schema_builder& b, const schema& s,
     b.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
 }
 
-static schema_ptr create_log_schema(const schema& s, const replica::database& db,
-        const keyspace_metadata& ksm, std::optional<table_id> uuid, schema_ptr old)
-{
-    schema_builder b(s.ks_name(), log_name(s.cf_name()));
-    b.with_partitioner(cdc::cdc_partitioner::classname);
-
-    set_default_properties_log_table(b, s, db, ksm);
-
+static void add_columns_to_cdc_log(schema_builder& b, const schema& s) {
     b.with_column(log_meta_column_name_bytes("stream_id"), bytes_type, column_kind::partition_key);
     b.with_column(log_meta_column_name_bytes("time"), timeuuid_type, column_kind::clustering_key);
     b.with_column(log_meta_column_name_bytes("batch_seq_no"), int32_type, column_kind::clustering_key);
@@ -677,6 +670,16 @@ static schema_ptr create_log_schema(const schema& s, const replica::database& db
     add_columns(s.clustering_key_columns());
     add_columns(s.static_columns(), true);
     add_columns(s.regular_columns(), true);
+}
+
+static schema_ptr create_log_schema(const schema& s, const replica::database& db,
+        const keyspace_metadata& ksm, std::optional<table_id> uuid, schema_ptr old)
+{
+    schema_builder b(s.ks_name(), log_name(s.cf_name()));
+    b.with_partitioner(cdc::cdc_partitioner::classname);
+
+    set_default_properties_log_table(b, s, db, ksm);
+    add_columns_to_cdc_log(b, s);
 
     if (uuid) {
         b.set_uuid(*uuid);
