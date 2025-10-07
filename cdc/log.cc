@@ -675,10 +675,21 @@ static void add_columns_to_cdc_log(schema_builder& b, const schema& s) {
 static schema_ptr create_log_schema(const schema& s, const replica::database& db,
         const keyspace_metadata& ksm, std::optional<table_id> uuid, schema_ptr old)
 {
-    schema_builder b(s.ks_name(), log_name(s.cf_name()));
+    using properties_type = std::reference_wrapper<const schema::properties>;
+
+    schema_builder b(
+            s.ks_name(),
+            log_name(s.cf_name()),
+            std::nullopt,
+            utf8_type,
+            old ? std::make_optional<properties_type>(old->get_properties()) : std::nullopt);
+
     b.with_partitioner(cdc::cdc_partitioner::classname);
 
-    set_default_properties_log_table(b, s, db, ksm);
+    if (!old) {
+        set_default_properties_log_table(b, s, db, ksm);
+    }
+
     add_columns_to_cdc_log(b, s);
 
     if (uuid) {
