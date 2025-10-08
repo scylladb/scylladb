@@ -4903,6 +4903,10 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+bool storage_service::has_transition_nodes() const {
+    return !_topology_state_machine._topology.transition_nodes.empty();
+}
+
 semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }

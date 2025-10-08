@@ -1028,6 +1028,7 @@ public:
     // if request completes with an error
     future<sstring> wait_for_topology_request_completion(utils::UUID id, bool require_entry = true);
     future<> wait_for_topology_not_busy();
+    bool has_transition_nodes() const;
 
 private:
     semaphore _do_sample_sstables_concurrency_limiter{1};

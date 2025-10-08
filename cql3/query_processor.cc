@@ -1099,6 +1099,15 @@ future<> query_processor::announce_schema_statement(const statements::schema_alt
         }
         co_return;
     }
+    auto create_ks_stmt_ptr = dynamic_cast<const statements::create_keyspace_statement*>(&stmt);
+    if (create_ks_stmt_ptr && create_ks_stmt_ptr->uses_tablets(*this)) {
+        // We don't allow to create a keyspace if there are nodes being added or removed because the
+        // number of racks may be changed and break RF-rack validity.
+        if (remote_.get().ss.has_transition_nodes()) {
+            throw exceptions::request_execution_exception(exceptions::exception_code::INVALID,
+                "Cannot create a keyspace while there are nodes being added or removed");
+        }
+    }
     co_await remote_.get().mm.announce(std::move(m), std::move(guard), description);
 }
 

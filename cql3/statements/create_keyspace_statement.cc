@@ -326,6 +326,18 @@ lw_shared_ptr<data_dictionary::keyspace_metadata> create_keyspace_statement::get
             keyspace());
 }
 
+bool create_keyspace_statement::uses_tablets(query_processor& qp) const {
+    const auto tmptr = qp.proxy().get_token_metadata_ptr();
+    const auto& feat = qp.proxy().features();
+    const auto& cfg = qp.db().get_config();
+    auto ksm = _attrs->as_ks_metadata(_name, *tmptr, feat, cfg);
+    auto rs = locator::abstract_replication_strategy::create_replication_strategy(
+        ksm->strategy_name(),
+        locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()),
+        tmptr->get_topology());
+    return rs->uses_tablets();
+}
+
 }
 
 }
