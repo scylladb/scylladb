@@ -1595,6 +1595,56 @@ void decompress_operation(schema_ptr schema, reader_permit permit, const std::ve
     }
 }
 
+future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr sstable_schema) {
+    auto& db = env.local_db();
+
+    const auto keyspace_name = "scylla_sstable";
+    co_await env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name));
+    auto& keyspace = db.find_keyspace(keyspace_name);
+
+    // Clone and modify the schema:
+    // * Change keyspace name to scylla_sstable
+    // * Generate a new ID
+    // * Drop all properties
+    //
+    // This will help avoid conflicts when querying sstables of system-tables
+    // and allows cql_test_env to work with a simple config (no EAR setup).
+    auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
+    for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
+        for (const auto& col : sstable_schema->columns(col_kind)) {
+            builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
+
+            // Register any user types, so they are known by the time we create the table.
+            if (col.type->is_user_type()) {
+                keyspace.add_user_type(dynamic_pointer_cast<const user_type_impl>(col.type));
+            }
+        }
+    }
+    auto schema = builder.build();
+
+    const auto table_name = schema->cf_name();
+
+    schema_describe_helper describe_helper = replica::make_schema_describe_helper(schema, db.as_data_dictionary());
+
+    const auto original_schema_description = sstable_schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+    const auto schema_description = schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
+
+    const sstring original_create_statement = original_schema_description.create_statement.value().linearize();
+    const sstring schema_create_statement = schema_description.create_statement.value().linearize();
+
+    sst_log.debug("\noriginal schema:\n{}\nreplacement schema:\n{}\n\nNote: original keyspace name of {} was replaced with {}, original id of {} was replaced with {} and all properties were dropped!\n",
+            original_create_statement,
+            schema_create_statement,
+            sstable_schema->ks_name(),
+            keyspace_name,
+            sstable_schema->id(),
+            schema->id());
+
+    co_await env.execute_cql(schema_create_statement);
+
+    co_return std::ref(db.find_column_family(keyspace_name, table_name));
+}
+
 void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& manager, const bpo::variables_map& vm) {
     static const std::vector<std::pair<std::string, mutation_fragment_stream_validation_level>> valid_validation_levels{
@@ -1955,51 +2005,8 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
     do_with_cql_env_noreentrant_in_thread([&] (cql_test_env& env) mutable -> future<> {
         auto& db = env.local_db();
 
-        const auto keyspace_name = "scylla_sstable";
-        co_await env.execute_cql(seastar::format("CREATE KEYSPACE {} WITH replication = {{'class': 'LocalStrategy'}}", keyspace_name));
-        auto& keyspace = db.find_keyspace(keyspace_name);
-
-        // Clone and modify the schema:
-        // * Change keyspace name to scylla_sstable
-        // * Generate a new ID
-        // * Drop all properties
-        //
-        // This will help avoid conflicts when querying sstables of system-tables
-        // and allows cql_test_env to work with a simple config (no EAR setup).
-        auto builder = schema_builder(keyspace_name, sstable_schema->cf_name());
-        for (const auto& col_kind : {column_kind::partition_key, column_kind::clustering_key, column_kind::static_column, column_kind::regular_column}) {
-            for (const auto& col : sstable_schema->columns(col_kind)) {
-                builder.with_column(col.name(), col.type, col_kind, col.view_virtual());
-
-                // Register any user types, so they are known by the time we create the table.
-                if (col.type->is_user_type()) {
-                    keyspace.add_user_type(dynamic_pointer_cast<const user_type_impl>(col.type));
-                }
-            }
-        }
-        auto schema = builder.build();
-
-        const auto table_name = schema->cf_name();
-
-        schema_describe_helper describe_helper = replica::make_schema_describe_helper(schema, db.as_data_dictionary());
-
-        const auto original_schema_description = sstable_schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
-        const auto schema_description = schema->describe(describe_helper, cql3::describe_option::STMTS_AND_INTERNALS);
-
-        const sstring original_create_statement = original_schema_description.create_statement.value().linearize();
-        const sstring schema_create_statement = schema_description.create_statement.value().linearize();
-
-        sst_log.debug("\noriginal schema:\n{}\nreplacement schema:\n{}\n\nNote: original keyspace name of {} was replaced with {}, original id of {} was replaced with {} and all properties were dropped!\n",
-                original_create_statement,
-                schema_create_statement,
-                sstable_schema->ks_name(),
-                keyspace_name,
-                sstable_schema->id(),
-                schema->id());
-
-        co_await env.execute_cql(schema_create_statement);
-
-        auto& table = db.find_column_family(keyspace_name, table_name);
+        auto& table = co_await create_table_in_cql_env(env, sstable_schema);
+        auto table_schema = table.schema();
 
         // We don't want to register the sstables with the table object,
         // to avoid any attempt to compact/split/merge/rewrite them.
@@ -2035,10 +2042,10 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
             auto fstream = make_file_input_stream(file);
             query = co_await util::read_entire_stream_contiguous(fstream);
         } else {
-            query = seastar::format("SELECT * FROM {}.{} ", keyspace_name, table_name);
+            query = seastar::format("SELECT * FROM {}.{} ", table_schema->ks_name(), table_schema->cf_name());
         }
 
-        query_operation_validate_query(query, table_name, db.as_data_dictionary());
+        query_operation_validate_query(query, table_schema->cf_name(), db.as_data_dictionary());
 
         sst_log.debug("query_operation(): running query {}", query);
 
