@@ -255,11 +255,11 @@ future<> view_building_worker::create_staging_sstable_tasks() {
     for (auto& [shard, sstables_per_table]: new_sstables_per_shard) {
         co_await container().invoke_on(shard, [sstables_for_this_shard = std::move(sstables_per_table)] (view_building_worker& local_vbw) mutable {
             for (auto& [tid, ssts]: sstables_for_this_shard) {
-                    auto unwrapped_ssts = ssts | std::views::as_rvalue | std::views::transform([] (auto&& fptr) {
-                        return fptr.unwrap_on_owner_shard();
-                    }) | std::ranges::to<std::vector>();
-                    auto& tid_ssts = local_vbw._staging_sstables[tid];
-                    tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(unwrapped_ssts.begin()), std::make_move_iterator(unwrapped_ssts.end()));
+                auto unwrapped_ssts = ssts | std::views::as_rvalue | std::views::transform([] (auto&& fptr) {
+                    return fptr.unwrap_on_owner_shard();
+                }) | std::ranges::to<std::vector>();
+                auto& tid_ssts = local_vbw._staging_sstables[tid];
+                tid_ssts.insert(tid_ssts.end(), std::make_move_iterator(unwrapped_ssts.begin()), std::make_move_iterator(unwrapped_ssts.end()));
             }
         });
     }
@@ -865,14 +865,15 @@ future<> view_building_worker::do_process_staging(table_id table_id, dht::token 
     }
 
     co_await _vug.process_staging_sstables(std::move(table), sstables_to_process);
+
     try {
-    // Remove processed sstables from `_staging_sstables` map
-    auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
-    std::unordered_set<sstables::shared_sstable> sstables_to_remove(sstables_to_process.begin(), sstables_to_process.end());
-    auto [first, last] = std::ranges::remove_if(_staging_sstables[table_id], [&] (auto& sst) {
-        return sstables_to_remove.contains(sst);
-    });
-    _staging_sstables[table_id].erase(first, last);
+        // Remove processed sstables from `_staging_sstables` map
+        auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
+        std::unordered_set<sstables::shared_sstable> sstables_to_remove(sstables_to_process.begin(), sstables_to_process.end());
+        auto [first, last] = std::ranges::remove_if(_staging_sstables[table_id], [&] (auto& sst) {
+            return sstables_to_remove.contains(sst);
+        });
+        _staging_sstables[table_id].erase(first, last);
     } catch (semaphore_aborted&) {
         vbw_logger.warn("Semaphore was aborted while waiting to removed processed sstables for table {}", table_id);
     }
