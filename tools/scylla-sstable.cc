@@ -1720,31 +1720,36 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
     }
     auto input_file = vm["input-file"].as<std::string>();
     auto output_dir = vm["output-dir"].as<std::string>();
-    auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
     auto format = sstables::sstable_format_types::big;
     auto version = vm.contains("sstable-version")
         ? version_from_string(vm["sstable-version"].as<std::string>())
         : manager.get_preferred_sstable_version();
 
+  auto consume_reader = [&] (mutation_reader reader, size_t partition_count_estimate) -> future<> {
+    auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
+
     {
         auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
-        if (file_exists(sst_name).get()) {
+        if (co_await file_exists(sst_name)) {
             throw std::invalid_argument(fmt::format("cannot create output sstable {}, file already exists", sst_name));
         }
     }
 
-    auto ifile = open_file_dma(input_file, open_flags::ro).get();
-    auto istream = make_file_input_stream(std::move(ifile));
-    auto parser = tools::json_mutation_stream_parser{schema, permit, std::move(istream), sst_log};
-    auto reader = make_generating_reader(schema, permit, std::move(parser));
     auto writer_cfg = manager.configure_writer("scylla-sstable");
     writer_cfg.validation_level = validation_level;
     auto local = data_dictionary::make_local_options(output_dir);
     auto sst = manager.make_sstable(schema, local, generation, sstables::sstable_state::normal, version, format);
 
-    sst->write_components(std::move(reader), 1, schema, writer_cfg, encoding_stats{}).get();
+    co_await sst->write_components(std::move(reader), partition_count_estimate, schema, writer_cfg, encoding_stats{});
 
-    fmt::print(std::cout, "{}", generation);
+    fmt::print(std::cout, "{}\n", generation);
+  };
+
+    auto ifile = open_file_dma(input_file, open_flags::ro).get();
+    auto istream = make_file_input_stream(std::move(ifile));
+    auto parser = tools::json_mutation_stream_parser{schema, permit, std::move(istream), sst_log};
+    auto reader = make_generating_reader(schema, permit, std::move(parser));
+    consume_reader(std::move(reader), 1).get();
 }
 
 void script_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
