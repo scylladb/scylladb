@@ -1645,6 +1645,48 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
     co_return std::ref(db.find_column_family(keyspace_name, table_name));
 }
 
+void query_operation_validate_query(const sstring& query, std::string_view table_name, data_dictionary::database db) {
+    std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
+    try {
+        raw_statements = cql3::query_processor::parse_statements(query, cql3::dialect{});
+    } catch (...) {
+        throw std::invalid_argument(seastar::format("failed to parse query: {}", std::current_exception()));
+    }
+    if (raw_statements.size() != 1) {
+        throw std::invalid_argument(seastar::format("expected exactly 1 query, got {}", raw_statements.size()));
+    }
+
+    const auto raw_statement = raw_statements.front().get();
+
+    if (auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement)) {
+        if (!cf_statement->has_keyspace()) {
+            throw std::invalid_argument("query must have keyspace and the keyspace has to be scylla_sstable");
+        }
+        if (cf_statement->keyspace() != "scylla_sstable") {
+            throw std::invalid_argument(seastar::format("query must select from scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
+        }
+        if (cf_statement->column_family() != table_name) {
+            throw std::invalid_argument(seastar::format("query must select from {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
+        }
+    } else {
+        throw std::invalid_argument("query must be a select query");
+    }
+
+    seastar::shared_ptr<cql3::cql_statement> statement;
+    cql3::cql_stats cql_stats;
+
+    try {
+        auto prepared_statement = raw_statement->prepare(db, cql_stats);
+        statement = prepared_statement->statement;
+    } catch (...) {
+        throw std::invalid_argument(seastar::format("failed to prepare query: {}", std::current_exception()));
+    }
+
+    if (dynamic_cast<cql3::statements::select_statement*>(statement.get()) == nullptr) {
+        throw std::invalid_argument("query must be a select query");
+    }
+}
+
 void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& manager, const bpo::variables_map& vm) {
     static const std::vector<std::pair<std::string, mutation_fragment_stream_validation_level>> valid_validation_levels{
@@ -1946,48 +1988,6 @@ public:
         }
     }
 };
-
-void query_operation_validate_query(const sstring& query, std::string_view table_name, data_dictionary::database db) {
-    std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
-    try {
-        raw_statements = cql3::query_processor::parse_statements(query, cql3::dialect{});
-    } catch (...) {
-        throw std::invalid_argument(seastar::format("failed to parse query: {}", std::current_exception()));
-    }
-    if (raw_statements.size() != 1) {
-        throw std::invalid_argument(seastar::format("expected exactly 1 query, got {}", raw_statements.size()));
-    }
-
-    const auto raw_statement = raw_statements.front().get();
-
-    if (auto cf_statement = dynamic_cast<cql3::statements::raw::cf_statement*>(raw_statement)) {
-        if (!cf_statement->has_keyspace()) {
-            throw std::invalid_argument("query must have keyspace and the keyspace has to be scylla_sstable");
-        }
-        if (cf_statement->keyspace() != "scylla_sstable") {
-            throw std::invalid_argument(seastar::format("query must select from scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
-        }
-        if (cf_statement->column_family() != table_name) {
-            throw std::invalid_argument(seastar::format("query must select from {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
-        }
-    } else {
-        throw std::invalid_argument("query must be a select query");
-    }
-
-    seastar::shared_ptr<cql3::cql_statement> statement;
-    cql3::cql_stats cql_stats;
-
-    try {
-        auto prepared_statement = raw_statement->prepare(db, cql_stats);
-        statement = prepared_statement->statement;
-    } catch (...) {
-        throw std::invalid_argument(seastar::format("failed to prepare query: {}", std::current_exception()));
-    }
-
-    if (dynamic_cast<cql3::statements::select_statement*>(statement.get()) == nullptr) {
-        throw std::invalid_argument("query must be a select query");
-    }
-}
 
 void query_operation(schema_ptr sstable_schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& sstable_manager, const bpo::variables_map& vm) {
