@@ -21,6 +21,7 @@
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
 
+#include "cql3/untyped_result_set.hh"
 #include "mutation/timestamp.hh"
 #include "tracing/trace_state.hh"
 #include "utils/UUID.hh"
@@ -61,6 +62,10 @@ enum class operation : int8_t {
 };
 
 struct per_request_options {
+    // The value of the base row before current operation, queried by higher
+    // layers than CDC. We assume that CDC could have seen the row in this
+    // state, i.e. the value isn't 'stale'/'too recent'.
+    lw_shared_ptr<cql3::untyped_result_set> preimage;
 };
 
 struct operation_result_tracker;
