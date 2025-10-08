@@ -14,7 +14,13 @@
 #include "locator/token_metadata_fwd.hh"
 #include <seastar/core/metrics.hh>
 
+namespace db {
+class system_keyspace;
+}
+
 namespace service {
+
+class topology;
 
 struct load_balancer_dc_stats {
     uint64_t calls = 0;
@@ -230,7 +236,7 @@ public:
     ///
     /// The algorithm takes care of limiting the streaming load on the system, also by taking active migrations into account.
     ///
-    future<migration_plan> balance_tablets(locator::token_metadata_ptr, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
+    future<migration_plan> balance_tablets(locator::token_metadata_ptr, service::topology*, db::system_keyspace*, locator::load_stats_ptr = {}, std::unordered_set<locator::host_id> = {});
 
     void set_load_stats(locator::load_stats_ptr);
 

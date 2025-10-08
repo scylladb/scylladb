@@ -669,6 +669,8 @@ class load_balancer {
 
     replica::database& _db;
     token_metadata_ptr _tm;
+    [[maybe_unused]]service::topology* _topology;
+    [[maybe_unused]]db::system_keyspace* _sys_ks;
     std::optional<locator::load_sketch> _load_sketch;
     // Holds the set of tablets already scheduled for transition during plan-making.
     std::unordered_set<global_tablet_id> _scheduled_tablets;
@@ -753,7 +755,10 @@ private:
         return streaming_infos;
     }
 public:
-    load_balancer(replica::database& db, token_metadata_ptr tm, locator::load_stats_ptr table_load_stats,
+    load_balancer(replica::database& db, token_metadata_ptr tm,
+            service::topology* topology,
+            db::system_keyspace* sys_ks,
+            locator::load_stats_ptr table_load_stats,
             load_balancer_stats_manager& stats,
             uint64_t target_tablet_size,
             unsigned tablets_per_shard_goal,
@@ -762,6 +767,8 @@ public:
         , _tablets_per_shard_goal(tablets_per_shard_goal)
         , _db(db)
         , _tm(std::move(tm))
+        , _topology(topology)
+        , _sys_ks(sys_ks)
         , _table_load_stats(std::move(table_load_stats))
         , _stats(stats)
         , _skiplist(std::move(skiplist))
@@ -3275,9 +3282,11 @@ class tablet_allocator_impl : public tablet_allocator::impl
     locator::load_stats_ptr _load_stats;
 private:
     load_balancer make_load_balancer(token_metadata_ptr tm,
+            service::topology* topology,
+            db::system_keyspace* sys_ks,
             locator::load_stats_ptr table_load_stats,
             std::unordered_set<host_id> skiplist) {
-        load_balancer lb(_db, tm, std::move(table_load_stats), _load_balancer_stats,
+        load_balancer lb(_db, tm, topology, sys_ks, std::move(table_load_stats), _load_balancer_stats,
             _db.get_config().target_tablet_size_in_bytes(),
             _db.get_config().tablets_per_shard_goal(),
             std::move(skiplist));
@@ -3304,8 +3313,8 @@ public:
         _stopped = true;
     }
 
-    future<migration_plan> balance_tablets(token_metadata_ptr tm, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
-        auto lb = make_load_balancer(tm, table_load_stats ? table_load_stats : _load_stats, std::move(skiplist));
+    future<migration_plan> balance_tablets(token_metadata_ptr tm, service::topology* topology, db::system_keyspace* sys_ks, locator::load_stats_ptr table_load_stats, std::unordered_set<host_id> skiplist) {
+        auto lb = make_load_balancer(tm, topology, sys_ks, table_load_stats ? table_load_stats : _load_stats, std::move(skiplist));
         co_await coroutine::switch_to(_db.get_streaming_scheduling_group());
         co_return co_await lb.make_plan();
     }
@@ -3325,7 +3334,7 @@ public:
     // Allocates new tablets for a table which is not co-located with another table.
     tablet_map allocate_tablets_for_new_base_table(const tablet_aware_replication_strategy* tablet_rs, const schema& s) {
         auto tm = _db.get_shared_token_metadata().get();
-        auto lb = make_load_balancer(tm, nullptr, {});
+        auto lb = make_load_balancer(tm, nullptr, nullptr, nullptr, {});
         auto plan = lb.make_sizing_plan(s.shared_from_this(), tablet_rs).get();
         auto& table_plan = plan.tables[s.id()];
         if (table_plan.target_tablet_count_aligned != table_plan.target_tablet_count) {
@@ -3545,8 +3554,8 @@ future<> tablet_allocator::stop() {
     return impl().stop();
 }
 
-future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist) {
-    return impl().balance_tablets(std::move(tm), std::move(load_stats), std::move(skiplist));
+future<migration_plan> tablet_allocator::balance_tablets(locator::token_metadata_ptr tm, service::topology* topology, db::system_keyspace* sys_ks, locator::load_stats_ptr load_stats, std::unordered_set<host_id> skiplist) {
+    return impl().balance_tablets(std::move(tm), topology, sys_ks, std::move(load_stats), std::move(skiplist));
 }
 
 void tablet_allocator::set_load_stats(locator::load_stats_ptr load_stats) {
