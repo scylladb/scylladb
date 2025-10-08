@@ -879,6 +879,23 @@ future<> view_building_worker::do_process_staging(table_id table_id, dht::token 
     }
 }
 
+void view_building_worker::load_sstables(table_id table_id, std::vector<sstables::shared_sstable> ssts) {
+    std::ranges::copy_if(std::move(ssts), std::back_inserter(_staging_sstables[table_id]), [] (auto& sst) {
+        return sst->state() == sstables::sstable_state::staging;
+    });
+}
+
+void view_building_worker::cleanup_staging_sstables(locator::effective_replication_map_ptr erm, table_id table_id, locator::tablet_id tid) {
+    auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(table_id);
+    auto tablet_range = tablet_map.get_token_range(tid);
+
+    auto [first, last] = std::ranges::remove_if(_staging_sstables[table_id], [&] (auto& sst) {
+        auto sst_last_token = sst->get_last_decorated_key().token();
+        return tablet_range.contains(sst_last_token, dht::token_comparator());
+    });
+    _staging_sstables[table_id].erase(first, last);
+}
+
 }
 
 }
