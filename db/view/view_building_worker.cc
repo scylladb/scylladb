@@ -127,11 +127,12 @@ view_building_worker::view_building_worker(replica::database& db, db::system_key
     init_messaging_service();
 }
 
-void view_building_worker::start_background_fibers() {
+future<> view_building_worker::init() {
     SCYLLA_ASSERT(this_shard_id() == 0);
     _staging_sstables_registrator = run_staging_sstables_registrator();
     _view_building_state_observer = run_view_building_state_observer();
     _mnotifier.register_listener(this);
+    co_return;
 }
 
 dht::token_range view_building_worker::get_tablet_token_range(table_id table_id, dht::token last_token) {
