@@ -1645,7 +1645,8 @@ future<replica::table&> create_table_in_cql_env(cql_test_env& env, schema_ptr ss
     co_return std::ref(db.find_column_family(keyspace_name, table_name));
 }
 
-void query_operation_validate_query(const sstring& query, std::string_view table_name, data_dictionary::database db) {
+shared_ptr<cql3::cql_statement>
+validate_and_prepare_query(std::string_view query, std::string_view table_name, data_dictionary::database db, std::string_view query_type) {
     std::vector<std::unique_ptr<cql3::statements::raw::parsed_statement>> raw_statements;
     try {
         raw_statements = cql3::query_processor::parse_statements(query, cql3::dialect{});
@@ -1663,27 +1664,31 @@ void query_operation_validate_query(const sstring& query, std::string_view table
             throw std::invalid_argument("query must have keyspace and the keyspace has to be scylla_sstable");
         }
         if (cf_statement->keyspace() != "scylla_sstable") {
-            throw std::invalid_argument(seastar::format("query must select from scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
+            throw std::invalid_argument(seastar::format("query must be against scylla_sstable keyspace, got {} instead", std::string_view(cf_statement->keyspace())));
         }
         if (cf_statement->column_family() != table_name) {
-            throw std::invalid_argument(seastar::format("query must select from {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
+            throw std::invalid_argument(seastar::format("query must be against {} table, got {} instead", table_name, std::string_view(cf_statement->column_family())));
         }
     } else {
-        throw std::invalid_argument("query must be a select query");
+        throw std::invalid_argument(fmt::format("query must be a {} query", query_type));
     }
 
-    seastar::shared_ptr<cql3::cql_statement> statement;
     cql3::cql_stats cql_stats;
 
     try {
         auto prepared_statement = raw_statement->prepare(db, cql_stats);
-        statement = prepared_statement->statement;
+        return std::move(prepared_statement->statement);
     } catch (...) {
         throw std::invalid_argument(seastar::format("failed to prepare query: {}", std::current_exception()));
     }
+}
 
-    if (dynamic_cast<cql3::statements::select_statement*>(statement.get()) == nullptr) {
-        throw std::invalid_argument("query must be a select query");
+template <typename statement_type>
+void validate_query(std::string_view query, std::string_view table_name, data_dictionary::database db, std::string_view query_type) {
+    auto statement = validate_and_prepare_query(query, table_name, db, query_type);
+
+    if (dynamic_cast<statement_type*>(statement.get()) == nullptr) {
+        throw std::invalid_argument(fmt::format("query must be {} query", query_type));
     }
 }
 
@@ -2045,7 +2050,7 @@ void query_operation(schema_ptr sstable_schema, reader_permit permit, const std:
             query = seastar::format("SELECT * FROM {}.{} ", table_schema->ks_name(), table_schema->cf_name());
         }
 
-        query_operation_validate_query(query, table_schema->cf_name(), db.as_data_dictionary());
+        validate_query<cql3::statements::select_statement>(query, table_schema->cf_name(), db.as_data_dictionary(), "a select");
 
         sst_log.debug("query_operation(): running query {}", query);
 
