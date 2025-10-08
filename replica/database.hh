@@ -2125,6 +2125,18 @@ public:
     //   must contain a complete list of racks and data centers in the cluster.
     void check_rf_rack_validity(const locator::token_metadata_ptr) const;
 
+    // Verifies whether all keyspaces that require RF-rack-validity (as determined by enforce_rf_rack_validity_for_keyspace)
+    // would remain RF-rack-valid after applying a topology change.
+    //
+    // Returns true if all such keyspaces would remain RF-rack-valid after the change, and false otherwise.
+    // For keyspaces that would become RF-rack-invalid but do not require enforcement,
+    // a warning is printed, but this does not affect the return value.
+    //
+    // Preconditions:
+    // * The provided locator::topology instance (from the passed locator::token_metadata_ptr)
+    //   must contain a complete list of racks and data centers in the cluster.
+    bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation) const;
+
 private:
     // SSTable sampling might require considerable amounts of memory,
     // so we want to limit the number of concurrent sampling operations.

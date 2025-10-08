@@ -1423,7 +1423,9 @@ const effective_replication_map_ptr& token_metadata_guard::get_erm() const {
     return g ? (**g).get_erm() : get<effective_replication_map_ptr>(_guard);
 }
 
-void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
+static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars,
+        const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>& dc_rack_map,
+        std::function<bool(host_id)> is_normal_token_owner) {
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Starting verifying that keyspace '{}' is RF-rack-valid", ks);
 
     // Any keyspace that does NOT use tablets is RF-rack-valid.
@@ -1435,8 +1437,6 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     // Tablets can only be used with NetworkTopologyStrategy.
     SCYLLA_ASSERT(ars.get_type() == replication_strategy_type::network_topology);
     const auto& nts = *static_cast<const network_topology_strategy*>(std::addressof(ars));
-
-    const auto& dc_rack_map = tmptr->get_topology().get_datacenter_racks();
 
     for (const auto& dc : nts.get_datacenters()) {
         if (!dc_rack_map.contains(dc)) {
@@ -1453,9 +1453,7 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
         for (const auto& [_, rack_nodes] : rack_map) {
             // We must ignore zero-token nodes because they don't take part in replication.
             // Verify that this rack has at least one normal node.
-            const bool normal_rack = std::ranges::any_of(rack_nodes, [tmptr] (host_id host_id) {
-                return tmptr->is_normal_token_owner(host_id);
-            });
+            const bool normal_rack = std::ranges::any_of(rack_nodes, is_normal_token_owner);
             if (normal_rack) {
                 ++normal_rack_count;
             }
@@ -1484,6 +1482,52 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     }
 
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Keyspace '{}' has been verified to be RF-rack-valid", ks);
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars) {
+    assert_rf_rack_valid_keyspace(ks, tmptr, ars,
+        tmptr->get_topology().get_datacenter_racks(),
+        [&tmptr] (host_id host) {
+            return tmptr->is_normal_token_owner(host);
+        }
+    );
+}
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars, rf_rack_topology_operation op) {
+    auto dc_rack_map = tmptr->get_topology().get_datacenter_racks();
+
+    switch (op.tag) {
+        case rf_rack_topology_operation::type::add:
+            // include the new node only if it's added to an existing DC.
+            if (dc_rack_map.contains(op.dc)) {
+                tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Including new node {} in DC '{}' and rack '{}'", op.node_id, op.dc, op.rack);
+                dc_rack_map[op.dc][op.rack].insert(op.node_id);
+            }
+            break;
+        case rf_rack_topology_operation::type::remove:
+            // remove the node from the map, if it exists.
+            tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Excluding removed node {} from DC '{}' and rack '{}'", op.node_id, op.dc, op.rack);
+            if (dc_rack_map.contains(op.dc) && dc_rack_map[op.dc].contains(op.rack)) {
+                dc_rack_map[op.dc][op.rack].erase(op.node_id);
+                if (dc_rack_map[op.dc][op.rack].empty()) {
+                    dc_rack_map[op.dc].erase(op.rack);
+                    if (dc_rack_map[op.dc].empty()) {
+                        dc_rack_map.erase(op.dc);
+                    }
+                }
+            }
+            break;
+    }
+
+    assert_rf_rack_valid_keyspace(ks, tmptr, ars,
+        dc_rack_map,
+        [&tmptr, &op] (host_id host) {
+            if (op.tag == rf_rack_topology_operation::type::add && host == op.node_id) {
+                return true;
+            }
+            return tmptr->is_normal_token_owner(host);
+        }
+    );
 }
 
 rack_list get_allowed_racks(const locator::token_metadata& tm, const sstring& dc) {

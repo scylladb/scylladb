@@ -3599,6 +3599,53 @@ void database::check_rf_rack_validity(const locator::token_metadata_ptr tmptr) c
     }
 }
 
+bool database::check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr tmptr, locator::rf_rack_topology_operation change) const {
+    // if it's already invalid before the topology change, it's allowed to remain invalid
+    try {
+        check_rf_rack_validity(tmptr);
+    } catch (...) {
+        return true;
+    }
+
+    const auto& keyspaces = get_keyspaces();
+    std::vector<std::string_view> invalid_keyspaces{};
+    bool valid = true;
+
+    for (const auto& [name, info] : keyspaces) {
+        try {
+            locator::assert_rf_rack_valid_keyspace(name, tmptr, info.get_replication_strategy(), change);
+        } catch (...) {
+            if (enforce_rf_rack_validity_for_keyspace(info)) {
+                valid = false;
+            }
+
+            invalid_keyspaces.push_back(std::string_view(name));
+        }
+    }
+
+    if (invalid_keyspaces.size() != 0) {
+        const auto ks_list = invalid_keyspaces
+                | std::views::join_with(std::string_view(", "))
+                | std::ranges::to<std::string>();
+
+        auto op_str = [&] {
+            switch (change.tag) {
+                case locator::rf_rack_topology_operation::type::add: return "joining";
+                case locator::rf_rack_topology_operation::type::remove: return "removed";
+            }
+        }();
+
+        dblog.warn("The {} node with DC='{}' and rack='{}' makes some existing keyspaces RF-rack-invalid, i.e. the replication factor "
+                "does not match the number of racks in one of the datacenters. That may reduce "
+                "availability in case of a failure (cf. "
+                "https://docs.scylladb.com/manual/stable/reference/glossary.html#term-RF-rack-valid-keyspace). "
+                "Those keyspaces are: {}",
+                op_str, change.dc, change.rack, ks_list);
+    }
+
+    return valid;
+}
+
 utils::chunked_vector<uint64_t> compute_random_sorted_ints(uint64_t max_value, uint64_t n_values) {
     static thread_local std::minstd_rand rng{std::random_device{}()};
     std::uniform_int_distribution<uint64_t> dist(0, max_value);
