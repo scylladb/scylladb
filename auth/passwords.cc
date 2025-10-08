@@ -21,14 +21,18 @@ static thread_local crypt_data tlcrypt = {};
 
 namespace detail {
 
-void verify_scheme(scheme scheme) {
+scheme identify_best_supported_scheme() {
+    const auto all_schemes = { scheme::bcrypt_y, scheme::bcrypt_a, scheme::sha_512, scheme::sha_256, scheme::md5 };
+    // "Random", for testing schemes.
     const sstring random_part_of_salt = "aaaabbbbccccdddd";
 
-    const sstring salt = sstring(prefix_for_scheme(scheme)) + random_part_of_salt;
-    const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
+    for (scheme c : all_schemes) {
+        const sstring salt = sstring(prefix_for_scheme(c)) + random_part_of_salt;
+        const char* e = crypt_r("fisk", salt.c_str(), &tlcrypt);
 
-    if (e && (e[0] != '*')) {
-        return;
+        if (e && (e[0] != '*')) {
+            return c;
+        }
     }
 
     throw no_supported_schemes();
