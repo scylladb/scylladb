@@ -1142,13 +1142,13 @@ class client::chunked_download_source final : public seastar::data_source_impl {
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         while (!_is_finished) {
             try {
-                if (_buffers_size >= _max_buffers_size * _buffers_low_watermark) {
-                    co_await _bg_fiber_cv.when([this] { return _buffers_size < _max_buffers_size * _buffers_low_watermark; });
+                if (!_is_finished && _buffers_size >= _max_buffers_size * _buffers_low_watermark) {
+                    co_await _bg_fiber_cv.when([this] { return _is_finished || (_buffers_size < _max_buffers_size * _buffers_low_watermark); });
                 }
 
-                if (auto units = try_get_units(_client->_memory, _socket_buff_size); !_buffers.empty() && !units) {
+                if (auto units = try_get_units(_client->_memory, _socket_buff_size); !_is_finished && !_buffers.empty() && !units) {
                     co_await _bg_fiber_cv.when([this] {
-                        return _buffers.empty() || try_get_units(_client->_memory, _socket_buff_size);
+                        return _is_finished || _buffers.empty() || try_get_units(_client->_memory, _socket_buff_size);
                     });
                 }
 
