@@ -177,6 +177,11 @@ public:
     virtual void on_update_view(const sstring& ks_name, const sstring& view_name, bool columns_changed) override {};
     virtual void on_drop_view(const sstring& ks_name, const sstring& view_name) override;
 
+    // Used ONLY to load staging sstables migrated during intra-node tablet migration.
+    void load_sstables(table_id table_id, std::vector<sstables::shared_sstable> ssts);
+    // Used in cleanup/cleanup-target tablet transition stage
+    void cleanup_staging_sstables(table_id table_id, locator::tablet_id tid);
+
 private:
     future<> run_view_building_state_observer();
     future<> update_built_views();
