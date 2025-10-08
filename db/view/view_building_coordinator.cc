@@ -32,7 +32,7 @@
 
 using namespace std::chrono_literals;
 
-static constexpr auto min_time_between_rcm_notifications = 1s;
+static constexpr auto min_time_between_rcm_notifications = 250ms;
 static logging::logger vbc_logger("view_building_coordinator");
 
 namespace db {
@@ -812,12 +812,7 @@ future<> view_building_coordinator::rpc_callback_manager::mark_rpc_done(locator:
     auto lock = co_await get_units(_mutex, 1, _vbc._as);
     _working_rpcs.erase(replica);
 
-    if (_working_rpcs.empty()) {
-        // If there are no more RPCs to wait for,
-        // cancel the timer and notify the coordinator immediately
-        _timer.cancel();
-        notify_coordinator();
-    } else if (!_timer.armed()) {
+    if (!_timer.armed()) {
         auto wait_until = _previous_iteration + min_time_between_rcm_notifications;
         if (wait_until > lowres_clock::now()) {
             _timer.arm(wait_until);
@@ -825,6 +820,21 @@ future<> view_building_coordinator::rpc_callback_manager::mark_rpc_done(locator:
             notify_coordinator();
         }
     }
+
+
+    // if (_working_rpcs.empty()) {
+    //     // If there are no more RPCs to wait for,
+    //     // cancel the timer and notify the coordinator immediately
+    //     _timer.cancel();
+    //     notify_coordinator();
+    // } else if (!_timer.armed()) {
+    //     auto wait_until = _previous_iteration + min_time_between_rcm_notifications;
+    //     if (wait_until > lowres_clock::now()) {
+    //         _timer.arm(wait_until);
+    //     } else {
+    //         notify_coordinator();
+    //     }
+    // }
 }
 
 }
