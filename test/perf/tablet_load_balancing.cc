@@ -157,7 +157,7 @@ rebalance_stats rebalance_tablets(cql_test_env& e, locator::load_stats_ptr load_
         auto prev_lb_stats = talloc.stats().for_dc(dc);
         auto start_time = std::chrono::steady_clock::now();
 
-        auto plan = talloc.balance_tablets(stm.get(), load_stats, skiplist).get();
+        auto plan = talloc.balance_tablets(stm.get(), nullptr, nullptr, load_stats, skiplist).get();
 
         auto end_time = std::chrono::steady_clock::now();
         auto lb_stats = talloc.stats().for_dc(dc) - prev_lb_stats;

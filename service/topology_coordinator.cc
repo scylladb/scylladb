@@ -1848,7 +1848,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
         bool has_nodes_to_drain = false;
         if (!preempt) {
-            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), {}, get_dead_nodes());
+            auto plan = co_await _tablet_allocator.balance_tablets(get_token_metadata_ptr(), &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
             has_nodes_to_drain = plan.has_nodes_to_drain();
             if (!drain || plan.has_nodes_to_drain()) {
                 co_await generate_migration_updates(updates, guard, plan);
@@ -1971,7 +1971,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         co_await utils::get_local_injector().inject("tablet_resize_finalization_post_barrier", utils::wait_for_message(std::chrono::minutes(2)));
 
         auto tm = get_token_metadata_ptr();
-        auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
+        auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
 
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
@@ -3475,7 +3475,7 @@ future<bool> topology_coordinator::maybe_start_tablet_migration(group0_guard gua
     }
 
     auto tm = get_token_metadata_ptr();
-    auto plan = co_await _tablet_allocator.balance_tablets(tm, {}, get_dead_nodes());
+    auto plan = co_await _tablet_allocator.balance_tablets(tm, &_topo_sm._topology, &_sys_ks, {}, get_dead_nodes());
     if (plan.empty()) {
         rtlogger.debug("Tablet load balancer did not make any plan");
         co_return false;
