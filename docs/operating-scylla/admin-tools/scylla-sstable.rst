@@ -645,7 +645,33 @@ the output will be:
 write
 ^^^^^
 
-Writes an SStable based on a JSON representation of the content.
+Writes an SStable based on a description of the content.
+The description can be provided in two formats: ``CQL`` and ``JSON``.
+The input format can be selected with the ``--input-format`` flag. Default is ``cql``.
+In both cases the input is expected to be provided via the file whoose path is passed to ``--input-file``.
+
+CQL input format
+~~~~~~~~~~~~~~~~
+
+The input file is expected to contain ``;`` separated CQL statements, providing the content of the output SSTable(s).
+The following CQL statements are allowed: ``INSERT``, ``UPDATE`` and ``DELETE``.
+The statements can be in any order, the data will be sorted internally.
+Writes are internally applied to a memtable, which is flushed to disk once its size exceeds the memory limit, specified via the ``--memory-limit`` command line argument (defaults to ``1MiB``).
+
+Reading the statements from the input file happens via a streaming parser, it is
+safe to provide input files of any size.
+
+Can produce multiple output SSTables, depending on the size of the input.
+
+This operation needs a temporary directory to write files to -- as it sets up a
+``cql_test_env``. This temporary directory will have a size of a couple of megabytes.
+By default it will create this in ``/tmp``, this can be changed with the ``TEMPDIR``
+environment variable. This temporary directory is removed on exit.
+
+JSON input format
+~~~~~~~~~~~~~~~~~
+
+The input file is expected to contain a JSON description of the content of the SStable to write.
 The JSON representation has to have the same schema as that of a single SStable from the output of the `dump-data operation <dump-data_>`_ (corresponding to the ``$SSTABLE`` symbol).
 The easiest way to get started with writing your own SStable is to dump an existing SStable, modify the JSON then invoke this operation with the result.
 You can feed the output of dump-data to write by filtering the output of the former with ``jq .sstables[]``:
@@ -658,16 +684,21 @@ You can feed the output of dump-data to write by filtering the output of the for
 
 At the end of the above, ``input.json`` and ``dump.json`` will have the same content.
 
-Note that `write` doesn't yet support all the features of the ScyllaDB storage engine. The following are not supported:
+Note that ``write`` with ``--input-format=json`` doesn't yet support all the features of the ScyllaDB storage engine. The following are not supported:
 
 * Counters.
 * Non-strictly atomic cells, including frozen multi-cell types like collections, tuples, and UDTs.
 
 Parsing uses a streaming JSON parser, it is safe to pass in input files of any size.
 
+Produces a single output SSTable.
+
+Output SSTables
+~~~~~~~~~~~~~~~
+
 The output SStable will use the BIG format, the highest supported SStable format and a random UUID generation, which is printed to stdout.
-By default, it is placed in the local directory, which can be changed with ``--output-dir``.
-If the output SStable clashes with an existing SStable, the write will fail.
+By default, they are placed in the local directory, which can be changed with ``--output-dir``.
+If any output SStable clashes with an existing SStable, the write will fail.
 
 The output is validated before being written to the disk.
 The validation done here is similar to that done by the `validate operation <validate_>`_.

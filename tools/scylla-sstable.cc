@@ -23,6 +23,7 @@
 #include "compaction/compaction_strategy_state.hh"
 #include "cql3/type_json.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
+#include "cql3/statements/modification_statement.hh"
 #include "cql3/statements/select_statement.hh"
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
@@ -420,6 +421,24 @@ output_format get_output_format_from_options(const bpo::variables_map& opts, out
             return output_format::json;
         } else {
             throw std::invalid_argument(fmt::format("invalid value for dump option output-format: {}", value));
+        }
+    }
+    return default_format;
+}
+
+enum class input_format {
+    cql, json
+};
+
+input_format get_input_format_from_options(const bpo::variables_map& opts, input_format default_format) {
+    if (auto it = opts.find("input-format"); it != opts.end()) {
+        const auto& value = it->second.as<std::string>();
+        if (value == "cql") {
+            return input_format::cql;
+        } else if (value == "json") {
+            return input_format::json;
+        } else {
+            throw std::invalid_argument(fmt::format("invalid value for option input-format: {}", value));
         }
     }
     return default_format;
@@ -1692,6 +1711,46 @@ void validate_query(std::string_view query, std::string_view table_name, data_di
     }
 }
 
+future<> consume_queries(input_stream<char>&& is, std::function<future<>(std::string_view)> consumer) {
+    temporary_buffer<char> buf;
+
+    auto trimmed = [&buf] (size_t query_size) {
+        if (query_size == 0) {
+            return std::string_view{};
+        }
+        auto query = std::string_view(buf.begin(), query_size);
+        while (!query.empty() && std::isspace(query.front())) {
+            query.remove_prefix(1);
+        }
+        return query;
+    };
+
+    while (true) {
+        // Attemp to extract a query from existing data.
+        if (const auto separator_pos = std::ranges::find(buf, ';'); separator_pos != buf.end()) {
+            const auto query_size = separator_pos - buf.begin();
+            if (auto query = trimmed(query_size); !query.empty()) {
+                co_await consumer(query);
+            }
+            buf.trim_front(query_size + 1); // include the separator too
+        // Attempt to read more data.
+        } else if (auto read_buf = co_await is.read(); read_buf) {
+            auto new_buf = temporary_buffer<char>(buf.size() + read_buf.size());
+            std::ranges::copy(buf, new_buf.get_write());
+            std::ranges::copy(read_buf, new_buf.get_write() + buf.size());
+            buf = std::move(new_buf);
+        // Reached EOF
+        } else {
+            if (auto query = trimmed(buf.size()); !query.empty()) {
+                co_await consumer(query);
+            }
+            break;
+        }
+    }
+
+    co_await is.close();
+}
+
 void write_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
         sstables::sstables_manager& manager, const bpo::variables_map& vm) {
     static const std::vector<std::pair<std::string, mutation_fragment_stream_validation_level>> valid_validation_levels{
@@ -1719,6 +1778,8 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
         validation_level = vl_it->second;
     }
     auto input_file = vm["input-file"].as<std::string>();
+    auto input_format = get_input_format_from_options(vm, input_format::cql);
+    auto memory_limit = vm["memory-limit"].as<size_t>();
     auto output_dir = vm["output-dir"].as<std::string>();
     auto format = sstables::sstable_format_types::big;
     auto version = vm.contains("sstable-version")
@@ -1747,9 +1808,54 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
 
     auto ifile = open_file_dma(input_file, open_flags::ro).get();
     auto istream = make_file_input_stream(std::move(ifile));
-    auto parser = tools::json_mutation_stream_parser{schema, permit, std::move(istream), sst_log};
-    auto reader = make_generating_reader(schema, permit, std::move(parser));
-    consume_reader(std::move(reader), 1).get();
+
+    if (input_format == input_format::json) {
+        auto parser = tools::json_mutation_stream_parser{schema, permit, std::move(istream), sst_log};
+        auto reader = make_generating_reader(schema, permit, std::move(parser));
+        consume_reader(std::move(reader), 1).get();
+    } else {
+        lw_shared_ptr<replica::memtable> mt = make_lw_shared<replica::memtable>(schema);
+        auto flush_memtable = [&consume_reader, &schema, &permit] (replica::memtable& mt) -> future<> {
+            co_await consume_reader(mt.make_flush_reader(schema, permit), mt.partition_count());
+            co_await mt.clear_gently();
+        };
+        do_with_cql_env_noreentrant_in_thread([&] (cql_test_env& env) mutable -> future<> {
+            auto& db = env.local_db();
+            auto& table = co_await create_table_in_cql_env(env, schema);
+            auto table_schema = table.schema();
+
+            // Disable commitlog.
+            table.set_durable_writes(false);
+
+            // We don't want to register the sstables with the table object,
+            // to avoid any attempt to compact/split/merge/rewrite them.
+            // Also, they were created with a foreign stable-manager (not part of
+            // cql_test_env).
+            // Use the virtual reader facility to isolate the sstables from
+            // cql-test-env.
+            table.set_virtual_writer([&] (const frozen_mutation& fm) -> future<> {
+                mt->apply(fm, schema);
+                sst_log.trace("applied mutation of size {}", fm.representation().size());
+                if (mt->occupancy().total_space() >= memory_limit) {
+                    sst_log.debug("cycling memtable with occupancy {}", mt->occupancy().total_space());
+                    co_await flush_memtable(*mt);
+                    mt = make_lw_shared<replica::memtable>(schema);
+                }
+            });
+
+            co_await consume_queries(std::move(istream), [&] (std::string_view query) -> future<> {
+                sst_log.debug("write_operation(): processing query {}", query);
+
+                validate_query<cql3::statements::modification_statement>(query, table_schema->cf_name(), db.as_data_dictionary(), "an insert, update or delete");
+
+                const auto result = co_await env.execute_cql(query);
+                result->throw_if_exception();
+            });
+        });
+        if (!mt->empty()) {
+            flush_memtable(*mt).get();
+        }
+    }
 }
 
 void script_operation(schema_ptr schema, reader_permit permit, const std::vector<sstables::shared_sstable>& sstables,
@@ -2275,7 +2381,33 @@ the output will be:
     {{"write",
             "Write an sstable",
 fmt::format(R"(
-Write an sstable based on a JSON representation of the content. The JSON
+Write an sstable based on the input provided via --input-file and
+--input-format.
+
+The input formats are supported: CQL and JSON
+
+CQL
+---
+
+Write output sstable(s) based on the CQL statements provided in the input.
+The following statements are supported: INSERT, UPDATE and DELETE.
+The statements are expected to be separated by semicolons.
+The statements do not need to be ordered in any way.
+
+Data is buffered in memory, in a memtable. This provides the required ordering
+to the incoming statements. When the memtable reaches its maximum size, it is
+flushed and a new output sstable is created. Consequently, multiple output
+sstables can be created for large enough inputs.
+The maximum size of the memtable can be controlled via the --memory-limit command
+line argument, which defaults to 1MiB.
+
+Reading the statements from the input file happens via a streaming parser, it is
+safe to provide input files of any size.
+
+JSON
+----
+
+Wite an sstable based on the JSON representation of the content. The JSON
 representation has to have the same schema as that of a single sstable
 from the output of the dump-data operation (corresponding to the $SSTABLE
 symbol).
@@ -2289,15 +2421,23 @@ storage engine. The following is not supported:
 Parsing uses a streaming json parser, it is safe to pass in input-files
 of any size.
 
-The output sstable will use the BIG format, the highest supported sstable
-format and random UUID generation (printed to stdout). By default it is
-placed in the local directory, can be changed with --output-dir. If the
-output sstable clashes with an existing sstable, the write will fail.
+Produces a single output sstable.
+
+Output SSTables
+---------------
+
+The output sstable(s) will use the BIG format, the highest supported sstable
+format (can be changed with --sstable-version) and random UUID generation
+(printed to stdout). By default it is placed in the local directory, can be
+changed with --output-dir. If the output sstable clashes with an existing
+sstable, the write will fail.
 
 For more information, see: {}
 )", doc_link("operating-scylla/admin-tools/scylla-sstable#write")),
             {
                     typed_option<std::string>("input-file", "the file containing the input"),
+                    typed_option<std::string>("input-format", "text", "the input-format, one of (cql, json)"),
+                    typed_option<size_t>("memory-limit", 1 << 20, "the maximum amount of memory in bytes to use for the memtable buffering the query results (default 1MiB)"),
                     typed_option<std::string>("output-dir", ".", "directory to place the output sstable(s) to"),
                     typed_option<std::string>("validation-level", "clustering_key", "degree of validation on the output, one of (partition_region, token, partition_key, clustering_key)"),
                     typed_option<std::string>("sstable-version", "SSTable format version, (e.g. \"me\", \"ms\")"),
