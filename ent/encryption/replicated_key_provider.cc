@@ -132,11 +132,6 @@ private:
 
     future<std::tuple<UUID, key_ptr>> get_key(const key_info&, opt_bytes = {});
 
-    future<key_ptr> load_or_create(const key_info&);
-    future<key_ptr> load_or_create_local(const key_info&);
-    future<> read_key_file();
-    future<> write_key_file();
-
     template<typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> query(sstring, Args&& ...);
 
