@@ -1704,10 +1704,10 @@ def test_scylla_sstable_query_validation(cql, scylla_path, scylla_data_dir):
         check("SELECT * FROM ,", "failed to parse query: exceptions::syntax_exception")
         check("SELECT * FROM scylla_sstable.columns; SELECT * FROM scylla_sstable.columns;", "expected exactly 1 query, got 2")
         check("SELECT * FROM foo", "query must have keyspace and the keyspace has to be scylla_sstable")
-        check("SELECT * FROM foo.bar", "query must select from scylla_sstable keyspace, got foo instead")
-        check("SELECT * FROM system.local", "query must select from scylla_sstable keyspace, got system instead")
-        check("SELECT * FROM scylla_sstable.foo", "query must select from local table, got foo instead")
-        check("SELECT * FROM scylla_sstable.tables", "query must select from local table, got tables instead")
+        check("SELECT * FROM foo.bar", "query must be against scylla_sstable keyspace, got foo instead")
+        check("SELECT * FROM system.local", "query must be against scylla_sstable keyspace, got system instead")
+        check("SELECT * FROM scylla_sstable.foo", "query must be against local table, got foo instead")
+        check("SELECT * FROM scylla_sstable.tables", "query must be against local table, got tables instead")
         check("INSERT INTO scylla_sstable.local (key, bootstrapped) VALUES ('local', 'COMPLETED')", "query must be a select query")
 
 
