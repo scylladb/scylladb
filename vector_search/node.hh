@@ -33,7 +33,8 @@ private:
     seastar::future<> restart_pinging();
     seastar::future<> start_pinging();
     seastar::future<> stop_pinging();
-    seastar::future<> ping();
+    seastar::future<bool> ping();
+    seastar::future<> handle_ann_failed();
 
     client _client;
     bool _is_up{true};
