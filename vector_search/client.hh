@@ -32,9 +32,11 @@ public:
         seastar::net::inet_address ip;
     };
 
+    enum class status_type { unknown, initializing, connecting_to_db, bootstrapping, serving };
+
     explicit client(endpoint_type endpoint_);
 
-    seastar::future<> status(seastar::abort_source& as);
+    seastar::future<status_type> status(seastar::abort_source& as);
 
     seastar::future<response> ann(seastar::sstring keyspace, seastar::sstring name, std::vector<float> embedding, std::size_t limit, seastar::abort_source& as);
 
