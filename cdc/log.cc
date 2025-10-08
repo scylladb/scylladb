@@ -1367,6 +1367,8 @@ struct process_row_visitor {
 
 struct process_change_visitor {
     const per_request_options& _request_options;
+    const operation _row_delete_op;
+    const operation _partition_delete_op;
 
     stats::part_type_set& _touched_parts;
 
@@ -1436,7 +1438,7 @@ struct process_change_visitor {
     void clustered_row_delete(const clustering_key& ckey, const tombstone&) {
         _touched_parts.set<stats::part_type::ROW_DELETE>();
 
-        auto log_ck = _builder.allocate_new_log_row(operation::row_delete);
+        auto log_ck = _builder.allocate_new_log_row(_row_delete_op);
         _builder.set_clustering_columns(log_ck, ckey);
 
         if (_enable_updating_state && get_row_state(_clustering_row_states, ckey)) {
@@ -1480,7 +1482,7 @@ struct process_change_visitor {
 
     void partition_delete(const tombstone&) {
         _touched_parts.set<stats::part_type::PARTITION_DELETE>();
-        auto log_ck = _builder.allocate_new_log_row(operation::partition_delete);
+        auto log_ck = _builder.allocate_new_log_row(_partition_delete_op);
         if (_enable_updating_state) {
             _clustering_row_states.clear();
         }
@@ -1697,6 +1699,8 @@ public:
         SCYLLA_ASSERT(_builder);
         process_change_visitor v {
             ._request_options = _options,
+            ._row_delete_op = _options.origin_system ? operation::service_row_delete : operation::row_delete,
+            ._partition_delete_op = _options.origin_system ? operation::service_partition_delete : operation::partition_delete,
             ._touched_parts = _touched_parts,
             ._builder = *_builder,
             ._enable_updating_state = _enable_updating_state,

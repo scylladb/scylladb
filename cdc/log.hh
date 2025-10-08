@@ -62,6 +62,9 @@ enum class operation : int8_t {
     pre_image = 0, update = 1, insert = 2, row_delete = 3, partition_delete = 4,
     range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
     post_image = 9,
+    
+    service_row_delete = 10,
+    service_partition_delete = 11,
 };
 
 struct per_request_options {
@@ -79,6 +82,8 @@ struct per_request_options {
     // request, because it's live-updateable. As a result, the flag may change
     // between reads.
     const bool alternator_streams_strict_compatibility = false;
+    // This mutation is a result of an internal operation initiated by Scylla.
+    const bool origin_system = false;
 };
 
 struct operation_result_tracker;
