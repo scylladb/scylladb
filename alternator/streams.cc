@@ -940,7 +940,7 @@ future<executor::request_return_type> executor::get_records(client_state& client
                 rjson::add(record, "awsRegion", rjson::from_string(dc_name));
                 rjson::add(record, "eventID", event_id(iter.shard.id, *timestamp));
                 rjson::add(record, "eventSource", "scylladb:alternator");
-                rjson::add(record, "eventVersion", "1.0");
+                rjson::add(record, "eventVersion", "1.1");
                 rjson::push_back(records, std::move(record));
                 record = rjson::empty_object();
                 --limit;
@@ -999,6 +999,16 @@ future<executor::request_return_type> executor::get_records(client_state& client
             case cdc::operation::insert:
                 rjson::add(record, "eventName", "INSERT");
                 break;
+            case cdc::operation::service_row_delete:
+            case cdc::operation::service_partition_delete:
+            {
+                auto user_identity = rjson::value();
+                rjson::add(user_identity, "type", "Service");
+                rjson::add(user_identity, "principalId", "dynamodb.amazonaws.com");
+                rjson::add(record, "userIdentity", std::move(user_identity));
+                rjson::add(record, "eventName", "REMOVE");
+                break;
+            }
             default:
                 rjson::add(record, "eventName", "REMOVE");
                 break;
