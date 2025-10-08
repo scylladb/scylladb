@@ -160,7 +160,7 @@ private:
     condition_variable _sstables_to_register_event;
     semaphore _staging_sstables_mutex = semaphore(1);
     std::unordered_map<table_id, std::vector<staging_sstable_task_info>> _sstables_to_register;
-    std::unordered_map<table_id, std::unordered_map<dht::token, std::vector<sstables::shared_sstable>>> _staging_sstables;
+    std::unordered_map<table_id, std::vector<sstables::shared_sstable>> _staging_sstables;
     future<> _staging_sstables_registrator = make_ready_future<>();
 
 public:
