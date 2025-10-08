@@ -131,6 +131,7 @@ private:
     static bytes encode_id(const UUID&);
 
     future<std::tuple<UUID, key_ptr>> get_key(const key_info&, opt_bytes = {});
+    future<std::optional<std::tuple<UUID, key_ptr>>> find_key(key_id& id, sstring_view cipher);
 
     template<typename... Args>
     future<::shared_ptr<cql3::untyped_result_set>> query(sstring, Args&& ...);
@@ -294,41 +295,15 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
 
     auto cipher = info.alg.substr(0, info.alg.find('/')); // e.g. "AES"
 
-    UUID uuid;
-    shared_ptr<cql3::untyped_result_set> res;
-
-    if (id.id) {
-        uuid = utils::UUID_gen::get_UUID(*id.id);
-        log.debug("Finding key {} ({})", uuid, info);
-        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? AND key_id=?;", KSNAME, TABLENAME);
-        res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len), uuid);
-
-        // if we find nothing, and we actually queried a specific key (by uuid), we've failed.
-        if (res->empty()) {
-            log.debug("Could not find key {}", id.id);
-            throw std::runtime_error(fmt::format("Unable to find key for cipher={} strength={} id={}", cipher, id.info.len, uuid));
-        }
-    } else {
-        log.debug("Finding key ({})", info);
-        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? LIMIT 1;", KSNAME, TABLENAME);
-        res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len));
-    }
-
-    if (!res->empty()) {
-        // found it
-        auto& row = res->one();
-        uuid = row.get_as<UUID>("key_id");
-        auto ks = row.get_as<sstring>("key");
-        auto kb = base64_decode(ks);
-        auto b = co_await _system_key->decrypt(kb);
-        auto k = make_shared<symmetric_key>(id.info, b);
+    auto res = co_await find_key(id, cipher);
+    if (res) {
+        auto [uuid, k] = *res;
         cache_key(id, uuid, k);
-
         co_return std::tuple(uuid, k);
     }
 
     // otoh, if we don't need a specific key, we can just create a new one (writing a sstable)
-    uuid = utils::UUID_gen::get_time_UUID();
+    UUID uuid = utils::UUID_gen::get_time_UUID();
 
     log.debug("No key found. Generating {}", uuid);
 
@@ -344,6 +319,39 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
     log.trace("Flushing key table");
     co_await force_blocking_flush();
 
+    co_return std::tuple(uuid, k);
+}
+
+future<std::optional<std::tuple<UUID, key_ptr>>> replicated_key_provider::find_key(key_id& id, sstring_view cipher) {
+    shared_ptr<cql3::untyped_result_set> res;
+    if (id.id) {
+        auto uuid = utils::UUID_gen::get_UUID(*id.id);
+        log.debug("Finding key {} ({})", uuid, id.info);
+        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? AND key_id=?;", KSNAME, TABLENAME);
+        res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len), uuid);
+
+        // if we find nothing, and we actually queried a specific key (by uuid), we've failed.
+        if (res->empty()) {
+            log.debug("Could not find key {}", id.id);
+            throw std::runtime_error(fmt::format("Unable to find key for cipher={} strength={} id={}", cipher, id.info.len, uuid));
+        }
+    } else {
+        log.debug("Finding key ({})", id.info);
+        auto s = fmt::format("SELECT * FROM {}.{} WHERE key_file=? AND cipher=? AND strength=? LIMIT 1;", KSNAME, TABLENAME);
+        res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len));
+
+        if (res->empty()) {
+            co_return std::nullopt;
+        }
+    }
+
+    // found it
+    auto& row = res->one();
+    auto uuid = row.get_as<UUID>("key_id");
+    auto ks = row.get_as<sstring>("key");
+    auto kb = base64_decode(ks);
+    auto b = co_await _system_key->decrypt(kb);
+    auto k = make_shared<symmetric_key>(id.info, b);
     co_return std::tuple(uuid, k);
 }
 
