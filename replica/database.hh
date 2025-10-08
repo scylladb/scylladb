@@ -2093,6 +2093,13 @@ public:
     //   must contain a complete list of racks and data centers in the cluster.
     void check_rf_rack_validity(const bool enforce_rf_rack_valid_keyspaces, const locator::token_metadata_ptr) const;
 
+    // Verify that the existing keyspaces would remain RF-rack-valid after applying a topology change.
+    //
+    // The validation is effective only if the database is configured with `rf_rack_valid_keyspaces`. In this case,
+    // the function returns false if there is a keyspace that would violate RF-rack-validity after applying the topology change.
+    // If the database is not configured with `rf_rack_valid_keyspaces`, the function always returns true, but prints a warning if RF-rack-validity would be violated.
+    bool check_rf_rack_validity_with_topology_change(locator::token_metadata_ptr, locator::rf_rack_topology_operation) const;
+
     /// Verify that all existing materialized views are valid.
     ///
     /// We consider a materialized view valid if one of the following
