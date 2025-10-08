@@ -314,35 +314,35 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
         res = co_await query(std::move(s), _system_key->name(), cipher, int32_t(id.info.len));
     }
 
-    // otoh, if we don't need a specific key, we can just create a new one (writing a sstable)
-    if (res->empty()) {
-        uuid = utils::UUID_gen::get_time_UUID();
-
-        log.debug("No key found. Generating {}", uuid);
-
-        auto k = make_shared<symmetric_key>(id.info);
+    if (!res->empty()) {
+        // found it
+        auto& row = res->one();
+        uuid = row.get_as<UUID>("key_id");
+        auto ks = row.get_as<sstring>("key");
+        auto kb = base64_decode(ks);
+        auto b = co_await _system_key->decrypt(kb);
+        auto k = make_shared<symmetric_key>(id.info, b);
         cache_key(id, uuid, k);
-
-        auto b = co_await _system_key->encrypt(k->key());
-        auto ks = base64_encode(b);
-        log.trace("Inserting generated key {}", uuid);
-        co_await query(fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)", 
-            KSNAME, TABLENAME), _system_key->name(), cipher, int32_t(id.info.len), uuid, ks
-        );
-        log.trace("Flushing key table");
-        co_await force_blocking_flush();
 
         co_return std::tuple(uuid, k);
     }
 
-    // found it
-    auto& row = res->one();
-    uuid = row.get_as<UUID>("key_id");
-    auto ks = row.get_as<sstring>("key");
-    auto kb = base64_decode(ks);
-    auto b = co_await _system_key->decrypt(kb);
-    auto k = make_shared<symmetric_key>(id.info, b);
+    // otoh, if we don't need a specific key, we can just create a new one (writing a sstable)
+    uuid = utils::UUID_gen::get_time_UUID();
+
+    log.debug("No key found. Generating {}", uuid);
+
+    auto k = make_shared<symmetric_key>(id.info);
     cache_key(id, uuid, k);
+
+    auto b = co_await _system_key->encrypt(k->key());
+    auto ks = base64_encode(b);
+    log.trace("Inserting generated key {}", uuid);
+    co_await query(fmt::format("INSERT INTO {}.{} (key_file, cipher, strength, key_id, key) VALUES (?, ?, ?, ?, ?)",
+        KSNAME, TABLENAME), _system_key->name(), cipher, int32_t(id.info.len), uuid, ks
+    );
+    log.trace("Flushing key table");
+    co_await force_blocking_flush();
 
     co_return std::tuple(uuid, k);
 }
