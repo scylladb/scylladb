@@ -1725,25 +1725,25 @@ void write_operation(schema_ptr schema, reader_permit permit, const std::vector<
         ? version_from_string(vm["sstable-version"].as<std::string>())
         : manager.get_preferred_sstable_version();
 
-  auto consume_reader = [&] (mutation_reader reader, size_t partition_count_estimate) -> future<> {
-    auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
+    auto consume_reader = [&] (mutation_reader reader, size_t partition_count_estimate) -> future<> {
+        auto generation = sstables::generation_type(utils::UUID_gen::get_time_UUID());
 
-    {
-        auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
-        if (co_await file_exists(sst_name)) {
-            throw std::invalid_argument(fmt::format("cannot create output sstable {}, file already exists", sst_name));
+        {
+            auto sst_name = sstables::sstable::filename(output_dir, schema->ks_name(), schema->cf_name(), version, generation, format, component_type::Data);
+            if (co_await file_exists(sst_name)) {
+                throw std::invalid_argument(fmt::format("cannot create output sstable {}, file already exists", sst_name));
+            }
         }
-    }
 
-    auto writer_cfg = manager.configure_writer("scylla-sstable");
-    writer_cfg.validation_level = validation_level;
-    auto local = data_dictionary::make_local_options(output_dir);
-    auto sst = manager.make_sstable(schema, local, generation, sstables::sstable_state::normal, version, format);
+        auto writer_cfg = manager.configure_writer("scylla-sstable");
+        writer_cfg.validation_level = validation_level;
+        auto local = data_dictionary::make_local_options(output_dir);
+        auto sst = manager.make_sstable(schema, local, generation, sstables::sstable_state::normal, version, format);
 
-    co_await sst->write_components(std::move(reader), partition_count_estimate, schema, writer_cfg, encoding_stats{});
+        co_await sst->write_components(std::move(reader), partition_count_estimate, schema, writer_cfg, encoding_stats{});
 
-    fmt::print(std::cout, "{}\n", generation);
-  };
+        fmt::print(std::cout, "{}\n", generation);
+    };
 
     auto ifile = open_file_dma(input_file, open_flags::ro).get();
     auto istream = make_file_input_stream(std::move(ifile));
