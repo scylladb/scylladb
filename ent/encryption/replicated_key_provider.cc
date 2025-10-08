@@ -125,7 +125,7 @@ public:
     }
 
 private:
-    void store_key(const key_id&, const UUID&, key_ptr);
+    void cache_key(const key_id&, const UUID&, key_ptr);
 
     static opt_bytes decode_id(const opt_bytes&);
     static bytes encode_id(const UUID&);
@@ -181,7 +181,7 @@ future<> replicated_key_provider::force_blocking_flush() {
     });
 }
 
-void replicated_key_provider::store_key(const key_id& id, const UUID& uuid, key_ptr k) {
+void replicated_key_provider::cache_key(const key_id& id, const UUID& uuid, key_ptr k) {
     if (!_use_cache) {
         return;
     }
@@ -321,7 +321,7 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
         log.debug("No key found. Generating {}", uuid);
 
         auto k = make_shared<symmetric_key>(id.info);
-        store_key(id, uuid, k);
+        cache_key(id, uuid, k);
 
         auto b = co_await _system_key->encrypt(k->key());
         auto ks = base64_encode(b);
@@ -342,7 +342,7 @@ future<std::tuple<UUID, key_ptr>> replicated_key_provider::get_key(const key_inf
     auto kb = base64_decode(ks);
     auto b = co_await _system_key->decrypt(kb);
     auto k = make_shared<symmetric_key>(id.info, b);
-    store_key(id, uuid, k);
+    cache_key(id, uuid, k);
 
     co_return std::tuple(uuid, k);
 }
