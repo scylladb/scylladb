@@ -73,3 +73,24 @@ async def test_add_and_drop_column_with_cdc(manager: ManagerClient):
         base_rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test")
         cdc_rows = await cql.run_async(f"SELECT COUNT(*) FROM {ks}.test_scylla_cdc_log")
         assert base_rows[0].count == cdc_rows[0].count, f"Base table rows: {base_rows[0].count}, CDC log rows: {cdc_rows[0].count}"
+
+@pytest.mark.asyncio
+async def test_recreate_column_too_soon(manager: ManagerClient):
+    """ Test that recreating a dropped column too soon fails with an appropriate error.
+
+        When dropping a column from a CDC log table, the drop timestamp is set
+        several seconds into the future to prevent race conditions with concurrent
+        writes. This test verifies that attempting to recreate a column with the
+        same name before the drop timestamp has passed results in a proper error
+        message, preventing potential data corruption.
+    """
+    await manager.servers_add(1, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets={'enabled': false}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int, dropped_col int) WITH cdc={{'enabled': true}}")
+        await cql.run_async(f"ALTER TABLE {ks}.test DROP dropped_col")
+
+        # recreating too soon
+        with pytest.raises(Exception, match="a column with the same name was dropped too recently"):
+            await cql.run_async(f"ALTER TABLE {ks}.test ADD dropped_col int")
