@@ -47,7 +47,7 @@ sstring index_name_from_table_name(const sstring& table_name);
 
 /// Given a list of base-table schemas, return all their secondary indexes, except that specified in cf_to_exclude.
 std::set<sstring>
-existing_index_names(const std::vector<schema_ptr>& tables, std::string_view cf_to_exclude);
+existing_index_names(std::span<const schema_ptr> tables, std::string_view cf_to_exclude);
 
 /// Given a base-table keyspace and table name, return the first available index
 /// name (containing index_name_root if specified).
