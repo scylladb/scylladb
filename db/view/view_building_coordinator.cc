@@ -78,6 +78,7 @@ future<> view_building_coordinator::commit_mutations(service::group0_guard guard
         .mutations{std::move(cmuts)}
     }, guard, description);
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
+    vbc_logger.debug("COMMITED");
 }
 
 void view_building_coordinator::handle_coordinator_error(std::exception_ptr eptr) {
