@@ -12,7 +12,6 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_tablet_count, get_base_table, get_tablet_replicas
 from test.cluster.util import new_test_keyspace
-from test.cluster.conftest import skip_mode
 
 import asyncio
 import logging
@@ -171,7 +170,7 @@ async def validate_virtual_tables(manager, servers, cql, log_table_id, ks, table
 # Read CDC stream information from the virtual tables system.cdc_timestamps and system.cdc_streams
 # and verify it against the internal CDC tables.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_virtual_tables(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(1, config=cfg)
@@ -211,7 +210,7 @@ async def test_cdc_virtual_tables(manager: ManagerClient):
         await validate_virtual_tables(manager, servers, cql, log_table_id, ks, 'test')
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(1, config=cfg)
@@ -250,7 +249,7 @@ async def test_cdc_virtual_tables_with_multiple_cdc_tables(manager: ManagerClien
 # get the same result.
 # Then trigger tablet merge and do the same, verifying streams are merged.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(1, config=cfg)
@@ -375,7 +374,7 @@ async def test_cdc_colocation(manager: ManagerClient):
 # and wait until the old streams are garbage collected and we have a single stream set again.
 # Verify the remaining stream set is equal to the most recent stream set.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode(mode='release', reason='error injections are not supported in release mode')
 async def test_cdc_stream_garbage_collection(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1, 'error_injections_at_startup': ['short_cdc_streams_gc_refresh_interval' ] }
     servers = await manager.servers_add(1, config=cfg)

@@ -5,13 +5,12 @@
 #
 import asyncio
 import pytest
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode(mode='release', reason="error injections aren't enabled in release mode")
 async def test_create_table_notification_deadlock_with_shutdown(manager: ManagerClient):
     """
     Execute a CREATE TABLE query during node shutdown and reproduce a deadlock between
