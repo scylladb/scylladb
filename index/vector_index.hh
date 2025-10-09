@@ -33,9 +33,9 @@ public:
     static bool has_vector_index(const schema& s);
     static void check_cdc_options(const schema& schema);
 private:
-    void check_cdc_not_explicitly_disabled(const schema& schema);
-    void check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets);
-    void check_index_options(cql3::statements::index_prop_defs& properties);
+    void check_cdc_not_explicitly_disabled(const schema& schema) const;
+    void check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const;
+    void check_index_options(const cql3::statements::index_prop_defs& properties) const;
 };
 
 std::unique_ptr<secondary_index::custom_index> vector_index_factory();
