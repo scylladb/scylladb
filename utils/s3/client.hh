@@ -131,6 +131,7 @@ class client : public enable_shared_from_this<client> {
         io_stats read_stats;
         io_stats write_stats;
         uint64_t prefetch_bytes = 0;
+        uint64_t downloads_blocked_on_memory = 0;
         seastar::metrics::metric_groups metrics;
         group_client(std::unique_ptr<http::experimental::connection_factory> f, unsigned max_conn, const aws::retry_strategy& retry_strategy);
         void register_metrics(std::string class_name, std::string host);
