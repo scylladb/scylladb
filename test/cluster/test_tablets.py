@@ -897,7 +897,7 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
 
         logger.info("Attempting removenode - expected to fail")
         await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id, ignore_dead=[replaced_host_id],
-                                expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (There are nodes with tablets to drain")
+                                expected_error="Removenode failed. See earlier errors (node remove rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid)")
 
         logger.info(f"Replacing {node_to_replace} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)

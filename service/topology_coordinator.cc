@@ -2285,6 +2285,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             break;
                         }
 
+                        if (!_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
+                                locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::add,
+                                    to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
+                            _rollback = fmt::format("Cannot add the node because its addition would make some existing keyspace RF-rack-invalid");
+                            break;
+                        }
+
                         auto tmptr = get_token_metadata_ptr();
                         std::unordered_set<token> bootstrap_tokens;
                         try {
@@ -3129,6 +3136,11 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     node_validation_result
     validate_removing_node(const node_to_work_on& node) {
+        if (!_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
+                locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::remove,
+                    to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
+            return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid"};
+        }
         return node_validation_success {};
     }
 
