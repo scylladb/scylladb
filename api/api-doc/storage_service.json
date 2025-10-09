@@ -914,7 +914,7 @@
                           "schema" :{
                               "type": "array",
                               "items": {
-                                  "type": "string"
+                                  "type": "sstable_to_restore"
                               }
                           }
                       },
@@ -3544,6 +3544,24 @@
             "ratio":{
                "type":"float",
                "description":"The resulting compression ratio (estimated on a random sample of files)"
+            }
+         }
+      },
+      "sstable_to_restore":{
+         "id":"sstable_to_restore",
+         "description":"SSTable to restore and its token range",
+         "properties":{
+            "toc_filename":{
+               "type":"string",
+               "description":"the TOC filename of the sstable"
+            },
+            "token_min":{
+               "type":"string",
+               "description":"the minimum token found in the sstable"
+            },
+            "token_max":{
+               "type":"string",
+               "description":"the maximum token found in the sstable"
             }
          }
       }

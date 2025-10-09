@@ -504,7 +504,18 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
             throw httpd::bad_param_exception("malformatted sstables in body");
         }
         auto sstables = parsed.GetArray() |
-            std::views::transform([] (const auto& s) { return sstring(rjson::to_string_view(s)); }) |
+            std::views::transform([] (const auto& s) {
+                // Support the previous format where body contains an array of TOC names until
+                // we finish building tablet aware restore.
+                if (s.IsString()) {
+                    return std::make_pair(sstring(rjson::to_string_view(s)), dht::token_range{});
+                }
+
+                dht::token token_min = dht::token::from_int64(validate_int(s["token_min"].GetString()));
+                dht::token token_max = dht::token::from_int64(validate_int(s["token_max"].GetString()));
+                dht::token_range r(wrapping_interval<dht::token>::bound(token_min, true), wrapping_interval<dht::token>::bound(token_max, true));
+                return std::make_pair(sstring(rjson::to_string_view(s["toc_filename"])), r);
+            }) |
             std::ranges::to<std::vector>();
         auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope);
         co_return json::json_return_type(fmt::to_string(task_id));
