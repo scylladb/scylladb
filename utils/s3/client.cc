@@ -235,6 +235,11 @@ void client::group_client::register_metrics(std::string class_name, std::string 
                 sm::description("Total time spend writing data to objects"), {ep_label, sg_label}),
         sm::make_counter("total_read_prefetch_bytes", [this] { return prefetch_bytes; },
                 sm::description("Total number of bytes requested from object"), {ep_label, sg_label}),
+         sm::make_counter("downloads_blocked_on_memory",
+                          [this] { return downloads_blocked_on_memory; },
+                          sm::description("Counts the number of times S3 client downloads were delayed due to insufficient memory availability"),
+                          {ep_label, sg_label})
+
     });
 }
 
@@ -1147,6 +1152,8 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 }
 
                 if (auto units = try_get_units(_client->_memory, _socket_buff_size); !_is_finished && !_buffers.empty() && !units) {
+                    auto& gc = _client->find_or_create_client();
+                    ++gc.downloads_blocked_on_memory;
                     co_await _bg_fiber_cv.when([this] {
                         return _is_finished || _buffers.empty() || try_get_units(_client->_memory, _socket_buff_size);
                     });
