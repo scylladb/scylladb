@@ -4,7 +4,6 @@
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 #
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 from cassandra import WriteFailure
 import pytest
@@ -74,8 +73,8 @@ async def test_no_cleanup_when_unnecessary(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'dev is enough')
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('debug', 'dev is enough')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
     """Scenario:
        * Start two nodes, a vnodes-based table with an rf=2

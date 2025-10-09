@@ -14,7 +14,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import read_barrier
-from test.cluster.conftest import cluster_con, skip_mode
+from test.cluster.conftest import cluster_con
 from test.cluster.util import get_coordinator_host_ids, get_current_group0_config
 
 
@@ -103,7 +103,7 @@ async def test_raft_voters_multidc_kill_dc(manager: ManagerClient, num_nodes: in
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_raft_limited_voters_upgrade(manager: ManagerClient):
     """
     Test that the limited voters feature works correctly during the upgrade.

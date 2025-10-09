@@ -15,11 +15,15 @@ from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.manager_client import ManagerClient
 from test.pylib.scylla_cluster import gather_safely
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_first_completed
-from test.cluster.conftest import skip_mode
 from test.cluster.util import reconnect_driver, enter_recovery_state, \
         delete_raft_data_and_upgrade_state, log_run_time, wait_until_upgrade_finishes as wait_until_schema_upgrade_finishes, \
         wait_until_topology_upgrade_finishes, delete_raft_topology_state, wait_for_cdc_generations_publishing, \
         check_system_topology_and_cdc_generations_v3_consistency
+
+pytestmark = [
+    pytest.mark.skip_mode('release', reason='error injections are not supported in release mode'),
+    pytest.mark.skip_mode('debug', reason='test performs many topology changes')
+]
 
 async def wait_for_log_on_any_node(logs: List[ScyllaLogFile], marks: List[int], pattern: str):
     """
@@ -29,8 +33,6 @@ async def wait_for_log_on_any_node(logs: List[ScyllaLogFile], marks: List[int], 
     await wait_for_first_completed([l.wait_for(pattern) for l, m in zip(logs, marks)])
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
-@skip_mode('debug', 'test performs many topology changes')
 @log_run_time
 async def test_topology_upgrade_stuck(request, manager: ManagerClient):
     """

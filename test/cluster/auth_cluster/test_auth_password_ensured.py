@@ -9,7 +9,6 @@ import logging
 import time
 
 from cassandra.cluster import NoHostAvailable
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient, ServerUpState
 from test.pylib.util import wait_for
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
@@ -29,7 +28,7 @@ Test CQL is served only after superuser default password is created.
 After CQL is served, user is properily authenticated as superuser (not annonymous user)
 """
 @pytest.mark.asyncio
-@skip_mode('release', 'error injection is disabled in release mode')
+@pytest.mark.skip_mode('release', 'error injection is disabled in release mode')
 async def test_auth_password_ensured(manager: ManagerClient) -> None:
     config = {
         **auth_config,

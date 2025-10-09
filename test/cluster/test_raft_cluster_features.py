@@ -9,7 +9,6 @@ Tests that are specific to the raft-based cluster feature implementation.
 import asyncio
 import time
 
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts, wait_for_feature
 from test.cluster import test_cluster_features
@@ -87,7 +86,7 @@ async def test_cannot_disable_cluster_feature_after_all_declare_support(manager:
     await asyncio.gather(*(wait_for_feature('TEST_ONLY_FEATURE', cql, h, time.time() + 60) for h in hosts))
 
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode("release", "error injections are not supported in release mode")
 async def test_simulate_upgrade_legacy_to_raft_listener_registration(manager: ManagerClient):
     """
     We simulate an upgrade from legacy mode to Raft. Our goal is

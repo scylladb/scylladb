@@ -14,7 +14,6 @@ from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_fini
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
         wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, \
         find_server_by_host_id
-from test.cluster.conftest import skip_mode
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
@@ -246,7 +245,7 @@ async def assert_connections_params(manager: ManagerClient, hosts, expect):
             assert param["scheduling_group"]
 
 @pytest.mark.asyncio
-@skip_mode('release', 'cql server testing REST API is not supported in release mode')
+@pytest.mark.skip_mode('release', 'cql server testing REST API is not supported in release mode')
 async def test_connections_parameters_auto_update(manager: ManagerClient, build_mode):
     servers = await manager.servers_add(3, config=auth_config, auto_rack_dc="dc1")
     cql = manager.get_cql()
@@ -357,7 +356,7 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
     assert len(result) == 2 and result[0].workload_type == 'batch' and result[1].workload_type == 'batch'
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injection is disabled in release mode')
+@pytest.mark.skip_mode('release', 'error injection is disabled in release mode')
 async def test_shares_check(manager: ManagerClient):
     srv = await manager.server_add(config={
         "error_injections_at_startup": [
@@ -386,7 +385,7 @@ async def test_shares_check(manager: ManagerClient):
     await cql.run_async(f"ALTER SERVICE LEVEL {sl1} WITH shares=100")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injection is not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injection is not supported in release mode')
 async def test_workload_prioritization_upgrade(manager: ManagerClient):
     # This test simulates OSS->enterprise upgrade in v1 service levels.
     # Using error injection, the test disables WORKLOAD_PRIORITIZATION feature
@@ -430,7 +429,7 @@ async def test_workload_prioritization_upgrade(manager: ManagerClient):
     await cql.run_async("CREATE SERVICE LEVEL sl2 WITH shares = 100")
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injection is disabled in release mode')
+@pytest.mark.skip_mode('release', 'error injection is disabled in release mode')
 async def test_service_levels_over_limit(manager: ManagerClient):
     srv = await manager.server_add(config={**auth_config,
         "error_injections_at_startup": ['allow_service_level_over_limit']
@@ -495,7 +494,7 @@ async def test_service_level_metric_name_change(manager: ManagerClient) -> None:
 
 # Reproduces scylladb/scylladb#24792.
 @pytest.mark.asyncio
-@skip_mode("release", "error injection is disabled in release mode")
+@pytest.mark.skip_mode("release", "error injection is disabled in release mode")
 async def test_reload_service_levels_after_auth_service_is_stopped(manager: ManagerClient):
     config = {**auth_config, "error_injections_at_startup": ["reload_service_level_cache_after_auth_service_is_stopped"]}
     s1 = await manager.server_add(config=config)
