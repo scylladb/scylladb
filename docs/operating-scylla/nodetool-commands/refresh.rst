@@ -29,15 +29,26 @@ Load and Stream
 
 .. code::
 
-   nodetool refresh <my_keyspace> <my_table> [--load-and-stream | -las] [--scope <scope>]
+   nodetool refresh <my_keyspace> <my_table> [(--load-and-stream | -las) [[(--primary-replica-only | -pro)] | [--scope <scope>]]]
 
-The Load and Stream feature extends nodetool refresh. The new ``-las`` option loads arbitrary sstables that do not belong to a node into the cluster. It loads the sstables from the disk and calculates the data's owning nodes, and streams automatically.
-For example, say the old cluster has 6 nodes and the new cluster has 3 nodes. We can copy the sstables from the old cluster to any of the new nodes and trigger the load and stream process.
+The Load and Stream feature extends nodetool refresh. 
+
+The ``--load-and-stream`` option loads arbitrary sstables into the cluster by reading the sstable data and streaming each partition to the replica(s) that owns it. In addition, the ``--scope`` and ``--primary-replica-only`` options are applied to filter the set of target replicas for each partition.  For example, say the old cluster has 6 nodes and the new cluster has 3 nodes. One can copy the sstables from the old cluster to any of the new nodes and trigger refresh with load and stream.
+
+
+
+
 
 Load and Stream make restores and migrations much easier:
 
 * You can place sstable from every node to every node
 * No need to run nodetool cleanup to remove unused data
+
+With --primary-replica-only (or -pro) option, only the primary replica of each partition in an sstable will be used as the target. 
+--primary-replica-only must be applied together with --load-and-stream.
+--primary-replica-only cannot be used with --scope, they are mutually exclusive.
+--primary-replica-only requires repair to be run after the load and stream operation is completed. 
+
 
 Scope
 -----
