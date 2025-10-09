@@ -22,13 +22,13 @@
 #include "cql3/statements/prepared_statement.hh"
 #include "cql3/cql_statement.hh"
 #include "cql3/dialect.hh"
+#include "cql3/vector_store_client_interface.hh"
 #include "exceptions/exceptions.hh"
 #include "service/migration_listener.hh"
 #include "mutation/timestamp.hh"
 #include "transport/messages/result_message.hh"
 #include "service/client_state.hh"
 #include "service/broadcast_tables/experimental/query_result.hh"
-#include "vector_search/vector_store_client.hh"
 #include "utils/assert.hh"
 #include "utils/observable.hh"
 #include "service/raft/raft_group0_client.hh"
@@ -109,7 +109,7 @@ private:
     service::storage_proxy& _proxy;
     data_dictionary::database _db;
     service::migration_notifier& _mnotifier;
-    vector_search::vector_store_client& _vector_store_client;
+    cql3::vector_store_client_interface& _vector_store_client;
     memory_config _mcfg;
     const cql_config& _cql_config;
 
@@ -149,7 +149,7 @@ public:
     static std::unique_ptr<statements::raw::parsed_statement> parse_statement(const std::string_view& query, dialect d);
     static std::vector<std::unique_ptr<statements::raw::parsed_statement>> parse_statements(std::string_view queries, dialect d);
 
-    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, vector_search::vector_store_client& vsc,
+    query_processor(service::storage_proxy& proxy, data_dictionary::database db, service::migration_notifier& mn, cql3::vector_store_client_interface& vsc,
             memory_config mcfg, cql_config& cql_cfg, utils::loading_cache_config auth_prep_cache_cfg, lang::manager& langm);
 
     ~query_processor();
@@ -180,11 +180,11 @@ public:
 
     lang::manager& lang() { return _lang_manager; }
 
-    const vector_search::vector_store_client& vector_store_client() const noexcept {
+    const cql3::vector_store_client_interface& vector_store_client() const noexcept {
         return _vector_store_client;
     }
 
-    vector_search::vector_store_client& vector_store_client() noexcept {
+    cql3::vector_store_client_interface& vector_store_client() noexcept {
         return _vector_store_client;
     }
 

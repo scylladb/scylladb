@@ -75,6 +75,7 @@
 #include "init.hh"
 #include "lang/manager.hh"
 #include "utils/disk_space_monitor.hh"
+#include "vector_search/vector_store_client.hh"
 
 #include <sys/time.h>
 #include <sys/resource.h>
