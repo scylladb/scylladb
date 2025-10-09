@@ -35,7 +35,7 @@ using namespace std::chrono_literals;
 
 static logging::logger vbc_logger("view_building_coordinator");
 
-static constexpr std::chrono::milliseconds min_time_between_iterations = 1000ms;
+static constexpr std::chrono::milliseconds min_time_between_iterations = 200ms;
 
 namespace db {
 
