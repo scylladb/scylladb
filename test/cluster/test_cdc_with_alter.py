@@ -169,4 +169,76 @@ async def test_recreate_column_too_soon(manager: ManagerClient):
         # recreating too soon
         with pytest.raises(Exception, match="a column with the same name was dropped too recently"):
             await cql.run_async(f"ALTER TABLE {ks}.test ADD dropped_col int")
+<<<<<<< HEAD
 >>>>>>> 039323d889 (cdc: check if recreating a column too soon)
+||||||| parent of e85051068d (test: test concurrent writes with column drop with cdc preimage)
+=======
+
+@pytest.mark.asyncio
+async def test_concurrent_writes_and_drop_column_with_cdc_preimage(manager: ManagerClient):
+    """ Test concurrent writes and column drop with CDC preimage enabled.
+
+        This test reproduces an issue where writes concurrent with column drop can cause
+        malformed SSTables when CDC preimage is enabled. The problem occurs because:
+
+        1. The table has CDC with preimage='full', which means CDC preimage generation
+           accesses all columns in the table, including ones not touched by the write
+        2. Writes continuously update existing rows (triggering preimage generation)
+        3. Concurrently, a column is dropped from the table
+        4. The preimage generation may access the dropped column even though the actual
+           write doesn't touch it
+        5. This can result in writes having newer timestamps than the column drop
+           timestamp, leading to malformed SSTables where dropped columns appear
+           with data newer than their drop time
+
+        The test validates that the resulting SSTables are well-formed by running
+        compaction, which would fail if the SSTables were corrupted.
+
+        Reproduces #26340.
+    """
+    servers = await manager.servers_add(3, auto_rack_dc="dc1")
+    cql = manager.get_cql()
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 3}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, v int, dropped_col int) WITH cdc={{'enabled': true, 'preimage': 'full'}}")
+
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, v) VALUES ({pk}, 0)") for pk in range(50)])
+
+        stop_writer = asyncio.Event()
+
+        async def continuous_writer():
+            """Task that continuously writes to the table without touching the dynamic column"""
+            v = 1
+            while not stop_writer.is_set():
+                try:
+                    # Update existing row to trigger preimage generation
+                    await asyncio.gather(*[cql.run_async(f"UPDATE {ks}.test SET v = {v} WHERE pk = {pk}") for pk in range(50)])
+                    v += 1
+                except Exception as e:
+                    # Some writes might fail due to #26405 - ignore
+                    if "does not have base column" in str(e):
+                        continue
+                    else:
+                        raise
+
+        async def drop_column():
+            await asyncio.sleep(0.5) # Let some writes happen first
+
+            # Drop the column and flush concurrently.
+            # we want values that are written at the time the column is dropped to be flushed
+            await asyncio.gather(*[
+                cql.run_async(f"ALTER TABLE {ks}.test DROP dropped_col"),
+                manager.api.flush_keyspace(servers[0].ip_addr, ks)
+                ])
+
+        # do writes while dropping the column
+        writer_task = asyncio.create_task(continuous_writer())
+        schema_task = asyncio.create_task(drop_column())
+
+        await schema_task
+        stop_writer.set()
+        await writer_task
+
+        # run compaction to trigger validation of the sstables
+        await manager.api.keyspace_compaction(servers[0].ip_addr, ks)
+>>>>>>> e85051068d (test: test concurrent writes with column drop with cdc preimage)
