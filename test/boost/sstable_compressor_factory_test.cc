@@ -13,6 +13,7 @@
 #include "sstables/sstable_compressor_factory.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
+#include "test/lib/test_utils.hh"
 
 BOOST_AUTO_TEST_SUITE(sstable_compressor_factory_test)
 
@@ -27,7 +28,7 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
     testlog.info("Testing NUMA topology {}", shard_to_numa_mapping);
 
     // Create a compressor factory.
-    SCYLLA_ASSERT(shard_to_numa_mapping.size() == smp::count);
+    tests::require(shard_to_numa_mapping.size() == smp::count);
     auto config = default_sstable_compressor_factory::config{
         .numa_config = std::vector(shard_to_numa_mapping.begin(), shard_to_numa_mapping.end()),
     };
@@ -68,8 +69,8 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
 
                 // Check that the dictionary used by this shard lies on the same NUMA node.
                 // This is important to avoid cross-node memory accesses on the hot path.
-                BOOST_CHECK_EQUAL(our_numa_node, compressor_numa_node);
-                BOOST_CHECK_EQUAL(our_numa_node, decompressor_numa_node);
+                tests::require_equal(our_numa_node, compressor_numa_node);
+                tests::require_equal(our_numa_node, decompressor_numa_node);
 
                 compressor_numa_nodes[this_shard_id()] = compressor_numa_node;
                 decompressor_numa_nodes[this_shard_id()] = compressor_numa_node;
@@ -79,22 +80,22 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
                 auto compressed_size = compressor->compress(
                     reinterpret_cast<const char*>(message.data()), message.size(),
                     reinterpret_cast<char*>(compressed.data()), compressed.size());
-                BOOST_REQUIRE_GE(compressed_size, 0);
+                tests::require_greater_equal(compressed_size, 0);
                 compressed.resize(compressed_size);
 
                 // Validate that the recommeded dict was actually used.
-                BOOST_CHECK(compressed.size() < message.size() / 10);
+                tests::require_less(compressed.size(), message.size() / 10);
 
                 auto decompressed = std::vector<char>(message.size());
                 auto decompressed_size = decompressor->uncompress(
                     reinterpret_cast<const char*>(compressed.data()), compressed.size(),
                     reinterpret_cast<char*>(decompressed.data()), decompressed.size());
-                BOOST_REQUIRE_GE(decompressed_size, 0);
+                tests::require_greater_equal(decompressed_size, 0);
                 decompressed.resize(decompressed_size);
 
                 // Validate that the roundtrip through compressor and decompressor
                 // resulted in the original message.
-                BOOST_CHECK_EQUAL_COLLECTIONS(message.begin(), message.end(), decompressed.begin(), decompressed.end());
+                tests::require(std::equal(message.begin(), message.end(), decompressed.begin(), decompressed.end()));
             })).get();
         }
 
@@ -102,11 +103,11 @@ void test_one_numa_topology(std::span<unsigned> shard_to_numa_mapping) {
         // of NUMA nodes.
         // This isn't that important, but we don't want to duplicate dictionaries
         // within a NUMA node unnecessarily.
-        BOOST_CHECK_EQUAL(
+        tests::require_equal(
             std::set(compressor_numa_nodes.begin(), compressor_numa_nodes.end()).size(),
             std::set(shard_to_numa_mapping.begin(), shard_to_numa_mapping.end()).size()
         );
-        BOOST_CHECK_EQUAL(
+        tests::require_equal(
             std::set(decompressor_numa_nodes.begin(), decompressor_numa_nodes.end()).size(),
             std::set(shard_to_numa_mapping.begin(), shard_to_numa_mapping.end()).size()
         );
