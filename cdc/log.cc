@@ -56,6 +56,15 @@ using namespace std::chrono_literals;
 
 logging::logger cdc_log("cdc");
 
+namespace {
+
+// When dropping a column from a CDC log table, we set the drop timestamp
+// `column_drop_leeway` seconds into the future to ensure that for writes concurrent
+// with column drop, the write timestamp is before the column drop timestamp.
+constexpr auto column_drop_leeway = std::chrono::seconds(5);
+
+} // anonymous namespace
+
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
 }
@@ -592,7 +601,8 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
         // not super efficient, but we don't do this often.
         for (auto& col : old->all_columns()) {
             if (!b.has_column({col.name(), col.name_as_text() })) {
-                b.without_column(col.name_as_text(), col.type, api::new_timestamp());
+                auto drop_ts = api::timestamp_clock::now() + column_drop_leeway;
+                b.without_column(col.name_as_text(), col.type, drop_ts.time_since_epoch().count());
             }
         }
     }
