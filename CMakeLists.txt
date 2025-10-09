@@ -96,7 +96,7 @@ else()
     set(Seastar_EXCLUDE_APPS_FROM_ALL ON CACHE BOOL "" FORCE)
     set(Seastar_EXCLUDE_TESTS_FROM_ALL ON CACHE BOOL "" FORCE)
     set(Seastar_IO_URING ON CACHE BOOL "" FORCE)
-    set(Seastar_SCHEDULING_GROUPS_COUNT 20 CACHE STRING "" FORCE)
+    set(Seastar_SCHEDULING_GROUPS_COUNT 21 CACHE STRING "" FORCE)
     set(Seastar_UNUSED_RESULT_ERROR ON CACHE BOOL "" FORCE)
     add_subdirectory(seastar)
     target_compile_definitions (seastar

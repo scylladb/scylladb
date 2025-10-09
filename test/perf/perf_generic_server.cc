@@ -70,6 +70,7 @@ public:
         return make_shared<test_connection>(*this, std::move(fd), sem, std::move(initial_sem_units), _conf);
     }
 
+    scheduling_group get_scheduling_group_for_new_connection() const override { return current_scheduling_group(); }
 
     test_server(const test_config& conf)
     : generic_server::server("test_server", plog,

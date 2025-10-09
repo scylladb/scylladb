@@ -18,6 +18,11 @@ from cassandra.util import Duration
 import pytest
 import time
 
+# MAX_USER_SERVICE_LEVELS represents the maximal number of service levels that users can create.
+# The value is documentented in `docs/features/workload-prioritization.rst`.
+# It's used for regression testing of user service level limit in this and other files.
+MAX_USER_SERVICE_LEVELS = 8
+
 @contextmanager
 def new_service_level(cql, timeout=None, workload_type=None, shares=None, role=None):
     params = ""
@@ -142,7 +147,7 @@ def test_list_effective_service_level_without_attached(scylla_only, cql):
         with pytest.raises(InvalidRequest, match=f"Role {role} doesn't have assigned any service level"):
             cql.execute(f"LIST EFFECTIVE SERVICE LEVEL OF {role}")
 
-# Scylla Enterprise limits the number of service levels to a small number (9 including 1 default service level).
+# ScyllaDB limits the number of service levels to a small number (10 including 1 default and 1 driver service level).
 # This test verifies that attempting to create more service levels than that results in an InvalidRequest error
 # and doesn't silently succeed. 
 # The test also has a regression check if a user can create exactly 8 service levels.
@@ -161,7 +166,7 @@ def test_scheduling_groups_limit(scylla_only, cql):
                 created_count = created_count + 1
 
     assert created_count > 0
-    assert created_count == 8 # regression check
+    assert created_count == MAX_USER_SERVICE_LEVELS # regression check
 
 def test_default_shares_in_listings(scylla_only, cql):
     with scylla_inject_error(cql, "create_service_levels_without_default_shares", one_shot=False), \

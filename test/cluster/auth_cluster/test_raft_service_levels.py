@@ -11,16 +11,20 @@ from test.pylib.rest_client import get_host_api_address, read_barrier
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.pylib.manager_client import ManagerClient
 from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
-        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, wait_for_token_ring_and_group0_consistency
+        delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
+        wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, \
+        find_server_by_host_id
 from test.cluster.conftest import skip_mode
+from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
 from cassandra.query import SimpleStatement
-from cassandra.protocol import InvalidRequest
+from cassandra.protocol import InvalidRequest, QueryMessage
 from cassandra.auth import PlainTextAuthProvider
 from test.cluster.auth_cluster import extra_scylla_config_options as auth_config
 
 
 logger = logging.getLogger(__name__)
+DRIVER_SL_NAME = "driver"
 
 @pytest.mark.asyncio
 async def test_service_levels_snapshot(manager: ManagerClient):
@@ -98,16 +102,17 @@ async def test_service_levels_upgrade(request, manager: ManagerClient, build_mod
 
     logging.info("Waiting until upgrade finishes")
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+    await wait_until_driver_service_level_created(cql, time.time() + 60)
 
     result_v2 = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_v2]) == set(sls)
+    assert set([sl.service_level for sl in result_v2]) == set(sls + [DRIVER_SL_NAME])
 
     sl_v2 = "sl" + unique_name()
     await cql.run_async(f"CREATE SERVICE LEVEL {sl_v2}")
 
     await asyncio.gather(*(read_barrier(manager.api, get_host_api_address(host)) for host in hosts))
     result_with_sl_v2 = await cql.run_async(f"SELECT service_level FROM system.service_levels_v2")
-    assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [sl_v2])
+    assert set([sl.service_level for sl in result_with_sl_v2]) == set(sls + [DRIVER_SL_NAME] + [sl_v2])
 
 @pytest.mark.asyncio
 async def test_service_levels_work_during_recovery(manager: ManagerClient):
@@ -130,7 +135,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     logging.info("Validating service levels were created in v2 table")
     result = await cql.run_async("SELECT service_level FROM system.service_levels_v2")
     for sl in result:
-        assert sl.service_level in sls
+        assert sl.service_level in sls + [DRIVER_SL_NAME]
 
     logging.info(f"Restarting hosts {hosts} in recovery mode")
     await asyncio.gather(*(enter_recovery_state(cql, h) for h in hosts))
@@ -143,7 +148,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     logging.info("Checking service levels can be read and v2 table is used")
     recovery_result = await cql.run_async("LIST ALL SERVICE LEVELS")
     assert sl_v1 not in [sl.service_level for sl in recovery_result]
-    assert set([sl.service_level for sl in recovery_result]) == set(sls)
+    assert set([sl.service_level for sl in recovery_result]) == set(sls + [DRIVER_SL_NAME])
 
     logging.info("Checking changes to service levels are forbidden during recovery")
     with pytest.raises(InvalidRequest, match="The cluster is in recovery mode. Changes to service levels are not allowed."):
@@ -169,6 +174,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
     await manager.servers_see_each_other(servers)
     await manager.api.upgrade_to_raft_topology(hosts[0].address)
     await asyncio.gather(*(wait_until_topology_upgrade_finishes(manager, h.address, time.time() + 60) for h in hosts))
+    await wait_until_driver_service_level_created(cql, time.time() + 60)
 
     logging.info("Validating service levels works in v2 mode after leaving recovery")
     new_sl = "sl" + unique_name()
@@ -176,7 +182,7 @@ async def test_service_levels_work_during_recovery(manager: ManagerClient):
 
     sls_list = await cql.run_async("LIST ALL SERVICE LEVELS")
     assert sl_v1 not in [sl.service_level for sl in sls_list]
-    assert set([sl.service_level for sl in sls_list]) == set(sls + [new_sl])
+    assert set([sl.service_level for sl in sls_list]) == set(sls + [new_sl] + [DRIVER_SL_NAME])
 
 def default_timeout(mode):
     if mode == "dev":
@@ -332,7 +338,7 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
     await cql.run_async(f"CREATE SERVICE LEVEL sl1 WITH timeout=500ms AND workload_type='batch'")
 
     sls_list_before = await cql.run_async("LIST ALL SERVICE LEVELS")
-    assert len(sls_list_before) == 1
+    assert len(sls_list_before) == 2
 
     await manager.rolling_restart(servers)
     cql = await reconnect_driver(manager)
@@ -348,7 +354,7 @@ async def test_service_level_cache_after_restart(manager: ManagerClient):
     await cql.run_async(f"ALTER SERVICE LEVEL sl1 WITH timeout = 400ms")
 
     result = await cql.run_async("SELECT workload_type FROM system.service_levels_v2")
-    assert len(result) == 1 and result[0].workload_type == 'batch'
+    assert len(result) == 2 and result[0].workload_type == 'batch' and result[1].workload_type == 'batch'
 
 @pytest.mark.asyncio
 @skip_mode('release', 'error injection is disabled in release mode')
@@ -433,9 +439,8 @@ async def test_service_levels_over_limit(manager: ManagerClient):
     cql = manager.get_cql()
     hosts = await wait_for_cql_and_get_hosts(cql, [srv], time.time() + 60)
 
-    SL_LIMIT = 8
     sls = []
-    for i in range(SL_LIMIT + 1):
+    for i in range(MAX_USER_SERVICE_LEVELS + 1):
         sl = f"sl_{i}_{unique_name()}"
         sls.append(sl)
         await cql.run_async(f"CREATE SERVICE LEVEL {sl}")
@@ -521,3 +526,152 @@ async def test_service_level_reuse_name(manager: ManagerClient):
 
     cql = await create_sl_and_use(cql, sl2)
     cql = await create_sl_and_use(cql, sl1)
+
+@pytest.mark.asyncio
+async def test_driver_service_level(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    logger.info("Verify that sl:driver is created properly on system startup")
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    assert len(service_levels) == 1
+    assert service_levels[0].service_level == "driver"
+    assert service_levels[0].workload_type == "batch"
+    assert service_levels[0].shares == 200
+    assert (await cql.run_async("SELECT value FROM system.scylla_local WHERE key = 'service_level_driver_created'"))[0].value == "true"
+
+    logger.info("Verify that sl:driver can be removed")
+    await cql.run_async(f"DROP SERVICE LEVEL driver")
+    assert len(await cql.run_async("LIST ALL SERVICE LEVELS")) == 0
+
+    logger.info("Add a new server so that the Raft state machine snapshot is used")
+    new_servers = await manager.servers_add(1, config=auth_config, auto_rack_dc="dc1")
+
+    logger.info("Verify that sl:driver is not re-created even after topology coordinator reload")
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
+
+    hosts = await wait_for_cql_and_get_hosts(cql, servers + new_servers, time.time() + 60)
+    for host in hosts:
+        assert len(await cql.run_async("LIST ALL SERVICE LEVELS", host=host)) == 0
+
+@pytest.mark.asyncio
+async def test_driver_service_creation_failure(manager: ManagerClient) -> None:
+    servers = await manager.servers_add(2, config=auth_config, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    logger.info("Drop sl:driver to prepare the system state and re-create it later")
+    await cql.run_async(f"DROP SERVICE LEVEL driver")
+
+    logger.info("Create new service levels to occupy all slots, including the slot of the removed sl:driver")
+    for i in range(MAX_USER_SERVICE_LEVELS + 1):
+        await cql.run_async(f"CREATE SERVICE_LEVEL new_sl_{i}")
+
+    logger.info("Verify that all newly created service levels exist")
+    service_levels = await cql.run_async("LIST ALL SERVICE LEVELS")
+    service_level_names = [sl.service_level for sl in service_levels]
+    for i in range(MAX_USER_SERVICE_LEVELS + 1):
+        assert f"new_sl_{i}" in service_level_names
+    assert "driver" not in service_level_names
+
+    logger.info("Check the logs to see that sl:driver creation failed")
+    coord = await get_topology_coordinator(manager)
+    coord_serv = await find_server_by_host_id(manager, servers, coord)
+    log_file = await manager.server_open_log(coord_serv.server_id)
+    mark = await log_file.mark()
+
+    logger.info("Set service_level_driver_created=false in system.scylla_local and reload topology coordinator")
+    for host in hosts:
+        await cql.run_async(f"UPDATE system.scylla_local SET value = 'false' WHERE key = 'service_level_driver_created'", host=host)
+    await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
+    await log_file.wait_for("Failed to create service level for driver", from_mark=mark)
+
+    logger.info("Verify topology coordinator is not blocked despite the failure")
+    mark = await log_file.mark()
+    await manager.api.reload_raft_topology_state(coord_serv.ip_addr)
+    await log_file.wait_for("topology coordinator fiber has nothing to do. Sleeping.", from_mark=mark)
+
+    logger.info("Double-check that the driver is not re-created")
+    for host in hosts:
+        service_levels = await cql.run_async("LIST ALL SERVICE LEVELS", host=host)
+        service_level_names = [sl.service_level for sl in service_levels]
+        assert "driver" not in service_level_names
+
+def get_processed_tasks_for_group(metrics, group):
+    res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
+    if res is None:
+        return 0
+    return res
+
+@pytest.mark.asyncio
+async def _verify_tasks_processed_metrics(manager, server, used_group, unused_group, func):
+    number_of_requests = 1000
+
+    def get_processed_tasks_for_group(metrics, group):
+        res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
+        if res is None:
+            return 0
+        return res
+
+    metrics = await manager.metrics.query(server.ip_addr)
+    initial_tasks_processed_by_used_group = get_processed_tasks_for_group(metrics, used_group)
+    initial_tasks_processed_by_unused_group = get_processed_tasks_for_group(metrics, unused_group)
+
+    await asyncio.gather(*[asyncio.to_thread(func) for i in range(number_of_requests)])
+
+    metrics = await manager.metrics.query(server.ip_addr)
+    assert get_processed_tasks_for_group(metrics, used_group) - initial_tasks_processed_by_used_group > number_of_requests
+    assert get_processed_tasks_for_group(metrics, unused_group) - initial_tasks_processed_by_unused_group < number_of_requests
+
+@pytest.mark.asyncio
+async def test_driver_service_level_not_used_for_user_queries(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    func = lambda: cql.execute(f"SELECT * from system.peers")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:default', 'sl:driver', func)
+
+    await cql.run_async(f"CREATE SERVICE LEVEL test", host=h)
+    await cql.run_async(f"ATTACH SERVICE LEVEL test TO cassandra", host=h)
+
+    func = lambda: cql.execute(f"SELECT * from system.peers")
+    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:driver', func)
+
+@pytest.mark.asyncio
+async def test_driver_service_level_used_for_driver_queries(manager: ManagerClient) -> None:
+    server = await manager.server_add(config=auth_config)
+
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    await cql.run_async(f"CREATE SERVICE LEVEL test", host=h)
+    await cql.run_async(f"ATTACH SERVICE LEVEL test TO cassandra", host=h)
+
+    async def get_control_connection_query_function(manager):
+        await manager.driver_connect() # restart control connection
+        cql = manager.get_cql()
+        control_connection = cql.cluster.control_connection._connection
+        query = QueryMessage("select * from system.peers", 1)
+        return cql, lambda: control_connection.wait_for_response(query)
+
+    cql, func = await get_control_connection_query_function(manager)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:driver', 'sl:test', func)
+
+    await cql.run_async(f"DROP SERVICE LEVEL driver", host=h)
+    cql, func = await get_control_connection_query_function(manager)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:test', 'sl:driver', func)
+
+    await cql.run_async(f"CREATE SERVICE LEVEL driver", host=h)
+    cql, func = await get_control_connection_query_function(manager)
+    await _verify_tasks_processed_metrics(manager, server, 'sl:driver', 'sl:test', func)
