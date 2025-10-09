@@ -8,11 +8,15 @@
 
 #pragma once
 
+#include <unordered_map>
 #include <vector>
 #include <seastar/core/sharded.hh>
+#include "dht/i_partitioner_fwd.hh"
 #include "schema/schema_fwd.hh"
+#include "seastar/core/sstring.hh"
 #include "sstables/shared_sstable.hh"
 #include "tasks/task_manager.hh"
+#include "dht/token.hh"
 
 using namespace seastar;
 
@@ -58,6 +62,21 @@ struct stream_progress {
     }
 };
 
+struct sstable_to_restore {
+    sstring identification;
+    std::optional<dht::token_range> token_range;
+    std::optional<sstables::shared_sstable> sstable;
+
+    sstable_to_restore() = delete;
+
+    sstable_to_restore(const sstring& id)
+        : identification(id) {}
+
+    sstable_to_restore(const sstring& id, sstables::shared_sstable sst)
+        : identification(id)
+        , sstable(sst) {}
+};
+
 // The handler of the 'storage_service/load_new_ss_tables' endpoint which, in
 // turn, is the target of the 'nodetool refresh' command.
 // Gets sstables from the upload directory and makes them available in the
@@ -89,7 +108,7 @@ private:
     bool _loading_new_sstables = false;
 
     future<> load_and_stream(sstring ks_name, sstring cf_name,
-            table_id, std::vector<sstables::shared_sstable> sstables,
+            table_id, std::vector<sstable_to_restore> sstables,
             bool_class<struct primary_replica_only_tag> primary_replica_only, bool unlink_sstables, stream_scope scope,
             shared_ptr<stream_progress> progress);
 
@@ -129,7 +148,7 @@ public:
      * Download new SSTables not currently tracked by the system from object store
      */
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
+            sstring prefix, std::unordered_map<sstring, sstable_to_restore> sstables,
             sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
     class download_task_impl;
