@@ -127,8 +127,9 @@ view_building_worker::view_building_worker(replica::database& db, db::system_key
     init_messaging_service();
 }
 
-void view_building_worker::start_background_fibers() {
+future<> view_building_worker::init() {
     SCYLLA_ASSERT(this_shard_id() == 0);
+    co_await discover_existing_staging_sstables();
     _staging_sstables_registrator = run_staging_sstables_registrator();
     _view_building_state_observer = run_view_building_state_observer();
     _mnotifier.register_listener(this);
@@ -195,8 +196,6 @@ future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstabl
 }
 
 future<> view_building_worker::run_staging_sstables_registrator() {
-    co_await discover_existing_staging_sstables();
-
     while (!_as.abort_requested()) {
         try {
             auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
