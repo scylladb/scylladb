@@ -81,7 +81,7 @@ public:
     // of the column family's keyspace. The reason for this is that we sometimes create a keyspace
     // and its column families together. Therefore, listeners can't load the keyspace from the
     // database. Instead, they should use the `ksm` parameter if needed.
-    virtual void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&) {}
+    virtual void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&, api::timestamp_type) {}
     virtual void on_before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp);
     virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type) {}
@@ -155,7 +155,7 @@ public:
     // We want to do this before calling `before_create_column_families`,
     // because in `before_create_column_families` we want the subscriber to get
     // the final list of tables.
-    void pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&);
+    void pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&, api::timestamp_type);
 
     void before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
     void before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>&, utils::chunked_vector<mutation>&, api::timestamp_type);
