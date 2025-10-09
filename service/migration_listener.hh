@@ -80,10 +80,30 @@ public:
     // of the column family's keyspace. The reason for this is that we sometimes create a keyspace
     // and its column families together. Therefore, listeners can't load the keyspace from the
     // database. Instead, they should use the `ksm` parameter if needed.
+<<<<<<< HEAD
     virtual void on_before_create_column_family(const keyspace_metadata& ksm, const schema&, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type) {}
     virtual void on_before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type) {}
+||||||| parent of eefae4cc4e (migration_manager: pass timestamp to pre_create)
+    virtual void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&) {}
+    virtual void on_before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp);
+    virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+
+    virtual void on_before_allocate_tablet_map(const locator::tablet_map&, const schema& s, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+=======
+    virtual void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&, api::timestamp_type) {}
+    virtual void on_before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>& cfms, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp);
+    virtual void on_before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+    virtual void on_before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+
+    virtual void on_before_allocate_tablet_map(const locator::tablet_map&, const schema& s, utils::chunked_vector<mutation>&, api::timestamp_type) {}
+>>>>>>> eefae4cc4e (migration_manager: pass timestamp to pre_create)
 
     class only_view_notifications;
     class empty_listener;
@@ -146,10 +166,44 @@ public:
     future<> drop_function(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
     future<> drop_aggregate(const db::functions::function_name& fun_name, const std::vector<data_type>& arg_types);
 
+<<<<<<< HEAD
     void before_create_column_family(const keyspace_metadata& ksm, const schema&, std::vector<mutation>&, api::timestamp_type);
     void before_update_column_family(const schema& new_schema, const schema& old_schema, std::vector<mutation>&, api::timestamp_type);
     void before_drop_column_family(const schema&, std::vector<mutation>&, api::timestamp_type);
     void before_drop_keyspace(const sstring& keyspace_name, std::vector<mutation>&, api::timestamp_type);
+||||||| parent of eefae4cc4e (migration_manager: pass timestamp to pre_create)
+    // This notification allows the subscriber to modify the cfms vector before
+    // we create the tables mutations and notify about them. For example, we
+    // can add a new table here (e.g. CDC).
+    // We want to do this before calling `before_create_column_families`,
+    // because in `before_create_column_families` we want the subscriber to get
+    // the final list of tables.
+    void pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&);
+
+    void before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type);
+
+    void before_allocate_tablet_map(const locator::tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+=======
+    // This notification allows the subscriber to modify the cfms vector before
+    // we create the tables mutations and notify about them. For example, we
+    // can add a new table here (e.g. CDC).
+    // We want to do this before calling `before_create_column_families`,
+    // because in `before_create_column_families` we want the subscriber to get
+    // the final list of tables.
+    void pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>&, api::timestamp_type);
+
+    void before_create_column_family(const keyspace_metadata& ksm, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_create_column_families(const keyspace_metadata& ksm, const std::vector<schema_ptr>&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_update_column_family(const schema& new_schema, const schema& old_schema, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_drop_column_family(const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+    void before_drop_keyspace(const sstring& keyspace_name, utils::chunked_vector<mutation>&, api::timestamp_type);
+
+    void before_allocate_tablet_map(const locator::tablet_map&, const schema&, utils::chunked_vector<mutation>&, api::timestamp_type);
+>>>>>>> eefae4cc4e (migration_manager: pass timestamp to pre_create)
 };
 
 }

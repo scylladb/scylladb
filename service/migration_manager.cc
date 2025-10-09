@@ -590,6 +590,40 @@ void migration_notifier::before_create_column_family(const keyspace_metadata& ks
     });
 }
 
+<<<<<<< HEAD
+||||||| parent of eefae4cc4e (migration_manager: pass timestamp to pre_create)
+void migration_notifier::pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) {
+    _listeners.thread_for_each([&ksm, &cfms] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_pre_create_column_families(ksm, cfms);
+    });
+}
+
+void migration_notifier::before_create_column_families(const keyspace_metadata& ksm,
+        const std::vector<schema_ptr>& schemas, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
+    _listeners.thread_for_each([&ksm, &schemas, &mutations, timestamp] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_before_create_column_families(ksm, schemas, mutations, timestamp);
+    });
+}
+
+=======
+void migration_notifier::pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms, api::timestamp_type timestamp) {
+    _listeners.thread_for_each([&ksm, &cfms, timestamp] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_pre_create_column_families(ksm, cfms, timestamp);
+    });
+}
+
+void migration_notifier::before_create_column_families(const keyspace_metadata& ksm,
+        const std::vector<schema_ptr>& schemas, utils::chunked_vector<mutation>& mutations, api::timestamp_type timestamp) {
+    _listeners.thread_for_each([&ksm, &schemas, &mutations, timestamp] (migration_listener* listener) {
+        // allow exceptions. so a listener can effectively kill a create-table
+        listener->on_before_create_column_families(ksm, schemas, mutations, timestamp);
+    });
+}
+
+>>>>>>> eefae4cc4e (migration_manager: pass timestamp to pre_create)
 void migration_notifier::before_update_column_family(const schema& new_schema,
         const schema& old_schema, std::vector<mutation>& mutations, api::timestamp_type ts) {
     _listeners.thread_for_each([&mutations, &new_schema, &old_schema, ts] (migration_listener* listener) {
@@ -652,9 +686,37 @@ static future<std::vector<mutation>> do_prepare_new_column_family_announcement(s
 
     mlogger.info("Create new ColumnFamily: {}", cfm);
 
+<<<<<<< HEAD
     return seastar::async([&db, &ksm, cfm, timestamp] {
         auto mutations = db::schema_tables::make_create_table_mutations(cfm, timestamp);
         db.get_notifier().before_create_column_family(ksm, *cfm, mutations, timestamp);
+||||||| parent of eefae4cc4e (migration_manager: pass timestamp to pre_create)
+        for (auto cfm : cfms) {
+            mlogger.info("Create new ColumnFamily: {}", cfm);
+        }
+
+        db.get_notifier().pre_create_column_families(ksm, cfms);
+
+        utils::chunked_vector<mutation> mutations;
+        for (schema_ptr cfm : cfms) {
+            auto table_muts = db::schema_tables::make_create_table_mutations(cfm, timestamp);
+            mutations.insert(mutations.end(), std::make_move_iterator(table_muts.begin()), std::make_move_iterator(table_muts.end()));
+        }
+        db.get_notifier().before_create_column_families(ksm, cfms, mutations, timestamp);
+=======
+        for (auto cfm : cfms) {
+            mlogger.info("Create new ColumnFamily: {}", cfm);
+        }
+
+        db.get_notifier().pre_create_column_families(ksm, cfms, timestamp);
+
+        utils::chunked_vector<mutation> mutations;
+        for (schema_ptr cfm : cfms) {
+            auto table_muts = db::schema_tables::make_create_table_mutations(cfm, timestamp);
+            mutations.insert(mutations.end(), std::make_move_iterator(table_muts.begin()), std::make_move_iterator(table_muts.end()));
+        }
+        db.get_notifier().before_create_column_families(ksm, cfms, mutations, timestamp);
+>>>>>>> eefae4cc4e (migration_manager: pass timestamp to pre_create)
         return mutations;
     }).then([&sp, &ksm](std::vector<mutation> mutations) {
         return include_keyspace(sp, ksm, std::move(mutations));
