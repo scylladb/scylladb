@@ -183,7 +183,7 @@ public:
         muts.emplace_back(std::move(mut));
     }
 
-    void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms) override {
+    void on_pre_create_column_families(const keyspace_metadata& ksm, std::vector<schema_ptr>& cfms, api::timestamp_type ts) override {
         std::vector<schema_ptr> new_cfms;
 
         for (auto sp : cfms) {
