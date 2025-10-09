@@ -56,6 +56,33 @@ using namespace std::chrono_literals;
 
 logging::logger cdc_log("cdc");
 
+<<<<<<< HEAD
+||||||| parent of 48298e38ab (cdc: set column drop timestamp in the future)
+namespace {
+
+shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy(const keyspace_metadata& ksm, const locator::topology& topo) {
+    locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option());
+    return locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, topo);
+}
+
+} // anonymous namespace
+
+=======
+namespace {
+
+shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy(const keyspace_metadata& ksm, const locator::topology& topo) {
+    locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option());
+    return locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, topo);
+}
+
+// When dropping a column from a CDC log table, we set the drop timestamp
+// `column_drop_leeway` seconds into the future to ensure that for writes concurrent
+// with column drop, the write timestamp is before the column drop timestamp.
+constexpr auto column_drop_leeway = std::chrono::seconds(5);
+
+} // anonymous namespace
+
+>>>>>>> 48298e38ab (cdc: set column drop timestamp in the future)
 namespace cdc {
 static schema_ptr create_log_schema(const schema&, std::optional<table_id> = {}, schema_ptr = nullptr);
 }
@@ -636,7 +663,8 @@ static schema_ptr create_log_schema(const schema& s, std::optional<table_id> uui
         // not super efficient, but we don't do this often.
         for (auto& col : old->all_columns()) {
             if (!b.has_column({col.name(), col.name_as_text() })) {
-                b.without_column(col.name_as_text(), col.type, api::new_timestamp());
+                auto drop_ts = api::timestamp_clock::now() + column_drop_leeway;
+                b.without_column(col.name_as_text(), col.type, drop_ts.time_since_epoch().count());
             }
         }
     }
