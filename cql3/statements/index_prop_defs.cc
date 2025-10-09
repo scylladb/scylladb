@@ -15,7 +15,7 @@
 #include "exceptions/exceptions.hh"
 #include "schema/schema.hh"
 
-void check_system_option_specified(const index_options_map& options, const sstring& option_name) {
+static void check_system_option_specified(const index_options_map& options, const sstring& option_name) {
     if (options.count(option_name)) {
         throw exceptions::invalid_request_exception(
                 fmt::format("Cannot specify {} as a CUSTOM option", option_name));
