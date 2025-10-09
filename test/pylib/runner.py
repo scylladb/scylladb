@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import pathlib
+import platform
 import sys
 from argparse import BooleanOptionalAction
 from collections import defaultdict
@@ -304,3 +305,16 @@ def modify_pytest_item(item: pytest.Item) -> None:
 
     item._nodeid = f"{item._nodeid}{suffix}"
     item.name = f"{item.name}{suffix}"
+    skip_marks = [
+        mark for mark in item.iter_markers("skip_mode")
+        if mark.name == "skip_mode"
+    ]
+
+    for mark in skip_marks:
+        mode = mark.kwargs.get('mode')
+        reason = mark.kwargs.get('reason')
+        platform_key = mark.kwargs.get('platform_key')
+
+        if mode == item.stash[BUILD_MODE]:
+            if platform_key is None or platform_key in platform.platform():
+                item.add_marker(pytest.mark.skip(reason=reason))
