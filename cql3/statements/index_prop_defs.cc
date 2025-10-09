@@ -13,7 +13,6 @@
 #include "index_prop_defs.hh"
 #include "index/secondary_index.hh"
 #include "exceptions/exceptions.hh"
-#include "schema/schema.hh"
 
 static void check_system_option_specified(const index_options_map& options, const sstring& option_name) {
     if (options.count(option_name)) {
