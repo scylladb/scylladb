@@ -3475,7 +3475,8 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
 
                 if (tmp.size_bytes() == 0) {
                     eof = true;
-                    auto reason = fmt::format("read 0 bytes, while tried to read {}", block_size);
+                    auto reason = fmt::format("read 0 bytes, while tried to read {} bytes. rem={}, size={}",
+                            block_size, rem, size);
                     throw segment_truncation(std::move(reason), block_boundry);
                 }
 
@@ -3511,11 +3512,13 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
                     auto checksum = crc.checksum();
 
                     if (check != checksum) {
-                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}", check, checksum);
+                        auto reason = fmt::format("checksums do not match: {:x} vs. {:x}. rem={}, size={}",
+                                check, checksum, rem, size);
                         throw segment_data_corruption_error(std::move(reason), alignment);
                     }
                     if (id != this->id) {
-                        auto reason = fmt::format("IDs do not match: {} vs. {}", id, this->id);
+                        auto reason = fmt::format("IDs do not match: {} vs. {}. rem={}, size={}",
+                                id, this->id, rem, size);
                         throw segment_truncation(std::move(reason), pos + rem);
                     }
                 }
