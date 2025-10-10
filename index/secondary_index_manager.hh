@@ -47,7 +47,7 @@ sstring index_name_from_table_name(const sstring& table_name);
 
 /// Given a list of base-table schemas, return all their secondary indexes, except that specified in cf_to_exclude.
 std::set<sstring>
-existing_index_names(const std::vector<schema_ptr>& tables, std::string_view cf_to_exclude);
+existing_index_names(std::span<const schema_ptr> tables, std::string_view cf_to_exclude);
 
 /// Given a base-table keyspace and table name, return the first available index
 /// name (containing index_name_root if specified).
@@ -103,7 +103,8 @@ public:
     /// Returns a custom description of the index, or std::nullopt if the default index description logic should be used instead.
     virtual std::optional<cql3::description> describe(const index_metadata& im, const schema& base_schema) const = 0;
     virtual bool view_should_exist() const = 0;
-    virtual void validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) = 0;
+    virtual void validate(const schema &schema, const cql3::statements::index_prop_defs &properties,
+            const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) const = 0;
     virtual table_schema_version index_version(const schema& schema) = 0;
 };
 

@@ -75,7 +75,7 @@ std::optional<cql3::description> vector_index::describe(const index_metadata& im
     };
 }
 
-void vector_index::check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) {
+void vector_index::check_target(const schema& schema, const std::vector<::shared_ptr<cql3::statements::index_target>>& targets) const {
     if (targets.size() != 1) {
         throw exceptions::invalid_request_exception("Vector index can only be created on a single column");
     }
@@ -90,7 +90,7 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
     }
 }
 
-void vector_index::check_cdc_not_explicitly_disabled(const schema& schema) {
+void vector_index::check_cdc_not_explicitly_disabled(const schema& schema) const {
     auto cdc_options = schema.cdc_options();
     if (cdc_options.is_enabled_set() && !cdc_options.enabled()) {
         // If CDC is explicitly disabled by the user, we cannot create the vector index.
@@ -133,7 +133,7 @@ void vector_index::check_cdc_options(const schema& schema) {
     }
 }
 
-void vector_index::check_index_options(cql3::statements::index_prop_defs& properties) {
+void vector_index::check_index_options(const cql3::statements::index_prop_defs& properties) const {
     for (auto option: properties.get_raw_options()) {
         auto it = vector_index_options.find(option.first);
         if (it == vector_index_options.end()) {
@@ -143,7 +143,10 @@ void vector_index::check_index_options(cql3::statements::index_prop_defs& proper
     }
 }
 
-void vector_index::validate(const schema &schema, cql3::statements::index_prop_defs &properties, const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) {
+void vector_index::validate(const schema &schema, const cql3::statements::index_prop_defs &properties,
+        const std::vector<::shared_ptr<cql3::statements::index_target>> &targets,
+        const gms::feature_service& fs) const
+{
     check_target(schema, targets);
     check_cdc_not_explicitly_disabled(schema);
     check_cdc_options(schema);

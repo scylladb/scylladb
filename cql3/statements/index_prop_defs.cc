@@ -13,16 +13,15 @@
 #include "index_prop_defs.hh"
 #include "index/secondary_index.hh"
 #include "exceptions/exceptions.hh"
-#include "schema/schema.hh"
 
-void check_system_option_specified(const index_options_map& options, const sstring& option_name) {
+static void check_system_option_specified(const index_options_map& options, const sstring& option_name) {
     if (options.count(option_name)) {
         throw exceptions::invalid_request_exception(
                 fmt::format("Cannot specify {} as a CUSTOM option", option_name));
     }
 }
 
-void cql3::statements::index_prop_defs::validate() {
+void cql3::statements::index_prop_defs::validate() const {
     static std::set<sstring> keywords({ sstring(KW_OPTIONS) });
 
     property_definitions::validate(keywords);
@@ -41,13 +40,13 @@ void cql3::statements::index_prop_defs::validate() {
 }
 
 index_options_map
-cql3::statements::index_prop_defs::get_raw_options() {
+cql3::statements::index_prop_defs::get_raw_options() const {
     auto options = get_map(KW_OPTIONS);
     return !options ? std::unordered_map<sstring, sstring>() : std::unordered_map<sstring, sstring>(options->begin(), options->end());
 }
 
 index_options_map
-cql3::statements::index_prop_defs::get_options() {
+cql3::statements::index_prop_defs::get_options() const {
     auto options = get_raw_options();
     options.emplace(db::index::secondary_index::custom_class_option_name, *custom_class);
     if (index_version.has_value()) {

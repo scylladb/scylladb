@@ -175,7 +175,7 @@ sstring index_name_from_table_name(const sstring& table_name) {
 }
 
 std::set<sstring>
-existing_index_names(const std::vector<schema_ptr>& tables, std::string_view cf_to_exclude) {
+existing_index_names(std::span<const schema_ptr> tables, std::string_view cf_to_exclude) {
     std::set<sstring> names;
     for (auto& schema : tables) {
         if (!cf_to_exclude.empty() && schema->cf_name() == cf_to_exclude) {
