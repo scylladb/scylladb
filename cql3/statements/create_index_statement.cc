@@ -10,6 +10,8 @@
 
 #include <seastar/core/coroutine.hh>
 #include "create_index_statement.hh"
+#include "db/config.hh"
+#include "db/view/view.hh"
 #include "exceptions/exceptions.hh"
 #include "prepared_statement.hh"
 #include "types/types.hh"
@@ -92,9 +94,13 @@ std::vector<::shared_ptr<index_target>> create_index_statement::validate_while_e
         throw exceptions::invalid_request_exception(format("index names shouldn't be more than {:d} characters long (got \"{}\")", schema::NAME_LENGTH, _index_name.c_str()));
     }
 
-    if (!db.features().views_with_tablets && db.find_keyspace(keyspace()).get_replication_strategy().uses_tablets()) {
-        throw exceptions::invalid_request_exception(format("Secondary indexes are not supported on base tables with tablets (keyspace '{}')", keyspace()));
+    try {
+        db::view::validate_view_keyspace(db, keyspace());
+    } catch (const std::exception& e) {
+        // The type of the thrown exception is not specified, so we need to wrap it here.
+        throw exceptions::invalid_request_exception(e.what());
     }
+
     validate_for_local_index(*schema);
 
     std::vector<::shared_ptr<index_target>> targets;

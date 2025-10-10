@@ -2208,6 +2208,11 @@ sharded<locator::shared_token_metadata> token_metadata;
             startlog.info("Verifying that all of the keyspaces are RF-rack-valid");
             db.local().check_rf_rack_validity(cfg->rf_rack_valid_keyspaces(), token_metadata.local().get());
 
+            // Materialized views and secondary indexes are still restricted and require specific configuration
+            // options to work. Make sure that if there are existing views or indexes, they don't violate
+            // the requirements imposed on them.
+            db.local().validate_tablet_views_indexes();
+
             // Semantic validation of sstable compression parameters from config.
             // Adding here (i.e., after `join_cluster`) to ensure that the
             // required SSTABLE_COMPRESSION_DICTS cluster feature has been negotiated.

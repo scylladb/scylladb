@@ -256,6 +256,11 @@ async def test_mv_pairing_during_replace(manager: ManagerClient):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("delayed_replica", ["base", "mv"])
 @pytest.mark.parametrize("altered_dc", ["dc1", "dc2"])
+# FIXME: The test relies on cross-rack tablet migrations. They're forbidden when the configuration option
+# `rf_rack_valid_keyspaces` is enabled. On the other hand, materialized views in tablet-based keyspaces
+# require the configuration option to be used.
+# Hence, we need to rewrite this test.
+@pytest.mark.skip
 @skip_mode('release', 'error injections are not supported in release mode')
 async def test_mv_rf_change(manager: ManagerClient, delayed_replica: str, altered_dc: str):
     servers = []
@@ -331,8 +336,8 @@ async def test_mv_first_replica_in_dc(manager: ManagerClient, delayed_replica: s
     # If we run the test with more than 1 shard and the tablet for the view table gets allocated on the same shard as the tablet of the base table,
     # we'll perform an intranode migration of one of these tablets to the other shard. This migration can be confused with the migration to the
     # new dc in the "first_migration_done()" below. To avoid this, run servers with only 1 shard.
-    servers.append(await manager.server_add(cmdline=['--smp', '1'], config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc1', 'rack': 'myrack1'}))
-    servers.append(await manager.server_add(cmdline=['--smp', '1'], config={'rf_rack_valid_keyspaces': False}, property_file={'dc': f'dc2', 'rack': 'myrack1'}))
+    servers.append(await manager.server_add(cmdline=['--smp', '1'], property_file={'dc': f'dc1', 'rack': 'myrack1'}))
+    servers.append(await manager.server_add(cmdline=['--smp', '1'], property_file={'dc': f'dc2', 'rack': 'myrack1'}))
 
     cql = manager.get_cql()
     await cql.run_async("CREATE KEYSPACE IF NOT EXISTS ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': 1} AND tablets = {'initial': 1}")

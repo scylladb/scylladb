@@ -202,12 +202,9 @@ enabled. If you plan to use any of the features listed below, CREATE your keyspa
 :ref:`with tablets disabled <tablets-enable-tablets>`.
 
 * Counters
-* Materialized Views (MV) ``*``
-* Secondary indexes (SI, as it depends on MV) ``*``
 
-``*`` You can enable experimental support for MV and SI using
-the ``--experimental-features=views-with-tablets`` configuration option. 
-See :ref:`Views with tablets <admin-views-with-tablets>` for details.
+To enable materialized views and secondary indexes for tablet keyspaces, use
+the `--rf-rack-valid-keyspaces` See :ref:`Views with tablets <admin-views-with-tablets>` for details.
 
 Resharding in keyspaces with tablets enabled has the following limitations:
 
