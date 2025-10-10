@@ -1670,7 +1670,7 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         }
     }
 
-    bytes_opt result = scalar_fun->execute(arguments);
+    bytes_opt result = scalar_fun->execute(arguments, inputs);
 
     if (has_cache_id) {
         inputs.options->cache_pk_function_call(**fun_call.lwt_cache_id, result);
@@ -2083,7 +2083,7 @@ convert_map_back_to_listlike(expression e) {
             return "NONE";
         }
 
-        virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+        virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
             auto& p = parameters[0];
             if (!p) {
                 return std::nullopt;

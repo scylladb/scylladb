@@ -48,7 +48,7 @@ public:
     virtual bool is_pure() const override {
         return Pure;
     }
-    virtual bytes_opt execute(std::span<const bytes_opt> parameters) override {
+    virtual bytes_opt execute(std::span<const bytes_opt> parameters, const expr::evaluation_inputs& inputs) override {
         try {
             return _func(parameters);
         } catch(exceptions::cassandra_exception&) {
