@@ -2064,7 +2064,7 @@ void print_query_results_json(const cql3::result& result) {
         writer.StartObject();
         for (size_t i = 0; i < row.size(); ++i) {
             writer.Key(column_metadata[i]->name->text());
-            if (!row[i]) {
+            if (!row[i] || row[i]->empty()) {
                 writer.Null();
                 continue;
             }
