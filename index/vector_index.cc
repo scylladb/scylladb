@@ -84,6 +84,15 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
     if (!c_def) {
         throw exceptions::invalid_request_exception(format("Column {} not found in schema", target->column_name()));
     }
+    auto indexes = schema.indices();
+    for (auto& i: indexes) {
+        auto& options = i.options();
+        auto i_target = options.find(cql3::statements::index_target::target_option_name);
+        auto i_custom_class = options.find(db::index::secondary_index::custom_class_option_name);
+        if (i_target != options.end() && i_custom_class != options.end() && i_target->second == target->column_name() && i_custom_class->second == "vector_index") {
+            throw exceptions::invalid_request_exception("Cannot create more than one vector index on a given column");
+        }
+    }
     auto type = c_def->type;
     if (!type->is_vector() || static_cast<const vector_type_impl*>(type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
         throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
