@@ -179,6 +179,12 @@ def test_vector_index_version_fail_given_as_option(cql, test_keyspace, scylla_on
         with pytest.raises(InvalidRequest, match="Cannot specify index_version as a CUSTOM option"):
             cql.execute(f"CREATE CUSTOM INDEX abc ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'index_version': '18ad2003-05ea-17d9-1855-0325ac0a755d'}}")
 
+def test_one_vector_index_on_column(cql, test_keyspace, scylla_only):
+    schema = "p int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
+        with pytest.raises(InvalidRequest, match="Cannot create more than one vector index on a given column"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING 'vector_index'")
 
 ###############################################################################
 # Tests for CDC with vector indexes
