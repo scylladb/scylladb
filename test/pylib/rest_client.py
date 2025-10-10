@@ -489,6 +489,13 @@ class ScyllaRESTAPIClient():
         return await self.client.get_json(f'/storage_service/range_to_endpoint_map/{keyspace}', host=node_ip, params=params)
 
 
+    async def describe_ring(self, node_ip: str, keyspace: str, table: Optional[str] = None) -> Any:
+        params = None
+        if (table):
+            params = {"table": table}
+        return await self.client.get_json(f'/storage_service/describe_ring/{keyspace}', host=node_ip, params=params)
+
+
 class ScyllaMetricsLine:
     def __init__(self, name: str, labels: dict, value: float):
         self.name = name
