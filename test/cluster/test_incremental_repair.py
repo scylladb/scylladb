@@ -157,6 +157,9 @@ def get_incremental_repair_sst_skipped_bytes(server):
 def get_incremental_repair_sst_read_bytes(server):
     return get_metrics(server, "scylla_repair_inc_sst_read_bytes")
 
+def get_repair_tablet_time_ms(server):
+    return get_metrics(server, "scylla_repair_tablet_time_ms")
+
 async def get_sstables_for_server(manager, server, ks):
     node_workdir = await manager.server_get_workdir(server.server_id)
     sstables = get_sstables(node_workdir, ks, 'test')
@@ -671,3 +674,18 @@ async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
         assert skip1 == skip2
         assert read1 < read2
     await do_repair_and_check('full', 1, rf'Starting tablet repair by API .* incremental_mode=full.*', check4)
+
+@pytest.mark.asyncio
+async def test_tablet_repair_tablet_time_metrics(manager: ManagerClient):
+    servers, _, _, ks, _, _, _, _, _, token = await preapre_cluster_for_incremental_repair(manager)
+    time1 = 0
+    time2 = 0
+
+    for s in servers:
+        time1 += get_repair_tablet_time_ms(s)
+    await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token)
+    for s in servers:
+        time2 += get_repair_tablet_time_ms(s)
+
+    assert time1 == 0
+    assert time2 > 0
