@@ -13,6 +13,7 @@
 #include "db/config.hh"
 #include "db/view/view.hh"
 #include "exceptions/exceptions.hh"
+#include "index/vector_index.hh"
 #include "prepared_statement.hh"
 #include "types/types.hh"
 #include "validation.hh"
@@ -379,6 +380,15 @@ std::optional<create_index_statement::base_schema_with_new_index> create_index_s
         } else {
             throw exceptions::invalid_request_exception(
                     format("Index {} is a duplicate of existing index {}", index.name(), existing_index.value().name()));
+        }
+    }
+    bool existing_vector_index = _properties->custom_class && _properties->custom_class == "vector_index" && secondary_index::vector_index::has_vector_index_on_column(*schema, targets[0]->column_name());
+    bool custom_index_with_same_name = _properties->custom_class && db.existing_index_names(keyspace()).contains(_index_name);
+    if (existing_vector_index || custom_index_with_same_name) {
+        if (_if_not_exists) {
+            return {};
+        } else {
+            throw exceptions::invalid_request_exception("There exists a duplicate custom index");
         }
     }
     auto index_table_name = secondary_index::index_table_name(accepted_name);
