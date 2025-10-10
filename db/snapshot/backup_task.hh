@@ -20,7 +20,7 @@
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/sharded.hh>
 
-#include "utils/s3/client_fwd.hh"
+#include "utils/upload_progress.hh"
 #include "utils/small_vector.hh"
 #include "tasks/task_manager.hh"
 #include "sstables/component_type.hh"
@@ -34,6 +34,7 @@ namespace replica {
 namespace sstables {
 class sstables_manager;
 class storage_manager;
+class object_storage_client;
 }
 
 namespace db {
@@ -64,12 +65,13 @@ class backup_task_impl : public tasks::task_manager::task::impl {
     class worker : sstables::sstables_manager_event_handler {
         sstables::sstables_manager& _manager;
         backup_task_impl& _task;
-        shared_ptr<s3::client> _client;
+        shared_ptr<sstables::object_storage_client> _client;
         abort_source _as;
         std::exception_ptr _ex;
 
     public:
         worker(const replica::database& db, table_id t, backup_task_impl& task);
+        ~worker();
 
         future<> start_uploading();
 
@@ -89,7 +91,7 @@ class backup_task_impl : public tasks::task_manager::task::impl {
         future<> upload_component(sstring name);
     };
     sharded<worker> _sharded_worker;
-    std::vector<s3::upload_progress> _progress_per_shard{smp::count};
+    std::vector<utils::upload_progress> _progress_per_shard{smp::count};
 
     future<> do_backup();
     future<> process_snapshot_dir();
