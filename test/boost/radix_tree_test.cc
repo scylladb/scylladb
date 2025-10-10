@@ -37,11 +37,6 @@ public:
     }
 };
 
-std::ostream& operator<<(std::ostream& out, const test_data& d) {
-    out << d.value();
-    return out;
-}
-
 using test_tree = tree<test_data>;
 
 SEASTAR_TEST_CASE(test_exception_safety_of_emplace) {
