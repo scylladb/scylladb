@@ -12,6 +12,7 @@ import pytest
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for_cql_and_get_hosts
 from test.cluster.conftest import skip_mode
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
@@ -86,8 +87,11 @@ async def test_raft_recovery_during_join(manager: ManagerClient):
     dead_hosts.append(failed_server_host)
 
     logging.info(f'Killing {dead_servers}')
-    for srv in dead_servers:
-        await manager.server_stop(server_id=srv.server_id)
+    await asyncio.gather(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
+
+    logging.info('Checking that group 0 has no majority')
+    with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out"):
+        await read_barrier(manager.api, live_servers[0].ip_addr, timeout=2)
 
     logging.info(f'Unblocking the topology coordinator on server {coordinator}')
     await manager.api.message_injection(coordinator.ip_addr, 'delay_node_bootstrap')
