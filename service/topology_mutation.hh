@@ -128,7 +128,7 @@ public:
     topology_mutation_builder& del_global_topology_request();
     topology_mutation_builder& del_global_topology_request_id();
     topology_mutation_builder& queue_global_topology_request_id(const utils::UUID& value);
-    topology_mutation_builder& drop_first_global_topology_request_id(const std::vector<utils::UUID>&, utils::UUID&);
+    topology_mutation_builder& drop_first_global_topology_request_id(const std::vector<utils::UUID>&, const utils::UUID&);
     topology_node_mutation_builder& with_node(raft::server_id);
     canonical_mutation build() { return canonical_mutation{std::move(_m)}; }
 };
