@@ -16,7 +16,6 @@ from cassandra.cluster import ConsistencyLevel, Session as CassandraSession
 from cassandra.policies import FallthroughRetryPolicy, ConstantReconnectionPolicy
 from cassandra.protocol import ServerError
 from cassandra.query import SimpleStatement
-from test.pylib.util import wait_for_cql_and_get_hosts
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +26,7 @@ def dict_memory(metrics: list[ScyllaMetrics]) -> int:
     return sum([m.get("scylla_sstable_compression_dicts_total_live_memory_bytes") for m in metrics])
 
 async def live_update_config(manager: ManagerClient, servers: list[ServerInfo], key: str, value: str):
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, deadline = time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
     await asyncio.gather(*[cql.run_async("UPDATE system.config SET value=%s WHERE name=%s", [value, key], host=host) for host in hosts])
 
 async def populate_with_repeated_blob(ks: str, cf: str, blob: bytes, pk_range, cql: CassandraSession):
@@ -151,7 +149,7 @@ async def test_retrain_dict(manager: ManagerClient):
 
     logger.info("Validating that the zstd-dict-compressed SSTables are readable")
     await manager.driver_connect(server=servers[0])
-    cql = manager.get_cql()
+    cql, hosts = await manager.get_ready_cql(servers)
     select = cql.prepare(f"SELECT c FROM {ks_name}.{cf_name} WHERE pk = ?;")
     select.consistency_level = ConsistencyLevel.ALL;
     results = await cql.run_async(select, [42])
@@ -521,8 +519,7 @@ async def test_sstable_compression_dictionaries_allow_in_ddl(manager: ManagerCli
         else:
             raise Exception('Expected a ServerError, got no exceptions')
 
-    cql = manager.get_cql()
-    hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+    cql, hosts = await manager.get_ready_cql(servers)
 
     await cql.run_async("""
         CREATE KEYSPACE test
