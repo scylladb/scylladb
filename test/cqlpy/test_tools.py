@@ -8,10 +8,12 @@
 
 import contextlib
 import collections
+import datetime
 import glob
 import itertools
 import functools
 import json
+import math
 import os
 import pathlib
 import pytest
@@ -292,11 +294,256 @@ def test_scylla_sstable_dump_data(request, cql, test_keyspace, scylla_path, scyl
         assert json.loads(out)
 
 
+class deletion_time:
+    def __init__(self, dt):
+        self._dt = dt
+
+    def __eq__(self, other):
+        dt_format = "%Y-%m-%d %H:%M:%Sz"
+        dt1 = datetime.datetime.strptime(self._dt, dt_format)
+        dt2 = datetime.datetime.strptime(other._dt, dt_format)
+        delta = abs((dt1 - dt2).total_seconds())
+        return delta <= 10 # Need slack for debug builds
+
+    def __str__(self):
+        return str(self._dt)
+
+    def __repr__(self):
+        return f"deletion_time({self._dt})"
+
+
+def test_scylla_sstable_write_cql_query_file_reader(cql, test_keyspace, scylla_path):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+        with open(schema_file, 'w') as f:
+            f.write(f"CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+
+        input_file = os.path.join(tmp_dir, 'input.cql')
+        with open(input_file, 'w') as f:
+            f.write("   INSERT INTO scylla_sstable.tbl (pk) VALUES (0);\nINSERT INTO scylla_sstable.tbl (pk) VALUES (1);INSERT INTO scylla_sstable.tbl (pk) VALUES (2);\n;     ;;INSERT INTO scylla_sstable.tbl (pk) VALUES (3)")
+
+        generation = subprocess.check_output([scylla_path, "sstable", "write",
+                                              "--schema-file", schema_file,
+                                              "--input-format", "cql",
+                                              "--input-file", input_file,
+                                              "--output-dir", tmp_dir,
+                                              "--logger-log-level", "scylla-sstable=trace"], text=True).strip()
+
+        sstable_files = glob.glob(os.path.join(tmp_dir, f"*-{generation}-big-Data.db"))
+        assert len(sstable_files) == 1
+        sstable_file = sstable_files[0]
+
+        result = json.loads(subprocess.check_output([scylla_path, "sstable", "query", "--schema-file", schema_file, "--output-format", "json", sstable_file], text=True))
+
+        keys = {row['pk'] for row in result}
+        assert keys == {0, 1, 2, 3}
+
+
+def test_scylla_sstable_write_cql(cql, test_keyspace, scylla_path):
+    col_defs = "pk int, ck int, v int, PRIMARY KEY (pk, ck)"
+    with util.new_test_table(cql, test_keyspace, col_defs) as table, tempfile.TemporaryDirectory() as tmp_dir:
+
+        keyspace_name, table_name = table.split(".")
+
+        write_query_templates = [
+            "INSERT INTO {} (pk, ck, v) VALUES (0, 0, 40) USING TIMESTAMP 100",
+            "INSERT INTO {} (pk, ck, v) VALUES (0, 1, 30) USING TIMESTAMP 100",
+            "INSERT INTO {} (pk, ck, v) VALUES (1, 0, 20) USING TIMESTAMP 100",
+            "INSERT INTO {} (pk, ck, v) VALUES (0, 1, 10) USING TIMESTAMP 100",
+            "INSERT INTO {} (pk, ck, v) VALUES (2, 0, 50) USING TIMESTAMP 100",
+            "INSERT INTO {} (pk, ck, v) VALUES (2, 1, 50) USING TIMESTAMP 100",
+            "INSERT INTO {} (pk, ck, v) VALUES (3, 0, 50) USING TIMESTAMP 100",
+            "UPDATE {} USING TIMESTAMP 200 SET v = 180 WHERE pk = 0 AND ck = 1",
+            "UPDATE {} USING TIMESTAMP 200 SET v = 180 WHERE pk = 0 AND ck = 2",
+            "DELETE v FROM {} USING TIMESTAMP 300 WHERE pk = 1 AND ck = 1",
+            "DELETE v FROM {} USING TIMESTAMP 300 WHERE pk = 1 AND ck = 2",
+            "DELETE FROM {} USING TIMESTAMP 300 WHERE pk = 2 AND ck = 1",
+            "DELETE FROM {} USING TIMESTAMP 300 WHERE pk = 3",
+            "DELETE FROM {} USING TIMESTAMP 300 WHERE pk = 4",
+        ]
+
+        # Don't select mutation_source, it will differ between the two selects.
+        fragments_query_template = "SELECT pk, partition_region, ck, position_weight, mutation_fragment_kind, metadata, value FROM MUTATION_FRAGMENTS({})"
+
+        for write_query_template in write_query_templates:
+            cql.execute(write_query_template.format(table))
+
+        # FIXME cannot combine JSON and MUTATION_FRAGMENTS
+        original_json = [row._asdict() for row in cql.execute(fragments_query_template.format(table))]
+
+        input_file = os.path.join(tmp_dir, 'input.cql')
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+
+        with open(input_file, 'w') as f:
+            for write_query_template in write_query_templates:
+                f.write(write_query_template.format(f"scylla_sstable.{table_name}") + ";\n")
+
+        with open(schema_file, 'w') as f:
+            f.write(f"CREATE TABLE {table} ({col_defs})")
+
+        generation = subprocess.check_output([scylla_path, "sstable", "write",
+                                              "--schema-file", schema_file,
+                                              "--input-format", "cql",
+                                              "--input-file", input_file,
+                                              "--output-dir", tmp_dir,
+                                              "--logger-log-level", "scylla-sstable=trace"], text=True).strip()
+
+        sstable_files = glob.glob(os.path.join(tmp_dir, f"*-{generation}-big-Data.db"))
+        assert len(sstable_files) == 1
+        sstable_file = sstable_files[0]
+
+        query_file = os.path.join(tmp_dir, 'query.cql')
+        with open(query_file, 'w') as f:
+            f.write(fragments_query_template.format(f"scylla_sstable.{table_name}"))
+
+        actual_json = json.loads(subprocess.check_output([scylla_path, "sstable", "query",
+                                                          "--schema-file", schema_file,
+                                                          "--output-format", "json",
+                                                          "--query-file", query_file,
+                                                          "--logger-log-level", "scylla-sstable=trace",
+                                                          sstable_file], text=True))
+
+        def wrap_deletion_time(json_rows):
+            for row in json_rows:
+                if row['metadata'] is None:
+                    continue
+
+                metadata = json.loads(row['metadata'])
+
+                if 'row_marker' in metadata and 'deletion_time' in metadata['row_marker']:
+                    metadata['row_marker']['deletion_time'] = deletion_time(metadata['row_marker']['deletion_time'])
+                if 'tombstone' in row['metadata'] and 'deletion_time' in metadata['tombstone']:
+                    metadata['tombstone']['deletion_time'] = deletion_time(metadata['tombstone']['deletion_time'])
+                if 'shadowable_tombstone' in row['metadata'] and 'deletion_time' in metadata['shadowable_tombstone']:
+                    metadata['shadowable_tombstone']['deletion_time'] = deletion_time(metadata['shadowable_tombstone']['deletion_time'])
+
+                if 'columns' in metadata:
+                    for name, col in metadata['columns'].items():
+                        if 'deletion_time' in col:
+                            col['deletion_time'] = deletion_time(col['deletion_time'])
+
+                row['metadata'] = metadata
+
+            return json_rows
+
+
+        # deletion time is wall-clock, allow for a few seconds of difference
+        assert wrap_deletion_time(actual_json) == wrap_deletion_time(original_json)
+
+
+def test_scylla_sstable_write_cql_large_input(scylla_path):
+    keyspace_name = "ks"
+    table_name = "tbl"
+    table_definition = f"CREATE TABLE {keyspace_name}.{table_name} (pk int PRIMARY KEY, v text);"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+        with open(schema_file, 'w') as f:
+            f.write(table_definition)
+            f.flush()
+
+        input_file = os.path.join(tmp_dir, 'input.cql')
+
+        expected_json = []
+        value_size = 1 << 17
+        total_size = 1 << 20
+        value_count = math.ceil(total_size / value_size)
+        value = 'a' * value_size
+        with open(input_file, 'w') as f:
+            for i in range(0, value_count):
+                expected_json.append({'pk': i, 'v': value})
+                f.write(f"INSERT INTO scylla_sstable.{table_name} (pk, v) VALUES ({i}, '{value}');\n")
+
+        # memtable grows in segment_size increments (128KiB)
+        memory_limit = 1 << 17
+        out = subprocess.check_output([
+            scylla_path, "sstable", "write",
+            "--schema-file", schema_file,
+            "--input-format", "cql",
+            "--input-file", input_file,
+            "--memory-limit", str(memory_limit),
+            "--output-dir", tmp_dir,
+            '--logger-log-level', 'scylla-sstable=trace'], text=True)
+
+        generations = out.strip().split("\n")
+        assert len(generations) == math.ceil(total_size / memory_limit)
+
+        sstable_files = glob.glob(os.path.join(tmp_dir, f"me-*-big-Data.db"))
+
+        assert(len(sstable_files) == len(generations))
+
+        actual_json = json.loads(subprocess.check_output([
+            scylla_path, "sstable", "query",
+            "--schema-file", schema_file,
+            "--output-format", "json"] + sstable_files))
+
+        assert sorted(actual_json, key=lambda x: x['pk']) == expected_json
+
+
+def test_scylla_sstable_write_validation(cql, scylla_path):
+    """Check that invalid queries are rejected."""
+    keyspace_name = "ks"
+    table_name = "tbl"
+    table_definition = f"CREATE TABLE {keyspace_name}.{table_name} (pk int PRIMARY KEY, v text);"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+        with open(schema_file, 'w') as f:
+            f.write(table_definition)
+            f.flush()
+
+        common_params = [scylla_path, "sstable", "write",
+                         "--schema-file", schema_file,
+                         "--input-format", "cql"]
+
+        def check(bad_query, expected_error):
+            input_file = os.path.join(tmp_dir, 'input.cql')
+            with open(input_file, 'w') as f:
+                f.write(bad_query + "\n")
+                f.flush()
+            res = subprocess.run(common_params + ["--input-file", input_file], text=True, capture_output=True)
+            assert res.returncode == 1
+            assert res.stdout == ""
+            assert "error processing arguments: " + expected_error in res.stderr
+
+        check(f"INSERT INTO scylla_sstable.{table_name} (pk) VALUES,", "failed to parse query: exceptions::syntax_exception")
+        check(f"INSERT INTO {table_name} (pk) VALUES (0);", "query must have keyspace and the keyspace has to be scylla_sstable")
+        check(f"INSERT INTO foo.{table_name} (pk) VALUES (0);", "query must be against scylla_sstable keyspace, got foo instead")
+        check(f"INSERT INTO {keyspace_name}.{table_name} (pk) VALUES (0);", f"query must be against scylla_sstable keyspace, got {keyspace_name} instead")
+        check(f"INSERT INTO scylla_sstable.foo (pk) VALUES (0);", f"query must be against {table_name} table, got foo instead")
+        check(f"SELECT * FROM scylla_sstable.{table_name}", "query must be an insert, update or delete query")
+
+
+def test_scylla_sstable_write_temp_dir(cql, scylla_path, scylla_data_dir):
+    """Check that TEMPDIR environment variable is respected.
+
+    This is very hard to test with a positive test, because cql_test_env removes
+    its temp-dir on exit. So we test with a negative test: give an impossible
+    path and check that creating the temp-dir fails.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        schema_file = os.path.join(tmp_dir, 'schema.cql')
+        with open(schema_file, 'w') as f:
+            f.write(f"CREATE TABLE ks.tbl (pk int PRIMARY KEY)")
+
+        input_file = os.path.join(tmp_dir, 'input.cql')
+        with open(input_file, 'w') as f:
+            f.write("INSERT INTO scylla_sstable.tbl (pk) VALUES (0)")
+
+        with tempfile.NamedTemporaryFile("r") as f:
+            args = [scylla_path, "sstable", "write", "--schema-file", schema_file, "--input-file", input_file, "--input-format", "cql", "--output-dir", tmp_dir]
+            res = subprocess.run(args, text=True, capture_output=True, env={'TEMPDIR': f.name})
+
+        assert res.returncode == 2
+        assert res.stdout == ""
+        assert res.stderr.endswith(f"error running operation: std::filesystem::__cxx11::filesystem_error (error generic:20, filesystem error: temp_directory_path: Not a directory [{f.name}])\n")
+
+
 @pytest.mark.parametrize("table_factory", [
         simple_no_clustering_table,
         simple_clustering_table,
 ])
-def test_scylla_sstable_write(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory):
+def test_scylla_sstable_write_json(cql, test_keyspace, scylla_path, scylla_data_dir, table_factory):
     with scylla_sstable(table_factory, cql, test_keyspace, scylla_data_dir) as (_, schema_file, sstables):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dump_common_args = [scylla_path, "sstable", "dump-data", "--schema-file", schema_file, "--output-format", "json", "--merge"]
