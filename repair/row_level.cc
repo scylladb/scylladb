@@ -196,6 +196,7 @@ struct row_level_repair_metrics {
     uint64_t rx_hashes_nr{0};
     uint64_t inc_sst_skipped_bytes{0};
     uint64_t inc_sst_read_bytes{0};
+    uint64_t tablet_time_ms{0};
     row_level_repair_metrics() {
         namespace sm = seastar::metrics;
         _metrics.add_group("repair", {
@@ -219,6 +220,8 @@ struct row_level_repair_metrics {
                             sm::description("Total number of bytes skipped from sstables for incremental repair on this shard.")),
             sm::make_counter("inc_sst_read_bytes", inc_sst_read_bytes,
                             sm::description("Total number of bytes read from sstables for incremental repair on this shard.")),
+            sm::make_counter("tablet_time_ms", tablet_time_ms,
+                            sm::description("Time spent on tablet repair on this shard in milliseconds.")),
         });
     }
 };
@@ -3477,7 +3480,16 @@ future<> repair_cf_range_row_level(repair::shard_repair_task_impl& shard_task,
         service::frozen_topology_guard topo_guard) {
     auto start_time = flush_time;
     auto repair = row_level_repair(shard_task, std::move(cf_name), std::move(table_id), std::move(range), all_peer_nodes, small_table_optimization, start_time, topo_guard);
-    co_return co_await repair.run();
+    bool is_tablet = shard_task.db.local().find_column_family(table_id).uses_tablets();
+    bool is_tablet_rebuild = shard_task.sched_info.for_tablet_rebuild;
+    auto t = std::chrono::steady_clock::now();
+    auto update_time = seastar::defer([&] {
+        if (is_tablet && !is_tablet_rebuild) {
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t);
+            _metrics.tablet_time_ms += duration.count();
+        }
+    });
+    co_await repair.run();
 }
 
 class row_level_repair_gossip_helper : public gms::i_endpoint_state_change_subscriber {
