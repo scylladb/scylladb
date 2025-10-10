@@ -1938,7 +1938,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
-::shared_ptr<cql3::statements::select_statement> ordered_by_ann_of_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
+::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
         uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
         ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
         ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
@@ -1966,12 +1966,12 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
         throw std::runtime_error("No index found.");
     }
 
-    return ::make_shared<cql3::statements::ordered_by_ann_of_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
+    return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
             std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
             std::move(per_partition_limit), stats, *index_opt, std::move(attrs));
 }
 
-ordered_by_ann_of_select_statement::ordered_by_ann_of_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
+vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
         ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
         ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
         prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
@@ -1995,7 +1995,7 @@ std::vector<dht::partition_range> to_partition_ranges(const std::vector<primary_
 
 } // namespace
 
-future<shared_ptr<cql_transport::messages::result_message>> ordered_by_ann_of_select_statement::do_execute(
+future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
     tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
     validate_for_read(options.get_consistency());
@@ -2021,12 +2021,12 @@ future<shared_ptr<cql_transport::messages::result_message>> ordered_by_ann_of_se
     co_return co_await query_base_table(qp, state, options, pkeys.value());
 }
 
-void ordered_by_ann_of_select_statement::update_stats() const {
+void vector_indexed_table_select_statement::update_stats() const {
     ++_stats.secondary_index_reads;
     ++_stats.query_cnt(source_selector::USER, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 }
 
-lw_shared_ptr<query::read_command> ordered_by_ann_of_select_statement::prepare_command_for_base_query(
+lw_shared_ptr<query::read_command> vector_indexed_table_select_statement::prepare_command_for_base_query(
         query_processor& qp, service::query_state& state, const query_options& options) const {
     auto slice = make_partition_slice(options);
     return ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(slice), qp.proxy().get_max_result_size(slice),
@@ -2036,13 +2036,13 @@ lw_shared_ptr<query::read_command> ordered_by_ann_of_select_statement::prepare_c
             options.get_timestamp(state));
 }
 
-std::vector<float> ordered_by_ann_of_select_statement::get_ann_ordering_vector(const query_options& options) const {
+std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vector(const query_options& options) const {
     auto [ann_column, ann_vector_expr] = _prepared_ann_ordering;
     auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
     return util::to_vector<float>(values);
 }
 
-future<::shared_ptr<cql_transport::messages::result_message>> ordered_by_ann_of_select_statement::query_base_table(
+future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(
         query_processor& qp, service::query_state& state, const query_options& options, const std::vector<primary_key>& pkeys) const {
     auto command = prepare_command_for_base_query(qp, state, options);
     auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
@@ -2312,7 +2312,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 stats,
                 std::move(prepared_attrs));
     } else if (prepared_ann_ordering) {
-        stmt = ordered_by_ann_of_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
+        stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
                 prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {

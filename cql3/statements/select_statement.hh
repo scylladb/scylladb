@@ -358,7 +358,7 @@ private:
 };
 
 
-class ordered_by_ann_of_select_statement : public select_statement {
+class vector_indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
     prepared_ann_ordering_type _prepared_ann_ordering;
     mutable gc_clock::time_point _query_start_time_point;
@@ -373,7 +373,7 @@ public:
             ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
             std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<cql3::attributes> attrs);
 
-    ordered_by_ann_of_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
+    vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
             ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
             ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
             prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit, std::optional<expr::expression> per_partition_limit,
