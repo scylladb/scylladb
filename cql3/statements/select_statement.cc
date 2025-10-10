@@ -68,6 +68,32 @@ bool is_internal_keyspace(std::string_view name);
 namespace cql3 {
 
 namespace statements {
+namespace {
+
+std::vector<dht::partition_range> to_partition_ranges(const std::vector<primary_key>& pkeys) {
+    std::vector<dht::partition_range> partition_ranges;
+    std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
+        return dht::partition_range::make_singular(pkey.partition);
+    });
+
+    return partition_ranges;
+}
+
+template <typename Func>
+auto measure_index_latency(const schema& schema, const secondary_index::index& index, Func&& func) -> std::invoke_result_t<Func> {
+    auto start_time = lowres_system_clock::now();
+    auto result = co_await func();
+    auto duration = lowres_system_clock::now() - start_time;
+
+    auto stats = schema.table().get_index_manager().get_index_stats(index.metadata().name());
+    if (stats) {
+        stats->add_latency(duration);
+    }
+
+    co_return result;
+}
+
+} // namespace
 
 static logging::logger logger("select_statement");
 
@@ -1148,15 +1174,10 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
 
 future<shared_ptr<cql_transport::messages::result_message>> indexed_table_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
-        
-        auto start_time = lowres_system_clock::now();
-        auto result = co_await actually_do_execute(qp, state, options);
-        auto duration = lowres_system_clock::now() - start_time;
-        auto stats = _schema->table().get_index_manager().get_index_stats(_index.metadata().name());
-        if (stats) {
-            stats->add_latency(duration);
-        }
-        co_return result;
+
+    return measure_index_latency(*_schema, _index, [this, &qp, &state, &options]() -> future<shared_ptr<cql_transport::messages::result_message>> {
+        return actually_do_execute(qp, state, options);
+    });
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
@@ -1994,43 +2015,33 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
     }
 }
 
-namespace {
-
-std::vector<dht::partition_range> to_partition_ranges(const std::vector<primary_key>& pkeys) {
-    std::vector<dht::partition_range> partition_ranges;
-    std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
-        return dht::partition_range::make_singular(pkey.partition);
-    });
-
-    return partition_ranges;
-}
-
-} // namespace
-
 future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
-    tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
-    validate_for_read(options.get_consistency());
 
-    _query_start_time_point = gc_clock::now();
+    return measure_index_latency(*_schema, _index, [this, &qp, &state, &options]() -> future<shared_ptr<cql_transport::messages::result_message>> {
+        tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
+        validate_for_read(options.get_consistency());
 
-    update_stats();
+        _query_start_time_point = gc_clock::now();
 
-    auto limit = get_limit(options, _limit);
+        update_stats();
 
-    if (limit > max_ann_query_limit) {
-        co_await coroutine::return_exception(exceptions::invalid_request_exception(
-                fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
-    }
+        auto limit = get_limit(options, _limit);
 
-    auto as = abort_source();
-    auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, as);
-    if (!pkeys.has_value()) {
-        co_await coroutine::return_exception(
-                exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
-    }
+        if (limit > max_ann_query_limit) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                    fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
+        }
 
-    co_return co_await query_base_table(qp, state, options, pkeys.value());
+        auto as = abort_source();
+        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, as);
+        if (!pkeys.has_value()) {
+            co_await coroutine::return_exception(
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+        }
+
+        co_return co_await query_base_table(qp, state, options, pkeys.value());
+    });
 }
 
 void vector_indexed_table_select_statement::update_stats() const {
