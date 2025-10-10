@@ -148,7 +148,7 @@ private:
         return *_token_metadata_ptr;
     }
 public:
-    future<> stream_async();
+    future<> stream_async(std::function<void(size_t)> progress_updater = nullptr);
     size_t nr_ranges_to_stream();
 private:
     sharded<replica::database>& _db;
