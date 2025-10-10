@@ -73,6 +73,7 @@ private:
     std::vector<seastar::sstring> _hosts;
     host_address_map _addresses;
     listener_type _listener;
+    uint64_t& _refreshes_counter;
 };
 
 } // namespace vector_search
