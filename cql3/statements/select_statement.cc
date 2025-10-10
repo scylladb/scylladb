@@ -1980,6 +1980,18 @@ vector_indexed_table_select_statement::vector_indexed_table_select_statement(sch
               per_partition_limit, stats, std::move(attrs)}
     , _index{index}
     , _prepared_ann_ordering(std::move(prepared_ann_ordering)) {
+
+    if (!limit.has_value()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
+    }
+
+    if (per_partition_limit.has_value()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries do not support per-partition limits");
+    }
+
+    if (selection->is_aggregate()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
+    }
 }
 
 namespace {
@@ -2213,7 +2225,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
             if constexpr (std::is_same_v<T, select_statement::ann_vector>) {
-                verify_ann_ordering_is_valid(_limit, _per_partition_limit, *selection);
                 prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
             } else {
                 SCYLLA_ASSERT(!for_view);
@@ -2533,22 +2544,6 @@ void select_statement::verify_ordering_is_valid(const prepared_orderings_type& o
                     cur_ck_column.name_as_text()));
             }
         }
-    }
-}
-
-void select_statement::verify_ann_ordering_is_valid(const std::optional<expr::expression>& limit,
-                                                    const std::optional<expr::expression>& per_partition_limit,
-                                                    const selection::selection& selection) const {
-    if (!limit.has_value()) {
-        throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
-    }
-
-    if (per_partition_limit.has_value()) {
-        throw exceptions::invalid_request_exception("Vector ANN queries do not support per-partition limits");
-    }
-
-    if (selection.is_aggregate()) {
-        throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
     }
 }
 
