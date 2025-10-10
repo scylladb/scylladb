@@ -51,3 +51,12 @@ def test_ann_query_not_allow_any_filtering(scylla_only, cql, test_keyspace):
             cql.execute(f"SELECT * FROM {table} WHERE c = 1 ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 5")
         with pytest.raises(InvalidRequest, match=re.escape(SCYLLA_ANN_REQUIRES_INDEXED_FILTERING_MESSAGE)):
             cql.execute(f"SELECT * FROM {table} WHERE c = 1 ORDER BY v ANN OF [0.1, 0.2, 0.3] LIMIT 5 ALLOW FILTERING")
+
+def test_ann_query_with_null_vector(cql, test_keyspace):
+    schema = 'p int primary key, c int, v vector<float, 3>'
+    custom_index = 'vector_index' if is_scylla(cql) else 'sai'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_index}'")
+
+        with pytest.raises(InvalidRequest, match="Unsupported null value for column v"):
+            cql.execute(f"SELECT * FROM {table} ORDER BY v ANN OF null LIMIT 5")
