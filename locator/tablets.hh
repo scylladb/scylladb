@@ -178,11 +178,11 @@ sstring tablet_task_type_to_string(tablet_task_type);
 tablet_task_type tablet_task_type_from_string(const sstring&);
 
 
-// - regular (regular incremental repair): The incremental repair logic is enabled.
+// - incremental (incremental repair): The incremental repair logic is enabled.
 //   Unrepaired sstables will be included for repair. Repaired sstables will be
 //   skipped. The incremental repair states will be updated after repair.
 
-// - full (full incremental repair): The incremental repair logic is enabled.
+// - full (full repair): The incremental repair logic is enabled.
 //   Both repaired and unrepaired sstables will be included for repair. The
 //   incremental repair states will be updated after repair.
 
@@ -191,12 +191,12 @@ tablet_task_type tablet_task_type_from_string(const sstring&);
 //   sstables_repaired_at in system.tablets table, will not be updated after
 //   repair.
 enum class tablet_repair_incremental_mode : uint8_t {
-    regular,
+    incremental,
     full,
     disabled,
 };
 
-constexpr tablet_repair_incremental_mode default_tablet_repair_incremental_mode{tablet_repair_incremental_mode::regular};
+constexpr tablet_repair_incremental_mode default_tablet_repair_incremental_mode{tablet_repair_incremental_mode::incremental};
 
 sstring tablet_repair_incremental_mode_to_string(tablet_repair_incremental_mode);
 tablet_repair_incremental_mode tablet_repair_incremental_mode_from_string(const sstring&);
