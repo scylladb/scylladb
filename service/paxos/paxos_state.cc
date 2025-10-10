@@ -283,6 +283,8 @@ future<> paxos_state::learn(storage_proxy& sp, paxos_store& paxos_store, schema_
         tracing::trace(tr_state, "Not committing decision {} as ballot timestamp predates last truncation time", decision);
     }
 
+    co_await utils::get_local_injector().inject("paxos_state_learn_after_mutate", utils::wait_for_message(5min));
+
     // We don't need to lock the partition key if there is no gap between loading paxos
     // state and saving it, and here we're just blindly updating.
     co_await utils::get_local_injector().inject("paxos_timeout_after_save_decision", timeout);
