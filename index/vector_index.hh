@@ -32,6 +32,7 @@ public:
             const std::vector<::shared_ptr<cql3::statements::index_target>> &targets, const gms::feature_service& fs) const override;
     table_schema_version index_version(const schema& schema) override;
     static bool has_vector_index(const schema& s);
+    static bool has_vector_index_on_column(const schema& s, const sstring& target_name);
     static void check_cdc_options(const schema& schema);
 private:
     void check_cdc_not_explicitly_disabled(const schema& schema) const;
