@@ -72,6 +72,8 @@ class feature_service;
 namespace db {
 class system_keyspace;
 
+enum class batchlog_stage : int32_t;
+
 namespace view {
 struct view_building_state_machine;
 }
@@ -650,7 +652,7 @@ private:
         return _pending_writes_phaser.start();
     }
 
-    mutation do_get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+    mutation do_get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now, db::batchlog_stage stage);
     future<> drain_on_shutdown();
 public:
     // Applies mutation on this node.
@@ -798,7 +800,7 @@ public:
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
-    mutation get_batchlog_mutation_for(const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+    mutation get_batchlog_mutation_for(const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now, db::batchlog_stage stage);
 
     future<> stop();
     future<> start_hints_manager();

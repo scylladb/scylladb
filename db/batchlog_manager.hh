@@ -17,6 +17,8 @@
 #include <seastar/core/abort_source.hh>
 
 #include "db_clock.hh"
+#include "utils/UUID.hh"
+#include "keys/keys.hh"
 
 #include <chrono>
 #include <limits>
@@ -32,15 +34,32 @@ namespace db {
 class system_keyspace;
 
 struct batchlog_manager_config {
-    std::chrono::duration<double> write_request_timeout;
+    db_clock::duration replay_timeout;
     uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
     std::chrono::milliseconds delay = std::chrono::milliseconds(0);
     unsigned replay_cleanup_after_replays;
 };
 
+enum class batchlog_stage : int32_t {
+    initial,
+    failed_replay
+};
+
 class batchlog_manager : public peering_sharded_service<batchlog_manager> {
 public:
     using post_replay_cleanup = bool_class<class post_replay_cleanup_tag>;
+
+    struct batchlog_replay_stats {
+        uint64_t skipped_batches = 0; // not replayed at all
+        uint64_t replayed_batches = 0; // attempted to replay
+        uint64_t dropped_batches = 0; // attempted to replay but dropped due to empty or ttl
+        uint64_t deleted_batches = 0; // batches deleted at the end of replay
+        uint64_t rate_limiter_engaged = 0; // raplays for which rate limiter was engaged
+        std::chrono::milliseconds rate_limiter_total_delay{}; // total delay due to rate limiting
+        std::chrono::milliseconds replay_duration{};
+        std::chrono::milliseconds cleanup_duration{};
+        utils::UUID tracing_session_id;
+    };
 
 private:
     static constexpr std::chrono::seconds replay_interval = std::chrono::seconds(60);
@@ -57,7 +76,7 @@ private:
 
     cql3::query_processor& _qp;
     db::system_keyspace& _sys_ks;
-    db_clock::duration _write_request_timeout;
+    db_clock::duration _replay_timeout;
     uint64_t _replay_rate;
     std::chrono::milliseconds _delay;
     unsigned _replay_cleanup_after_replays = 100;
@@ -69,7 +88,7 @@ private:
 
     gc_clock::time_point _last_replay;
 
-    future<> replay_all_failed_batches(post_replay_cleanup cleanup);
+    future<std::optional<batchlog_replay_stats>> replay_all_failed_batches(post_replay_cleanup cleanup, bool trace);
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
@@ -80,13 +99,20 @@ public:
     future<> drain();
     future<> stop();
 
-    future<> do_batch_log_replay(post_replay_cleanup cleanup);
+    future<std::optional<batchlog_replay_stats>> do_batch_log_replay(post_replay_cleanup cleanup, bool trace = false);
+
+    future<> log_batch_traces(utils::UUID tracing_session_id);
 
     future<size_t> count_all_batches() const;
-    db_clock::duration get_batch_log_timeout() const;
     gc_clock::time_point get_last_replay() const {
         return _last_replay;
     }
+
+    static std::pair<partition_key, clustering_key>
+    get_batchlog_key(const schema& schema, int32_t version, batchlog_stage stage, int8_t shard, db_clock::time_point written_at, std::optional<utils::UUID> id);
+
+    static std::pair<partition_key, clustering_key>
+    get_batchlog_key(const schema& schema, int32_t version, batchlog_stage stage, db_clock::time_point written_at, std::optional<utils::UUID> id);
 private:
     future<> batchlog_replay_loop();
 };
