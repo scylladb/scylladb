@@ -236,15 +236,20 @@ async def test_can_restart(manager: ManagerClient, raft_op_timeout: int) -> None
     await asyncio.gather(*(manager.server_update_config(srv.server_id, 'group0_raft_op_timeout_in_ms', raft_op_timeout)
                            for srv in servers))
 
-    logger.info(f"Restarting {servers}")
-    for idx, srv in enumerate(servers):
+    logger.info(f"Restarting {servers[:2]} with no group 0 quorum")
+    for idx, srv in enumerate(servers[:2]):
         await manager.server_start(srv.server_id)
-
-        # Make sure that the first two nodes restart without group 0 quorum.
-        if idx < 2:
-            with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, "
-                                                "there is no raft quorum, total voters count 5, "
-                                                f"alive voters count {idx + 1}"):
-                await read_barrier(manager.api, srv.ip_addr)
-        else:
+        with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out, "
+                                            "there is no raft quorum, total voters count 5, "
+                                            f"alive voters count {idx + 1}"):
             await read_barrier(manager.api, srv.ip_addr)
+
+    # Increase the timeout back to 300s to ensure the new group 0 leader is elected before the first read barrier below
+    # times out.
+    await asyncio.gather(*(manager.server_update_config(srv.server_id, 'group0_raft_op_timeout_in_ms', 300000)
+                           for srv in servers))
+
+    logger.info(f"Restarting {servers[2:]} with group 0 quorum")
+    for srv in servers[2:]:
+        await manager.server_start(srv.server_id)
+        await read_barrier(manager.api, srv.ip_addr)
