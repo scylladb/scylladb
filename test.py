@@ -9,6 +9,8 @@
 import argparse
 import asyncio
 import collections
+from pprint import pprint
+
 import colorama
 import difflib
 import filecmp
@@ -826,16 +828,6 @@ class Test:
     def print_summary(self) -> None:
         pass
 
-    async def setup(self, port, options):
-        """
-        Performs any necessary setup steps before running a test.
-        Returns (fn, txt, test_env) where:
-        fn  - is a cleanup function to call unconditionally after the test stops running
-        txt - is failure-injection description.
-        test_env - is a dictionary containing environment variables map specific for the test
-        """
-        return (lambda: 0, None,{})
-
     def check_log(self, trim: bool) -> None:
         """Check and trim logs and xml output for tests which have it"""
         if trim:
@@ -1007,11 +999,11 @@ def try_something_backoff(something):
         sleep_time *= 2
     return True
 
-def make_saslauthd_conf(port, instance_path):
+def make_saslauthd_conf(host, port, instance_path):
     """Creates saslauthd.conf with appropriate contents under instance_path.  Returns the path to the new file."""
     saslauthd_conf_path = os.path.join(instance_path, 'saslauthd.conf')
     with open(saslauthd_conf_path, 'w') as f:
-        f.write('ldap_servers: ldap://localhost:{}\nldap_search_base: dc=example,dc=com'.format(port))
+        f.write('ldap_servers: ldap://{}:{}\nldap_search_base: dc=example,dc=com'.format(host, port))
     return saslauthd_conf_path
 
 
@@ -1020,71 +1012,6 @@ class LdapTest(BoostTest):
 
     def __init__(self, test_no, shortname, args, suite):
         super().__init__(test_no, shortname, args, suite, None, False, None)
-
-    async def setup(self, port, options):
-        instances_root = os.path.join(options.tmpdir, self.mode, 'ldap_instances');
-        instance_path = os.path.join(os.path.abspath(instances_root), str(port))
-        slapd_pid_file = os.path.join(instance_path, 'slapd.pid')
-        saslauthd_socket_path = TemporaryDirectory()
-        os.makedirs(instance_path, exist_ok=True)
-        # This will always fail because it lacks the permissions to read the default slapd data
-        # folder but it does create the instance folder so we don't want to fail here.
-        try:
-            subprocess.check_output(['slaptest', '-f', LDAP_SERVER_CONFIGURATION_FILE, '-F', instance_path],
-                                    stderr=subprocess.DEVNULL)
-        except:
-            pass
-        # Set up failure injection.
-        proxy_name = 'p{}'.format(port)
-        subprocess.check_output([
-            'toxiproxy-cli', 'c', proxy_name,
-            '--listen', 'localhost:{}'.format(port + 2), '--upstream', 'localhost:{}'.format(port)])
-        # Sever the connection after byte_limit bytes have passed through:
-        byte_limit = options.byte_limit if options.byte_limit else randint(0, 2000)
-        subprocess.check_output(['toxiproxy-cli', 't', 'a', proxy_name, '-t', 'limit_data', '-n', 'limiter',
-                                 '-a', 'bytes={}'.format(byte_limit)])
-        # Change the data folder in the default config.
-        replace_expression = 's/olcDbDirectory:.*/olcDbDirectory: {}/g'.format(
-            os.path.abspath(instance_path).replace('/', r'\/'))
-        subprocess.check_output(
-            ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'])
-        # Change the pid file to be kept with the instance.
-        replace_expression = 's/olcPidFile:.*/olcPidFile: {}/g'.format(
-            os.path.abspath(slapd_pid_file).replace('/', r'\/'))
-        subprocess.check_output(
-            ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'])
-        # Put the test data in.
-        cmd = ['slapadd', '-F', instance_path]
-        subprocess.check_output(
-            cmd, input='\n\n'.join(DEFAULT_ENTRIES).encode('ascii'), stderr=subprocess.STDOUT)
-        # Set up the server.
-        SLAPD_URLS='ldap://:{}/ ldaps://:{}/'.format(port, port + 1)
-        def can_connect_to_saslauthd():
-            return can_connect(os.path.join(saslauthd_socket_path.name, 'mux'), socket.AF_UNIX)
-        slapd_proc = subprocess.Popen(['prlimit', '-n1024', 'slapd', '-F', instance_path, '-h', SLAPD_URLS, '-d', '0'])
-        saslauthd_conf_path = make_saslauthd_conf(port, instance_path)
-        test_env = {
-            "SEASTAR_LDAP_PORT" : str(port),
-            "SASLAUTHD_MUX_PATH" : os.path.join(saslauthd_socket_path.name, "mux")
-        }
-
-        saslauthd_proc = subprocess.Popen(
-            ['saslauthd', '-d', '-n', '1', '-a', 'ldap', '-O', saslauthd_conf_path, '-m', saslauthd_socket_path.name],
-            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-        def finalize():
-            slapd_proc.terminate()
-            slapd_proc.wait() # Wait for slapd to remove slapd.pid, so it doesn't race with rmtree below.
-            saslauthd_proc.kill() # Somehow, invoking terminate() here also terminates toxiproxy-server. o_O
-            shutil.rmtree(instance_path)
-            saslauthd_socket_path.cleanup()
-            subprocess.check_output(['toxiproxy-cli', 'd', proxy_name])
-        try:
-            if not try_something_backoff(can_connect_to_saslauthd):
-                raise Exception('Unable to connect to saslauthd')
-        except:
-            finalize()
-            raise
-        return finalize, '--byte-limit={}'.format(byte_limit), test_env
 
 
 class CQLApprovalTest(Test):
@@ -1508,36 +1435,86 @@ class TabularConsoleOutput:
             msg += " {:.2f}s".format(test.time_end - test.time_start)
             print(msg)
 
-toxiproxy_id_gen = 0
+async def start_ldap(toxiproxy_host: str, toxiproxy_port: int, ldap_host: str, options: argparse.Namespace):
+    port = 5000
+    instances_root = os.path.join(options.tmpdir, 'ldap_instances')
+    instance_path = os.path.join(os.path.abspath(instances_root), f"{ldap_host}_{port}")
+    slapd_pid_file = os.path.join(instance_path, 'slapd.pid')
+    saslauthd_socket_path = TemporaryDirectory()
+    os.makedirs(instance_path, exist_ok=True)
+    # This will always fail because it lacks the permissions to read the default slapd data
+    # folder but it does create the instance folder so we don't want to fail here.
+    try:
+        subprocess.check_output(['slaptest', '-f', LDAP_SERVER_CONFIGURATION_FILE, '-F', instance_path],
+                                stderr=subprocess.DEVNULL)
+    except:
+        pass
+    # Set up failure injection.
+    try:
+        proxy_name = f"{ldap_host}_{port}_proxy"
+        subprocess.check_output([
+            'toxiproxy-cli', '-h', f"{toxiproxy_host}:{toxiproxy_port}", 'c', proxy_name,
+            '--listen', '{}:{}'.format(ldap_host, port + 2), '--upstream', '{}:{}'.format(ldap_host, port)])
+        # Sever the connection after byte_limit bytes have passed through:
+        byte_limit = options.byte_limit if options.byte_limit else randint(0, 2000)
+        subprocess.check_output(['toxiproxy-cli', '-h', f"{toxiproxy_host}:{toxiproxy_port}", 't', 'a', proxy_name, '-t',
+                                 'limit_data', '-n', 'limiter', '-a', 'bytes={}'.format(byte_limit)])
+        # Change the data folder in the default config.
+        replace_expression = 's/olcDbDirectory:.*/olcDbDirectory: {}/g'.format(
+            os.path.abspath(instance_path).replace('/', r'\/'))
+        subprocess.check_output(
+            ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'])
+        # Change the pid file to be kept with the instance.
+        replace_expression = 's/olcPidFile:.*/olcPidFile: {}/g'.format(
+            os.path.abspath(slapd_pid_file).replace('/', r'\/'))
+        subprocess.check_output(
+            ['find', instance_path, '-type', 'f', '-exec', 'sed', '-i', replace_expression, '{}', ';'])
+        # Put the test data in.
+        cmd = ['slapadd', '-F', instance_path]
+        subprocess.check_output(
+            cmd, input='\n\n'.join(DEFAULT_ENTRIES).encode('ascii'), stderr=subprocess.STDOUT)
+        # Set up the server.
+        SLAPD_URLS = 'ldap://:{}/ ldaps://:{}/'.format(port, port + 1)
 
-def is_port_available(host, port):
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(0.1)
-        return s.connect_ex((host, port)) != 0
+        def can_connect_to_saslauthd():
+            return can_connect(os.path.join(saslauthd_socket_path.name, 'mux'), socket.AF_UNIX)
 
-def can_connect_to_local_ports(ports_range):
-    for port in ports_range:
-        if not is_port_available('localhost', port):
-            return False
-    return True
+        slapd_proc = subprocess.Popen(['prlimit', '-n1024', 'slapd', '-F', instance_path, '-h', SLAPD_URLS, '-d', '0'])
+        saslauthd_conf_path = make_saslauthd_conf(ldap_host, port, instance_path)
+        test_env = {
+            "SEASTAR_LDAP_HOST": str(ldap_host),
+            "SEASTAR_LDAP_PORT": str(port),
+            "SASLAUTHD_MUX_PATH": os.path.join(saslauthd_socket_path.name, "mux")
+        }
+
+        saslauthd_proc = subprocess.Popen(
+            ['saslauthd', '-d', '-n', '1', '-a', 'ldap', '-O', saslauthd_conf_path, '-m', saslauthd_socket_path.name],
+            stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as e:
+        logging.critical("toxiproxy-cli failed: %s: %s", e, e.stdout)
+        raise
+
+    async def finalize():
+        slapd_proc.terminate()
+        slapd_proc.wait()  # Wait for slapd to remove slapd.pid, so it doesn't race with rmtree below.
+        saslauthd_proc.kill()  # Somehow, invoking terminate() here also terminates toxiproxy-server. o_O
+        shutil.rmtree(instance_path)
+        saslauthd_socket_path.cleanup()
+        subprocess.check_output(['toxiproxy-cli', '-h', f"{toxiproxy_host}:{toxiproxy_port}", 'd', proxy_name])
+
+    try:
+        if not try_something_backoff(can_connect_to_saslauthd):
+            raise Exception('Unable to connect to saslauthd')
+    except:
+        await finalize()
+        raise
+    return finalize, test_env
 
 async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, env=dict()) -> bool:
     """Run test program, return True if success else False"""
 
     with test.log_filename.open("wb") as log:
-        global toxiproxy_id_gen
-        toxiproxy_id = toxiproxy_id_gen
-        toxiproxy_id_gen += 1
-        ldap_port = 5000 + (toxiproxy_id * 3) % 55000
-        while not can_connect_to_local_ports(range(ldap_port, ldap_port+3)):
-            print("One of {} ports required by LDAP are busy, trying the next 3 ports".format(list(range(ldap_port, ldap_port+3))))
-            ldap_port = ldap_port + 3
-            if ldap_port > 65535: # it's the highest possible TCP port number
-                print("No more ports to check, exiting")
-                return False
-
         cleanup_fn = None
-        finject_desc = None
         def report_error(error, failure_injection_desc = None):
             msg = "=== TEST.PY SUMMARY START ===\n"
             msg += "{}\n".format(error)
@@ -1546,11 +1523,6 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 msg += 'failure injection: {}'.format(failure_injection_desc)
             log.write(msg.encode(encoding="UTF-8"))
 
-        try:
-            cleanup_fn, finject_desc, test_env = await test.setup(ldap_port, options)
-        except Exception as e:
-            report_error("Test setup failed ({})\n{}".format(str(e), traceback.format_exc()))
-            return False
         process = None
         stdout = None
         logging.info("Starting test %s: %s %s", test.uname, test.path, " ".join(test.args))
@@ -1566,18 +1538,12 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             "detect_stack_use_after_return=1",
             os.getenv("ASAN_OPTIONS"),
         ]
-        ldap_instance_path = os.path.join(
-            os.path.abspath(os.path.join(options.tmpdir, test.mode, 'ldap_instances')),
-            str(ldap_port))
-        saslauthd_mux_path = os.path.join(ldap_instance_path, 'mux')
         if options.manual_execution:
             print('Please run the following shell command, then press <enter>:')
-            test_env_string = " ".join([f"{k}={v}" for k,v in test_env.items()])
+            test_env_string = " ".join([f"{k}={v}" for k,v in test.env.items()])
             print('{} {}'.format(
                 test_env_string, ' '.join([shlex.quote(e) for e in [test.path, *test.args]])))
             input('-- press <enter> to continue --')
-            if cleanup_fn is not None:
-                cleanup_fn()
             return True
         try:
             resource_gather = get_resource_gather(options.gather_metrics, test, options.tmpdir)
@@ -1587,7 +1553,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 ":".join(filter(None, UBSAN_OPTIONS))).encode(encoding="UTF-8"))
             log.write("export ASAN_OPTIONS='{}'\n".format(
                 ":".join(filter(None, ASAN_OPTIONS))).encode(encoding="UTF-8"))
-            for k,v in test_env.items():
+            for k,v in test.env.items():
                 log.write(f"export {k}={v}\n".encode(encoding="UTF-8"))
             log.write("{} {}\n".format(test.path, " ".join(test.args)).encode(encoding="UTF-8"))
             log.write("=== TEST.PY TEST {} OUTPUT ===\n".format(test.uname).encode(encoding="UTF-8"))
@@ -1604,7 +1570,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             test_running_event = asyncio.Event()
             test_resource_watcher = resource_gather.cgroup_monitor(test_event=test_running_event)
 
-            test_env.update(
+            test.env.update(
                 dict(os.environ,
                          UBSAN_OPTIONS=":".join(filter(None, UBSAN_OPTIONS)),
                          ASAN_OPTIONS=":".join(filter(None, ASAN_OPTIONS)),
@@ -1619,7 +1585,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
                 path, *args,
                 stderr=log,
                 stdout=log,
-                env=test_env,
+                env=test.env,
                 preexec_fn=resource_gather.put_process_to_cgroup,
             )
             stdout, _ = await asyncio.wait_for(process.communicate(), options.timeout)
@@ -1665,7 +1631,7 @@ async def run_test(test: Test, options: argparse.Namespace, gentle_kill=False, e
             report_error("Failed to run the test:\n{e}".format(e=e))
         finally:
             if cleanup_fn is not None:
-                cleanup_fn()
+                await cleanup_fn()
     return False
 
 
@@ -1902,11 +1868,11 @@ async def run_all_tests(signaled: asyncio.Event, options: argparse.Namespace) ->
                 console.print_progress(result)
         return failed
 
-    ms = MinioServer(options.tmpdir, '127.0.0.1', LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
+    hosts = HostRegistry()
+    ms = MinioServer(options.tmpdir, await hosts.lease_host(), LogPrefixAdapter(logging.getLogger('minio'), {'prefix': 'minio'}))
     await ms.start()
     TestSuite.artifacts.add_exit_artifact(None, ms.stop)
 
-    hosts = HostRegistry()
     mock_s3_server = MockS3Server(await hosts.lease_host(), 2012,
                                   LogPrefixAdapter(logging.getLogger('s3_mock'), {'prefix': 's3_mock'}))
     await mock_s3_server.start()
@@ -2227,13 +2193,29 @@ async def main() -> int:
     setup_signal_handlers(asyncio.get_running_loop(), signaled)
 
     tp_server = None
+    finalize = None
     try:
         if [t for t in TestSuite.all_tests() if isinstance(t, LdapTest)]:
-            tp_server = subprocess.Popen('toxiproxy-server', stderr=subprocess.DEVNULL)
+            toxiproxy_host = await TestSuite.hosts.lease_host()
+            toxiproxy_port = 8474
+            ldap_host = await TestSuite.hosts.lease_host()
+            tp_log_file = pathlib.Path(options.tmpdir, f"toxiproxy_server_{toxiproxy_host}.log")
+            env = os.environ.copy()
+            pprint(f'{env=}', stream=pathlib.Path(f'/tmp/toxiproxy_env_{toxiproxy_host}.log').open(mode='w'))
+            tp_server = subprocess.Popen(
+                ['toxiproxy-server', '-host', toxiproxy_host, '-port', str(toxiproxy_port)],
+                stdout=tp_log_file.open('x'),
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+
             def can_connect_to_toxiproxy():
-                return can_connect(('127.0.0.1', 8474))
+                return can_connect((toxiproxy_host, toxiproxy_port))
             if not try_something_backoff(can_connect_to_toxiproxy):
                 raise Exception('Could not connect to toxiproxy')
+            finalize, test_env = await start_ldap(ldap_host=ldap_host, toxiproxy_host=toxiproxy_host, toxiproxy_port=toxiproxy_port, options=options)
+            for t in [t for t in TestSuite.all_tests() if isinstance(t, LdapTest)]:
+                t.env.update(test_env)
 
         try:
             logging.info('running all tests')
@@ -2246,6 +2228,8 @@ async def main() -> int:
             print(palette.fail(e))
             raise
     finally:
+        if finalize is not None:
+            await finalize()
         if tp_server is not None:
             tp_server.terminate()
 
