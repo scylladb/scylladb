@@ -641,7 +641,8 @@ raft_tests = set([
 
 vector_search_tests = set([
     'test/vector_search/vector_store_client_test',
-    'test/vector_search/load_balancer_test'
+    'test/vector_search/load_balancer_test',
+    'test/vector_search/node_test'
 ])
 
 wasms = set([
@@ -1264,6 +1265,9 @@ scylla_core = (['message/messaging_service.cc',
                 'utils/disk_space_monitor.cc',
                 'vector_search/vector_store_client.cc',
                 'vector_search/dns.cc',
+                'vector_search/client.cc',
+                'vector_search/node.cc',
+                'vector_search/client_manager.cc'
                 ] + [Antlr3Grammar('cql3/Cql.g')] \
                   + scylla_raft_core
                )
@@ -1656,8 +1660,9 @@ deps['test/raft/discovery_test'] =  ['test/raft/discovery_test.cc',
                                      'test/lib/log.cc',
                                      'service/raft/discovery.cc'] + scylla_raft_dependencies
 
-deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/vector_store_client_test'] =  ['test/vector_search/vector_store_client_test.cc', 'test/vector_search/vs_mock_server.cc'] + scylla_tests_dependencies
 deps['test/vector_search/load_balancer_test'] = ['test/vector_search/load_balancer_test.cc'] + scylla_tests_dependencies
+deps['test/vector_search/node_test'] = ['test/vector_search/node_test.cc', 'test/vector_search/vs_mock_server.cc'] + scylla_tests_dependencies
 
 wasm_deps = {}
 

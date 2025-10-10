@@ -888,9 +888,14 @@ rf_rack_valid_keyspaces: false
 #
 # Vector Store options
 #
-# A comma-separated list of URIs for the vector store using DNS name. Only HTTP schema is supported. Port number is mandatory.
-# Default is empty, which means that the vector store is not used.
+# Only HTTP schema is supported. Port number is mandatory.
+# If both `vector_store_primary_uri` and `vector_store_secondary_uri` are unset or empty, vector search is disabled.
+#
+# A comma-separated list of primary vector store node URIs. These nodes are preferred for vector search operations.
 # vector_store_primary_uri: http://vector-store.dns.name:{port}
+#
+# A comma-separated list of secondary vector store node URIs. These nodes are used as a fallback when all primary nodes are unavailable, and are typically located in a different availability zone for high availability.
+# vector_store_secondary_uri: http://vector-store.dns.name:{port}
 
 # 
 # io-streaming rate limiting
