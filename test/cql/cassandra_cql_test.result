@@ -18,11 +18,11 @@ OK
 > ALTER KEYSPACE ks1 WITH replication = { 'class' : 'NetworkTopologyStrategy', 'datacenter1' : 1 };
 OK
 > SELECT * FROM system_schema.keyspaces WHERE keyspace_name = 'ks1';
-+-----------------+------------------+--------------------------+
-| keyspace_name   | durable_writes   | replication              |
-|-----------------+------------------+--------------------------|
-| ks1             | True             | ['class', 'datacenter1'] |
-+-----------------+------------------+--------------------------+
++-----------------+------------------+--------------------------+------------------+
+| keyspace_name   | durable_writes   | replication              | replication_v2   |
+|-----------------+------------------+--------------------------+------------------|
+| ks1             | True             | ['class', 'datacenter1'] | null             |
++-----------------+------------------+--------------------------+------------------+
 > USE ks1;
 OK
 > 

@@ -62,6 +62,7 @@ public:
     const locator::replication_strategy_config_options& strategy_options() const {
         return _strategy_options;
     }
+    locator::replication_strategy_config_options strategy_options_v1() const;
     std::optional<unsigned> initial_tablets() const {
         return _initial_tablets;
     }
