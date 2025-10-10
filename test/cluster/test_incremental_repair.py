@@ -655,7 +655,7 @@ async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
         assert read1 == 0
         assert skip2 == 0
         assert read2 > 0
-    await do_repair_and_check(None, 1, rf'Starting tablet repair by API .* incremental_mode=regular.*', check1)
+    await do_repair_and_check(None, 1, rf'Starting tablet repair by API .* incremental_mode=incremental.*', check1)
 
     def check2(skip1, read1, skip2, read2):
         assert skip1 == skip2
@@ -665,7 +665,7 @@ async def test_tablet_repair_with_incremental_option(manager: ManagerClient):
     def check3(skip1, read1, skip2, read2):
         assert skip1 < skip2
         assert read1 == read2
-    await do_repair_and_check('regular', 1, rf'Starting tablet repair by API .* incremental_mode=regular.*', check3)
+    await do_repair_and_check('incremental', 1, rf'Starting tablet repair by API .* incremental_mode=incremental.*', check3)
 
     def check4(skip1, read1, skip2, read2):
         assert skip1 == skip2

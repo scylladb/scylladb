@@ -424,7 +424,7 @@ def test_repair_keyspace(nodetool):
         ]},
         ["error processing arguments: nodetool cluster repair repairs only tablet keyspaces. To repair vnode keyspaces use nodetool repair."])
 
-@pytest.mark.parametrize("mode", ["disabled", "regular", "full"])
+@pytest.mark.parametrize("mode", ["disabled", "incremental", "full"])
 def test_repair_incremenatal_repair(nodetool, mode):
     id1 = "ef1b7a61-66c8-494c-bb03-6f65724e6eee"
     res = nodetool("cluster", "repair", "--incremental-mode", mode, "ks", "table1", expected_requests=[

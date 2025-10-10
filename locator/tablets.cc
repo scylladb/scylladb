@@ -754,7 +754,7 @@ tablet_task_type tablet_task_type_from_string(const sstring& name) {
 // The names are persisted in system tables so should not be changed.
 static const std::unordered_map<locator::tablet_repair_incremental_mode, sstring> tablet_repair_incremental_mode_to_name = {
     {locator::tablet_repair_incremental_mode::disabled, "disabled"},
-    {locator::tablet_repair_incremental_mode::regular, "regular"},
+    {locator::tablet_repair_incremental_mode::incremental, "incremental"},
     {locator::tablet_repair_incremental_mode::full, "full"},
 };
 

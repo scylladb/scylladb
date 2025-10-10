@@ -76,7 +76,7 @@ struct repair_row_level_start_response {
 
 namespace locator {
 enum class tablet_repair_incremental_mode : uint8_t {
-    regular,
+    incremental,
     full,
     disabled,
 };
