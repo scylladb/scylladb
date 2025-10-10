@@ -179,6 +179,26 @@ def test_vector_index_version_fail_given_as_option(cql, test_keyspace, scylla_on
         with pytest.raises(InvalidRequest, match="Cannot specify index_version as a CUSTOM option"):
             cql.execute(f"CREATE CUSTOM INDEX abc ON {table}(v) USING 'vector_index' WITH OPTIONS = {{'index_version': '18ad2003-05ea-17d9-1855-0325ac0a755d'}}")
 
+def test_one_vector_index_on_column(cql, test_keyspace):
+    schema = "p int primary key, v vector<float, 3>"
+    if is_scylla(cql):
+        custom_class = 'vector_index'
+    else:
+        custom_class =  'sai'
+    with new_test_table(cql, test_keyspace, schema) as table:
+        cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_class}'")
+        with pytest.raises(InvalidRequest, match=r"There exists a duplicate custom index|Cannot create more than one storage-attached index on the same column"):
+            cql.execute(f"CREATE CUSTOM INDEX ON {table}(v) USING '{custom_class}'")
+        cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ON {table}(v) USING '{custom_class}'")
+
+# Reproduces issue #26672
+def test_two_same_name_indexes_on_different_tables_with_if_not_exists(cql, test_keyspace, scylla_only):
+    schema = "p int primary key, v vector<float, 3>"
+    with new_test_table(cql, test_keyspace, schema) as table:
+        schema = "p int primary key, v vector<float, 3>"
+        with new_test_table(cql, test_keyspace, schema) as table2:
+            cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ann_index ON {table}(v) USING 'vector_index'")
+            cql.execute(f"CREATE CUSTOM INDEX IF NOT EXISTS ann_indes ON {table2}(v) USING 'vector_index'")
 
 ###############################################################################
 # Tests for CDC with vector indexes
