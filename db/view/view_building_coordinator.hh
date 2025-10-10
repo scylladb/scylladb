@@ -43,6 +43,35 @@ namespace db {
 namespace view {
 
 class view_building_coordinator : public service::endpoint_lifecycle_subscriber {
+    // The manager is used as a middleware, responsible for
+    // rate-limiting iterations of view building coordinator triggered by
+    // finished RPC calls.
+    //
+    // If some RPC call was finished but others are still running,
+    // the manager waits 1s since last successful group0 commit,
+    // before notifying the coordinator to batch as many responses as it can.
+    // When all RPC are finished before the timer expires, the timer is cancelled and the coordinator
+    // is notified immediately.
+    class rpc_callback_manager {
+        semaphore _mutex = semaphore(1);
+        std::unordered_set<locator::tablet_replica> _working_rpcs;
+        lowres_clock::time_point _previous_iteration;
+        timer<lowres_clock> _timer;
+        view_building_coordinator& _vbc;
+
+        void notify_coordinator();
+
+    public:
+        rpc_callback_manager(view_building_coordinator& vbc);
+        ~rpc_callback_manager();
+
+        void mark_successful_group0_commit();
+        future<> mark_rpc_started(locator::tablet_replica replica);
+        future<> mark_rpc_done(locator::tablet_replica replica);
+    };
+    friend class rpc_callback_manager;
+
+private:
     replica::database& _db;
     raft::server& _raft;
     service::raft_group0& _group0;
@@ -57,6 +86,7 @@ class view_building_coordinator : public service::endpoint_lifecycle_subscriber 
 
     using remote_work_results = std::vector<std::pair<utils::UUID, db::view::view_task_result>>;
     std::unordered_map<locator::tablet_replica, shared_future<std::optional<remote_work_results>>> _remote_work;
+    rpc_callback_manager _rcm;
 
 public:
     view_building_coordinator(replica::database& db, raft::server& raft, service::raft_group0& group0,

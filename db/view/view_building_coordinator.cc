@@ -30,6 +30,9 @@
 #include "utils/assert.hh"
 #include "idl/view.dist.hh"
 
+using namespace std::chrono_literals;
+
+static constexpr auto min_time_between_rcm_notifications = 250ms;
 static logging::logger vbc_logger("view_building_coordinator");
 
 namespace db {
@@ -49,7 +52,8 @@ view_building_coordinator::view_building_coordinator(replica::database& db, raft
     , _vb_sm(vb_sm)
     , _topo_sm(topo_sm)
     , _term(term)
-    , _as(as) {}
+    , _as(as)
+    , _rcm(*this) {}
 
 future<service::group0_guard> view_building_coordinator::start_operation() {
     auto guard = co_await _group0.client().start_operation(_as, service::raft_timeout{});
@@ -73,6 +77,7 @@ future<> view_building_coordinator::commit_mutations(service::group0_guard guard
         .mutations{std::move(cmuts)}
     }, guard, description);
     co_await _group0.client().add_entry(std::move(cmd), std::move(guard), _as);
+    _rcm.mark_successful_group0_commit();
 }
 
 void view_building_coordinator::handle_coordinator_error(std::exception_ptr eptr) {
@@ -440,11 +445,20 @@ void view_building_coordinator::attach_to_started_tasks(const locator::tablet_re
 
 future<std::optional<view_building_coordinator::remote_work_results>> view_building_coordinator::work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks) {
     std::vector<view_task_result> remote_results;
+    bool failed = false;
     try {
+        co_await _rcm.mark_rpc_started(replica);
         remote_results = co_await ser::view_rpc_verbs::send_work_on_view_building_tasks(&_messaging, replica.host, _as, tasks);
     } catch (...) {
         vbc_logger.warn("Work on tasks {} on replica {}, failed with error: {}", tasks, replica, std::current_exception());
-        _vb_sm.event.broadcast();
+        failed = true;
+    }
+
+    if (failed) {
+        if (!_as.abort_requested()) {
+            // If the abort was requested, we don't need to mark the RPC as done, because the `_rcm` also stops working
+            co_await _rcm.mark_rpc_done(replica);
+        }
         co_return std::nullopt;
     }
 
@@ -771,6 +785,56 @@ future<> view_building_coordinator::remove_view_build_statuses_on_left_node(util
             vbc_logger.debug("Removed view build status for view {} on node {}", view_name, host_id);
         }
     }
+}
+
+view_building_coordinator::rpc_callback_manager::rpc_callback_manager(view_building_coordinator& vbc)
+    : _timer(std::bind(&rpc_callback_manager::notify_coordinator, this))
+    , _vbc(vbc) {}
+
+view_building_coordinator::rpc_callback_manager::~rpc_callback_manager() {
+    _timer.cancel();
+}
+
+void view_building_coordinator::rpc_callback_manager::notify_coordinator() {
+    _vbc._vb_sm.event.broadcast();
+}
+
+void view_building_coordinator::rpc_callback_manager::mark_successful_group0_commit() {
+    _previous_iteration = lowres_clock::now();
+}
+
+future<> view_building_coordinator::rpc_callback_manager::mark_rpc_started(locator::tablet_replica replica) {
+    auto lock = co_await get_units(_mutex, 1, _vbc._as);
+    _working_rpcs.insert(replica);
+}
+
+future<> view_building_coordinator::rpc_callback_manager::mark_rpc_done(locator::tablet_replica replica) {
+    auto lock = co_await get_units(_mutex, 1, _vbc._as);
+    _working_rpcs.erase(replica);
+
+    if (!_timer.armed()) {
+        auto wait_until = _previous_iteration + min_time_between_rcm_notifications;
+        if (wait_until > lowres_clock::now()) {
+            _timer.arm(wait_until);
+        } else {
+            notify_coordinator();
+        }
+    }
+
+
+    // if (_working_rpcs.empty()) {
+    //     // If there are no more RPCs to wait for,
+    //     // cancel the timer and notify the coordinator immediately
+    //     _timer.cancel();
+    //     notify_coordinator();
+    // } else if (!_timer.armed()) {
+    //     auto wait_until = _previous_iteration + min_time_between_rcm_notifications;
+    //     if (wait_until > lowres_clock::now()) {
+    //         _timer.arm(wait_until);
+    //     } else {
+    //         notify_coordinator();
+    //     }
+    // }
 }
 
 }
