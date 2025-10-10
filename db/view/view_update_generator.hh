@@ -59,7 +59,7 @@ using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 class view_update_generator : public async_sharded_service<view_update_generator> {
 public:
     static constexpr size_t registration_queue_size = 100;
-
+    static constexpr size_t max_concurrent_updates = 128;
 private:
     replica::database& _db;
     sharded<service::storage_proxy>& _proxy;
@@ -67,6 +67,7 @@ private:
     future<> _started = make_ready_future<>();
     seastar::condition_variable _pending_sstables;
     named_semaphore _registration_sem{registration_queue_size, named_semaphore_exception_factory{"view update generator"}};
+    db::timeout_semaphore _view_update_concurrency_sem{max_concurrent_updates};
     std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_with_tables;
     std::unordered_map<lw_shared_ptr<replica::table>, std::vector<sstables::shared_sstable>> _sstables_to_move;
     metrics::metric_groups _metrics;
