@@ -117,7 +117,8 @@ public:
         tracing::trace_state_ptr,
         streamed_mutation::forwarding,
         mutation_reader::forwarding,
-        const sstable_predicate&) const override;
+        const sstable_predicate&,
+        sstables::integrity_check integrity = sstables::integrity_check::no) const override;
 
     friend class sstable_position_reader_queue;
 };
@@ -152,7 +153,8 @@ public:
             tracing::trace_state_ptr,
             streamed_mutation::forwarding,
             mutation_reader::forwarding,
-            const sstable_predicate&) const override;
+            const sstable_predicate&,
+            sstables::integrity_check integrity = sstables::integrity_check::no) const override;
 
     class incremental_selector;
 };
