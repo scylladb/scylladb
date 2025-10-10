@@ -408,6 +408,10 @@ async def test_hint_to_pending(manager: ManagerClient):
         assert await_sync_point(servers[0], sync_point, 30)
 
         await manager.api.message_injection(servers[0].ip_addr, "pause_after_streaming_tablet")
-        await asyncio.wait([tablet_migration])
+        done, pending = await asyncio.wait([tablet_migration])
+        for task in pending:
+            task.cancel()
+        for task in done:
+            task.result()
 
         assert list(await cql.run_async(f"SELECT v FROM {table} WHERE pk = 0")) == [(0,)]
