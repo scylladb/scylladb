@@ -4,7 +4,6 @@
 #
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 
 import pytest
 import logging
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.mark.skip(reason = "can't make it work with the new join procedure, without error recovery")
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.asyncio
 async def test_blocked_bootstrap(manager: ManagerClient):
     """

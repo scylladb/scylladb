@@ -10,7 +10,6 @@ import asyncio
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)
@@ -24,7 +23,7 @@ async def disable_autocompaction_across_keyspaces(manager: ManagerClient, server
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("consider_only_existing_data", [True, False])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_major_compaction_consider_only_existing_data(manager: ManagerClient, consider_only_existing_data):
     """
     Test compactions drop tombstones when consider_only_existing_data is enabled.
@@ -146,7 +145,7 @@ async def test_major_compaction_flush_all_tables(manager: ManagerClient, compact
 
 # Testcase for https://github.com/scylladb/scylladb/issues/20197
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_shutdown_drain_during_compaction(manager: ManagerClient):
     """
     Test drain/shutdown during compaction doesn't throw any unexpected errors

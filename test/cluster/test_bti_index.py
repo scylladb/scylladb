@@ -11,7 +11,6 @@ import glob
 import json
 import logging
 from typing import Any
-from test.cluster.conftest import skip_mode
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import ScyllaMetrics
@@ -36,7 +35,7 @@ async def get_sstable_files_for_server(data_dir, ks, cf):
     return sstables
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_bti_index_enable(manager: ManagerClient) -> None:
     cassandra_logger = logging.getLogger('cassandra')
     cassandra_logger.setLevel(logging.INFO)

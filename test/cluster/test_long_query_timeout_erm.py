@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
 from cassandra.policies import WhiteListRoundRobinPolicy
-from test.cluster.conftest import skip_mode
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables, Column, IntType
 from test.pylib.rest_client import inject_error_one_shot
@@ -15,7 +14,7 @@ import logging
 import time
 
 logger = logging.getLogger(__name__)
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.asyncio
 @pytest.mark.parametrize("query_type,should_wait_for_timeout,shutdown_nodes", [
     ("SELECT", True, True),
@@ -135,7 +134,7 @@ async def test_long_query_timeout_erm(request, manager: ManagerClient, query_typ
             with pytest.raises(Exception, match="Operation failed for"):
                 await query_future
 
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.asyncio
 @pytest.mark.parametrize("enable_tablets", [True, False])
 async def test_long_query_timeout_without_failure_erm(request, manager: ManagerClient, enable_tablets):

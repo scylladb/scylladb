@@ -11,7 +11,6 @@ from test.pylib.rest_client import read_barrier
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_tablet_count, get_base_table, get_tablet_replicas
 from test.cluster.util import new_test_keyspace
-from test.cluster.conftest import skip_mode
 
 import asyncio
 import logging
@@ -173,7 +172,7 @@ async def test_cdc_virtual_table(manager: ManagerClient):
 # get the same result.
 # Then trigger tablet merge and do the same, verifying streams are merged.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_cdc_stream_split_and_merge_basic(manager: ManagerClient):
     cfg = { 'tablet_load_stats_refresh_interval_in_seconds': 1 }
     servers = await manager.servers_add(1, config=cfg)

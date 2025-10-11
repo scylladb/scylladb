@@ -11,13 +11,12 @@ import time
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 from test.cluster.util import (delete_raft_data_and_upgrade_state, enter_recovery_state, log_run_time,
                                reconnect_driver, wait_for_upgrade_state, wait_until_upgrade_finishes)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 @log_run_time
 async def test_recover_stuck_raft_recovery(request, manager: ManagerClient):
     """

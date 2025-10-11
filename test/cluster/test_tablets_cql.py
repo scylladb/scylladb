@@ -11,14 +11,13 @@ from cassandra.protocol import InvalidRequest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
-from test.cluster.conftest import skip_mode
 from test.cluster.util import disable_schema_agreement_wait, create_new_test_keyspace, new_test_keyspace
 
 logger = logging.getLogger(__name__)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
     config = {
         'tablets_mode_for_new_keyspaces': 'enabled'
@@ -69,7 +68,7 @@ async def test_alter_dropped_tablets_keyspace(manager: ManagerClient) -> None:
         await task
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_alter_tablets_keyspace_concurrent_modification(manager: ManagerClient) -> None:
     config = {
         'tablets_mode_for_new_keyspaces': 'enabled'
