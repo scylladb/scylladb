@@ -602,7 +602,7 @@ public:
     future<> cdc_set_rewritten(std::optional<cdc::generation_id_v1>);
 
     future<> read_cdc_streams_state(std::optional<table_id> table, noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f);
-    future<> read_cdc_streams_history(table_id table, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
+    future<> read_cdc_streams_history(table_id table, std::optional<db_clock::time_point> from, noncopyable_function<future<>(table_id, db_clock::time_point, cdc::cdc_stream_diff)> f);
 
     // Load Raft Group 0 id from scylla.local
     future<utils::UUID> get_raft_group0_id();
