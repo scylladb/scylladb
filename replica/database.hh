@@ -872,6 +872,9 @@ public:
     mutation_source as_mutation_source() const;
     mutation_source as_mutation_source_excluding_staging() const;
 
+    mutation_reader_consumer make_interposer_consumer(const mutation_source_metadata& metadata, mutation_reader_consumer end_consumer, sstables::offstrategy offstrategy) const;
+    uint64_t adjust_partition_estimate(const mutation_source_metadata& metadata, uint64_t partition_estimate, sstables::offstrategy offstrategy) const;
+
     // Select all memtables which contain this token and return them as mutation sources.
     // We could return memtables here, but table has no public memtable accessors so far.
     // Memtables are mutable objects, so it is best to keep it this way.

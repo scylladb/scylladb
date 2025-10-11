@@ -46,12 +46,11 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
             });
             //FIXME: for better estimations this should be transmitted from remote
             auto metadata = mutation_source_metadata{};
-            auto& cs = cf->get_compaction_strategy();
             // Data segregation is postponed to happen during off-strategy if latter is enabled, which
             // means partition estimation shouldn't be adjusted.
-            const auto adjusted_estimated_partitions = (offstrategy) ? estimated_partitions : cs.adjust_partition_estimate(metadata, estimated_partitions, cf->schema());
+            const auto adjusted_estimated_partitions = cf->adjust_partition_estimate(metadata, estimated_partitions, offstrategy);
             mutation_reader_consumer consumer =
-                    [cf = std::move(cf), adjusted_estimated_partitions, use_view_update_path, &vb, &vbw, origin = std::move(origin),
+                    [cf, adjusted_estimated_partitions, use_view_update_path, &vb, &vbw, origin = std::move(origin),
                 offstrategy, repaired_at, sstable_list_to_mark_as_repaired, frozen_guard] (mutation_reader reader) {
                 sstables::shared_sstable sst;
                 try {
@@ -89,9 +88,7 @@ mutation_reader_consumer make_streaming_consumer(sstring origin,
                     return make_ready_future<>();
                 });
             };
-            if (!offstrategy) {
-                consumer = cs.make_interposer_consumer(metadata, std::move(consumer));
-            }
+            consumer = cf->make_interposer_consumer(metadata, std::move(consumer), offstrategy);
             co_return co_await consumer(std::move(reader));
         } catch (...) {
             ex = std::current_exception();
