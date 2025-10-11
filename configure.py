@@ -2847,6 +2847,7 @@ def create_build_system(args):
     for mode, mode_config in build_modes.items():
         extra_cxxflags = ' '.join(get_extra_cxxflags(mode, mode_config, args.cxx, args.debuginfo))
         mode_config['cxxflags'] += f' {extra_cxxflags}'
+        mode_config['cxx_ld_flags'] += ' ' + args.user_ldflags
 
         mode_config['per_src_extra_cxxflags']['release.cc'] = ' '.join(get_release_cxxflags(scylla_product, scylla_version, scylla_release))
 
