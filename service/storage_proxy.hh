@@ -11,6 +11,7 @@
 #pragma once
 
 #include <variant>
+#include "cdc/log.hh"
 #include "inet_address_vectors.hh"
 #include "replica/database_fwd.hh"
 #include "message/messaging_service_fwd.hh"
@@ -165,6 +166,7 @@ struct storage_proxy_coordinator_query_result {
 };
 
 struct storage_proxy_coordinator_mutate_options {
+    cdc::per_request_options cdc_options;
     node_local_only node_local_only = node_local_only::no;
 };
 
@@ -686,8 +688,9 @@ public:
     * @param mutations the mutations to be applied across the replicas
     * @param consistency_level the consistency level for the operation
     * @param tr_state trace state handle
+    * @param request_opts additional options passed to CDC for these mutations
     */
-    future<> mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false);
+    future<> mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters = false, cdc::per_request_options request_opts = {});
 
     /**
     * See mutate. Does the same, but returns some exceptions
@@ -796,7 +799,7 @@ public:
     future<bool> cas(schema_ptr schema, cas_shard cas_shard, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector partition_ranges, coordinator_query_options query_options,
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-            clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
+            clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true, cdc::per_request_options cdc_opts = {});
 
     mutation get_batchlog_mutation_for(const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 
