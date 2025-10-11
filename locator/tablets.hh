@@ -852,6 +852,24 @@ class abstract_replication_strategy;
 /// * The keyspace need not exist. We use its name purely for informational reasons (in error messages).
 void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr, const abstract_replication_strategy&);
 
+// Verify that the provided keyspace corresponding to the provided replication strategy will be RF-rack-valid
+// after the provided topology change operation is applied.
+// The operation is either adding a node, or removing / decommissioning a node.
+// The added/removed node should be a normal token owning node. Nodes that don't own tokens don't affect RF-rack-validity.
+
+struct rf_rack_topology_operation {
+    enum class type {
+        add,
+        remove // node remove or decommission
+    };
+    type tag;
+    host_id node_id;
+    sstring dc;
+    sstring rack;
+};
+
+void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars, rf_rack_topology_operation op);
+
 }
 
 template <>

@@ -80,6 +80,8 @@ public:
 
     lw_shared_ptr<data_dictionary::keyspace_metadata> get_keyspace_metadata(const locator::token_metadata& tm, const gms::feature_service& feat, const db::config& cfg);
 
+    bool uses_tablets(query_processor& qp) const;
+
 private:
     ::shared_ptr<event_t> created_event() const;
 };

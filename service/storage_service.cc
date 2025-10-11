@@ -4909,6 +4909,10 @@ future<> storage_service::wait_for_topology_not_busy() {
     }
 }
 
+bool storage_service::has_transition_nodes() const {
+    return !_topology_state_machine._topology.transition_nodes.empty();
+}
+
 semaphore& storage_service::get_do_sample_sstables_concurrency_limiter() {
     return _do_sample_sstables_concurrency_limiter;
 }
@@ -5998,6 +6002,8 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
                     utils::get_local_injector().inject("stop_before_streaming",
                         [] { std::raise(SIGSTOP); });
+
+                    co_await utils::get_local_injector().inject("wait_before_streaming", utils::wait_for_message(60s));
 
                     switch(rs.state) {
                     case node_state::bootstrapping:

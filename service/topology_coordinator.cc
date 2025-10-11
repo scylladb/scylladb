@@ -56,6 +56,7 @@
 #include "topology_mutation.hh"
 #include "utils/assert.hh"
 #include "utils/error_injection.hh"
+#include "utils/overloaded_functor.hh"
 #include "utils/stall_free.hh"
 #include "utils/to_string.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
@@ -2780,7 +2781,16 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 if (_topo_sm._topology.normal_nodes.empty()) {
                     rtlogger.info("skipping join node handshake for the first node in the cluster");
                 } else {
-                    auto validation_result = validate_joining_node(node);
+                    auto validation_result = std::visit(overloaded_functor {
+                        [&] (node_validation_success&& p) -> std::variant<join_node_response_params::accepted, join_node_response_params::rejected> {
+                            return join_node_response_params::accepted {};
+                        },
+                        [&] (node_validation_failure&& p) -> std::variant<join_node_response_params::accepted, join_node_response_params::rejected> {
+                            return join_node_response_params::rejected {
+                                .reason = std::move(p.reason)
+                            };
+                        }
+                    }, validate_joining_node(node));
 
                     if (utils::get_local_injector().enter("handle_node_transition_drop_expiring")) {
                         _gossiper.get_mutable_address_map().force_drop_expiring_entries();
@@ -2879,8 +2889,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, reason);
                         break;
                         }
-                    case topology_request::leave:
+                    case topology_request::leave: {
                         SCYLLA_ASSERT(node.rs->ring);
+
+                        auto validation_result = validate_removing_node(node);
+                        if (std::holds_alternative<node_validation_failure>(validation_result)) {
+                            builder.with_node(node.id)
+                                   .del("topology_request");
+                            rtbuilder.done(format("node decommission rejected: {}",
+                                    std::get<node_validation_failure>(validation_result).reason));
+                            co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()},
+                                                           "decommission rejected");
+                            break;
+                        }
+
                         // start decommission and put tokens of decommissioning nodes into write_both_read_old state
                         // meaning that reads will go to the replica being decommissioned
                         // but writes will go to new owner as well
@@ -2892,8 +2914,20 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
                                                        "start decommission");
                         break;
+                        }
                     case topology_request::remove: {
                         SCYLLA_ASSERT(node.rs->ring);
+
+                        auto validation_result = validate_removing_node(node);
+                        if (std::holds_alternative<node_validation_failure>(validation_result)) {
+                            builder.with_node(node.id)
+                                   .del("topology_request");
+                            rtbuilder.done(format("node remove rejected: {}",
+                                    std::get<node_validation_failure>(validation_result).reason));
+                            co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()},
+                                                           "removenode rejected");
+                            break;
+                        }
 
                         builder.set_transition_state(topology::transition_state::tablet_draining)
                                .set_version(_topo_sm._topology.version + 1)
@@ -2970,13 +3004,33 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
     }
 
-    std::variant<join_node_response_params::accepted, join_node_response_params::rejected>
+    struct node_validation_success {};
+    struct node_validation_failure {
+        sstring reason;
+    };
+    using node_validation_result = std::variant<node_validation_success, node_validation_failure>;
+
+    node_validation_result
     validate_joining_node(const node_to_work_on& node) {
         if (*node.request == topology_request::replace) {
             auto replaced_id = std::get<replace_param>(node.req_param.value()).replaced_id;
             if (!_topo_sm._topology.normal_nodes.contains(replaced_id)) {
-                return join_node_response_params::rejected {
+                return node_validation_failure {
                     .reason = ::format("Cannot replace node {} because it is not in the 'normal' state", replaced_id),
+                };
+            }
+        }
+
+        if (*node.request == topology_request::join) {
+            auto num_tokens = std::get<join_param>(node.req_param.value()).num_tokens;
+            auto tokens_string = std::get<join_param>(node.req_param.value()).tokens_string;
+            bool is_zero_token_node = (num_tokens == 0 && tokens_string.empty());
+
+            if (!is_zero_token_node && !_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
+                    locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::add,
+                        to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
+                return node_validation_failure{
+                    .reason = "Cannot join the node because its addition would make some existing keyspace not RF-rack-valid",
                 };
             }
         }
@@ -2986,13 +3040,23 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         std::ranges::set_difference(node.topology->enabled_features, supported_features, std::back_inserter(unsupported_features));
         if (!unsupported_features.empty()) {
             rtlogger.warn("node {} does not understand some features: {}", node.id, unsupported_features);
-            return join_node_response_params::rejected{
+            return node_validation_failure {
                 .reason = seastar::format("Feature check failed. The node does not support some features that are enabled by the cluster: {}",
                         unsupported_features),
             };
         }
 
-        return join_node_response_params::accepted {};
+        return node_validation_success {};
+    }
+
+    node_validation_result
+    validate_removing_node(const node_to_work_on& node) {
+        if (!_db.check_rf_rack_validity_with_topology_change(get_token_metadata_ptr(),
+                locator::rf_rack_topology_operation{locator::rf_rack_topology_operation::type::remove,
+                    to_host_id(node.id), node.rs->datacenter, node.rs->rack})) {
+            return node_validation_failure{"Cannot remove the node because its removal would make some existing keyspace not RF-rack-valid"};
+        }
+        return node_validation_success {};
     }
 
     // Tries to finish accepting the joining node by updating the cluster
