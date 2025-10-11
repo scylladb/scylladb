@@ -510,3 +510,13 @@ def test_mutation_fragments_vs_token(cql, test_keyspace, scylla_only):
         cql.execute(f'INSERT INTO {table} (pk, c) VALUES (0, 0)')
         # FIXME add some reasonable validation of selected keys vs tokens
         cql.execute(f'SELECT * FROM MUTATION_FRAGMENTS({table}) WHERE token(pk) <= -1')
+
+
+def test_virtual_table(cql):
+    clients = list(cql.execute('SELECT * FROM MUTATION_FRAGMENTS(system.clients)'))
+
+    # There should be at least one client -- 'cql'
+    assert len(clients) > 0
+
+    for row in clients:
+        assert row.mutation_source == "virtual-table"
