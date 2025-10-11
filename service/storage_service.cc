@@ -5584,7 +5584,7 @@ storage_service::describe_ring_for_table(const sstring& keyspace_name, const sst
     std::unordered_map<locator::host_id, locator::describe_ring_endpoint_info> host_infos;
     co_await tmap.for_each_tablet([&] (locator::tablet_id id, const locator::tablet_info& info) -> future<> {
         auto range = tmap.get_token_range(id);
-        auto& replicas = info.replicas;
+        auto& replicas = info.replicas();
         dht::token_range_endpoints tr;
         if (range.start()) {
             tr._start_token = range.start()->value().to_sstring();
@@ -6305,7 +6305,7 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         tasks::task_info global_tablet_repair_task_info;
         std::optional<locator::tablet_replica_set> replicas = std::nullopt;
         if (trinfo->stage == locator::tablet_transition_stage::repair) {
-            global_tablet_repair_task_info = {tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info.tablet_task_id.uuid()}, 0};
+            global_tablet_repair_task_info = {tasks::task_id{tmap.get_tablet_info(tablet.tablet).repair_task_info().tablet_task_id.uuid()}, 0};
         } else {
             auto migration_streaming_info = get_migration_streaming_info(get_token_metadata_ptr()->get_topology(), tmap.get_tablet_info(tablet.tablet), *trinfo);
             replicas = locator::tablet_replica_set{migration_streaming_info.read_from.begin(), migration_streaming_info.read_from.end()};
@@ -6320,26 +6320,6 @@ future<service::tablet_operation_repair_result> storage_service::repair_tablet(l
         co_return std::get<service::tablet_operation_repair_result>(result);
     }
     on_internal_error(slogger, "Got wrong tablet_operation_repair_result");
-}
-
-future<service::tablet_operation_repair_result> storage_service::repair_colocated_tablets(locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets, service::session_id session_id) {
-    auto base_repair_result = co_await repair_tablet(base_tablet, session_id);
-    gc_clock::time_point min_repair_time = base_repair_result.repair_time;
-
-    // repair derived co-located tablets
-    for (auto tablet : tablets) {
-        if (tablet == base_tablet) {
-            continue;
-        }
-
-        auto tablet_repair_result = co_await repair_tablet(tablet, session_id);
-
-        min_repair_time = std::min(min_repair_time, tablet_repair_result.repair_time);
-    }
-
-    co_return tablet_operation_repair_result {
-        min_repair_time
-    };
 }
 
 future<> storage_service::clone_locally_tablet_storage(locator::global_tablet_id tablet, locator::tablet_replica leaving, locator::tablet_replica pending) {
@@ -6423,7 +6403,7 @@ future<> storage_service::stream_tablet(locator::global_tablet_id tablet) {
             throw std::runtime_error(fmt::format("Tablet {} has pending replica different than this one", tablet));
         }
 
-        auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+        const auto& tinfo = tmap.get_tablet_info(tablet.tablet);
         auto range = tmap.get_token_range(tablet.tablet);
         std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
         locator::tablet_migration_streaming_info streaming_info = get_migration_streaming_info(tm->get_topology(), tinfo, *trinfo);
@@ -6598,7 +6578,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
             }
 
             if (trinfo->stage == locator::tablet_transition_stage::cleanup) {
-                auto& tinfo = tmap.get_tablet_info(tablet.tablet);
+                const auto& tinfo = tmap.get_tablet_info(tablet.tablet);
                 std::optional<locator::tablet_replica> leaving_replica = locator::get_leaving_replica(tinfo, *trinfo);
                 if (!leaving_replica) {
                     throw std::runtime_error(fmt::format("Tablet {} has no leaving replica", tablet));
@@ -6629,7 +6609,7 @@ future<> storage_service::cleanup_tablet(locator::global_tablet_id tablet) {
 
 static bool increases_replicas_per_rack(const locator::topology& topology, const locator::tablet_info& tinfo, sstring dst_rack) {
     std::unordered_map<sstring, size_t> m;
-    for (auto& replica: tinfo.replicas) {
+    for (auto& replica: tinfo.replicas()) {
         m[topology.get_rack(replica.host)]++;
     }
     auto max = *std::ranges::max_element(m | std::views::values);
@@ -6696,19 +6676,6 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // we don't allow requesting repair on tablets of colocated tables, because the repair task info
-        // is stored on the base table's tablet map which is shared by all the tables that are colocated with it.
-        // we don't have a way currently to store the repair task info for a specific colocated table.
-        // repair can only be requested for the base table, and this will repair the base table's tablets
-        // and all its colocated tablets as well.
-        if (!get_token_metadata().tablets().is_base_table(table)) {
-            throw std::invalid_argument(::format(
-                "Cannot set repair request on table {} because it is colocated with the base table {}. "
-                "Repair requests can be made only on the base table. "
-                "Repairing the base table will also repair all tables colocated with it.",
-                table, get_token_metadata().tablets().get_base_table(table)));
-        }
-
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         utils::chunked_vector<canonical_mutation> updates;
 
@@ -6723,15 +6690,15 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
 
         for (const auto& token : tokens) {
             auto tid = tmap.get_tablet_id(token);
-            auto& tinfo = tmap.get_tablet_info(tid);
-            auto& req_id = tinfo.repair_task_info.tablet_task_id;
+            auto&& tinfo = tmap.get_tablet_info(tid);
+            auto& req_id = tinfo.repair_task_info().tablet_task_id;
             if (req_id) {
                 throw std::runtime_error(fmt::format("Tablet {} is already in repair by tablet_task_id={}",
                         locator::global_tablet_id{table, tid}, req_id));
             }
             auto last_token = tmap.get_last_token(tid);
             updates.emplace_back(
-                tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+                replica::tablet_mutation_builder(guard.write_timestamp(), table)
                     .set_repair_task_info(last_token, repair_task_info, _feature_service)
                     .build());
         }
@@ -6753,7 +6720,7 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         return std::all_of(tokens.begin(), tokens.end(), [&] (const dht::token& token) {
             auto id = tmap.get_tablet_id(token);
-            return tmap.get_tablet_info(id).repair_task_info.tablet_task_id != repair_task_info.tablet_task_id;
+            return tmap.get_tablet_info(id).repair_task_info().tablet_task_id != repair_task_info.tablet_task_id;
         });
     });
 
@@ -6784,26 +6751,17 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
     while (true) {
         auto guard = co_await get_guard_for_tablet_update();
 
-        // see add_repair_tablet_request. repair requests can only be added on base tables.
-        if (!get_token_metadata().tablets().is_base_table(table)) {
-            throw std::invalid_argument(::format(
-                "Cannot delete repair request on table {} because it is colocated with the base table {}. "
-                "Repair requests can be added and deleted only on the base table.",
-                table, get_token_metadata().tablets().get_base_table(table)));
-        }
-
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
         utils::chunked_vector<canonical_mutation> updates;
 
-        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& info) -> future<> {
-            auto& tinfo = tmap.get_tablet_info(tid);
-            auto& req_id = tinfo.repair_task_info.tablet_task_id;
+        co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) -> future<> {
+            auto& req_id = tinfo.repair_task_info().tablet_task_id;
             if (req_id != tablet_task_id) {
                 co_return;
             }
             auto last_token = tmap.get_last_token(tid);
             auto* trinfo = tmap.get_tablet_transition_info(tid);
-            auto update = tablet_mutation_builder_for_base_table(guard.write_timestamp(), table)
+            auto update = replica::tablet_mutation_builder(guard.write_timestamp(), table)
                             .del_repair_task_info(last_token, _feature_service);
             if (trinfo && trinfo->transition == locator::tablet_transition_kind::repair) {
                 update.del_session(last_token);
@@ -6832,11 +6790,11 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
     co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         utils::chunked_vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
-        auto& tinfo = tmap.get_tablet_info(tid);
+        const auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
         auto gid = locator::global_tablet_id{table, tid};
 
-        if (!locator::contains(tinfo.replicas, src)) {
+        if (!locator::contains(tinfo.replicas(), src)) {
             throw std::runtime_error(seastar::format("Tablet {} has no replica on {}", gid, src));
         }
         auto* node = get_token_metadata().get_topology().find_node(dst.host);
@@ -6852,7 +6810,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
             return std::make_tuple(std::move(updates), std::move(reason));
         }
 
-        if (src.host != dst.host && locator::contains(tinfo.replicas, dst.host)) {
+        if (src.host != dst.host && locator::contains(tinfo.replicas(), dst.host)) {
             throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
         }
         auto src_dc_rack = get_token_metadata().get_topology().get_location(src.host);
@@ -6877,7 +6835,7 @@ future<> storage_service::move_tablet(table_id table, dht::token token, locator:
         migration_task_info.sched_nr++;
         migration_task_info.sched_time = db_clock::now();
         updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
-            .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas, src, dst))
+            .set_new_replicas(last_token, locator::replace_replica(tinfo.replicas(), src, dst))
             .set_stage(last_token, locator::tablet_transition_stage::allow_write_both_read_old)
             .set_transition(last_token, src.host == dst.host ? locator::tablet_transition_kind::intranode_migration
                                                              : locator::tablet_transition_kind::migration)
@@ -6906,7 +6864,7 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
     co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         utils::chunked_vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
-        auto& tinfo = tmap.get_tablet_info(tid);
+        const auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
         auto gid = locator::global_tablet_id{table, tid};
 
@@ -6918,11 +6876,11 @@ future<> storage_service::add_tablet_replica(table_id table, dht::token token, l
             throw std::runtime_error(format("Host {} does not have shard {}", *node, dst.shard));
         }
 
-        if (locator::contains(tinfo.replicas, dst.host)) {
+        if (locator::contains(tinfo.replicas(), dst.host)) {
             throw std::runtime_error(fmt::format("Tablet {} has replica on {}", gid, dst.host));
         }
 
-        locator::tablet_replica_set new_replicas(tinfo.replicas);
+        locator::tablet_replica_set new_replicas(tinfo.replicas());
         new_replicas.push_back(dst);
 
         updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
@@ -6950,7 +6908,7 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
     co_await transit_tablet(table, token, [=, this] (const locator::tablet_map& tmap, api::timestamp_type write_timestamp) {
         utils::chunked_vector<canonical_mutation> updates;
         auto tid = tmap.get_tablet_id(token);
-        auto& tinfo = tmap.get_tablet_info(tid);
+        const auto& tinfo = tmap.get_tablet_info(tid);
         auto last_token = tmap.get_last_token(tid);
         auto gid = locator::global_tablet_id{table, tid};
 
@@ -6962,13 +6920,13 @@ future<> storage_service::del_tablet_replica(table_id table, dht::token token, l
             throw std::runtime_error(format("Host {} does not have shard {}", *node, dst.shard));
         }
 
-        if (!locator::contains(tinfo.replicas, dst.host)) {
+        if (!locator::contains(tinfo.replicas(), dst.host)) {
             throw std::runtime_error(fmt::format("Tablet {} doesn't have replica on {}", gid, dst.host));
         }
 
         locator::tablet_replica_set new_replicas;
-        new_replicas.reserve(tinfo.replicas.size() - 1);
-        std::copy_if(tinfo.replicas.begin(), tinfo.replicas.end(), std::back_inserter(new_replicas), [&dst] (auto r) { return r != dst; });
+        new_replicas.reserve(tinfo.replicas().size() - 1);
+        std::copy_if(tinfo.replicas().begin(), tinfo.replicas().end(), std::back_inserter(new_replicas), [&dst] (auto r) { return r != dst; });
 
         updates.emplace_back(tablet_mutation_builder_for_base_table(write_timestamp, table)
             .set_new_replicas(last_token, new_replicas)
@@ -7038,7 +6996,7 @@ future<locator::load_stats> storage_service::load_stats_for_tablet_based_tables(
             // This helps to reduce the discrepancy window.
             auto tablet_filter = [&me] (const locator::tablet_map& tmap, locator::global_tablet_id id) {
                 auto transition = tmap.get_tablet_transition_info(id.tablet);
-                auto& info = tmap.get_tablet_info(id.tablet);
+                const auto& info = tmap.get_tablet_info(id.tablet);
 
                 // if tablet is not in transit, it's filtered in.
                 if (!transition) {
@@ -7653,12 +7611,6 @@ void storage_service::init_messaging_service() {
     ser::storage_service_rpc_verbs::register_tablet_repair(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id tablet, rpc::optional<service::session_id> session_id) {
         return handle_raft_rpc(dst_id, [tablet, session_id = session_id.value_or(service::session_id::create_null_id())] (auto& ss) -> future<service::tablet_operation_repair_result> {
             auto res = co_await ss.repair_tablet(tablet, session_id);
-            co_return res;
-        });
-    });
-    ser::storage_service_rpc_verbs::register_tablet_repair_colocated(&_messaging.local(), [handle_raft_rpc] (raft::server_id dst_id, locator::global_tablet_id base_tablet, std::vector<locator::global_tablet_id> tablets, rpc::optional<service::session_id> session_id) {
-        return handle_raft_rpc(dst_id, [base_tablet, tablets = std::move(tablets), session_id = session_id.value_or(service::session_id::create_null_id())] (auto& ss) -> future<service::tablet_operation_repair_result> {
-            auto res = co_await ss.repair_colocated_tablets(base_tablet, std::move(tablets), session_id);
             co_return res;
         });
     });
