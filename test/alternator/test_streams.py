@@ -849,6 +849,23 @@ def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and
         return events
     do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
+# This test checks if deleting an existing item in a table without a clustering
+# key produces an event which contains the OldImage. Alternator uses different
+# types of tombstones for deletions from tables with a CK (row tombstone) and
+# with a partition key only (partition tombstone), which may be handled
+# differently by CDC. Specifically, the current implementation doesn't select
+# a preimage for partition deletions, hence the missing OldImage.
+@pytest.mark.xfail(reason="Currently fails - see issue #26382")
+def test_streams_putitem_deleteitem_no_ck(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+    def do_updates(table, p, _):
+        events = []
+        table.put_item(Item={'p': p, 'x': 1})
+        events.append(['INSERT', {'p': p}, None, {'p': p, 'x': 1}])
+        table.delete_item(Key={'p': p})
+        events.append(['REMOVE', {'p': p}, {'p': p, 'x': 1}, None])
+        return events
+    do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
+
 # Test a single UpdateItem. Should result in a single INSERT event.
 # Currently fails because Alternator generates a MODIFY event even though
 # this is a new item (issue #6918).
