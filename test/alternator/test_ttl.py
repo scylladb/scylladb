@@ -657,7 +657,6 @@ def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
 # content), and a special userIdentity flag saying that this is not a regular
 # REMOVE but an expiration.
 @pytest.mark.veryslow
-@pytest.mark.xfail(reason="TTL expiration event in streams not yet marked")
 def test_ttl_expiration_streams(dynamodb, dynamodbstreams):
     # In my experiments, a 30-minute (1800 seconds) is the typical
     # expiration delay in this test. If the test doesn't finish within

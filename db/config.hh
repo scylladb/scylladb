@@ -479,6 +479,7 @@ public:
     named_value<bool> alternator_enforce_authorization;
     named_value<sstring> alternator_write_isolation;
     named_value<uint32_t> alternator_streams_time_window_s;
+    named_value<bool> alternator_streams_strict_compatibility;
     named_value<uint32_t> alternator_timeout_in_ms;
     named_value<double> alternator_ttl_period_in_seconds;
     named_value<sstring> alternator_describe_endpoints;

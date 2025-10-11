@@ -6,15 +6,28 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "bytes.hh"
+#include "bytes_fwd.hh"
+#include "mutation/atomic_cell.hh"
+#include "mutation/atomic_cell_or_collection.hh"
+#include "mutation/collection_mutation.hh"
 #include "mutation/mutation.hh"
+#include "mutation/tombstone.hh"
 #include "schema/schema.hh"
 
+#include "seastar/core/sstring.hh"
 #include "types/concrete_types.hh"
+#include "types/types.hh"
 #include "types/user.hh"
 
 #include "split.hh"
 #include "log.hh"
 #include "change_visitor.hh"
+#include "utils/managed_bytes.hh"
+#include <string_view>
+#include <unordered_map>
+
+extern logging::logger cdc_log;
 
 struct atomic_column_update {
     column_id id;
@@ -481,10 +494,12 @@ struct should_split_visitor {
     // Otherwise we store the change's ttl.
     std::optional<gc_clock::duration> _ttl = std::nullopt;
 
+    virtual ~should_split_visitor() = default;
+
     inline bool finished() const { return _result; }
     inline void stop() { _result = true; }
 
-    void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
+    virtual void visit(api::timestamp_type ts, gc_clock::duration ttl = gc_clock::duration(0)) {
         if (_ts != api::missing_timestamp && _ts != ts) {
             return stop();
         }
@@ -503,7 +518,7 @@ struct should_split_visitor {
 
     void collection_tombstone(const tombstone& t) { visit(t.timestamp + 1); }
 
-    void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
+    virtual void live_collection_cell(bytes_view, const atomic_cell_view& cell) {
         if (_had_row_marker) {
             // nonatomic updates cannot be expressed with an INSERT.
             return stop();
@@ -513,7 +528,7 @@ struct should_split_visitor {
     void dead_collection_cell(bytes_view, const atomic_cell_view& cell) { visit(cell); }
     void collection_column(const column_definition&, auto&& visit_collection) { visit_collection(*this); }
 
-    void marker(const row_marker& rm) {
+    virtual void marker(const row_marker& rm) {
         _had_row_marker = true;
         visit(rm.timestamp(), get_ttl(rm));
     }
@@ -554,7 +569,29 @@ struct should_split_visitor {
     }
 };
 
-bool should_split(const mutation& m) {
+// This is the same as the above, but it doesn't split a row marker away from
+// an update. As a result, updates that create an item appear as a single log
+// row.
+class alternator_should_split_visitor : public should_split_visitor {
+public:
+    ~alternator_should_split_visitor() override = default;
+
+    void live_collection_cell(bytes_view, const atomic_cell_view& cell) override {
+        visit(cell.timestamp());
+    }
+
+    void marker(const row_marker& rm) override {
+        visit(rm.timestamp());
+    }
+};
+
+bool should_split(const mutation& m, const per_request_options& options) {
+    if (options.alternator) {
+        alternator_should_split_visitor v;
+        cdc::inspect_mutation(m, v);
+        return v._result || v._ts == api::missing_timestamp;
+    }
+
     should_split_visitor v;
 
     cdc::inspect_mutation(m, v);
@@ -564,8 +601,84 @@ bool should_split(const mutation& m) {
         || v._ts == api::missing_timestamp;
 }
 
+static bool entries_match_row_state(const schema_ptr& base_schema, const cell_map& row_state, const std::vector<atomic_column_update>& atomic_entries,
+        std::vector<nonatomic_column_update>& nonatomic_entries) {
+    for (const auto& e : atomic_entries) {
+        const column_definition& cdef = base_schema->column_at(column_kind::regular_column, e.id);
+        auto it = row_state.find(&cdef);
+        if (it == row_state.end()) {
+            return false;
+        }
+        if (to_managed_bytes_opt(e.cell.value().linearize()) != it->second) {
+            return false;
+        }
+    }
+
+    for (auto& e : nonatomic_entries) {
+        const column_definition& cdef = base_schema->column_at(column_kind::regular_column, e.id);
+        auto it = row_state.find(&cdef);
+        if (it == row_state.end()) {
+            return false;
+        }
+
+        auto current_raw_map = cdef.type->deserialize(*it->second);
+        map_type_impl::native_type current_values = value_cast<map_type_impl::native_type>(current_raw_map);
+
+        if (current_values.size() != e.cells.size()) {
+            return false;
+        }
+        
+        std::unordered_map<sstring_view, bytes> kvm;
+        for (const auto& entry : current_values) {
+            const sstring& attr_name = value_cast<sstring>(entry.first);
+            auto v = value_cast<bytes>(entry.second);
+            kvm[std::string_view(attr_name)] = v;
+        }
+
+        for (auto& [key, value] : e.cells) {
+            auto upd = value.value().linearize();
+            auto k = to_string_view(key);
+            if (kvm[k] != upd) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool should_skip(batch& changes, const mutation& base_mutation, change_processor& processor) {
+    const schema_ptr& base_schema = base_mutation.schema();
+    if (!changes.static_updates.empty() || changes.partition_deletions.has_value() || !changes.clustered_range_deletions.empty()
+        || !changes.clustered_row_deletions.empty()) {
+        return false;
+    }
+
+    for (clustered_row_insert& u : changes.clustered_inserts) {
+        cell_map* row_state = get_row_state(processor.clustering_row_states(), u.key);
+        if (!row_state) {
+            return false;
+        }
+        if (!entries_match_row_state(base_schema, *row_state, u.atomic_entries, u.nonatomic_entries)) {
+            return false;
+        }
+    }
+
+    for (clustered_row_update& u : changes.clustered_updates) {
+        cell_map* row_state = get_row_state(processor.clustering_row_states(), u.key);
+        if (!row_state) {
+            return false;
+        }
+        if (!entries_match_row_state(base_schema, *row_state, u.atomic_entries, u.nonatomic_entries)) {
+            return false;
+        }
+    }
+
+    cdc_log.trace("Skipping CDC log for mutation {}", base_mutation);
+    return true;
+}
+
 void process_changes_with_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage) {
+        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
     const auto base_schema = base_mutation.schema();
     auto changes = extract_changes(base_mutation);
     auto pk = base_mutation.key();
@@ -577,9 +690,6 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
     const auto last_timestamp = changes.rbegin()->first;
 
     for (auto& [change_ts, btch] : changes) {
-        const bool is_last = change_ts == last_timestamp;
-        processor.begin_timestamp(change_ts, is_last);
-
         clustered_column_set affected_clustered_columns_per_row{clustering_key::less_compare(*base_schema)};
         one_kind_column_set affected_static_columns{base_schema->static_columns_count()};
 
@@ -588,6 +698,12 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
             affected_clustered_columns_per_row = btch.get_affected_clustered_columns_per_row(*base_mutation.schema());
         }
 
+        if (alternator_strict_compatibility && should_skip(btch, base_mutation, processor)) {
+            continue;
+        }
+
+        const bool is_last = change_ts == last_timestamp;
+        processor.begin_timestamp(change_ts, is_last);
         if (enable_preimage) {
             if (affected_static_columns.count() > 0) {
                 processor.produce_preimage(nullptr, affected_static_columns);
@@ -675,7 +791,13 @@ void process_changes_with_splitting(const mutation& base_mutation, change_proces
 }
 
 void process_changes_without_splitting(const mutation& base_mutation, change_processor& processor,
-        bool enable_preimage, bool enable_postimage) {
+        bool enable_preimage, bool enable_postimage, bool alternator_strict_compatibility) {
+    if (alternator_strict_compatibility) {
+        auto changes = extract_changes(base_mutation);
+        if (should_skip(changes.begin()->second, base_mutation, processor)) {
+            return;
+        }
+    }
     auto ts = find_timestamp(base_mutation);
     processor.begin_timestamp(ts, true);
 
