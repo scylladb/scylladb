@@ -34,7 +34,6 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
-#include "s3_retry_strategy.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
@@ -121,10 +120,7 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
 
     _creds_update_timer.arm(lowres_clock::now());
     if (!_retry_strategy) {
-        _retry_strategy = std::make_unique<aws::s3_retry_strategy>([this]() -> future<> {
-            auto units = co_await get_units(_creds_sem, 1);
-            co_await update_credentials_and_rearm();
-        });
+        _retry_strategy = std::make_unique<aws::default_retry_strategy>();
     }
 }
 
@@ -321,6 +317,10 @@ future<> client::make_request(http::request req,
                 s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
                          utils::aws::format_time_point(db_clock::now()),
                          request.get_header("x-amz-date"));
+                continue;
+            }
+            if (ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                _credentials = {};
                 continue;
             }
             map_s3_client_exception(std::current_exception());
