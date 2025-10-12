@@ -1306,7 +1306,8 @@ const effective_replication_map_ptr& token_metadata_guard::get_erm() const {
 
 static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr tmptr, const abstract_replication_strategy& ars,
         const std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_set<host_id>>>& dc_rack_map,
-        std::function<bool(host_id)> is_normal_token_owner) {
+        std::function<bool(host_id)> is_normal_token_owner,
+        std::function<bool(host_id)> is_transitioning_token_owner) {
     tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Starting verifying that keyspace '{}' is RF-rack-valid", ks);
 
     // Any keyspace that does NOT use tablets is RF-rack-valid.
@@ -1331,12 +1332,18 @@ static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metad
         tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Verifying for '{}' / '{}'", ks, dc);
 
         size_t normal_rack_count = 0;
+        size_t transitioning_rack_count = 0;
         for (const auto& [_, rack_nodes] : rack_map) {
             // We must ignore zero-token nodes because they don't take part in replication.
             // Verify that this rack has at least one normal node.
             const bool normal_rack = std::ranges::any_of(rack_nodes, is_normal_token_owner);
             if (normal_rack) {
                 ++normal_rack_count;
+            } else {
+                const bool is_transitioning_rack = std::ranges::any_of(rack_nodes, is_transitioning_token_owner);
+                if (is_transitioning_rack) {
+                    ++transitioning_rack_count;
+                }
             }
         }
 
@@ -1344,12 +1351,14 @@ static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metad
 
         // We must not allow for a keyspace to become RF-rack-invalid. Any attempt at that must be rejected.
         // For more context, see: scylladb/scylladb#23276.
-        const bool invalid_rf = rf != normal_rack_count && rf != 1 && rf != 0;
+        // If some rack is undetermined because it has only transitioning nodes and no normal nodes, we cannot
+        // use normal_rack_count to determine RF-rack-validity.
+        const bool valid_rf = (rf == normal_rack_count && transitioning_rack_count == 0) || rf == 1 || rf == 0;
         // Edge case: the DC in question is an arbiter DC and does NOT take part in replication.
         // Any positive RF for that DC is invalid.
         const bool invalid_arbiter_dc = normal_rack_count == 0 && rf > 0;
 
-        if (invalid_rf || invalid_arbiter_dc) {
+        if (!valid_rf || invalid_arbiter_dc) {
             throw std::invalid_argument(std::format(
                     "The keyspace '{}' is required to be RF-rack-valid. "
                     "That condition is violated for DC '{}': RF={} vs. rack count={}.",
@@ -1364,7 +1373,11 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
     assert_rf_rack_valid_keyspace(ks, tmptr, ars,
         tmptr->get_topology().get_datacenter_racks(),
         [&tmptr] (host_id host) {
-            return tmptr->is_normal_token_owner(host);
+            return tmptr->is_normal_token_owner(host) && !tmptr->is_leaving(host);
+        },
+        [&tmptr] (host_id host) {
+            return tmptr->get_topology().get_node(host).is_bootstrapping() ||
+                    (tmptr->is_normal_token_owner(host) && tmptr->is_leaving(host));
         }
     );
 }
@@ -1401,7 +1414,14 @@ void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metadata_ptr
             if (op.tag == rf_rack_topology_operation::type::add && host == op.node_id) {
                 return true;
             }
-            return tmptr->is_normal_token_owner(host);
+            return tmptr->is_normal_token_owner(host) && !tmptr->is_leaving(host);
+        },
+        [&tmptr, &op] (host_id host) {
+            if (op.tag == rf_rack_topology_operation::type::add && host == op.node_id) {
+                return false;
+            }
+            return tmptr->get_topology().get_node(host).is_bootstrapping() ||
+                    (tmptr->is_normal_token_owner(host) && tmptr->is_leaving(host));
         }
     );
 }
