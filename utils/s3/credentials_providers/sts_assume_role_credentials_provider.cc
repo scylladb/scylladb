@@ -44,7 +44,7 @@ future<> sts_assume_role_credentials_provider::update_credentials() {
     auto factory = std::make_unique<utils::http::dns_connection_factory>(sts_host, port, is_secured, sts_logger);
     retryable_http_client http_client(std::move(factory), 1, retryable_http_client::ignore_exception, http::experimental::client::retry_requests::yes, retry_strategy);
     co_await http_client.make_request(
-        std::move(req),
+        req,
         [this](const http::reply&, input_stream<char>&& in) -> future<> {
             auto input = std::move(in);
             auto body = co_await util::read_entire_stream_contiguous(input);

@@ -21,7 +21,7 @@ public:
                           error_handler error_func,
                           seastar::http::experimental::client::retry_requests should_retry,
                           const aws::retry_strategy& retry_strategy);
-    seastar::future<> make_request(seastar::http::request req,
+    seastar::future<> make_request(seastar::http::request& req,
                                    seastar::http::experimental::client::reply_handler handle,
                                    std::optional<seastar::http::reply::status_type> expected = std::nullopt,
                                    seastar::abort_source* = nullptr);
@@ -31,7 +31,7 @@ public:
 
 private:
     seastar::future<>
-    do_retryable_request(seastar::http::request req, seastar::http::experimental::client::reply_handler handler, seastar::abort_source* as = nullptr);
+    do_retryable_request(seastar::http::request& req, seastar::http::experimental::client::reply_handler handler, seastar::abort_source* as = nullptr);
 
     seastar::http::experimental::client http;
     const aws::retry_strategy& _retry_strategy;
