@@ -3126,6 +3126,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                .del("topology_request");
                         auto reason = ::format("bootstrap: accept node");
                         co_await update_topology_state(std::move(node.guard), {builder.build(), rtbuilder.build()}, reason);
+                        co_await utils::get_local_injector().inject("topology_coordinator_pause_after_accept_node", utils::wait_for_message(5min));
                         break;
                         }
                     case topology_request::leave: {
@@ -3152,6 +3153,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                .del("topology_request");
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
                                                        "start decommission");
+                        co_await utils::get_local_injector().inject("topology_coordinator_pause_after_start_decommission", utils::wait_for_message(5min));
                         break;
                         }
                     case topology_request::remove: {
@@ -3175,6 +3177,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                .del("topology_request");
                         co_await update_topology_state(take_guard(std::move(node)), {builder.build(), rtbuilder.build()},
                                                        "start removenode");
+                        co_await utils::get_local_injector().inject("topology_coordinator_pause_after_start_removenode", utils::wait_for_message(5min));
                         break;
                         }
                     case topology_request::replace: {
