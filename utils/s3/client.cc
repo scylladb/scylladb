@@ -306,6 +306,8 @@ future<> client::make_request(http::request req,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
     auto request = std::move(req);
+    constexpr size_t max_attempts = 3;
+    size_t attempts = 0;
     while (true) {
         co_await authorize(request);
         auto& gc = find_or_create_client();
@@ -313,6 +315,7 @@ future<> client::make_request(http::request req,
             co_return co_await gc.retryable_client.make_request(
                 request, [&handle](const http::reply& reply, input_stream<char>&& body) { return handle(reply, std::move(body)); }, expected, as);
         } catch (const aws::aws_exception& ex) {
+            if (++attempts <= max_attempts) {
             if (ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
                 s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
                          utils::aws::format_time_point(db_clock::now()),
@@ -322,6 +325,7 @@ future<> client::make_request(http::request req,
             if (ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
                 _credentials = {};
                 continue;
+            }
             }
             map_s3_client_exception(std::current_exception());
         } catch (const storage_io_error&) {
