@@ -849,18 +849,23 @@ def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and
         return events
     do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
-# This test checks if deleting an existing item in a table without a clustering
-# key produces an event which contains the OldImage. Alternator uses different
-# types of tombstones for deletions from tables with a CK (row tombstone) and
-# with a partition key only (partition tombstone), which may be handled
-# differently by CDC. Specifically, the current implementation doesn't select
-# a preimage for partition deletions, hence the missing OldImage.
-@pytest.mark.xfail(reason="Currently fails - see issue #26382")
-def test_streams_putitem_deleteitem_no_ck(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+# In test_streams_new_and_old_images among other things we test that a
+# DeleteItem operation gives the correct old image. That test used a table
+# which has a sort key, the following test checks this (old image in DeleteItem
+# case) for a table that does NOT have a sort key. Alternator uses different
+# types of tombstones for deletions from tables with a CK (row tombstone) vs.
+# with a partition key only (partition tombstone) - and those may be handled
+# differently by CDC. In issue #26382 - which this test reproduces - we
+# discovered that our implementation doesn't select a preimage for partition
+# deletions, resulting in a missing OldImage.
+@pytest.mark.xfail(reason="issue #26382")
+def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
     def do_updates(table, p, _):
         events = []
-        table.put_item(Item={'p': p, 'x': 1})
-        events.append(['INSERT', {'p': p}, None, {'p': p, 'x': 1}])
+        table.update_item(Key={'p': p},
+            AttributeUpdates={'x': {'Value': 1, 'Action': 'PUT'}})
+        # TODO: change to just 'INSERT' when #6918 is fixed
+        events.append([['INSERT', 'MODIFY'], {'p': p}, None, {'p': p, 'x': 1}])
         table.delete_item(Key={'p': p})
         events.append(['REMOVE', {'p': p}, {'p': p, 'x': 1}, None])
         return events
