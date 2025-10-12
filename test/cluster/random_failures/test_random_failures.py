@@ -21,7 +21,6 @@ from cassandra.cluster import NoHostAvailable
 
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
 from test.cluster.util import wait_for_token_ring_and_group0_consistency, get_coordinator_host
-from test.cluster.conftest import skip_mode
 from test.pylib.internal_types import ServerUpState
 from test.cluster.random_failures.cluster_events import CLUSTER_EVENTS, TOPOLOGY_TIMEOUT
 from test.cluster.random_failures.error_injections import ERROR_INJECTIONS, ERROR_INJECTIONS_NODE_MAY_HANG
@@ -80,7 +79,7 @@ async def four_nodes_cluster(manager: ManagerClient) -> None:
 
 @pytest.mark.usefixtures("four_nodes_cluster")
 @pytest.mark.asyncio
-@skip_mode("release", "error injections are not supported in release mode")
+@pytest.mark.skip_mode("release", "error injections are not supported in release mode")
 async def test_random_failures(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str,

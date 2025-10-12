@@ -10,7 +10,6 @@ import random
 from test.pylib.minio_server import MinioServer
 from test.pylib.manager_client import ManagerClient
 from test.cluster.object_store.conftest import get_s3_resource, format_tuples
-from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts
 from concurrent.futures import ThreadPoolExecutor
 from test.pylib.rest_client import read_barrier
@@ -263,14 +262,14 @@ async def test_backup_to_non_existent_snapshot(manager: ManagerClient, s3_server
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_backup_is_abortable(manager: ManagerClient, s3_server):
     '''check that backing up a snapshot for a keyspace works'''
     await do_test_backup_abort(manager, s3_server, breakpoint_name="backup_task_pause", min_files=0)
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_backup_is_abortable_in_s3_client(manager: ManagerClient, s3_server):
     '''check that backing up a snapshot for a keyspace works'''
     await do_test_backup_abort(manager, s3_server, breakpoint_name="backup_task_pre_upload", min_files=0, max_files=1)

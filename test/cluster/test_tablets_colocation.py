@@ -8,7 +8,6 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot
 from test.pylib.tablets import get_tablet_replica, get_base_table, get_tablet_count, get_tablet_info
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, wait_for_view
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace
 import time
 import pytest
@@ -173,7 +172,7 @@ async def test_move_tablet(manager: ManagerClient, move_table: str):
 # We verify that the tablets of both tables are split, and the tables have the same tablet count.
 # Then delete some keys and verify the tablets of both tables are merged.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.parametrize(
     "with_merge",
     [
@@ -306,7 +305,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
 # We verify we can continue read and write to both tables. Then we complete the
 # migration and verify everything continues to work as expected.
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 @pytest.mark.parametrize("wait_stage", [("streaming", "stream_tablet_wait"), ("cleanup", "cleanup_tablet_wait")])
 async def test_create_colocated_table_while_base_is_migrating(manager: ManagerClient, wait_stage):
     cfg = {'enable_tablets': True, 'tablet_load_stats_refresh_interval_in_seconds': 1 }

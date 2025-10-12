@@ -9,7 +9,6 @@ import asyncio
 import pytest
 import time
 import logging
-from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for_view
 from test.cluster.util import new_test_keyspace, new_test_table, new_materialized_view
 from cassandra.cqltypes import Int32Type
@@ -58,7 +57,7 @@ async def insert_with_concurrency(cql, table, value_count, concurrency):
 # replica write if the view update limit is exceeded. If, thanks to throttling, we never
 # exceed the limit, the test will pass
 @pytest.mark.asyncio
-@skip_mode('release', "error injections aren't enabled in release mode")
+@pytest.mark.skip_mode('release', "error injections aren't enabled in release mode")
 async def test_delete_partition_rows_from_table_with_mv(manager: ManagerClient) -> None:
     node_count = 2
     await manager.servers_add(node_count, config={'error_injections_at_startup': ['view_update_limit', 'delay_before_remote_view_update']})

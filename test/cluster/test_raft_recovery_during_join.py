@@ -13,14 +13,13 @@ import pytest
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 from test.cluster.util import check_system_topology_and_cdc_generations_v3_consistency, \
         check_token_ring_and_group0_consistency, delete_discovery_state_and_group0_id, delete_raft_group_data, \
         reconnect_driver, wait_for_cdc_generations_publishing
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_raft_recovery_during_join(manager: ManagerClient):
     """
     Test that the Raft-based recovery procedure works correctly if majority has been lost in the write_both_read_new

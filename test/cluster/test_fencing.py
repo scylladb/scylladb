@@ -12,7 +12,6 @@ from test.pylib.rest_client import ScyllaMetrics
 from test.pylib.tablets import get_all_tablet_replicas
 from cassandra.pool import Host # type: ignore # pylint: disable=no-name-in-module
 from cassandra.query import SimpleStatement
-from test.cluster.conftest import skip_mode
 from test.cluster.util import new_test_keyspace, reconnect_driver
 from test.pylib.scylla_cluster import ScyllaVersionDescription
 import pytest
@@ -129,7 +128,7 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_fence_hints(request, manager: ManagerClient):
     logger.info("Bootstrapping cluster with three nodes")
     s0 = await manager.server_add(
@@ -220,7 +219,7 @@ async def test_fence_hints(request, manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_fence_lwt_during_bootstap(manager: ManagerClient):
     """
     Scenario:
@@ -360,7 +359,7 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_fenced_out_on_tablet_migration_while_handling_paxos_verb(manager: ManagerClient):
     """
     This test verifies that the fencing token is checked on replicas
@@ -467,8 +466,8 @@ async def test_fenced_out_on_tablet_migration_while_handling_paxos_verb(manager:
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'dev mode is enough for this test')
-@skip_mode('debug', 'dev mode is enough for this test')
+@pytest.mark.skip_mode('release', 'dev mode is enough for this test')
+@pytest.mark.skip_mode('debug', 'dev mode is enough for this test')
 async def test_lwt_fencing_upgrade(manager: ManagerClient, scylla_2025_1: ScyllaVersionDescription):
     """
     The test runs some LWT workload on a vnodes-based table, rolling-restarts nodes

@@ -5,7 +5,6 @@
 #
 from test.pylib.manager_client import ManagerClient
 from test.pylib.tablets import get_tablet_replica
-from test.cluster.conftest import skip_mode
 import pytest
 import logging
 import asyncio
@@ -22,7 +21,7 @@ def disable_auto_compaction(ip_addr, ks_name, cf_name):
         raise RuntimeError(f'failed to disable autocompaction using {api_path}: {ret.text}')
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_resurrection_while_file_streaming(manager: ManagerClient):
     '''
     When tablets are migrated with file-based streaming, we can have a situation where a tombstone is garbage

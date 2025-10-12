@@ -1,7 +1,6 @@
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error
 from test.cluster.util import check_token_ring_and_group0_consistency
-from test.cluster.conftest import skip_mode
 import logging
 import pytest
 import asyncio
@@ -39,7 +38,7 @@ async def test_send_data_in_parts(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_group0_apply_while_node_is_being_shutdown(manager: ManagerClient):
     # This a regression test for #24401.
 

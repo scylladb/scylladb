@@ -5,7 +5,6 @@
 #
 from test.pylib.manager_client import ManagerClient, ServerInfo
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 
 from cassandra.cluster import ConsistencyLevel, NoHostAvailable, Session
 from cassandra.protocol import InvalidRequest
@@ -43,7 +42,7 @@ async def wait_for_publishing_generations(cql: Session, servers: list[ServerInfo
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_writes_to_recent_previous_cdc_generations(request, manager: ManagerClient):
     """
     Test that writes to previous CDC generations succeed if the timestamp of the generation being written to
@@ -92,7 +91,7 @@ async def test_writes_to_recent_previous_cdc_generations(request, manager: Manag
 
 
 @pytest.mark.asyncio
-@skip_mode('debug', 'test requires nodes to be started quickly')
+@pytest.mark.skip_mode('debug', 'test requires nodes to be started quickly')
 async def test_writes_to_old_previous_cdc_generation(request, manager: ManagerClient):
     """
     Test that writes to a previous CDC generation succeed if the write's timestamp is greater than

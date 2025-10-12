@@ -5,7 +5,6 @@
 #
 
 from test.pylib.manager_client import ManagerClient
-from test.cluster.conftest import skip_mode
 from test.pylib.repair import load_tablet_sstables_repaired_at, create_table_insert_data_for_repair
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.tasks.task_manager_client import TaskManagerClient
@@ -300,7 +299,7 @@ async def test_tablet_incremental_repair(manager: ManagerClient):
         assert len(enable) == 2
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_error(manager: ManagerClient):
     servers, cql, hosts, ks, table_id = await create_table_insert_data_for_repair(manager)
     token = -1
@@ -471,18 +470,18 @@ async def do_test_tablet_incremental_repair_with_split_and_merge(manager, do_spl
 
 @pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/24153")
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_with_split_and_merge(manager: ManagerClient):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=True, do_merge=True)
 
 @pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/24153")
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_with_split(manager: ManagerClient):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=True, do_merge=False)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_with_merge(manager: ManagerClient):
     await do_test_tablet_incremental_repair_with_split_and_merge(manager, do_split=False, do_merge=True)
 
@@ -511,7 +510,7 @@ async def test_tablet_incremental_repair_existing_and_repair_produced_sstable(ma
     await verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager):
     nr_keys = 100
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys)
@@ -551,7 +550,7 @@ async def test_tablet_incremental_repair_merge_higher_repaired_at_number(manager
     await verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_merge_correct_repaired_at_number_after_merge(manager):
     nr_keys = 100
     servers, cql, hosts, ks, table_id, logs, repaired_keys, unrepaired_keys, current_key, token = await preapre_cluster_for_incremental_repair(manager, nr_keys)
@@ -618,12 +617,12 @@ async def do_test_tablet_incremental_repair_merge_error(manager, error):
     await verify_repaired_and_unrepaired_keys(manager, scylla_path, servers, ks, repaired_keys, unrepaired_keys)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_merge_error_in_merge_finalization(manager):
     await do_test_tablet_incremental_repair_merge_error(manager, 'handle_tablet_resize_finalization_for_merge_error')
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_tablet_incremental_repair_merge_error_in_merge_completion_fiber(manager):
     await do_test_tablet_incremental_repair_merge_error(manager, 'merge_completion_fiber_error')
 

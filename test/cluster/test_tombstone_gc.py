@@ -13,7 +13,6 @@ import pytest
 
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for, wait_for_cql_and_get_hosts
-from test.cluster.conftest import skip_mode
 from test.cluster.util import disable_schema_agreement_wait, new_test_keyspace, new_test_table
 
 logger = logging.getLogger(__name__)
@@ -205,8 +204,8 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
 
 
 @pytest.mark.asyncio
-@skip_mode('release', "test only needs to run once - allowing only the 'dev' mode")
-@skip_mode('debug', "test only needs to run once - allowing only the 'dev' mode")
+@pytest.mark.skip_mode('release', "test only needs to run once - allowing only the 'dev' mode")
+@pytest.mark.skip_mode('debug', "test only needs to run once - allowing only the 'dev' mode")
 async def test_group0_state_id_failure(manager: ManagerClient):
     """
     Issue #21117 regression test.

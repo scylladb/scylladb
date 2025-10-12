@@ -8,13 +8,12 @@
 from aiohttp import ServerDisconnectedError
 import pytest
 
-from test.cluster.conftest import skip_mode
 from test.cluster.util import get_coordinator_host
 from test.pylib.manager_client import ManagerClient
 
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_gossiper_race_on_decommission(manager: ManagerClient):
     """
     Test for gossiper race scenario (https://github.com/scylladb/scylladb/issues/25621):

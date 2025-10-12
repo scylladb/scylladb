@@ -29,7 +29,6 @@ import random
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_all_tablet_replicas
-from test.cluster.conftest import skip_mode
 
 logger = logging.getLogger(__name__)
 
@@ -307,7 +306,7 @@ async def test_localnodes_down_normal_node(manager: ManagerClient):
 
 @pytest.mark.asyncio
 @pytest.mark.nightly
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_localnodes_joining_nodes(manager: ManagerClient):
     """Test that if a cluster is being enlarged and a node is coming up but
        not yet responsive, a "/localnodes" request should NOT return that node.

@@ -7,7 +7,6 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import HTTPError, read_barrier
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_info
-from test.cluster.conftest import skip_mode
 from test.cluster.util import wait_for_cql_and_get_hosts, new_test_keyspace, reconnect_driver, wait_for
 import time
 import pytest
@@ -97,7 +96,7 @@ async def test_tablet_transition_sanity(manager: ManagerClient, action):
 @pytest.mark.parametrize("fail_replica", ["source", "destination"])
 @pytest.mark.parametrize("fail_stage", ["streaming", "allow_write_both_read_old", "write_both_read_old", "write_both_read_new", "use_new", "cleanup", "cleanup_target", "end_migration", "revert_migration"])
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_node_failure_during_tablet_migration(manager: ManagerClient, fail_replica, fail_stage):
     if fail_stage == 'cleanup' and fail_replica == 'destination':
         pytest.skip('Failing destination during cleanup is pointless')
@@ -295,7 +294,7 @@ async def test_tablet_back_and_forth_migration(manager: ManagerClient):
         await assert_rows(3)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: ManagerClient):
     logger.info("Bootstrapping cluster")
     # the error injection will halt view updates from staging, allowing migration to transfer the view update backlog.
@@ -393,7 +392,7 @@ async def test_staging_backlog_is_preserved_with_file_based_streaming(manager: M
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("migration_stage_and_injection", [("cleanup", "cleanup_tablet_wait"), ("end_migration", "handle_tablet_migration_end_migration")], ids=["cleanup", "end_migration"])
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, migration_stage_and_injection):
     """
     Migrate a tablet from one node to another, and while in some migration
@@ -475,7 +474,7 @@ async def test_restart_leaving_replica_during_cleanup(manager: ManagerClient, mi
         await manager.api.disable_tablet_balancing(servers[0].ip_addr)
 
 @pytest.mark.asyncio
-@skip_mode('release', 'error injections are not supported in release mode')
+@pytest.mark.skip_mode('release', 'error injections are not supported in release mode')
 async def test_restart_in_cleanup_stage_after_cleanup(manager: ManagerClient):
     """
     Migrate a tablet from one node to another, and restart the leaving replica during
