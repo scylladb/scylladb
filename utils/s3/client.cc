@@ -309,9 +309,29 @@ future<> client::make_request(http::request req,
                               http::experimental::client::reply_handler handle,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as) {
-    co_await authorize(req);
-    auto& gc = find_or_create_client();
-    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+    auto request = std::move(req);
+    while (true) {
+        co_await authorize(request);
+        auto& gc = find_or_create_client();
+        try {
+            co_return co_await gc.retryable_client.make_request(
+                request, [&handle](const http::reply& reply, input_stream<char>&& body) { return handle(reply, std::move(body)); }, expected, as);
+        } catch (const aws::aws_exception& ex) {
+            if (ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
+                s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
+                         utils::aws::format_time_point(db_clock::now()),
+                         request.get_header("x-amz-date"));
+                continue;
+            }
+            map_s3_client_exception(std::current_exception());
+        } catch (const storage_io_error&) {
+            throw;
+        } catch (const abort_requested_exception&) {
+            throw;
+        } catch (...) {
+            map_s3_client_exception(std::current_exception());
+        }
+    }
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
