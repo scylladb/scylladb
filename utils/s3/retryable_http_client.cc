@@ -52,7 +52,8 @@ future<> retryable_http_client::do_retryable_request(const seastar::http::reques
             e = std::current_exception();
             request_ex = aws_exception(aws_error::from_exception_ptr(e));
         }
-        if (request_ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
+        if (request_ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED ||
+            request_ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
             co_await coroutine::return_exception_ptr(std::move(e));
         }
         if (!co_await _retry_strategy.should_retry(request_ex.error(), retries)) {
