@@ -37,7 +37,9 @@
 
 #include <stdexcept>
 
-namespace secondary_index {
+namespace cql3 {
+
+namespace statements {
 
 static const data_type collection_keys_type(const abstract_type& t) {
     struct visitor {
@@ -111,11 +113,10 @@ static data_type type_for_computed_column(cql3::statements::index_target::target
     }
 }
 
-view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
-    auto schema = _cf.schema();
+view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im) const {
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
-    schema_builder builder{schema->ks_name(), index_table_name(im.name())};
-    auto target_info = target_parser::parse(schema, im);
+    schema_builder builder{schema->ks_name(), secondary_index::index_table_name(im.name())};
+    auto target_info = secondary_index::target_parser::parse(schema, im);
     const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
     auto target_type = target_info.type;
 
@@ -204,12 +205,6 @@ view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im
     }
     return view_ptr{builder.build()};
 }
-
-} // namespace secondary_index
-
-namespace cql3 {
-
-namespace statements {
 
 create_index_statement::create_index_statement(cf_name name,
                                                ::shared_ptr<index_name> index_name,
@@ -587,7 +582,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
 
         // Produce the underlying view for the index.
         if (db::schema_tables::view_should_exist(res->index)) {
-            view_ptr view = cf.get_index_manager().create_view_for_index(res->index);
+            view_ptr view = create_view_for_index(cf.schema(), res->index);
             utils::chunked_vector<mutation> view_muts = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(view), ts);
 
             muts.reserve(muts.size() + view_muts.size());
