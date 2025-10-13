@@ -34,6 +34,7 @@
 #include "index/secondary_index_manager.hh"
 #include "types/concrete_types.hh"
 #include "db/tags/extension.hh"
+#include "tombstone_gc_extension.hh"
 
 #include <stdexcept>
 
@@ -113,7 +114,9 @@ static data_type type_for_computed_column(cql3::statements::index_target::target
     }
 }
 
-view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im) const {
+view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, const index_metadata& im,
+        const data_dictionary::database& db) const
+{
     sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
     schema_builder builder{schema->ks_name(), secondary_index::index_table_name(im.name())};
     auto target_info = secondary_index::target_parser::parse(schema, im);
@@ -196,6 +199,10 @@ view_ptr create_index_statement::create_view_for_index(const schema_ptr schema, 
         format("{} IS NOT NULL", index_target->name_as_cql_string()) :
         "";
     builder.with_view_info(schema, false, where_clause);
+
+    auto tombstone_gc_ext = seastar::make_shared<tombstone_gc_extension>(get_default_tombstone_gc_mode(db, schema->ks_name()));
+    builder.add_extension(tombstone_gc_extension::NAME, std::move(tombstone_gc_ext));
+
     // A local secondary index should be backed by a *synchronous* view,
     // see #16371. A view is marked synchronous with a tag. Non-local indexes
     // do not need the tags schema extension at all.
@@ -582,7 +589,7 @@ create_index_statement::prepare_schema_mutations(query_processor& qp, const quer
 
         // Produce the underlying view for the index.
         if (db::schema_tables::view_should_exist(res->index)) {
-            view_ptr view = create_view_for_index(cf.schema(), res->index);
+            view_ptr view = create_view_for_index(cf.schema(), res->index, qp.db());
             utils::chunked_vector<mutation> view_muts = co_await service::prepare_new_view_announcement(qp.proxy(), std::move(view), ts);
 
             muts.reserve(muts.size() + view_muts.size());
