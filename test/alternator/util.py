@@ -354,7 +354,10 @@ def scylla_config_write(dynamodb, name, value):
 # no other workload or test is using the same Alternator cluster in parallel,
 # because the changed configuration will affect the other workload too.
 @contextmanager
-def scylla_config_temporary(dynamodb, name, value):
+def scylla_config_temporary(dynamodb, name, value, nop = False):
+    if nop:
+        yield
+        return
     original_value = scylla_config_read(dynamodb, name)
     scylla_config_write(dynamodb, name, value)
     try:
