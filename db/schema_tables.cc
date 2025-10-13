@@ -1911,7 +1911,7 @@ static void make_update_indices_mutations(
         if (!view_should_exist(index)) {
             return view_ptr(nullptr);
         }
-        auto view = cf.get_index_manager().create_view_for_index(index);
+        auto view = cf.get_index_manager().create_view_for_index(index, db.as_data_dictionary());
         auto view_mutations = make_view_mutations(view, timestamp, true);
         view_mutations.copy_to(mutations);
         return view;
