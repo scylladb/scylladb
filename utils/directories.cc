@@ -112,7 +112,14 @@ void verification_error(const fs::path& path, const char* fstr, Args&&... args) 
 // If a 'do_verify_subpath' function is provided, only the subpaths
 // that return true when called with that function will be verified.
 future<> directories::do_verify_owner_and_mode(fs::path path, recursive recurse, int level, std::function<bool(const fs::path&)> do_verify_subpath) {
-    auto sd = co_await file_stat(path.string(), follow_symlink::no);
+    seastar::stat_data sd;
+    try {
+        sd = co_await file_stat(path.string(), follow_symlink::no);
+    } catch (const std::exception& e) {
+        startlog.warn("Could not stat {}: '{}'. Skipping the file", path, e.what());
+        co_return;
+    }
+
     // Under docker, we run with euid 0 and there is no reasonable way to enforce that the
     // in-container uid will have the same uid as files mounted from outside the container. So
     // just allow euid 0 as a special case. It should survive the file_accessible() checks below.
