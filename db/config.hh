@@ -365,6 +365,7 @@ public:
     named_value<string_map> request_scheduler_options;
     named_value<sstring> authenticator;
     named_value<sstring> internode_authenticator;
+    named_value<uint32_t> authenticator_threads;
     named_value<sstring> authorizer;
     named_value<sstring> role_manager;
     named_value<uint32_t> permissions_validity_in_ms;
