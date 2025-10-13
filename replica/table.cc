@@ -3823,6 +3823,10 @@ void table::do_apply(compaction_group& cg, db::rp_handle&& h, Args&&... args) {
 }
 
 future<> table::apply(const mutation& m, db::rp_handle&& h, db::timeout_clock::time_point timeout) {
+    if (_virtual_writer) [[unlikely]] {
+        return (*_virtual_writer)(freeze(m));
+    }
+
     auto& cg = compaction_group_for_token(m.token());
     auto holder = cg.async_gate().hold();
     return dirty_memory_region_group().run_when_memory_available([this, &m, h = std::move(h), &cg, holder = std::move(holder)] () mutable {

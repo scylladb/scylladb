@@ -61,6 +61,10 @@ private:
     std::map<sstring, mutation_source> create_all_mutation_sources() {
         std::map<sstring, mutation_source> all_mutation_sources;
         auto& tbl = _db.find_column_family(_underlying_schema);
+        if (tbl.is_virtual()) {
+            all_mutation_sources.emplace("virtual-table", tbl.as_mutation_source());
+            return all_mutation_sources;
+        }
         {
             auto mss = tbl.select_memtables_as_mutation_sources(_dk.token());
             for (size_t i = 0; i < mss.size(); ++i) {
