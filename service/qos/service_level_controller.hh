@@ -173,7 +173,7 @@ public:
         future<std::vector<cql3::description>> describe_attached_service_levels();
 
         /// Must be executed on shard 0.
-        future<> reload_cache();
+        future<> reload_cache(qos::query_context ctx);
 
         void clear_cache();
     };

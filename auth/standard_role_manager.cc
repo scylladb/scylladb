@@ -663,21 +663,30 @@ future<role_set> standard_role_manager::query_granted(std::string_view grantee_n
     });
 }
 
-future<role_to_directly_granted_map> standard_role_manager::query_all_directly_granted() {
+future<role_to_directly_granted_map> standard_role_manager::query_all_directly_granted(::service::query_state& qs) {
     const sstring query = seastar::format("SELECT * FROM {}.{}",
             get_auth_ks_name(_qp),
             meta::role_members_table::name);
 
+    const auto results = co_await _qp.execute_internal(
+            query,
+            db::consistency_level::ONE,
+            qs,
+            cql3::query_processor::cache_internal::yes);
+
     role_to_directly_granted_map roles_map;
-    co_await _qp.query_internal(query, [&roles_map] (const cql3::untyped_result_set_row& row) -> future<stop_iteration> {
-        roles_map.insert({row.get_as<sstring>("member"), row.get_as<sstring>("role")});
-        co_return stop_iteration::no;
-    });
+    std::transform(
+            results->begin(),
+            results->end(),
+            std::inserter(roles_map, roles_map.begin()),
+            [] (const cql3::untyped_result_set_row& row) {
+                return std::make_pair(row.get_as<sstring>("member"), row.get_as<sstring>("role")); }
+    );
 
     co_return roles_map;
 }
 
-future<role_set> standard_role_manager::query_all() {
+future<role_set> standard_role_manager::query_all(::service::query_state& qs) {
     const sstring query = seastar::format("SELECT {} FROM {}.{}",
             meta::roles_table::role_col_name,
             get_auth_ks_name(_qp),
@@ -695,7 +704,7 @@ future<role_set> standard_role_manager::query_all() {
     const auto results = co_await _qp.execute_internal(
             query,
             db::consistency_level::QUORUM,
-            internal_distributed_query_state(),
+            qs,
             cql3::query_processor::cache_internal::yes);
 
     role_set roles;
@@ -727,11 +736,11 @@ future<bool> standard_role_manager::can_login(std::string_view role_name) {
     });
 }
 
-future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name) {
+future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_view role_name, std::string_view attribute_name, ::service::query_state& qs) {
     const sstring query = seastar::format("SELECT name, value FROM {}.{} WHERE role = ? AND name = ?",
             get_auth_ks_name(_qp),
             meta::role_attributes_table::name);
-    const auto result_set = co_await _qp.execute_internal(query, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes);
+    const auto result_set = co_await _qp.execute_internal(query, db::consistency_level::ONE, qs, {sstring(role_name), sstring(attribute_name)}, cql3::query_processor::cache_internal::yes);
     if (!result_set->empty()) {
         const cql3::untyped_result_set_row &row = result_set->one();
         co_return std::optional<sstring>(row.get_as<sstring>("value"));
@@ -739,11 +748,11 @@ future<std::optional<sstring>> standard_role_manager::get_attribute(std::string_
     co_return std::optional<sstring>{};
 }
 
-future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_all (std::string_view attribute_name) {
-    return query_all().then([this, attribute_name] (role_set roles) {
-        return do_with(attribute_vals{}, [this, attribute_name, roles = std::move(roles)] (attribute_vals &role_to_att_val) {
-            return parallel_for_each(roles.begin(), roles.end(), [this, &role_to_att_val, attribute_name] (sstring role) {
-                return get_attribute(role, attribute_name).then([&role_to_att_val, role] (std::optional<sstring> att_val) {
+future<role_manager::attribute_vals> standard_role_manager::query_attribute_for_all (std::string_view attribute_name, ::service::query_state& qs) {
+    return query_all(qs).then([this, attribute_name, &qs] (role_set roles) {
+        return do_with(attribute_vals{}, [this, attribute_name, roles = std::move(roles), &qs] (attribute_vals &role_to_att_val) {
+            return parallel_for_each(roles.begin(), roles.end(), [this, &role_to_att_val, attribute_name, &qs] (sstring role) {
+                return get_attribute(role, attribute_name, qs).then([&role_to_att_val, role] (std::optional<sstring> att_val) {
                     if (att_val) {
                         role_to_att_val.emplace(std::move(role), std::move(*att_val));
                     }
@@ -788,7 +797,7 @@ future<> standard_role_manager::remove_attribute(std::string_view role_name, std
 future<std::vector<cql3::description>> standard_role_manager::describe_role_grants() {
     std::vector<cql3::description> result{};
 
-    const auto grants = co_await query_all_directly_granted();
+    const auto grants = co_await query_all_directly_granted(internal_distributed_query_state());
     result.reserve(grants.size());
 
     for (const auto& [grantee_role, granted_role] : grants) {
