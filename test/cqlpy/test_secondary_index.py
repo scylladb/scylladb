@@ -2176,3 +2176,26 @@ def test_indexing_paging_and_aggregation(cql, test_keyspace):
         assert list(cql.execute(stmt)) == [(row_count * row_count // 4,)]
         stmt = SimpleStatement(f'SELECT avg(id) FROM {table} WHERE c2 = 1', fetch_size=3)
         assert list(cql.execute(stmt)) == [(row_count / 2 + 1,)]
+
+# Verify that a newly created secondary index has
+# the property `tombstone_gc` set to some value.
+#
+# Reproducer of scylladb/scylladb#26542
+def test_tombstone_gc_property(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        index_name = unique_name()
+        cql.execute(f"CREATE INDEX {index_name} ON {table}(v)")
+
+        desc_row = cql.execute(f"DESCRIBE MATERIALIZED VIEW {test_keyspace}.{index_name}_index").one()
+        assert "tombstone_gc = {" in desc_row.create_statement
+
+# Verify that a newly created unnamed secondary index has
+# the property `tombstone_gc` set to some value.
+#
+# Reproducer of scylladb/scylladb#26542
+def test_tombstone_gc_property_unnamed_index(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, v int") as table:
+        cql.execute(f"CREATE INDEX ON {table}(v)")
+
+        desc_row = cql.execute(f"DESCRIBE MATERIALIZED VIEW {table}_v_idx_index").one()
+        assert "tombstone_gc = {" in desc_row.create_statement
