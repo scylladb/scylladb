@@ -757,9 +757,12 @@ sharded<locator::shared_token_metadata> token_metadata;
     // Note: we are creating this thread before app.run so that it doesn't
     // inherit Seastar's CPU affinity masks. We want this thread to be free
     // to migrate between CPUs; we think that's what makes the most sense.
-    auto rpc_dict_training_worker = utils::alien_worker(startlog, 19, "rpc-dict");
-    // niceness=10 is ~10% of normal process time
-    auto hashing_worker = utils::alien_worker(startlog, 10, "pwd-hash");
+    cpu_set_t cpuset;
+    if (sched_getaffinity(getpid(), sizeof(cpu_set_t), &cpuset) == -1) {
+        throw std::system_error(errno, std::system_category());
+    }
+    auto rpc_dict_training_worker = utils::alien_worker(startlog, 19, "rpc-dict", cpuset);
+    std::vector<std::unique_ptr<utils::alien_worker>> hashing_workers;
 
     return app.run(ac, av, [&] () -> future<int> {
 
@@ -790,7 +793,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
                 &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker,
-                &hashing_worker, &vector_store_client] {
+                &hashing_workers, &vector_store_client, &cpuset] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
                   // calling update_relabel_config_from_file can cause an exception that would stop startup
@@ -816,6 +819,14 @@ sharded<locator::shared_token_metadata> token_metadata;
 #ifdef SCYLLA_ENABLE_ERROR_INJECTION
             enable_initial_error_injections(*cfg).get();
 #endif
+
+            unsigned hashing_workers_num = (seastar::smp::count + cfg->authenticator_threads() - 1) / cfg->authenticator_threads();
+            hashing_workers.reserve(hashing_workers_num);
+            for (unsigned i = 0; i < hashing_workers_num; ++i) {
+                // niceness=10 is ~10% of normal process time
+                hashing_workers.push_back(std::make_unique<utils::alien_worker>(startlog, 10, fmt::format("pwd-{}", i), cpuset));
+            }
+
             auto notify_set = configurable::init_all(opts, *cfg, *ext, service_set(
                 db, ss, mm, proxy, feature_service, messaging, qp, bm
             )).get();
@@ -2066,7 +2077,7 @@ sharded<locator::shared_token_metadata> token_metadata;
                 maintenance_auth_config.authenticator_java_name = sstring{auth::allow_all_authenticator_name};
                 maintenance_auth_config.role_manager_java_name = sstring{auth::maintenance_socket_role_manager_name};
 
-                maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes, std::ref(hashing_worker)).get();
+                maintenance_auth_service.start(perm_cache_config, std::ref(qp), std::ref(group0_client),  std::ref(mm_notifier), std::ref(mm), maintenance_auth_config, maintenance_socket_enabled::yes, std::ref(hashing_workers)).get();
 
                 cql_maintenance_server_ctl.emplace(maintenance_auth_service, mm_notifier, gossiper, qp, service_memory_limiter, sl_controller, lifecycle_notifier, *cfg, maintenance_cql_sg_stats_key, maintenance_socket_enabled::yes, dbcfg.statement_scheduling_group);
 
@@ -2302,7 +2313,7 @@ sharded<locator::shared_token_metadata> token_metadata;
             auth_config.authenticator_java_name = qualified_authenticator_name;
             auth_config.role_manager_java_name = qualified_role_manager_name;
 
-            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
+            auth_service.start(std::move(perm_cache_config), std::ref(qp), std::ref(group0_client), std::ref(mm_notifier), std::ref(mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_workers)).get();
 
             std::any stop_auth_service;
             // Has to be called after node joined the cluster (join_cluster())

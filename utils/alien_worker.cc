@@ -13,7 +13,7 @@ using namespace seastar;
 
 namespace utils {
 
-std::thread alien_worker::spawn(seastar::logger& log, int niceness, const seastar::sstring& name_suffix) {
+std::thread alien_worker::spawn(seastar::logger& log, int niceness, const seastar::sstring& name_suffix, cpu_set_t cpu_set_mask) {
     sigset_t newset;
     sigset_t oldset;
     sigfillset(&newset);
@@ -24,11 +24,16 @@ std::thread alien_worker::spawn(seastar::logger& log, int niceness, const seasta
         log.warn("Thread name '{}' is longer than 15 characters, truncating to fit", thread_name);
         thread_name.resize(15); // pthread_setname_np requires name to be <= 15 characters
     }
-    auto thread = std::thread([this, &log, niceness, thread_name] () noexcept {
+    auto thread = std::thread([this, &log, niceness, thread_name, cpu_set_mask] () noexcept {
         errno = 0;
         int setname_value = pthread_setname_np(pthread_self(), thread_name.c_str());
         if (setname_value != 0) {
             log.error("Unable to set worker thread name '{}', setname_value={}", thread_name, setname_value);
+            std::abort();
+        }
+        int setaffinity_value = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpu_set_mask);
+        if (setaffinity_value != 0) {
+            log.error("Unable to set worker thread '{}' an affinity mask, setaffinity_value={}", thread_name, setaffinity_value);
             std::abort();
         }
         int nice_value = nice(niceness);
@@ -53,8 +58,8 @@ std::thread alien_worker::spawn(seastar::logger& log, int niceness, const seasta
     return thread;
 }
 
-alien_worker::alien_worker(seastar::logger& log, int niceness, const seastar::sstring& name_suffix)
-    : _thread(spawn(log, niceness, name_suffix))
+alien_worker::alien_worker(seastar::logger& log, int niceness, const seastar::sstring& name_suffix, cpu_set_t cpu_set_mask)
+    : _thread(spawn(log, niceness, name_suffix, cpu_set_mask))
 {}
 
 alien_worker::~alien_worker() {

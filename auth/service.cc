@@ -7,6 +7,7 @@
  */
 
 #include <exception>
+#include <memory>
 #include <seastar/core/coroutine.hh>
 #include "auth/authentication_options.hh"
 #include "auth/authorizer.hh"
@@ -32,6 +33,8 @@
 #include "db/config.hh"
 #include "db/consistency_level_type.hh"
 #include "db/functions/function_name.hh"
+#include "seastar/core/shard_id.hh"
+#include "seastar/core/smp.hh"
 #include "utils/log.hh"
 #include "schema/schema_fwd.hh"
 #include <seastar/core/future.hh>
@@ -188,14 +191,14 @@ service::service(
         ::service::migration_manager& mm,
         const service_config& sc,
         maintenance_socket_enabled used_by_maintenance_socket,
-        utils::alien_worker& hashing_worker)
+        std::vector<std::unique_ptr<utils::alien_worker>> const& hashing_workers)
             : service(
                       std::move(c),
                       qp,
                       g0,
                       mn,
                       create_object<authorizer>(sc.authorizer_java_name, qp, g0, mm),
-                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, hashing_worker),
+                      create_object<authenticator>(sc.authenticator_java_name, qp, g0, mm, *hashing_workers[this_shard_id() % hashing_workers.size()]),
                       create_object<role_manager>(sc.role_manager_java_name, qp, g0, mm),
                       used_by_maintenance_socket) {
 }

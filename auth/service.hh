@@ -16,6 +16,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 #include <seastar/core/sharded.hh>
+#include <vector>
 
 #include "auth/authenticator.hh"
 #include "auth/authorizer.hh"
@@ -128,7 +129,7 @@ public:
             ::service::migration_manager&,
             const service_config&,
             maintenance_socket_enabled,
-            utils::alien_worker&);
+            std::vector<std::unique_ptr<utils::alien_worker>>const&);
 
     future<> start(::service::migration_manager&, db::system_keyspace&);
 

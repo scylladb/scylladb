@@ -1120,8 +1120,13 @@ private:
 
 
             const uint64_t niceness = 19;
-            auto hashing_worker = utils::alien_worker(startlog, niceness, "pwd-hash");
-            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_worker)).get();
+            cpu_set_t cpuset;
+            if (sched_getaffinity(getpid(), sizeof(cpu_set_t), &cpuset) == -1) {
+                throw std::system_error(errno, std::system_category());
+            }
+            std::vector<std::unique_ptr<utils::alien_worker>> hashing_workers;
+            hashing_workers.emplace_back(std::make_unique<utils::alien_worker>(startlog, niceness, "pwd-hash", cpuset));
+            _auth_service.start(perm_cache_config, std::ref(_qp), std::ref(group0_client), std::ref(_mnotifier), std::ref(_mm), auth_config, maintenance_socket_enabled::no, std::ref(hashing_workers)).get();
             _auth_service.invoke_on_all([this] (auth::service& auth) {
                 return auth.start(_mm.local(), _sys_ks.local());
             }).get();
