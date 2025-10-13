@@ -50,5 +50,7 @@ custom_args:
         - '-c1'
     s3_test:
         - '-c2 -m2G --logger-log-level s3=trace --logger-log-level http=trace --logger-log-level default_retry_strategy=trace'
+    batchlog_manager_test:
+      - '-c2 -m2G --logger-log-level database=trace:batchlog_manager=trace:table=trace:debug_error_injection=trace:testlog=trace'
 run_in_debug:
     - logalloc_standard_allocator_segment_pool_backend_test
