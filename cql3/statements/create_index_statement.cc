@@ -31,8 +31,181 @@
 #include "index/secondary_index_manager.hh"
 #include "mutation/mutation.hh"
 #include "db/schema_tables.hh"
+#include "index/secondary_index_manager.hh"
+#include "types/concrete_types.hh"
+#include "db/tags/extension.hh"
 
 #include <stdexcept>
+
+namespace secondary_index {
+
+static const data_type collection_keys_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_keys_type: only collections (maps, lists and sets) supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const list_type_impl& l) {
+            return timeuuid_type;
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return m.get_keys_type();
+        }
+        const data_type operator()(const set_type_impl& s) {
+            return s.get_elements_type();
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static const data_type collection_values_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_values_type: only maps and lists supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return m.get_values_type();
+        }
+        const data_type operator()(const list_type_impl& l) {
+            return l.get_elements_type();
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static const data_type collection_entries_type(const abstract_type& t) {
+    struct visitor {
+        const data_type operator()(const abstract_type& t) {
+            throw std::logic_error(format("collection_entries_type: only maps supported, but received {}", t.cql3_type_name()));
+        }
+        const data_type operator()(const map_type_impl& m) {
+            return tuple_type_impl::get_instance({m.get_keys_type(), m.get_values_type()});
+        }
+    };
+    return visit(t, visitor{});
+}
+
+static bytes get_available_column_name(const schema& schema, const bytes& root) {
+    bytes accepted_name = root;
+    int i = 0;
+    while (schema.get_column_definition(accepted_name)) {
+        accepted_name = root + to_bytes("_") + to_bytes(std::to_string(++i));
+    }
+    return accepted_name;
+}
+
+static bytes get_available_token_column_name(const schema& schema) {
+    return get_available_column_name(schema, "idx_token");
+}
+
+static bytes get_available_computed_collection_column_name(const schema& schema) {
+    return get_available_column_name(schema, "coll_value");
+}
+
+static data_type type_for_computed_column(cql3::statements::index_target::target_type target, const abstract_type& collection_type) {
+    using namespace cql3::statements;
+    switch (target) {
+        case index_target::target_type::keys:               return collection_keys_type(collection_type);
+        case index_target::target_type::keys_and_values:    return collection_entries_type(collection_type);
+        case index_target::target_type::collection_values:  return collection_values_type(collection_type);
+        default: throw std::logic_error("reached regular values or full when only collection index target types were expected");
+    }
+}
+
+view_ptr secondary_index_manager::create_view_for_index(const index_metadata& im) const {
+    auto schema = _cf.schema();
+    sstring index_target_name = im.options().at(cql3::statements::index_target::target_option_name);
+    schema_builder builder{schema->ks_name(), index_table_name(im.name())};
+    auto target_info = target_parser::parse(schema, im);
+    const auto* index_target = im.local() ? target_info.ck_columns.front() : target_info.pk_columns.front();
+    auto target_type = target_info.type;
+
+    // For local indexing, start with base partition key
+    if (im.local()) {
+        if (index_target->is_partition_key()) {
+            throw exceptions::invalid_request_exception("Local indexing based on partition key column is not allowed,"
+                    " since whole base partition key must be used in queries anyway. Use global indexing instead.");
+        }
+        for (auto& col : schema->partition_key_columns()) {
+            builder.with_column(col.name(), col.type, column_kind::partition_key);
+        }
+        builder.with_column(index_target->name(), index_target->type, column_kind::clustering_key);
+    } else {
+        if (target_type == cql3::statements::index_target::target_type::regular_values) {
+            builder.with_column(index_target->name(), index_target->type, column_kind::partition_key);
+        } else {
+            bytes key_column_name = get_available_computed_collection_column_name(*schema);
+            column_computation_ptr collection_column_computation_ptr = [&name = index_target->name(), target_type] {
+                switch (target_type) {
+                    case cql3::statements::index_target::target_type::keys:
+                        return collection_column_computation::for_keys(name);
+                    case cql3::statements::index_target::target_type::collection_values:
+                        return collection_column_computation::for_values(name);
+                    case cql3::statements::index_target::target_type::keys_and_values:
+                        return collection_column_computation::for_entries(name);
+                    default:
+                        throw std::logic_error(format("create_view_for_index: invalid target_type, received {}", to_sstring(target_type)));
+                }
+            }().clone();
+
+            data_type t = type_for_computed_column(target_type, *index_target->type);
+            builder.with_computed_column(key_column_name, t, column_kind::partition_key, std::move(collection_column_computation_ptr));
+        }
+        // Additional token column is added to ensure token order on secondary index queries
+        bytes token_column_name = get_available_token_column_name(*schema);
+        builder.with_computed_column(token_column_name, long_type, column_kind::clustering_key, std::make_unique<token_column_computation>());
+
+        for (auto& col : schema->partition_key_columns()) {
+            if (col == *index_target) {
+                continue;
+            }
+            builder.with_column(col.name(), col.type, column_kind::clustering_key);
+        }
+    }
+
+    if (!index_target->is_static()) {
+        for (auto& col : schema->clustering_key_columns()) {
+            if (col == *index_target) {
+                continue;
+            }
+            builder.with_column(col.name(), col.type, column_kind::clustering_key);
+        }
+    }
+
+    // This column needs to be after the base clustering key.
+    if (!im.local()) {
+        // If two cells within the same collection share the same value but not liveness information, then
+        // for the index on the values, the rows generated would share the same primary key and thus the
+        // liveness information as well. Prevent that by distinguishing them in the clustering key.
+        if (target_type == cql3::statements::index_target::target_type::collection_values) {
+            data_type t = type_for_computed_column(cql3::statements::index_target::target_type::keys, *index_target->type);
+            bytes column_name = get_available_column_name(*schema, "keys_for_values_idx");
+            builder.with_computed_column(column_name, t, column_kind::clustering_key, collection_column_computation::for_keys(index_target->name()).clone());
+        }
+    }
+
+    if (index_target->is_primary_key()) {
+        for (auto& def : schema->regular_columns()) {
+            db::view::create_virtual_column(builder, def.name(), def.type);
+        }
+    }
+    // "WHERE col IS NOT NULL" is not needed (and doesn't work)
+    // when col is a collection.
+    const sstring where_clause =
+        (target_type == cql3::statements::index_target::target_type::regular_values) ?
+        format("{} IS NOT NULL", index_target->name_as_cql_string()) :
+        "";
+    builder.with_view_info(schema, false, where_clause);
+    // A local secondary index should be backed by a *synchronous* view,
+    // see #16371. A view is marked synchronous with a tag. Non-local indexes
+    // do not need the tags schema extension at all.
+    if (im.local()) {
+        std::map<sstring, sstring> tags_map = {{db::SYNCHRONOUS_VIEW_UPDATES_TAG_KEY, "true"}};
+        builder.add_extension(db::tags_extension::NAME, ::make_shared<db::tags_extension>(tags_map));
+    }
+    return view_ptr{builder.build()};
+}
+
+} // namespace secondary_index
 
 namespace cql3 {
 
