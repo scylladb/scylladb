@@ -45,10 +45,8 @@ auto wait_for_timeout(lowres_clock::duration timeout, abort_source& as) -> futur
 dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_type listener, uint64_t& refreshes_counter)
     : vslogger(logger)
     , _refresh_interval(DNS_REFRESH_INTERVAL)
-    , _resolver([this, &refreshes_counter](auto const& host) -> future<address_type> {
+    , _resolver([this](auto const& host) -> future<address_type> {
         auto f = co_await coroutine::as_future(net::dns::get_host_by_name(host));
-
-        refreshes_counter++;
         if (f.failed()) {
             auto err = f.get_exception();
             if (try_catch<std::system_error>(err) != nullptr) {
@@ -61,7 +59,8 @@ dns::dns(logging::logger& logger, std::vector<seastar::sstring> hosts, listener_
         co_return addr.addr_list;
     })
     , _hosts(std::move(hosts))
-    , _listener(std::move(listener)) {
+    , _listener(std::move(listener))
+    , _refreshes_counter(refreshes_counter) {
 }
 
 void dns::start_background_tasks() {
@@ -120,6 +119,7 @@ seastar::future<> dns::refresh_addr() {
     host_address_map new_addrs;
     auto copy = _hosts;
     co_await coroutine::parallel_for_each(std::move(copy), [this, &new_addrs](const sstring& host) -> future<> {
+        ++_refreshes_counter;
         new_addrs[host] = co_await _resolver(host);
     });
     if (new_addrs != _addresses) {
