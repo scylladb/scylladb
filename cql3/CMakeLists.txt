@@ -47,6 +47,7 @@ target_sources(cql3
     functions/aggregate_fcts.cc
     functions/castas_fcts.cc
     functions/error_injection_fcts.cc
+    functions/vector_search_fcts.cc
     statements/cf_prop_defs.cc
     statements/cf_statement.cc
     statements/authentication_statement.cc
