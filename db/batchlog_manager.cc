@@ -62,6 +62,14 @@ mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vecto
     return m;
 }
 
+mutation get_batchlog_delete_mutation(schema_ptr schema, const utils::UUID& id) {
+    auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(id)});
+    auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
+    mutation m(schema, key);
+    m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
+    return m;
+}
+
 } // namespace db
 
 const std::chrono::seconds db::batchlog_manager::replay_interval;
@@ -280,10 +288,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             }
             // delete batch
             auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
-            auto key = partition_key::from_singular(*schema, id);
-            mutation m(schema, key);
-            auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
-            m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
+            auto m = get_batchlog_delete_mutation(schema, id);
             co_await _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
             co_return stop_iteration::no;
     };
