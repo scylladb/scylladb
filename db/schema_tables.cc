@@ -9,6 +9,7 @@
 
 #include "db/schema_tables.hh"
 
+#include "db/view/view_building_task_mutation_builder.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -1876,6 +1877,7 @@ static void make_update_indices_mutations(
         utils::chunked_vector<mutation>& mutations)
 {
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
+    view::view_building_task_mutation_builder vb_mut_builder(timestamp);
     std::vector<mutation> view_building_muts;
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
@@ -1939,6 +1941,7 @@ static void make_update_indices_mutations(
     }
 
     mutations.emplace_back(std::move(indices_mutation));
+    mutations.emplace_back(vb_mut_builder.build());
     mutations.insert(mutations.end(), std::make_move_iterator(view_building_muts.begin()), std::make_move_iterator(view_building_muts.end()));
 }
 
