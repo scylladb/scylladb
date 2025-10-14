@@ -651,7 +651,7 @@ generate_base_key_from_index_pk(const partition_key& index_pk, const std::option
 }
 
 lw_shared_ptr<query::read_command>
-indexed_table_select_statement::prepare_command_for_base_query(query_processor& qp, const query_options& options,
+view_indexed_table_select_statement::prepare_command_for_base_query(query_processor& qp, const query_options& options,
         service::query_state& state, gc_clock::time_point now, bool use_paging) const {
     auto slice = make_partition_slice(options);
     if (use_paging) {
@@ -679,7 +679,7 @@ indexed_table_select_statement::prepare_command_for_base_query(query_processor& 
 }
 
 future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
-indexed_table_select_statement::do_execute_base_query(
+view_indexed_table_select_statement::do_execute_base_query(
         query_processor& qp,
         dht::partition_range_vector&& partition_ranges,
         service::query_state& state,
@@ -774,7 +774,7 @@ indexed_table_select_statement::do_execute_base_query(
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-indexed_table_select_statement::execute_base_query(
+view_indexed_table_select_statement::execute_base_query(
         query_processor& qp,
         dht::partition_range_vector&& partition_ranges,
         service::query_state& state,
@@ -789,7 +789,7 @@ indexed_table_select_statement::execute_base_query(
 }
 
 future<coordinator_result<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, lw_shared_ptr<query::read_command>>>>
-indexed_table_select_statement::do_execute_base_query(
+view_indexed_table_select_statement::do_execute_base_query(
         query_processor& qp,
         std::vector<primary_key>&& primary_keys,
         service::query_state& state,
@@ -854,7 +854,7 @@ indexed_table_select_statement::do_execute_base_query(
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-indexed_table_select_statement::execute_base_query(
+view_indexed_table_select_statement::execute_base_query(
         query_processor& qp,
         std::vector<primary_key>&& primary_keys,
         service::query_state& state,
@@ -922,7 +922,7 @@ select_statement::execute_without_checking_exception_message_non_aggregate_unpag
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-indexed_table_select_statement::process_base_query_results(
+view_indexed_table_select_statement::process_base_query_results(
         foreign_ptr<lw_shared_ptr<query::result>> results,
         lw_shared_ptr<query::read_command> cmd,
         service::query_state& state,
@@ -1024,7 +1024,7 @@ bool check_needs_allow_filtering_anyway(const restrictions::statement_restrictio
 }
 
 ::shared_ptr<cql3::statements::select_statement>
-indexed_table_select_statement::prepare(data_dictionary::database db,
+view_indexed_table_select_statement::prepare(data_dictionary::database db,
                                         schema_ptr schema,
                                         uint32_t bound_terms,
                                         lw_shared_ptr<const parameters> parameters,
@@ -1053,7 +1053,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
 
     schema_ptr view_schema = restrictions->get_view_schema();
 
-    return ::make_shared<cql3::statements::indexed_table_select_statement>(
+    return ::make_shared<cql3::statements::view_indexed_table_select_statement>(
             schema,
             bound_terms,
             parameters,
@@ -1072,7 +1072,7 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
 
 }
 
-indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,
+view_indexed_table_select_statement::view_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms,
                                                            lw_shared_ptr<const parameters> parameters,
                                                            ::shared_ptr<selection::selection> selection,
                                                            ::shared_ptr<const restrictions::statement_restrictions> restrictions,
@@ -1115,7 +1115,7 @@ static void append_base_key_to_index_ck(std::vector<managed_bytes_view>& explode
     std::move(begin, key_view.end(), std::back_inserter(exploded_index_ck));
 }
 
-bytes indexed_table_select_statement::compute_idx_token(const partition_key& key) const {
+bytes view_indexed_table_select_statement::compute_idx_token(const partition_key& key) const {
     const column_definition& cdef = *_view_schema->clustering_key_columns().begin();
     if (!cdef.is_computed()) {
         throw std::logic_error{format(
@@ -1125,7 +1125,7 @@ bytes indexed_table_select_statement::compute_idx_token(const partition_key& key
     return cdef.get_computation().compute_value(*_schema, key);
 }
 
-lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
+lw_shared_ptr<const service::pager::paging_state> view_indexed_table_select_statement::generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
         const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const {
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
     if (!cdef) {
@@ -1179,7 +1179,7 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
     return paging_state_copy;
 }
 
-future<shared_ptr<cql_transport::messages::result_message>> indexed_table_select_statement::do_execute(
+future<shared_ptr<cql_transport::messages::result_message>> view_indexed_table_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
 
     return measure_index_latency(*_schema, _index, [this, &qp, &state, &options]() -> future<shared_ptr<cql_transport::messages::result_message>> {
@@ -1188,7 +1188,7 @@ future<shared_ptr<cql_transport::messages::result_message>> indexed_table_select
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
-indexed_table_select_statement::actually_do_execute(query_processor& qp,
+view_indexed_table_select_statement::actually_do_execute(query_processor& qp,
                              service::query_state& state,
                              const query_options& options) const
 {
@@ -1344,11 +1344,11 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
     }
 }
 
-dht::partition_range_vector indexed_table_select_statement::get_partition_ranges_for_local_index_posting_list(const query_options& options) const {
+dht::partition_range_vector view_indexed_table_select_statement::get_partition_ranges_for_local_index_posting_list(const query_options& options) const {
     return _restrictions->get_partition_key_ranges(options);
 }
 
-dht::partition_range_vector indexed_table_select_statement::get_partition_ranges_for_global_index_posting_list(const query_options& options) const {
+dht::partition_range_vector view_indexed_table_select_statement::get_partition_ranges_for_global_index_posting_list(const query_options& options) const {
     dht::partition_range_vector partition_ranges;
 
     const column_definition* cdef = _schema->get_column_definition(to_bytes(_index.target_column()));
@@ -1367,7 +1367,7 @@ dht::partition_range_vector indexed_table_select_statement::get_partition_ranges
     return partition_ranges;
 }
 
-query::partition_slice indexed_table_select_statement::get_partition_slice_for_global_index_posting_list(const query_options& options) const {
+query::partition_slice view_indexed_table_select_statement::get_partition_slice_for_global_index_posting_list(const query_options& options) const {
     partition_slice_builder partition_slice_builder{*_view_schema};
 
     if (!_restrictions->has_partition_key_unrestricted_components()) {
@@ -1386,7 +1386,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_g
     return partition_slice_builder.build();
 }
 
-query::partition_slice indexed_table_select_statement::get_partition_slice_for_local_index_posting_list(const query_options& options) const {
+query::partition_slice view_indexed_table_select_statement::get_partition_slice_for_local_index_posting_list(const query_options& options) const {
     partition_slice_builder partition_slice_builder{*_view_schema};
 
     partition_slice_builder.with_ranges(
@@ -1399,7 +1399,7 @@ query::partition_slice indexed_table_select_statement::get_partition_slice_for_l
 // the posting-list for a particular value of the indexed column.
 // Remember a secondary index can only be created on a single column.
 future<coordinator_result<::shared_ptr<cql_transport::messages::result_message::rows>>>
-indexed_table_select_statement::read_posting_list(query_processor& qp,
+view_indexed_table_select_statement::read_posting_list(query_processor& qp,
                   const query_options& options,
                   uint64_t limit,
                   service::query_state& state,
@@ -1460,7 +1460,7 @@ indexed_table_select_statement::read_posting_list(query_processor& qp,
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
 future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>>
-indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
+view_indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
                                              service::query_state& state,
                                              const query_options& options) const
 {
@@ -1536,7 +1536,7 @@ indexed_table_select_statement::find_index_partition_ranges(query_processor& qp,
 // Note: the partitions keys returned by this function are sorted
 // in token order. See issue #3423.
 future<coordinator_result<std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>>>
-indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, service::query_state& state, const query_options& options) const
+view_indexed_table_select_statement::find_index_clustering_rows(query_processor& qp, service::query_state& state, const query_options& options) const
 {
     using value_type = std::tuple<std::vector<primary_key>, lw_shared_ptr<const service::pager::paging_state>>;
     auto now = gc_clock::now();
@@ -1985,6 +1985,7 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
     if (it == indexes.end()) {
         throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
     }
+
     if (index_opt || parameters->allow_filtering() || restrictions->need_filtering() || check_needs_allow_filtering_anyway(*restrictions)) {
         throw exceptions::invalid_request_exception("ANN ordering by vector does not support filtering");
     }
@@ -2345,7 +2346,7 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
                 prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs));
     } else if (restrictions->uses_secondary_indexing()) {
-        stmt = indexed_table_select_statement::prepare(
+        stmt = view_indexed_table_select_statement::prepare(
                 db,
                 schema,
                 ctx.bound_variables_size(),
