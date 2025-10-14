@@ -464,7 +464,7 @@ future<std::optional<view_building_coordinator::remote_work_results>> view_build
 future<utils::chunked_vector<mutation>> view_building_coordinator::update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, view_building_coordinator::remote_work_results results) {
     vbc_logger.debug("Got results from replica {}: {}", replica, results);
 
-    utils::chunked_vector<mutation> muts;
+    view_building_task_mutation_builder builder(guard.write_timestamp());
     for (auto& result: results) {
         vbc_logger.info("Task {} was finished with result: {}", result.first, result.second);
 
@@ -480,11 +480,10 @@ future<utils::chunked_vector<mutation>> view_building_coordinator::update_state_
         auto task_opt = _vb_sm.building_state.get_task(*_vb_sm.building_state.currently_processed_base_table, replica, result.first);
         if (task_opt && task_opt->get().state != view_building_task::task_state::aborted) {
             // Otherwise, the task was completed successfully and we can remove it.
-            auto delete_mut = co_await _sys_ks.make_remove_view_building_task_mutation(guard.write_timestamp(), result.first);
-            muts.push_back(std::move(delete_mut));
+            builder.del_task(result.first);
         }
     }
-    co_return muts;
+    co_return utils::chunked_vector<mutation>{builder.build()};
 }
 
 future<> view_building_coordinator::stop() {
