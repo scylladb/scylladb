@@ -424,12 +424,11 @@ std::vector<utils::UUID> view_building_coordinator::select_tasks_for_replica(loc
 future<utils::chunked_vector<mutation>> view_building_coordinator::start_tasks(const service::group0_guard& guard, std::vector<utils::UUID> tasks) {
     vbc_logger.info("Starting tasks {}", tasks);
 
-    utils::chunked_vector<mutation> muts;
+    view_building_task_mutation_builder builder(guard.write_timestamp());
     for (auto& t: tasks) {
-        auto mut = co_await _sys_ks.make_update_view_building_task_state_mutation(guard.write_timestamp(), t, view_building_task::task_state::started);
-        muts.push_back(std::move(mut));
+        builder.set_state(t, view_building_task::task_state::started);
     }
-    co_return muts;
+    co_return utils::chunked_vector<mutation>{builder.build()};
 }
 
 void view_building_coordinator::attach_to_started_tasks(const locator::tablet_replica& replica, std::vector<utils::UUID> tasks) {
