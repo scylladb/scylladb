@@ -431,6 +431,7 @@ unaliasedSelector returns [uexpression tmp]
        | K_TTL       '(' c=cident ')'              { tmp = column_mutation_attribute{column_mutation_attribute::attribute_kind::ttl,
                                                                                               unresolved_identifier{std::move(c)}}; }
        | f=functionName args=selectionFunctionArgs { tmp = function_call{std::move(f), std::move(args)}; }
+       | f=similarityFunctionName args=vectorSimilarityArgs            { tmp = function_call{std::move(f), std::move(args)}; }
        | K_CAST      '(' arg=unaliasedSelector K_AS t=native_type ')'  { tmp = cast{.style = cast::cast_style::sql, .arg = std::move(arg), .type = std::move(t)}; }
        )
        ( '.' fi=cident { tmp = field_selection{std::move(tmp), std::move(fi)}; }
@@ -443,6 +444,18 @@ selectionFunctionArgs returns [std::vector<expression> a]
     | '(' s1=unaliasedSelector { a.push_back(std::move(s1)); }
           ( ',' sn=unaliasedSelector { a.push_back(std::move(sn)); } )*
       ')'
+    ;
+
+vectorSimilarityArgs returns [std::vector<expression> a]
+    : '(' ')'
+    | '(' v1=vectorSimilarityArg { a.push_back(std::move(v1)); }
+          ( ',' vn=vectorSimilarityArg { a.push_back(std::move(vn)); } )*
+      ')'
+    ;
+
+vectorSimilarityArg returns [uexpression a]
+    : s=unaliasedSelector { a = std::move(s); }
+    | v=value             { a = std::move(v); }
     ;
 
 countArgument
@@ -1683,12 +1696,22 @@ functionName returns [cql3::functions::function_name s]
     : (ks=keyspaceName '.')? f=allowedFunctionName   { $s.keyspace = std::move(ks); $s.name = std::move(f); }
     ;
 
+similarityFunctionName returns [cql3::functions::function_name s]
+    : f=allowedSimilarityFunctionName { $s = cql3::functions::function_name::native_function(std::move(f)); }
+    ;
+
 allowedFunctionName returns [sstring s]
     : f=IDENT                       { $s = $f.text; std::transform(s.begin(), s.end(), s.begin(), ::tolower); }
     | f=QUOTED_NAME                 { $s = $f.text; }
     | u=unreserved_function_keyword { $s = u; }
     | K_TOKEN                       { $s = "token"; }
     | K_COUNT                       { $s = "count"; }
+    ;
+
+allowedSimilarityFunctionName returns [sstring s]
+    : K_SIMILARITY_COSINE       { $s = "similarity_cosine"; }
+    | K_SIMILARITY_EUCLIDEAN    { $s = "similarity_euclidean"; }
+    | K_SIMILARITY_DOT_PRODUCT  { $s = "similarity_dot_product"; }
     ;
 
 functionArgs returns [std::vector<expression> a]
@@ -2386,6 +2409,10 @@ K_EXECUTE:     E X E C U T E;
 K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
 
 K_VECTOR_SEARCH_INDEXING: V E C T O R '_' S E A R C H '_' I N D E X I N G;
+
+K_SIMILARITY_EUCLIDEAN:     S I M I L A R I T Y '_' E U C L I D E A N;
+K_SIMILARITY_COSINE:        S I M I L A R I T Y '_' C O S I N E;
+K_SIMILARITY_DOT_PRODUCT:   S I M I L A R I T Y '_' D O T '_' P R O D U C T;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
