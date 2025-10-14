@@ -18,6 +18,7 @@
 #include <seastar/core/sleep.hh>
 
 #include "batchlog_manager.hh"
+#include "batchlog.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "mutation/canonical_mutation.hh"
 #include "service/storage_proxy.hh"
@@ -36,6 +37,32 @@
 #include "replica/database.hh"
 
 static logging::logger blogger("batchlog_manager");
+
+namespace db {
+
+mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
+    auto key = partition_key::from_singular(*schema, id);
+    auto timestamp = api::new_timestamp();
+    auto data = [&mutations] {
+        utils::chunked_vector<canonical_mutation> fm(mutations.begin(), mutations.end());
+        bytes_ostream out;
+        for (auto& m : fm) {
+            ser::serialize(out, m);
+        }
+        return std::move(out).to_managed_bytes();
+    }();
+
+    mutation m(schema, key);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
+    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
+    // Avoid going through data_value and therefore `bytes`, as it can be large (#24809).
+    auto cdef_data = schema->get_column_definition(to_bytes("data"));
+    m.set_cell(clustering_key_prefix::make_empty(), *cdef_data, atomic_cell::make_live(*cdef_data->type, timestamp, std::move(data)));
+
+    return m;
+}
+
+} // namespace db
 
 const std::chrono::seconds db::batchlog_manager::replay_interval;
 const uint32_t db::batchlog_manager::page_size;
