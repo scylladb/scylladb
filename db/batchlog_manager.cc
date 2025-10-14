@@ -64,6 +64,14 @@ mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vecto
     return m;
 }
 
+mutation get_batchlog_delete_mutation(schema_ptr schema, const utils::UUID& id) {
+    auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(id)});
+    auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
+    mutation m(schema, key);
+    m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
+    return m;
+}
+
 } // namespace db
 
 const std::chrono::seconds db::batchlog_manager::replay_interval;
@@ -195,7 +203,28 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
     auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
+<<<<<<< HEAD
     auto batch = [this, limiter](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+||||||| parent of 9434ec2fd1 (service,db: extract generation of batchlog delete mutation)
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+    auto delete_batch = [this, schema = std::move(schema)] (utils::UUID id) {
+        auto key = partition_key::from_singular(*schema, id);
+        mutation m(schema, key);
+        auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
+        m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
+        return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+    };
+
+    auto batch = [this, limiter, delete_batch = std::move(delete_batch), &all_replayed](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+=======
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+    auto delete_batch = [this, schema = std::move(schema)] (utils::UUID id) {
+        auto m = get_batchlog_delete_mutation(schema, id);
+        return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+    };
+
+    auto batch = [this, limiter, delete_batch = std::move(delete_batch), &all_replayed](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+>>>>>>> 9434ec2fd1 (service,db: extract generation of batchlog delete mutation)
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
