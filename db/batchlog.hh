@@ -15,4 +15,6 @@ namespace db {
 
 mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 
+mutation get_batchlog_delete_mutation(schema_ptr schema, const utils::UUID& id);
+
 }
