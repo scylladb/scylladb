@@ -47,6 +47,7 @@ public:
     view_building_task_mutation_builder& del_all_tasks();
     // Sets the static column min_task_id to `id`.
     view_building_task_mutation_builder& set_min_task_id(utils::UUID id);
+    view_building_task_mutation_builder& set_task(db::view::view_building_task& task);
 
     mutation build() {
         return std::move(_m);
