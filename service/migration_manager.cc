@@ -834,13 +834,13 @@ static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_
     using namespace db::view;
     mlogger.info("Cleaning view building state for all views in keyspace {} ", ks_meta->name());
 
+    db::view::view_building_task_mutation_builder builder(ts);
     auto& sys_ks = sp.system_keyspace();
     auto& vb_state_machine = sp.view_building_state_machine();
 
-    auto drop_all_tasks_in_task_map = [&] (const task_map& task_map) -> future<> {
+    auto drop_all_tasks_in_task_map = [&] (const task_map& task_map) {
         for (auto& [id, _]: task_map) {
-            auto mut = co_await sys_ks.make_remove_view_building_task_mutation(ts, id);
-            out.push_back(std::move(mut));
+            builder.del_task(id);
             mlogger.trace("Aborting view building task with ID: {} because the keyspace is being dropped", id);
         }
     };
@@ -854,9 +854,9 @@ static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_
 
         for (auto [_, replica_tasks]: vb_state_machine.building_state.tasks_state.at(tid)) {
             for (auto& [_, views_tasks]: replica_tasks.view_tasks) {
-                co_await drop_all_tasks_in_task_map(views_tasks);
+                drop_all_tasks_in_task_map(views_tasks);
             }
-            co_await drop_all_tasks_in_task_map(replica_tasks.staging_tasks);
+            drop_all_tasks_in_task_map(replica_tasks.staging_tasks);
         }
     }
 
@@ -865,6 +865,7 @@ static future<> add_cleanup_view_building_state_drop_keyspace_mutations(storage_
         auto build_status_mut = co_await sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()});
         out.push_back(std::move(build_status_mut));
     }
+    out.emplace_back(builder.build());
 }
 
 future<utils::chunked_vector<mutation>> prepare_keyspace_drop_announcement(storage_proxy& sp, const sstring& ks_name, api::timestamp_type ts) {
@@ -1029,6 +1030,7 @@ static future<> add_cleanup_view_building_state_drop_view_mutations(storage_prox
     using namespace db::view;
     mlogger.info("Cleaning view building state for view {} ({}.{})", view->id(), view->ks_name(), view->cf_name());
 
+    db::view::view_building_task_mutation_builder builder(ts);
     auto& sys_ks = sp.system_keyspace();
     auto& vb_state_machine = sp.view_building_state_machine();
 
@@ -1042,8 +1044,7 @@ static future<> add_cleanup_view_building_state_drop_view_mutations(storage_prox
 
             // Abort all view building tasks for this view
             for (auto& [id, _]: replica_tasks.view_tasks.at(view->id())) {
-                auto mut = co_await sys_ks.make_remove_view_building_task_mutation(ts, id);
-                out.push_back(std::move(mut));
+                builder.del_task(id);
                 mlogger.trace("Aborting view building task with ID: {} because the view is being dropped", id);
             }
         }
@@ -1052,6 +1053,7 @@ static future<> add_cleanup_view_building_state_drop_view_mutations(storage_prox
     // Remove entries from `system.view_build_status_v2`
     auto build_status_mut = co_await sys_ks.make_remove_view_build_status_mutation(ts, {view->ks_name(), view->cf_name()});
     out.push_back(std::move(build_status_mut));
+    out.emplace_back(builder.build());
 }
 
 future<utils::chunked_vector<mutation>> prepare_view_drop_announcement(storage_proxy& sp, const sstring& ks_name, const sstring& cf_name, api::timestamp_type ts) {

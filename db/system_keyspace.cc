@@ -2807,16 +2807,6 @@ future<db::view::building_tasks> system_keyspace::get_view_building_tasks() {
     co_return tasks;
 }
 
-future<mutation> system_keyspace::make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id) {
-    static const sstring stmt = format("DELETE FROM {}.{} WHERE key = '{}' AND id = ?", NAME, VIEW_BUILDING_TASKS, VIEW_BUILDING_KEY);
-
-    auto muts = co_await _qp.get_mutations_internal(stmt, internal_system_query_state(), ts, {id});
-    if (muts.size() != 1) {
-        on_internal_error(slogger, fmt::format("expected 1 mutation got {}", muts.size()));
-    }
-    co_return std::move(muts[0]);
-}
-
 static constexpr auto VIEW_BUILDING_PROCESSING_BASE_ID_KEY = "view_building_processing_base_id";
 
 future<std::optional<table_id>> system_keyspace::get_view_building_processing_base_id() {

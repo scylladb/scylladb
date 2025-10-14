@@ -560,7 +560,6 @@ public:
 
     // system.view_building_tasks
     future<db::view::building_tasks> get_view_building_tasks();
-    future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
 
     // system.scylla_local, view_building_processing_base key
     future<std::optional<table_id>> get_view_building_processing_base_id();
