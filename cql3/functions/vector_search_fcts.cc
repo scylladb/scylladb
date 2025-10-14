@@ -10,6 +10,7 @@
 #include "dht/i_partitioner.hh"
 #include "cql3/column_identifier.hh"
 #include "types/vector.hh"
+#include "index/vector_index.hh"
 
 namespace cql3 {
 namespace functions {
@@ -23,6 +24,23 @@ float vector_similarity_fct::find_matching_distance() {
         throw std::runtime_error("No matching distance found for given primary key");
     }
     return it->second;
+}
+
+void vector_similarity_fct::validate_similarity_function() {
+    auto vector_index_options = secondary_index::vector_index::get_index_options(*_schema, _target);
+    if (vector_index_options.empty()) {
+        throw exceptions::invalid_request_exception(fmt::format("No vector index found on column {}", _target));
+    }
+    auto similarity_function_it = vector_index_options.find("similarity_function");
+    sstring similarity_function = similarity_function_it != vector_index_options.end() ? similarity_function_it->second : "cosine";
+    std::transform(similarity_function.begin(), similarity_function.end(), similarity_function.begin(), ::tolower);
+
+    // The `_name.name` returns the function name, e.g., "similarity_cosine", but the similarity function option
+    // in the vector index options is just "cosine", "euclidean", or "dot_product".
+    // Therefore, we check if the function name contains the metric name.
+    if (!_name.name.contains(similarity_function)) {
+        throw exceptions::invalid_request_exception(fmt::format("Vector index on column {} was not built with {} metric", _target, _name.name));
+    }
 }
 
 std::vector<data_type> vector_similarity_fct::provide_arg_types(
