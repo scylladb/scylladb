@@ -577,11 +577,16 @@ public:
     future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task);
 ||||||| parent of e002665aa7 (db/system_keyspace: replace `make_view_building_task_mutation()` with mutation builder)
     future<std::pair<db::view::building_tasks, std::optional<utils::UUID>>> get_view_building_tasks();
+<<<<<<< HEAD
     future<mutation> make_view_building_task_mutation(api::timestamp_type ts, const db::view::view_building_task& task);
 =======
     future<std::pair<db::view::building_tasks, std::optional<utils::UUID>>> get_view_building_tasks();
 >>>>>>> e002665aa7 (db/system_keyspace: replace `make_view_building_task_mutation()` with mutation builder)
     future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
+||||||| parent of 1a32ccd8f6 (db/system_keyspace: replace `make_remove_view_building_task_mutation()` with mutation builder)
+    future<mutation> make_remove_view_building_task_mutation(api::timestamp_type ts, utils::UUID id);
+=======
+>>>>>>> 1a32ccd8f6 (db/system_keyspace: replace `make_remove_view_building_task_mutation()` with mutation builder)
 
     // system.scylla_local, view_building_processing_base key
     future<std::optional<table_id>> get_view_building_processing_base_id();
