@@ -400,7 +400,7 @@ future<std::tuple<bool, gc_clock::time_point>> repair_service::flush_hints(repai
             }
             if (!nodes_down.empty()) {
                 rlogger.warn("repair[{}]: Skipped sending repair_flush_hints_batchlog due to nodes_down={}, continue to run repair",
-                        nodes_down, uuid);
+                        uuid, nodes_down);
                 co_return std::make_tuple(hints_batchlog_flushed, flush_time);
             }
             co_await parallel_for_each(waiting_nodes, [this, uuid, start_time, &times, &req] (locator::host_id node) -> future<> {
