@@ -104,6 +104,9 @@ public:
     bool ms_listen = false;
     bool run_with_raft_recovery = false;
 
+    std::optional<db_clock::duration> batchlog_replay_timeout;
+    std::chrono::milliseconds batchlog_delay = std::chrono::milliseconds(0);
+
     std::optional<timeout_config> query_timeout;
 
     cql_test_config();
