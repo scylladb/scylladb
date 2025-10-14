@@ -16,6 +16,7 @@
 #include "cql3/functions/user_function.hh"
 #include "cql3/functions/user_aggregate.hh"
 #include "cql3/functions/uuid_fcts.hh"
+#include "cql3/functions/vector_search_fcts.hh"
 #include "data_dictionary/data_dictionary.hh"
 #include "as_json_function.hh"
 #include "cql3/prepare_context.hh"
@@ -389,6 +390,9 @@ functions::get(data_dictionary::database db,
     static const function_name TOKEN_FUNCTION_NAME = function_name::native_function("token");
     static const function_name TO_JSON_FUNCTION_NAME = function_name::native_function("tojson");
     static const function_name FROM_JSON_FUNCTION_NAME = function_name::native_function("fromjson");
+    static const function_name SIMILARITY_COSINE_FUNCTION_NAME = function_name::native_function("similarity_cosine");
+    static const function_name SIMILARITY_EUCLIDEAN_FUNCTION_NAME = function_name::native_function("similarity_euclidean");
+    static const function_name SIMILARITY_DOT_PRODUCT_FUNCTION_NAME = function_name::native_function("similarity_dot_product");
 
     auto schema = std::invoke([&] () -> schema_ptr {
         if (receiver_cf.has_value() && db.has_schema(receiver_ks, *receiver_cf)) {
@@ -397,6 +401,30 @@ functions::get(data_dictionary::database db,
             return nullptr;
         }
     });
+
+    static const std::array<function_name, 3> SIMILARITY_FUNCTIONS = {
+            SIMILARITY_COSINE_FUNCTION_NAME,
+            SIMILARITY_EUCLIDEAN_FUNCTION_NAME,
+            SIMILARITY_DOT_PRODUCT_FUNCTION_NAME,
+    };
+
+    auto similarity_fun_it = std::find_if(SIMILARITY_FUNCTIONS.begin(), SIMILARITY_FUNCTIONS.end(), [&name](const auto& f) {
+        return name.has_keyspace() ? name == f : name.name == f.name;
+    });
+
+    if (similarity_fun_it != SIMILARITY_FUNCTIONS.end()) {
+        shared_ptr<vector_similarity_fct> fun;
+        if (*similarity_fun_it == SIMILARITY_COSINE_FUNCTION_NAME) {
+            fun = ::make_shared<similarity_cosine_fct>();
+        } else if (*similarity_fun_it == SIMILARITY_EUCLIDEAN_FUNCTION_NAME) {
+            fun = ::make_shared<similarity_euclidean_fct>();
+        } else if (*similarity_fun_it == SIMILARITY_DOT_PRODUCT_FUNCTION_NAME) {
+            fun = ::make_shared<similarity_dot_product_fct>();
+        }
+
+        validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
+        return fun;
+    }
 
     if (name.has_keyspace()
                 ? name == TOKEN_FUNCTION_NAME
