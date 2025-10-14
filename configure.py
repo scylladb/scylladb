@@ -644,6 +644,28 @@ vector_search_tests = set([
     'test/vector_search/load_balancer_test'
 ])
 
+vector_search_validator_bin = 'vector-search-validator/bin/vector-search-validator'
+vector_search_validator_deps = set([
+    'test/vector_search_validator/build-validator',
+    'test/vector_search_validator/Cargo.toml',
+    'test/vector_search_validator/crates/validator/Cargo.toml',
+    'test/vector_search_validator/crates/validator/src/main.rs',
+    'test/vector_search_validator/crates/validator-scylla/Cargo.toml',
+    'test/vector_search_validator/crates/validator-scylla/src/lib.rs',
+    'test/vector_search_validator/crates/validator-scylla/src/dummy.rs',
+])
+
+vector_store_bin = 'vector-search-validator/bin/vector-store'
+vector_store_deps = set([
+    'test/vector_search_validator/build-env',
+    'test/vector_search_validator/build-vector-store',
+])
+
+vector_search_validator_bins = set([
+    vector_search_validator_bin,
+    vector_store_bin,
+])
+
 wasms = set([
     'wasm/return_input.wat',
     'wasm/test_complex_null_values.wat',
@@ -2547,7 +2569,7 @@ def write_build_file(f,
         )
 
         f.write(
-            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla {wasms}\n'.format(
+            'build {mode}-test: test.{mode} {test_executables} $builddir/{mode}/scylla vector-search-validator {wasms}\n'.format(
                 mode=mode,
                 test_executables=' '.join(['$builddir/{}/{}'.format(mode, binary) for binary in sorted(tests)]),
                 wasms=' '.join([f'$builddir/{binary}' for binary in sorted(wasms)]),
@@ -2715,6 +2737,22 @@ def write_build_file(f,
     )
     f.write(
             'build compiler-training: phony {}\n'.format(' '.join(['{mode}-compiler-training'.format(mode=mode) for mode in default_modes]))
+    )
+
+    f.write(textwrap.dedent(f'''\
+        rule build-vector-search-validator
+            command = test/vector_search_validator/build-validator $builddir
+        rule build-vector-store
+            command = test/vector_search_validator/build-vector-store $builddir
+        '''))
+    f.write(
+            'build vector-search-validator: phony {}\n'.format(' '.join([f'$builddir/{binary}' for binary in sorted(vector_search_validator_bins)]))
+    )
+    f.write(
+            'build $builddir/{vector_search_validator_bin}: build-vector-search-validator {}\n'.format(' '.join([dep for dep in sorted(vector_search_validator_deps)]), vector_search_validator_bin=vector_search_validator_bin)
+    )
+    f.write(
+            'build $builddir/{vector_store_bin}: build-vector-store {}\n'.format(' '.join([dep for dep in sorted(vector_store_deps)]), vector_store_bin=vector_store_bin)
     )
 
     f.write(textwrap.dedent(f'''\

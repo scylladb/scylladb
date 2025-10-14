@@ -1,0 +1,24 @@
+## Copyright 2025-present ScyllaDB
+# SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
+
+[workspace]
+members = ["crates/*"]
+default-members = ["crates/validator"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0.97"
+futures = "0.3.31"
+scylla = { version = "1.2.0", features = ["time-03"] }
+tokio = { version = "1.44.1", features = ["full"] }
+tracing = "0.1.41"
+uuid = "1.16.0"
+vector-search-validator-engine = { git = "https://github.com/ewienik/vector-store.git", rev = "a1a562d392d2" }
+vector-search-validator-tests = { git = "https://github.com/ewienik/vector-store.git", rev = "a1a562d392d2" }
+
+[patch.'https://github.com/ewienik/vector-store.git']
+vector-search-validator-scylla = { path = "crates/validator-scylla" }

@@ -1,0 +1,8 @@
+[package]
+name = "vector-search-validator-scylla"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tracing.workspace = true
+vector-search-validator-tests.workspace = true
