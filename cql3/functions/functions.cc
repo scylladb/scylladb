@@ -413,15 +413,16 @@ functions::get(data_dictionary::database db,
     });
 
     if (similarity_fun_it != SIMILARITY_FUNCTIONS.end()) {
+        auto target = provided_args[0]->assignment_testable_source_context();
         auto arg_types = vector_similarity_fct::provide_arg_types(name, provided_args, db);
 
         shared_ptr<vector_similarity_fct> fun;
         if (*similarity_fun_it == SIMILARITY_COSINE_FUNCTION_NAME) {
-            fun = ::make_shared<similarity_cosine_fct>(schema, arg_types);
+            fun = ::make_shared<similarity_cosine_fct>(schema, target, arg_types);
         } else if (*similarity_fun_it == SIMILARITY_EUCLIDEAN_FUNCTION_NAME) {
-            fun = ::make_shared<similarity_euclidean_fct>(schema, arg_types);
+            fun = ::make_shared<similarity_euclidean_fct>(schema, target, arg_types);
         } else if (*similarity_fun_it == SIMILARITY_DOT_PRODUCT_FUNCTION_NAME) {
-            fun = ::make_shared<similarity_dot_product_fct>(schema, arg_types);
+            fun = ::make_shared<similarity_dot_product_fct>(schema, target, arg_types);
         }
 
         validate_types(db, keyspace, schema.get(), fun, provided_args, receiver_ks, receiver_cf);
