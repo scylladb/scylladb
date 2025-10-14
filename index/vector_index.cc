@@ -195,6 +195,21 @@ table_schema_version vector_index::index_version(const schema& schema) {
     return schema.version();
 }
 
+index_options_map vector_index::get_index_options(const schema& s, const sstring& target_name) {
+    auto i = s.indices();
+    for (const auto& index : i) {
+        auto class_it = index.options().find(db::index::secondary_index::custom_class_option_name);
+        auto target_it = index.options().find(cql3_parser::index_target::target_option_name);
+        if (class_it != index.options().end() && target_it != index.options().end()) {
+            auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
+            if (custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && target_it->second == target_name) {
+                return index.options();
+            }
+        }
+    }
+    return {};
+}
+
 std::unique_ptr<secondary_index::custom_index> vector_index_factory() {
     return std::make_unique<vector_index>();
 }
