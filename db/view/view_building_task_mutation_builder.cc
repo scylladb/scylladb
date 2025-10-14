@@ -52,6 +52,71 @@ view_building_task_mutation_builder& view_building_task_mutation_builder::del_ta
     return *this;
 }
 
+<<<<<<< HEAD
+||||||| parent of 4227cab5cb (db/view/view_building_task_mutation_builder: add helper method)
+view_building_task_mutation_builder& view_building_task_mutation_builder::del_tasks_before(utils::UUID id) {
+    auto ck = get_ck(id);
+    range_tombstone rt(
+        position_in_partition::before_all_clustered_rows(),
+        position_in_partition_view(ck, bound_weight::before_all_prefixed),
+        tombstone{_ts, gc_clock::now()});
+    _m.partition().apply_row_tombstone(*_s, std::move(rt));
+    return *this;
+}
+
+view_building_task_mutation_builder& view_building_task_mutation_builder::del_all_tasks() {
+    range_tombstone rt(
+        position_in_partition::before_all_clustered_rows(),
+        position_in_partition::after_all_clustered_rows(),
+        tombstone{_ts, gc_clock::now()});
+    _m.partition().apply_row_tombstone(*_s, std::move(rt));
+    return *this;
+}
+
+view_building_task_mutation_builder& view_building_task_mutation_builder::set_min_task_id(utils::UUID id) {
+    _m.set_static_cell("min_task_id", data_value(id), _ts);
+    return *this;
+}
+
+=======
+view_building_task_mutation_builder& view_building_task_mutation_builder::del_tasks_before(utils::UUID id) {
+    auto ck = get_ck(id);
+    range_tombstone rt(
+        position_in_partition::before_all_clustered_rows(),
+        position_in_partition_view(ck, bound_weight::before_all_prefixed),
+        tombstone{_ts, gc_clock::now()});
+    _m.partition().apply_row_tombstone(*_s, std::move(rt));
+    return *this;
+}
+
+view_building_task_mutation_builder& view_building_task_mutation_builder::del_all_tasks() {
+    range_tombstone rt(
+        position_in_partition::before_all_clustered_rows(),
+        position_in_partition::after_all_clustered_rows(),
+        tombstone{_ts, gc_clock::now()});
+    _m.partition().apply_row_tombstone(*_s, std::move(rt));
+    return *this;
+}
+
+view_building_task_mutation_builder& view_building_task_mutation_builder::set_min_task_id(utils::UUID id) {
+    _m.set_static_cell("min_task_id", data_value(id), _ts);
+    return *this;
+}
+
+view_building_task_mutation_builder& view_building_task_mutation_builder::set_task(db::view::view_building_task& task) {
+    auto id = task.id;
+    set_type(id, task.type);
+    set_aborted(id, task.aborted);
+    set_base_id(id, task.base_id);
+    if (task.view_id) {
+        set_view_id(id, *task.view_id);
+    }
+    set_last_token(id, task.last_token);
+    set_replica(id, task.replica);
+    return *this;
+}
+
+>>>>>>> 4227cab5cb (db/view/view_building_task_mutation_builder: add helper method)
 }
 
 }

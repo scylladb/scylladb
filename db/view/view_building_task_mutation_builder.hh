@@ -38,6 +38,23 @@ public:
     view_building_task_mutation_builder& set_last_token(utils::UUID id, dht::token last_token);
     view_building_task_mutation_builder& set_replica(utils::UUID id, const locator::tablet_replica& replica);
     view_building_task_mutation_builder& del_task(utils::UUID id);
+<<<<<<< HEAD
+||||||| parent of 4227cab5cb (db/view/view_building_task_mutation_builder: add helper method)
+    // Deletes all tasks with clustering key < id using a range tombstone.
+    view_building_task_mutation_builder& del_tasks_before(utils::UUID id);
+    // Deletes all tasks using a range tombstone covering the entire clustering range.
+    view_building_task_mutation_builder& del_all_tasks();
+    // Sets the static column min_task_id to `id`.
+    view_building_task_mutation_builder& set_min_task_id(utils::UUID id);
+=======
+    // Deletes all tasks with clustering key < id using a range tombstone.
+    view_building_task_mutation_builder& del_tasks_before(utils::UUID id);
+    // Deletes all tasks using a range tombstone covering the entire clustering range.
+    view_building_task_mutation_builder& del_all_tasks();
+    // Sets the static column min_task_id to `id`.
+    view_building_task_mutation_builder& set_min_task_id(utils::UUID id);
+    view_building_task_mutation_builder& set_task(db::view::view_building_task& task);
+>>>>>>> 4227cab5cb (db/view/view_building_task_mutation_builder: add helper method)
 
     mutation build() {
         return std::move(_m);
