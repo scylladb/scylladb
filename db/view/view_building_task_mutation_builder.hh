@@ -38,6 +38,7 @@ public:
     view_building_task_mutation_builder& set_last_token(utils::UUID id, dht::token last_token);
     view_building_task_mutation_builder& set_replica(utils::UUID id, const locator::tablet_replica& replica);
     view_building_task_mutation_builder& del_task(utils::UUID id);
+    view_building_task_mutation_builder& set_task(db::view::view_building_task& task);
 
     mutation build() {
         return std::move(_m);
