@@ -1,0 +1,21 @@
+#!/bin/bash
+
+set -e
+
+usage() {
+    echo "usage: $0 <build-dir>"
+    exit 1
+}
+
+build_dir=$1
+[[ -z $build_dir ]] && usage
+build_dir=$(realpath $build_dir/vector-search-validator)
+
+proj_dir=$(dirname "${BASH_SOURCE[0]}")
+proj_dir=$(realpath $proj_dir)
+
+mkdir -p "$build_dir"
+cd "$build_dir"
+
+rm bin/vector-search-validator release/deps/vector_search_validator* -f
+cargo install --path "$proj_dir/crates/validator" --root . --target-dir . --no-track vector-search-validator
