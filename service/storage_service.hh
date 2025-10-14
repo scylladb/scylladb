@@ -369,8 +369,14 @@ public:
         return *_shared_token_metadata.get();
     }
 
+    raft_group0_client* get_group0_client() noexcept;
+
     abort_source& get_abort_source() noexcept {
         return _abort_source;
+    }
+
+    abort_source& get_group0_abort_source() noexcept {
+        return _group0_as;
     }
 
     gms::feature_service& get_feature_service() noexcept {

@@ -8332,4 +8332,8 @@ future<> storage_service::query_cdc_streams(table_id table, noncopyable_function
     return _cdc_gens.local().query_cdc_streams(table, std::move(f));
 }
 
+raft_group0_client* storage_service::get_group0_client() noexcept {
+    return _group0 ? &_group0->client() : nullptr;
+}
+
 } // namespace service
