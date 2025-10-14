@@ -36,6 +36,7 @@ static locator::replication_strategy_config_options prepare_options(
     options.erase(ks_prop_defs::REPLICATION_STRATEGY_CLASS_KEY);
 
     auto is_nts = locator::abstract_replication_strategy::to_qualified_class_name(strategy_class) == "org.apache.cassandra.locator.NetworkTopologyStrategy";
+    auto is_alter = !old_options.empty();
 
     logger.debug("prepare_options: {}: is_nts={} old_options={} new_options={}", strategy_class, is_nts, old_options, options);
 
@@ -65,6 +66,10 @@ static locator::replication_strategy_config_options prepare_options(
             // and didn't provide any additional options.
             rf = std::get<sstring>(it->second);
         }
+    }
+
+    if (rf && uses_tablets && is_alter) {
+        throw exceptions::invalid_request_exception("'replication_factor' tag is not allowed when executing ALTER KEYSPACE with tablets, please list the DCs explicitly");
     }
 
     // Validate options.
