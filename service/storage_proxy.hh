@@ -559,7 +559,12 @@ private:
         return _pending_writes_phaser.start();
     }
 
+<<<<<<< HEAD
     mutation do_get_batchlog_mutation_for(schema_ptr schema, const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+||||||| parent of f54602daf0 (service,db: extract get_batchlog_mutation_for() from storage-proxy)
+    mutation do_get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+=======
+>>>>>>> f54602daf0 (service,db: extract get_batchlog_mutation_for() from storage-proxy)
     future<> drain_on_shutdown();
 public:
     // Applies mutation on this node.
@@ -705,8 +710,14 @@ public:
             db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
             clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write = true);
 
+<<<<<<< HEAD
     mutation get_batchlog_mutation_for(const std::vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
 
+||||||| parent of f54602daf0 (service,db: extract get_batchlog_mutation_for() from storage-proxy)
+    mutation get_batchlog_mutation_for(const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
+
+=======
+>>>>>>> f54602daf0 (service,db: extract get_batchlog_mutation_for() from storage-proxy)
     future<> stop();
     future<> start_hints_manager();
     void allow_replaying_hints() noexcept;
