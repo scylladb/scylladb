@@ -19,7 +19,7 @@ from test.cluster.test_group0_schema_versioning import get_group0_schema_version
 
 
 @pytest.mark.asyncio
-async def test_raft_recovery_entry_lose(manager: ManagerClient):
+async def test_raft_recovery_entry_loss(manager: ManagerClient):
     """
     Test that the Raft-based recovery procedure works correctly if some committed group 0 entry has been permanently
     lost (it has been committed only by dead nodes).
