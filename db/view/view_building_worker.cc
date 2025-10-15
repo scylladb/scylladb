@@ -171,8 +171,8 @@ void view_building_worker::on_drop_view(const sstring& ks_name, const sstring& v
 }
 
 future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, table_id table_id) {
-    auto& tablet_map = _db.get_token_metadata().tablets().get_tablet_map(table_id);
     auto staging_task_infos = ssts | std::views::as_rvalue | std::views::transform([&] (sstables::shared_sstable sst) {
+        auto& tablet_map = _db.get_token_metadata().tablets().get_tablet_map(table_id);
         auto tid = get_sstable_tablet_id(tablet_map, *sst);
         return staging_sstable_task_info {
             .table_id = table_id,
