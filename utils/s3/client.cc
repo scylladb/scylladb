@@ -1293,13 +1293,13 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
             } catch (const filler_exception& ex) {
                 if (ex._should_abort) {
-                    s3l.warn("Fiber for object '{}' experienced a non-retryable error in buffer filling loop. Reason: {}. Exiting", _object_name, ex._original_exception);
+                    s3l.info("Fiber for object '{}' experienced a non-retryable error in buffer filling loop. Reason: {}. Exiting", _object_name, ex._original_exception);
                     _get_cv.broken(ex._original_exception);
                     co_return;
                 }
-                s3l.warn("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex._original_exception);
+                s3l.info("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex._original_exception);
             } catch (...) {
-                s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
+                s3l.info("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
                 _get_cv.broken(std::current_exception());
                 co_return;
             }
