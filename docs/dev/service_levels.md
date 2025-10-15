@@ -30,7 +30,7 @@ SELECT * FROM  system.role_attributes WHERE role='r' and attribute_name='service
 ### Service Level Configuration Table
 
 ```
-    CREATE TABLE system_distributed.service_levels (
+    CREATE TABLE system.service_levels_v2 (
     service_level text PRIMARY KEY,
     timeout duration,
     workload_type text,
@@ -45,11 +45,11 @@ The table column names meanings are:
 *shares* - a number that represents this service level priority in relation to other service levels.
 
 ```
-select * from system_distributed.service_levels ;
+select * from system.service_levels_v2 ;
 
- service_level | timeout | workload_type
----------------+---------+---------------
-            sl |   500ms |   interactive
+ service_level | shares | timeout | workload_type
+---------------+--------+---------+---------------
+            sl |    100 |   500ms |   interactive
 
 ```
 
@@ -108,6 +108,8 @@ role1: `timeout = 10ms`
 role2: `timeout = 10ms`
 role3: `timeout = 2s`
 role4: `timeout = 10ms`
+
+
 
 ### Workload types
 
@@ -189,3 +191,17 @@ The command displays a table with: option name, effective service level the valu
         workload_type |                     sl2 |       batch
               timeout |                     sl1 |          2s
 ```
+
+## Service levels on Raft
+
+Since Scylla 6.0, service levels metadata is managed by Raft group0 and stored in `system.service_levels_v2`.
+
+In existing clusters, service levels metadata is automatically copied from `system_distributed.service_levels` to `system.service_levels_v2`
+during the topology upgrade (see [upgrade to raft topology secion](topology-over-raft.md#upgrade-from-legacy-topology-to-raft-based-topology)).
+
+Before the service levels on Raft, service levels cache was updated in 10s intervals by polling `system_distributed.service_levels` table.
+Once the service levels are migrated to raft, the cache is updated on every group0 state apply fiber, if there are any mutations to
+`system.service_levels_v2`, `system.role_attributes` or ` system.role_members`.
+
+With service levels on Raft, the cache also has an additional layer, called `service level effective cache`. This layer combines service levels
+and auth informations and stores effective service level for each role (see [effective service level section](#effective-service-level)).
