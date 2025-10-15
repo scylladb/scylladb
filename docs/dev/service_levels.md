@@ -30,7 +30,7 @@ SELECT * FROM  system.role_attributes WHERE role='r' and attribute_name='service
 ### Service Level Configuration Table
 
 ```
-    CREATE TABLE system_distributed.service_levels (
+    CREATE TABLE system.service_levels_v2 (
     service_level text PRIMARY KEY,
     timeout duration,
     workload_type text,
@@ -45,7 +45,7 @@ The table column names meanings are:
 *shares* - a number that represents this service level priority in relation to other service levels.
 
 ```
-select * from system_distributed.service_levels ;
+select * from system.service_levels_v2 ;
 
  service_level | timeout | workload_type
 ---------------+---------+---------------
@@ -189,3 +189,9 @@ The command displays a table with: option name, effective service level the valu
         workload_type |                     sl2 |       batch
               timeout |                     sl1 |          2s
 ```
+
+## Service levels on Raft
+
+Since Scylla 6.0, service levels metadata is manged by Raft group0 and stored in `system.service_levels_v2`.
+In existing clusters, migration from `system_distributed.service_levels` to `system.service_levels_v2`
+is done automatically once the consisteny topology is enabled.
