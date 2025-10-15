@@ -1815,6 +1815,9 @@ user_cflags = args.user_cflags + f" -ffile-prefix-map={curdir}=."
 # Since gcc 13, libgcc doesn't need the exception workaround
 user_cflags += ' -DSEASTAR_NO_EXCEPTION_HACK'
 
+# https://github.com/llvm/llvm-project/issues/163007
+user_cflags += ' -fextend-variable-liveness=none'
+
 if args.target != '':
     user_cflags += ' -march=' + args.target
 
