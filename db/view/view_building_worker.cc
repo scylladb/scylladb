@@ -135,6 +135,10 @@ future<> view_building_worker::init() {
     _mnotifier.register_listener(this);
 }
 
+void view_building_worker::trigger_state_update() {
+    _cv.broadcast();
+}
+
 dht::token_range view_building_worker::get_tablet_token_range(table_id table_id, dht::token last_token) {
     auto& cf = _db.find_column_family(table_id);
     auto& tablet_map = cf.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(table_id);
@@ -147,6 +151,7 @@ future<> view_building_worker::drain() {
     }
     _staging_sstables_mutex.broken();
     _sstables_to_register_event.broken();
+    _cv.broken();
     if (this_shard_id() == 0) {
         auto sstable_registrator = std::exchange(_staging_sstables_registrator, make_ready_future<>());
         co_await std::move(sstable_registrator);
