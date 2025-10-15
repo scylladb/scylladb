@@ -515,10 +515,13 @@ schema_ptr encrypted_keys_table() {
 }
 
 future<> replicated_key_provider::maybe_initialize_tables() {
-    if (!_initialized) {
-        co_await do_initialize_tables(_ctxt.get_database().local(), _ctxt.get_migration_manager().local());
-        _initialized = true;
+    if (_initialized) {
+        co_return;
     }
+    if (_keys_on == keys_location::sys_repl_keys_ks) {
+        co_await do_initialize_tables(_ctxt.get_database().local(), _ctxt.get_migration_manager().local());
+    }
+    _initialized = true;
 }
 
 future<> replicated_key_provider::do_initialize_tables(::replica::database& db, service::migration_manager& mm) {
