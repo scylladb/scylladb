@@ -7,6 +7,7 @@
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "utils/checked-file-impl.hh"
+#include "utils/exceptions.hh"
 
 static seastar::logger llogger("lister");
 
@@ -20,7 +21,18 @@ lister::lister(file f, dir_entry_types type, walker_type walker, filter_type fil
         , _show_hidden(do_show_hidden) {}
 
 future<> lister::visit(directory_entry de) {
-    return guarantee_type(std::move(de)).then([this] (directory_entry de) {
+    return guarantee_type(std::move(de)).then_wrapped([this] (auto&& fut) -> future<> {
+        if (fut.failed()) {
+            auto exp = fut.get_exception();
+            if (auto* e = try_catch<std::runtime_error>(exp)) {
+                llogger.warn("Failed to guarantee type: '{}'. Skipping the file", e->what());
+                return make_ready_future<>();
+            }
+
+            return make_exception_future<>(std::move(exp));
+        }
+        directory_entry de = fut.get();
+
         // Hide all synthetic directories and hidden files if not requested to show them.
         if ((_expected_type && !_expected_type.contains(*(de.type))) || (!_show_hidden && de.name[0] == '.')) {
             return make_ready_future<>();
