@@ -8,6 +8,7 @@
 
 #include "bytes.hh"
 #include "bytes_fwd.hh"
+#include "gc_clock.hh"
 #include "mutation/atomic_cell.hh"
 #include "mutation/atomic_cell_or_collection.hh"
 #include "mutation/collection_mutation.hh"
@@ -622,9 +623,13 @@ static bool entries_match_row_state(const schema_ptr& base_schema, const cell_ma
             return false;
         }
     }
+    if (nonatomic_entries.empty()) {
+        return true;
+    }
 
-    for (auto& e : nonatomic_entries) {
-        const column_definition& cdef = base_schema->column_at(column_kind::regular_column, e.id);
+    const auto now = gc_clock::now();
+    for (auto& update : nonatomic_entries) {
+        const column_definition& cdef = base_schema->column_at(column_kind::regular_column, update.id);
         auto it = row_state.find(&cdef);
         if (it == row_state.end()) {
             return false;
@@ -633,21 +638,25 @@ static bool entries_match_row_state(const schema_ptr& base_schema, const cell_ma
         auto current_raw_map = cdef.type->deserialize(*it->second);
         map_type_impl::native_type current_values = value_cast<map_type_impl::native_type>(current_raw_map);
 
-        if (current_values.size() != e.cells.size()) {
+        if (current_values.size() != update.cells.size()) {
             return false;
         }
         
-        std::unordered_map<sstring_view, bytes> kvm;
+        std::unordered_map<sstring_view, bytes> current_values_map;
         for (const auto& entry : current_values) {
             const sstring& attr_name = value_cast<sstring>(entry.first);
             auto v = value_cast<bytes>(entry.second);
-            kvm[std::string_view(attr_name)] = v;
+            current_values_map[std::string_view(attr_name)] = v;
         }
 
-        for (auto& [key, value] : e.cells) {
+        for (auto& [key, value] : update.cells) {
             auto upd = value.value().linearize();
             auto k = to_string_view(key);
-            if (kvm[k] != upd) {
+            if (value.is_dead(now)) {
+                if (current_values_map.contains(k)) {
+                    return false;
+                }
+            } else if (current_values_map[k] != upd) {
                 return false;
             }
         }
@@ -657,8 +666,8 @@ static bool entries_match_row_state(const schema_ptr& base_schema, const cell_ma
 
 bool should_skip(batch& changes, const mutation& base_mutation, change_processor& processor) {
     const schema_ptr& base_schema = base_mutation.schema();
-    if (!changes.static_updates.empty() || changes.partition_deletions.has_value() || !changes.clustered_range_deletions.empty()
-        || !changes.clustered_row_deletions.empty()) {
+    // Alternator doesn't use static updates and clustered range deletions.
+    if (!changes.static_updates.empty() || !changes.clustered_range_deletions.empty()) {
         return false;
     }
 
@@ -680,6 +689,23 @@ bool should_skip(batch& changes, const mutation& base_mutation, change_processor
         if (!entries_match_row_state(base_schema, *row_state, u.atomic_entries, u.nonatomic_entries)) {
             return false;
         }
+    }
+
+    // Skip only if the row being deleted does not exist (i.e. the deletion is a no-op).
+    for (const auto& row_deletion : changes.clustered_row_deletions) {
+        if (processor.clustering_row_states().contains(row_deletion.key)) {
+            return false;
+        }
+    }
+
+    // Don't skip if the item exists.
+    //
+    // Increased DynamoDB Streams compatibility guarantees that single-item
+    // operations will read the item and store it in the clustering row states.
+    // If it is not found there, we may skip CDC. This is safe as long as the
+    // assumptions of this operation's write isolation are not violated.
+    if (changes.partition_deletions && processor.clustering_row_states().contains(clustering_key::make_empty())) {
+        return false;
     }
 
     cdc_log.trace("Skipping CDC log for mutation {}", base_mutation);
