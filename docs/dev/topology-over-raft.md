@@ -801,6 +801,9 @@ From the admin's point of view, the steps are as follows:
   or via observing the logs
 - After all nodes report `done` via the GET endpoint, the upgrade has fully finished
 
+Note that during the upgrade no service levels or auth operations should be done,
+as those services are performing migrations to raft metadata.
+
 The `upgrade_state` static column in `system.topology` serves the key role
 in coordinating the upgrade. It goes through the following states in the following
 order:
