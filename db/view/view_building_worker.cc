@@ -197,6 +197,7 @@ future<> view_building_worker::register_staging_sstable_tasks(std::vector<sstabl
 
 future<> view_building_worker::run_staging_sstables_registrator() {
     while (!_as.abort_requested()) {
+        bool sleep = false;
         try {
             auto lock = co_await get_units(_staging_sstables_mutex, 1, _as);
             co_await create_staging_sstable_tasks();
@@ -213,6 +214,18 @@ future<> view_building_worker::run_staging_sstables_registrator() {
             vbw_logger.warn("Got group0_concurrent_modification while creating staging sstable tasks");
         } catch (raft::request_aborted&) {
             vbw_logger.warn("Got raft::request_aborted while creating staging sstable tasks");
+        } catch (...) {
+            vbw_logger.error("Exception while creating staging sstable tasks: {}", std::current_exception());
+            sleep = true;
+        }
+
+        if (sleep && !_as.abort_requested()) {
+            try {
+                vbw_logger.debug("Sleeping after exception.");
+                co_await seastar::sleep_abortable(1s, _as);
+            } catch (...) {
+                vbw_logger.warn("sleep failed: {}", std::current_exception());
+            }
         }
     }
 }
