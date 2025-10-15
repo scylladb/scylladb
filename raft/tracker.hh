@@ -31,7 +31,7 @@ public:
     // Highest read id the follower replied to
     read_id max_acked_read = read_id{0};
 
-    //is_voter::yes if the follower is a voting one
+    // is_voter::yes if the follower is a voting one
     raft::is_voter can_vote = raft::is_voter::yes;
 
     enum class state {
