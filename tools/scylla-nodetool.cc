@@ -2158,8 +2158,19 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
     } else {
         keyspaces.push_back(std::move(keyspace));
     }
-    if (vm.contains("skip-corrupted") && vm.contains("mode")) {
+
+    const bool has_skip_corrupted = vm.contains("skip-corrupted");
+    const bool has_mode = vm.contains("mode");
+    const bool has_drop_unfixable = vm.contains("drop-unfixable-sstables");
+
+    const sstring mode = has_mode ? vm["mode"].as<sstring>() : "";
+
+    if (has_skip_corrupted && has_mode) {
         throw std::invalid_argument("cannot use --skip-corrupted when --mode is used");
+    }
+
+    if (has_drop_unfixable && (!has_mode || mode != "SEGREGATE")) {
+        throw std::invalid_argument("--drop-unfixable-sstables is only valid with --mode=SEGREGATE");
     }
 
     std::unordered_map<sstring, sstring> params;
@@ -2168,9 +2179,9 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
         params["cf"] = fmt::to_string(fmt::join(tables.begin(), tables.end(), ","));
     }
 
-    if (vm.contains("mode")) {
-        params["scrub_mode"] = vm["mode"].as<sstring>();
-    } else if (vm.contains("skip-corrupted")) {
+    if (has_mode) {
+        params["scrub_mode"] = mode;
+    } else if (has_skip_corrupted) {
         params["scrub_mode"] = "SKIP";
     }
 
@@ -2180,6 +2191,10 @@ void scrub_operation(scylla_rest_client& client, const bpo::variables_map& vm) {
 
     if (vm.contains("no-snapshot")) {
         params["disable_snapshot"] = "true";
+    }
+
+    if (has_drop_unfixable) {
+        params["drop_unfixable_sstables"] = "true";
     }
 
     std::vector<api::scrub_status> statuses;
@@ -4401,6 +4416,7 @@ For more information, see: {}
                     typed_option<>("no-validate,n", "Do not validate columns using column validator (unused)"),
                     typed_option<>("reinsert-overflowed-ttl,r", "Rewrites rows with overflowed expiration date (unused)"),
                     typed_option<int64_t>("jobs,j", "The number of sstables to be scrubbed concurrently (unused)"),
+                    typed_option<>("drop-unfixable-sstables", "Drop unfixed sstables instead of aborting the entire scrub (only with --mode=SEGREGATE)"),
                 },
                 {
                     typed_option<sstring>("keyspace", "The keyspace to scrub", 1),

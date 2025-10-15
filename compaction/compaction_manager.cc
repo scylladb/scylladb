@@ -2313,7 +2313,7 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sst
     }
     owned_ranges_ptr owned_ranges_ptr = {};
     sstring option_desc = fmt::format("mode: {};\nquarantine_mode: {}\n", opts.operation_mode, opts.quarantine_operation_mode);
-    co_return co_await rewrite_sstables(t, compaction_type_options::make_scrub(scrub_mode), std::move(owned_ranges_ptr), [&t, opts] -> future<std::vector<sstables::shared_sstable>> {
+    co_return co_await rewrite_sstables(t, compaction_type_options::make_scrub(scrub_mode, opts.quarantine_sstables, opts.drop_unfixable), std::move(owned_ranges_ptr), [&t, opts] -> future<std::vector<sstables::shared_sstable>> {
         auto all_sstables = co_await get_all_sstables(t);
         std::vector<sstables::shared_sstable> sstables = all_sstables
                 | std::views::filter([&opts] (const sstables::shared_sstable& sst) {
