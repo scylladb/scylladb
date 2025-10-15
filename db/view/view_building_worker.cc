@@ -580,8 +580,6 @@ future<> view_building_worker::batch::do_work() {
             break;
         }
     }
-
-    _vbw.local()._vb_state_machine.event.broadcast();
 }
 
 future<> view_building_worker::do_build_range(table_id base_id, std::vector<table_id> views_ids, dht::token last_token, abort_source& as) {
