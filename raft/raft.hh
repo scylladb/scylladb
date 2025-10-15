@@ -73,8 +73,7 @@ struct server_address {
     }
 };
 
-struct is_voter_tag {};
-using is_voter = bool_class<is_voter_tag>;
+using is_voter = bool_class<struct is_voter_tag>;
 
 struct config_member {
     server_address addr;

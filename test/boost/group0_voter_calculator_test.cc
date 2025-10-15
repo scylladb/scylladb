@@ -7,7 +7,6 @@
  */
 
 #include <boost/test/data/test_case.hpp>
-#include <boost/test/tools/old/interface.hpp>
 #include <boost/test/unit_test.hpp>
 
 #include "service/raft/group0_voter_calculator.hh"
@@ -936,7 +935,7 @@ BOOST_AUTO_TEST_CASE(existing_voters_are_kept_across_racks) {
     BOOST_CHECK_EQUAL(voters.size(), max_voters);
 
     for (const auto& [id, node] : nodes | std::views::filter([](const auto& node) {
-             return bool(node.second.is_voter);
+             return node.second.is_voter == is_voter::yes;
          })) {
         BOOST_CHECK(voters.contains(id));
     }
