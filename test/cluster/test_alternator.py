@@ -861,9 +861,9 @@ async def test_zero_token_node_load_balancer(manager, tablets):
        versions - tablets=True and tablets=False.
     """
     if tablets:
-        tags = [{'Key': 'experimental:initial_tablets', 'Value': '0'}]
+        tags = [{'Key': 'system:initial_tablets', 'Value': '0'}]
     else:
-        tags = [{'Key': 'experimental:initial_tablets', 'Value': 'none'}]
+        tags = [{'Key': 'system:initial_tablets', 'Value': 'none'}]
     # Start a cluster with 4 nodes. Alternator uses RF=3, so with 4 nodes
     # the assignment of data (tablets or vnodes) to nodes isn't trivial,
     # which will allow us to check that non-trivial request forwarding works.

@@ -140,7 +140,7 @@ async def test_tablet_alternator_lsi_consistency(manager: ManagerClient):
     alternator = get_alternator(servers[0].ip_addr)
     # Tell Alternator to create a table with just *one* tablet, via a
     # special tag.
-    tablets_tags = [{'Key': 'experimental:initial_tablets', 'Value': '1'}]
+    tablets_tags = [{'Key': 'system:initial_tablets', 'Value': '1'}]
     # Create a table with an LSI
     table_name = 'tbl'
     index_name = 'ind'
