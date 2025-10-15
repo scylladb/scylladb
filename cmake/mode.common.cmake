@@ -117,6 +117,9 @@ add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}=.")
 cmake_path(GET CMAKE_BINARY_DIR FILENAME build_dir_name)
 add_compile_options("-ffile-prefix-map=${CMAKE_BINARY_DIR}/=${build_dir_name}")
 
+# https://github.com/llvm/llvm-project/issues/163007
+add_compile_options("-fextend-variable-liveness=none")
+
 default_target_arch(target_arch)
 if(target_arch)
   add_compile_options("-march=${target_arch}")
