@@ -295,3 +295,48 @@ async def test_keyspace_creation_during_node_remove(manager: ManagerClient, op: 
     await asyncio.gather(*[manager.api.message_injection(s.ip_addr, inj) for s in servers[:2]])
     logger.info(f"Waiting for node {op} to complete")
     await node_op_task
+
+
+@pytest.mark.parametrize("op", ["remove", "decommission"])
+@pytest.mark.asyncio
+async def test_remove_node_violating_rf_rack_with_rack_list(manager: ManagerClient, op: str):
+    """
+    Test removing a node when it would violate RF-rack constraints with explicit rack list.
+
+    Creates a cluster with 4 racks (r1, r2, r3, r4) and a keyspace that explicitly
+    specifies RF as a list of racks ['r1', 'r2', 'r4'].
+
+    Tests that:
+    - Removing a node from r4 (listed rack) should be rejected - would violate RF-rack constraints
+    - Removing a node from r3 (unlisted rack) should succeed - doesn't affect RF-rack validity
+    """
+    cfg = {}
+    cmdline = ['--logger-log-level', 'tablets=debug', '--logger-log-level', 'raft_topology=debug']
+
+    async def remove_node(server_id: str, expected_error: str = None):
+        if op == "remove":
+            await manager.server_stop_gracefully(server_id)
+            await manager.remove_node(servers[0].server_id, server_id, expected_error=expected_error)
+        elif op == "decommission":
+            await manager.decommission_node(server_id, expected_error=expected_error)
+
+    servers = await manager.servers_add(4, config=cfg, cmdline=cmdline, property_file=[
+        {"dc": "dc1", "rack": "r1"},
+        {"dc": "dc1", "rack": "r2"},
+        {"dc": "dc1", "rack": "r3"},
+        {"dc": "dc1", "rack": "r4"},
+    ])
+    cql = manager.get_cql()
+
+    # Create keyspace with explicit rack list - only uses racks r1, r2, r4
+    await cql.run_async("CREATE KEYSPACE ks WITH replication = {'class': 'NetworkTopologyStrategy', 'dc1': ['r1', 'r2', 'r4']} AND tablets = {'enabled': true}")
+    await cql.run_async("CREATE TABLE ks.t (p int PRIMARY KEY, v int)")
+    await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT * FROM ks.t WHERE p IS NOT NULL AND v IS NOT NULL PRIMARY KEY (v, p)")
+
+    # Try to remove node from r4 (listed rack) - should be rejected
+    # This would eliminate rack r4 from the available racks, violating RF-rack constraints
+    await remove_node(servers[3].server_id, expected_error=f"node {op} rejected: Cannot remove the node because its removal would make some existing keyspace RF-rack-invalid")
+
+    # Remove node from r3 (unlisted rack) - should succeed
+    # This doesn't affect RF-rack validity since r3 is not in the keyspace's rack list
+    await remove_node(servers[2].server_id)

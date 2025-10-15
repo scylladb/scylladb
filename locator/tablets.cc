@@ -20,6 +20,7 @@
 #include "gms/feature_service.hh"
 
 #include <algorithm>
+#include <flat_set>
 #include <iterator>
 #include <chrono>
 
@@ -1450,14 +1451,23 @@ static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metad
     for (const auto& [dc, rack_map] : dc_rack_map) {
         tablet_logger.debug("[assert_rf_rack_valid_keyspace]: Verifying for '{}' / '{}'", ks, dc);
 
+        auto rf_data = nts.get_replication_factor_data(dc);
+        if (!rf_data) {
+            continue;
+        }
+
+        auto required_racks = rf_data->is_rack_based() ?
+                std::flat_set<sstring>(std::from_range, rf_data->get_rack_list()) : std::flat_set<sstring>{};
+
         size_t normal_rack_count = 0;
         size_t transitioning_rack_count = 0;
-        for (const auto& [_, rack_nodes] : rack_map) {
+        for (const auto& [rack, rack_nodes] : rack_map) {
             // We must ignore zero-token nodes because they don't take part in replication.
             // Verify that this rack has at least one normal node.
             const bool normal_rack = std::ranges::any_of(rack_nodes, is_normal_token_owner);
             if (normal_rack) {
                 ++normal_rack_count;
+                required_racks.erase(rack);
             } else {
                 const bool is_transitioning_rack = std::ranges::any_of(rack_nodes, is_transitioning_token_owner);
                 if (is_transitioning_rack) {
@@ -1466,8 +1476,19 @@ static void assert_rf_rack_valid_keyspace(std::string_view ks, const token_metad
             }
         }
 
-        auto rf_data = nts.get_replication_factor_data(dc);
-        if (!rf_data || rf_data->is_rack_based()) {
+        if (required_racks.size() > 0) {
+            const auto rack_list = required_racks
+                    | std::views::join_with(std::string_view(", "))
+                    | std::ranges::to<std::string>();
+
+            throw std::invalid_argument(std::format(
+                    "The keyspace '{}' is required to be RF-rack-valid. "
+                    "That condition is violated for DC '{}': the following racks are "
+                    "required by the replication strategy, but they don't exist in the topology: {}.",
+                    ks, std::string_view(dc), rack_list));
+        }
+
+        if (rf_data->is_rack_based()) {
             continue;
         }
 
