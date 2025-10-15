@@ -6702,11 +6702,14 @@ future<std::unordered_map<sstring, sstring>> storage_service::add_repair_tablet_
         // repair can only be requested for the base table, and this will repair the base table's tablets
         // and all its colocated tablets as well.
         if (!get_token_metadata().tablets().is_base_table(table)) {
+            auto table_schema = _db.local().find_schema(table);
+            auto base_schema = _db.local().find_schema(get_token_metadata().tablets().get_base_table(table));
+
             throw std::invalid_argument(::format(
-                "Cannot set repair request on table {} because it is colocated with the base table {}. "
+                "Cannot set repair request on table '{}'.'{}' because it is colocated with the base table '{}'.'{}'. "
                 "Repair requests can be made only on the base table. "
                 "Repairing the base table will also repair all tables colocated with it.",
-                table, get_token_metadata().tablets().get_base_table(table)));
+                table_schema->ks_name(), table_schema->cf_name(), base_schema->ks_name(), base_schema->cf_name()));
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
@@ -6786,10 +6789,13 @@ future<> storage_service::del_repair_tablet_request(table_id table, locator::tab
 
         // see add_repair_tablet_request. repair requests can only be added on base tables.
         if (!get_token_metadata().tablets().is_base_table(table)) {
+            auto table_schema = _db.local().find_schema(table);
+            auto base_schema = _db.local().find_schema(get_token_metadata().tablets().get_base_table(table));
+
             throw std::invalid_argument(::format(
-                "Cannot delete repair request on table {} because it is colocated with the base table {}. "
+                "Cannot delete repair request on table '{}'.'{}' because it is colocated with the base table '{}'.'{}'. "
                 "Repair requests can be added and deleted only on the base table.",
-                table, get_token_metadata().tablets().get_base_table(table)));
+                table_schema->ks_name(), table_schema->cf_name(), base_schema->ks_name(), base_schema->cf_name()));
         }
 
         auto& tmap = get_token_metadata().tablets().get_tablet_map(table);
