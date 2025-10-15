@@ -710,7 +710,10 @@ future<> raft_group0::setup_group0_if_exist(db::system_keyspace& sys_ks, service
         } else {
             // We'll disable them once we complete the upgrade procedure.
         }
-    } else if (!qp.db().get_config().recovery_leader.is_set()) {
+    } else if (qp.db().get_config().recovery_leader.is_set()) {
+        group0_log.info("Disabling migration_manager schema pulls in the Raft-based recovery procedure");
+        co_await mm.disable_schema_pulls();
+    } else {
         // Scylla has bootstrapped earlier but group 0 ID is not present and we are not recovering from majority loss
         // using the Raft-based procedure. This means we're upgrading.
         // Upgrade will start through a feature listener created after we enter NORMAL state.
