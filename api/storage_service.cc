@@ -273,6 +273,13 @@ scrub_info parse_scrub_options(const http_context& ctx, std::unique_ptr<http::re
         throw httpd::bad_param_exception(fmt::format("Unknown argument for 'quarantine_mode' parameter: {}", quarantine_mode_str));
     }
 
+    if(req_param<bool>(*req, "drop_unfixable_sstables", false)) {
+        if(scrub_mode != compaction::compaction_type_options::scrub::mode::segregate) {
+            throw httpd::bad_param_exception("The 'drop_unfixable_sstables' parameter is only valid when 'scrub_mode' is 'SEGREGATE'");
+        }
+        info.opts.drop_unfixable = compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes;
+    }
+
     return info;
 }
 

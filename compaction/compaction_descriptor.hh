@@ -74,6 +74,11 @@ public:
         // Should invalid sstables be moved into quarantine.
         // Only applies to validate-mode.
         quarantine_invalid_sstables quarantine_sstables = quarantine_invalid_sstables::yes;
+
+        using drop_unfixable_sstables = bool_class<class drop_unfixable_sstables_tag>;
+        // Drop sstables that cannot be fixed.
+        // Only applies to segregate-mode.
+        drop_unfixable_sstables drop_unfixable = drop_unfixable_sstables::no;
     };
     struct reshard {
     };
@@ -113,8 +118,8 @@ public:
         return compaction_type_options(upgrade{});
     }
 
-    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes) {
-        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables});
+    static compaction_type_options make_scrub(scrub::mode mode, scrub::quarantine_invalid_sstables quarantine_sstables = scrub::quarantine_invalid_sstables::yes, scrub::drop_unfixable_sstables drop_unfixable_sstables = scrub::drop_unfixable_sstables::no) {
+        return compaction_type_options(scrub{.operation_mode = mode, .quarantine_sstables = quarantine_sstables, .drop_unfixable = drop_unfixable_sstables});
     }
 
     static compaction_type_options make_split(mutation_writer::classify_by_token_group classifier) {
