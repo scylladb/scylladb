@@ -191,3 +191,16 @@ def test_scrub_abort_exit_code(nodetool, scylla_only):
                     expected_request("GET", "/storage_service/keyspace_scrub/ks2", params={"scrub_mode": "ABORT"},
                                      response=scrub_status.successful.value)]},
             ["scrub failed: aborted"])
+
+def test_scrub_drop_unfixable_sstables_option(nodetool):
+    nodetool("scrub", "ks", "tbl1", "--mode=SEGREGATE", "--drop-unfixable-sstables", expected_requests=[
+        expected_request("GET", "/storage_service/keyspaces", response=["ks"]),
+        expected_request("GET", "/storage_service/keyspace_scrub/ks", params={"cf": "tbl1", "scrub_mode": "SEGREGATE",
+                                                                             "drop_unfixable_sstables": "true"},
+                         response=scrub_status.successful.value)])
+
+    check_nodetool_fails_with(
+            nodetool,
+            ("scrub", "ks", "tbl1", "--mode=ABORT", "--drop-unfixable-sstables"),
+            {"expected_requests": [expected_request("GET", "/storage_service/keyspaces", response=["ks"])]},
+            ["error processing arguments: --drop-unfixable-sstables is only valid with --mode=SEGREGATE"])
