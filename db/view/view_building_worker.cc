@@ -355,7 +355,7 @@ std::unordered_map<table_id, std::vector<view_building_worker::staging_sstable_t
 
 future<> view_building_worker::run_view_building_state_observer() {
     auto abort = _as.subscribe([this] () noexcept {
-        _vb_state_machine.event.broadcast();
+        trigger_state_update();
     });
 
     while (!_as.abort_requested()) {
@@ -374,7 +374,7 @@ future<> view_building_worker::run_view_building_state_observer() {
             // A batch could finished its work while the worker was
             // updating the state. In that case we should do another iteration.
             if (!_state.some_batch_finished) {
-                co_await _vb_state_machine.event.wait();
+                co_await _cv.wait();
             }
         } catch (abort_requested_exception&) {
         } catch (broken_condition_variable&) {
@@ -704,7 +704,7 @@ void view_building_worker::batch::start() {
     }).finally([this] () {
         state = batch_state::finished;
         _vbw.local()._state.some_batch_finished = true;
-        _vbw.local()._vb_state_machine.event.broadcast();
+        _vbw.local().trigger_state_update();
     });
 }
 
