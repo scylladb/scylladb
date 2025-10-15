@@ -30,7 +30,7 @@ SELECT * FROM  system.role_attributes WHERE role='r' and attribute_name='service
 ### Service Level Configuration Table
 
 ```
-    CREATE TABLE system_distributed.service_levels (
+    CREATE TABLE system.service_levels_v2 (
     service_level text PRIMARY KEY,
     timeout duration,
     workload_type text,
@@ -45,13 +45,18 @@ The table column names meanings are:
 *shares* - a number that represents this service level priority in relation to other service levels.
 
 ```
-select * from system_distributed.service_levels ;
+select * from system.service_levels_v2 ;
 
- service_level | timeout | workload_type
----------------+---------+---------------
-            sl |   500ms |   interactive
+ service_level | shares | timeout | workload_type
+---------------+--------+---------+---------------
+            sl |    100 |   500ms |   interactive
 
 ```
+
+* Please note that `system.service_levels_v2` is used as service levels configuration table only with consistent topology and service levels on Raft,
+which is enabled by default but not mandatory yet.
+Otherwise, the old `system_distributed.service_levels` is used as configuration table.
+For more information see [service levels on Raft](#service-levels-on-raft) section. *
 
 ### Service Level Timeout
 
@@ -189,6 +194,20 @@ The command displays a table with: option name, effective service level the valu
         workload_type |                     sl2 |       batch
               timeout |                     sl1 |          2s
 ```
+
+## Service levels on Raft
+
+Since ScyllaDB 6.0 and ScyllaDB Enterprise 2024.2, service levels metadata is managed by Raft group0 and stored in `system.service_levels_v2`.
+
+In existing clusters, service levels metadata is automatically copied from `system_distributed.service_levels` to `system.service_levels_v2`
+during the topology upgrade (see [upgrade to raft topology section](topology-over-raft.md#upgrade-from-legacy-topology-to-raft-based-topology)). Because of this, no service levels operations should be done during the topology upgrade.
+
+Before the service levels on Raft, service levels cache was updated in 10s intervals by polling `system_distributed.service_levels` table.
+Once the service levels are migrated to raft, the cache is updated on every group0 state apply fiber, if there are any mutations to
+`system.service_levels_v2`, `system.role_attributes` or ` system.role_members`.
+
+With service levels on Raft, the cache also has an additional layer, called `service level effective cache`. This layer combines service levels
+and auth information and stores effective service level for each role (see [effective service level section](#effective-service-level)).
 
 ## Implementation
 ### Integration with auth
