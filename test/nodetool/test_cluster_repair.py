@@ -176,8 +176,8 @@ def test_repair_keyspace_tablets_with_colocated_table(nodetool):
                 "table": "mv",
                 "tokens": "all"},
             response={"message": """
-Cannot set repair request on table ac77e950-9303-11f0-a718-c65bb2c481c4 because it is colocated with the
-base table a6044cd0-9303-11f0-a718-c65bb2c481c4. Repair requests can be made only on the base table.
+Cannot set repair request on table 'ks'.'mv' because it is colocated with the
+base table 'ks'.'table1'. Repair requests can be made only on the base table.
 Repairing the base table will also repair all tables colocated with it."""
                       , "code": 400}, response_status=400),
         expected_request(
