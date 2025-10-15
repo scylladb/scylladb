@@ -113,7 +113,7 @@ bool cas_request::applies_to() const {
 }
 
 std::optional<mutation> cas_request::apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
-        const query::partition_slice& slice, api::timestamp_type ts) {
+        const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options&) {
     _rows = update_parameters::build_prefetch_data(_schema, *qr, slice);
     if (applies_to()) {
         return apply_updates(ts);

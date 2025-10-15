@@ -1488,7 +1488,7 @@ public:
     future<ballot_and_data> begin_and_repair_paxos(client_state& cs, unsigned& contentions, bool is_write);
     future<paxos::prepare_summary> prepare_ballot(utils::UUID ballot);
     future<bool> accept_proposal(lw_shared_ptr<paxos::proposal> proposal, bool timeout_if_partially_accepted);
-    future<> learn_decision(lw_shared_ptr<paxos::proposal> proposal, bool allow_hints = false);
+    future<> learn_decision(lw_shared_ptr<paxos::proposal> proposal, bool allow_hints = false, cdc::per_request_options cdc_opts = {});
     void prune(utils::UUID ballot);
     uint64_t id() const {
         return _id;
@@ -2523,7 +2523,7 @@ struct fmt::formatter<service::paxos_response_handler> : fmt::formatter<string_v
 namespace service {
 
 // This function implements learning stage of Paxos protocol
-future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> decision, bool allow_hints) {
+future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> decision, bool allow_hints, cdc::per_request_options cdc_opts) {
     tracing::trace(tr_state, "learn_decision: committing {} with cl={}", *decision, _cl_for_learn);
     paxos::paxos_state::logger.trace("CAS[{}] learn_decision: committing {} with cl={}", _id, *decision, _cl_for_learn);
     // FIXME: allow_hints is ignored. Consider if we should follow it and remove if not.
@@ -2542,7 +2542,8 @@ future<> paxos_response_handler::learn_decision(lw_shared_ptr<paxos::proposal> d
         auto cdc = _proxy->get_cdc_service();
         if (cdc && cdc->needs_cdc_augmentation(update_mut_vec)) {
             auto cdc_shared = cdc->shared_from_this(); // keep CDC service alive
-            auto [all_mutations, tracker] = co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn);
+            auto [all_mutations, tracker] =
+                    co_await cdc->augment_mutation_call(_timeout, std::move(update_mut_vec), tr_state, _cl_for_learn, std::move(cdc_opts));
             // Pick only the CDC ("augmenting") mutations
             auto mutations = all_mutations | std::views::filter([base_tbl_id] (const mutation& m) {
                 return m.schema()->id() != base_tbl_id;
@@ -3953,14 +3954,15 @@ storage_proxy::get_paxos_participants(const sstring& ks_name, const locator::eff
  * @param consistency_level the consistency level for the operation
  * @param tr_state trace state handle
  */
-future<> storage_proxy::mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters) {
-    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters)
-            .then(utils::result_into_future<result<>>);
+future<> storage_proxy::mutate(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, cdc::per_request_options request_opts) {
+    return mutate_result(std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), allow_limit, raw_counters, coordinator_mutate_options {
+        .cdc_options = std::move(request_opts),
+    }).then(utils::result_into_future<result<>>);
 }
 
 future<result<>> storage_proxy::mutate_result(utils::chunked_vector<mutation> mutations, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit, db::allow_per_partition_rate_limit allow_limit, bool raw_counters, coordinator_mutate_options options) {
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit, options = std::move(options)](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), tr_state, cl, std::move(options.cdc_options)).then([this, cl, timeout, tr_state, permit = std::move(permit), raw_counters, cdc = _cdc->shared_from_this(), allow_limit, options = std::move(options)](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
             return _mutate_stage(this, std::move(mutations), cl, timeout, std::move(tr_state), std::move(permit), raw_counters, allow_limit, std::move(tracker), std::move(options));
@@ -4250,7 +4252,7 @@ storage_proxy::mutate_atomically_result(utils::chunked_vector<mutation> mutation
     };
 
     if (_cdc && _cdc->needs_cdc_augmentation(mutations)) {
-        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), cl).then([mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup), cdc = _cdc->shared_from_this()](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
+        return _cdc->augment_mutation_call(timeout, std::move(mutations), std::move(tr_state), cl, std::move(options.cdc_options)).then([mk_ctxt = std::move(mk_ctxt), cleanup = std::move(cleanup), cdc = _cdc->shared_from_this()](std::tuple<utils::chunked_vector<mutation>, lw_shared_ptr<cdc::operation_result_tracker>>&& t) mutable {
             auto mutations = std::move(std::get<0>(t));
             auto tracker = std::move(std::get<1>(t));
             return std::move(mk_ctxt)(std::move(mutations), std::move(tracker)).then([] (lw_shared_ptr<context> ctxt) {
@@ -6544,7 +6546,7 @@ storage_proxy::do_query_with_paxos(schema_ptr s,
     struct read_cas_request : public cas_request {
         foreign_ptr<lw_shared_ptr<query::result>> res;
         std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr,
-            const query::partition_slice& slice, api::timestamp_type ts) {
+            const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options&) {
             res = std::move(qr);
             return std::nullopt;
         }
@@ -6623,7 +6625,7 @@ static mutation_write_failure_exception read_failure_to_write(read_failure_excep
 future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_ptr<cas_request> request, lw_shared_ptr<query::read_command> cmd,
         dht::partition_range_vector partition_ranges, storage_proxy::coordinator_query_options query_options,
         db::consistency_level cl_for_paxos, db::consistency_level cl_for_learn,
-        clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write) {
+        clock_type::time_point write_timeout, clock_type::time_point cas_timeout, bool write, cdc::per_request_options cdc_opts) {
 
     auto& table = local_db().find_column_family(schema->id());
     if (table.uses_tablets()) {
@@ -6721,7 +6723,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
                 qr = std::move(cqr.query_result);
             }
 
-            auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot));
+            auto mutation = request->apply(std::move(qr), cmd->slice, utils::UUID_gen::micros_timestamp(ballot), cdc_opts);
             condition_met = true;
             if (!mutation) {
                 if (write) {
@@ -6763,7 +6765,7 @@ future<bool> storage_proxy::cas(schema_ptr schema, cas_shard cas_shard, shared_p
                 // accept the action associated with the computed ballot.
                 // Apply the mutation.
                 try {
-                  co_await handler->learn_decision(std::move(proposal));
+                  co_await handler->learn_decision(std::move(proposal), false, std::move(cdc_opts));
                 } catch (unavailable_exception& e) {
                     // if learning stage encountered unavailablity error lets re-map it to a write error
                     // since unavailable error means that operation has never ever started which is not
