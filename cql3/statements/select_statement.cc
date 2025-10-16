@@ -1235,9 +1235,15 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
                 });
 
             co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, nullptr);
+        } else {
+            std::vector<primary_key> primary_keys;
+            std::ranges::transform(pkeys.value(), std::back_inserter(primary_keys),[](const auto& pkey) {
+                    return primary_key{pkey.partition, pkey.clustering};
+                });
+            co_return co_await this->execute_base_query(qp, std::move(primary_keys), state, options, now, nullptr);
         }
 
-        co_return co_await this->execute_base_query(qp, std::move(*pkeys), state, options, now, nullptr);
+        
     }
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;

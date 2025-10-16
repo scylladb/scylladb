@@ -7,7 +7,6 @@ target_link_libraries(vector_search
   PUBLIC
     Seastar::seastar
   PRIVATE
-    cql3
     db
     utils
     schema
