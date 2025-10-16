@@ -63,7 +63,6 @@ public:
     using parameters = raw::select_statement::parameters;
     using ordering_comparator_type = raw::select_statement::ordering_comparator_type;
     using prepared_ann_ordering_type = raw::select_statement::prepared_ann_ordering_type;
-    static constexpr int DEFAULT_COUNT_PAGE_SIZE = 10000;
     bool _may_use_token_aware_routing;
 protected:
     static thread_local const lw_shared_ptr<const parameters> _default_parameters;
@@ -236,7 +235,7 @@ private:
             service::query_state& state, const query_options& options) const;
 
     lw_shared_ptr<const service::pager::paging_state> generate_view_paging_state_from_base_query_results(lw_shared_ptr<const service::pager::paging_state> paging_state,
-            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options) const;
+            const foreign_ptr<lw_shared_ptr<query::result>>& results, service::query_state& state, const query_options& options, uint32_t internal_page_size) const;
 
     future<coordinator_result<std::tuple<dht::partition_range_vector, lw_shared_ptr<const service::pager::paging_state>>>> find_index_partition_ranges(query_processor& qp,
                                                                     service::query_state& state,
@@ -253,7 +252,8 @@ private:
             service::query_state& state,
             const query_options& options,
             gc_clock::time_point now,
-            lw_shared_ptr<const service::pager::paging_state> paging_state) const;
+            lw_shared_ptr<const service::pager::paging_state> paging_state,
+            uint32_t internal_page_size) const;
 
     lw_shared_ptr<query::read_command>
     prepare_command_for_base_query(query_processor& qp, const query_options& options, service::query_state& state, gc_clock::time_point now,

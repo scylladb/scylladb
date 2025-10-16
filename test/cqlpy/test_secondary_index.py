@@ -2114,3 +2114,65 @@ def test_index_metrics(cql, test_keyspace, scylla_only):
         current_metrics = ScyllaMetrics.query(cql)
         current_count = current_metrics.get(f'scylla_index_query_latencies_count', {"idx": index_name, "ks": test_keyspace})
         assert current_count - initial_count == 1
+
+# Test combination of indexing, paging and aggregation.
+# Indexed queries used to erroneously return partial per-page results
+# for aggregation queries, as described in issue #4540. This test
+# (originally written in C++ in commit 3d9a37f28fe) reproduced that bug.
+def test_indexing_paging_and_aggregation(cql, test_keyspace):
+    # from cql3/statements/select_statement.cc:
+    DEFAULT_COUNT_PAGE_SIZE = 10000
+    row_count = 2 * DEFAULT_COUNT_PAGE_SIZE + 120
+    with new_test_table(cql, test_keyspace, 'id int primary key, v int') as table:
+        cql.execute(f'CREATE INDEX ON {table}(v)')
+        stmt = cql.prepare(f'INSERT INTO {table} (id, v) VALUES (?, ?)')
+        for i in range(row_count):
+            cql.execute(stmt, [i + 1, i % 2])
+        # In Scylla, in a single-node test materialized views and therefore
+        # secondary indexes have synchronous updates, so we can read the
+        # indexed data immediately. In Cassandra, secondary indexes are
+        # always synchronously updated (they don't use materialized views).
+        res = list(cql.execute(f'SELECT sum(id) FROM {table} WHERE v = 1'))
+        # Aggregation (like sum(id)) internally pages through the data
+        # DEFAULT_COUNT_PAGE_SIZE (=10,000) rows at a time, but even though
+        # we have more rows than that in the table, it must only return a
+        # single result row when all the data was aggregated - the CQL API
+        # doesn't allow it to return return partial, per-page, results.
+        # The expression in the following assert computes the sum of the
+        # v=1 entries, which are the even-numbered ids up to row_count.
+        # A short proof sketch (remember that row_count is even):
+        #  2 + 4 + 6 + ... row_count
+        #           = 2 * (1 + 2 + 3 + ... row_count/2)
+        # According to Gauss's summation formula (easily proved by a child),
+        #           = 2 * (row_count/2 * (row_count/2 + 1)) / 2
+        #           = row_count/2 * (row_count/2 + 1)
+        #           = row_count*row_count/4 + row_count/2
+        # We have below several other similar formulas, the margin is too
+        # narrow to include the proofs for all of them :-)
+        assert res == [(row_count * row_count // 4 + row_count // 2,)]
+        # If we specify a page size ("fetch_size") on the request, it is not
+        # expected to change anything, since the output is just one row.
+        # The aggregation doesn't use this page size to control its internal
+        # paging through the data - for that DEFAULT_COUNT_PAGE_SIZE is still
+        # used.
+        # This test doesn't actually check that internally the tiny page
+        # size = 2 doesn't get used, so it doesn't add much...
+        stmt = SimpleStatement(f'SELECT sum(id) FROM {table} WHERE v = 0', fetch_size=2)
+        assert list(cql.execute(stmt)) == [(row_count * row_count // 4,)]
+        # Same check as we did for sum(), but for avg()
+        res = list(cql.execute(f'SELECT avg(id) FROM {table} WHERE v = 1'))
+        assert res == [(row_count // 2 + 1,)]
+
+    # Test the same thing again, but this time the indexed column is a
+    # clustering key column, not the first one. After issue #3405 we
+    # have a special code path for indexing composite non-prefix clustering
+    # keys, so we want to exercise it too.
+    with new_test_table(cql, test_keyspace, 'id int, c1 int, c2 int, primary key(id, c1, c2)') as table:
+        cql.execute(f'CREATE INDEX ON {table}(c2)')
+        stmt = cql.prepare(f'INSERT INTO {table} (id, c1, c2) VALUES (?, ?, ?)')
+        for i in range(row_count):
+            cql.execute(stmt, [i + 1, i + 1, i % 2])
+        stmt = SimpleStatement(f'SELECT sum(id) FROM {table} WHERE c2 = 0', fetch_size=2)
+        assert list(cql.execute(stmt)) == [(row_count * row_count // 4,)]
+        stmt = SimpleStatement(f'SELECT avg(id) FROM {table} WHERE c2 = 1', fetch_size=3)
+        assert list(cql.execute(stmt)) == [(row_count / 2 + 1,)]
