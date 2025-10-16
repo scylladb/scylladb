@@ -197,12 +197,6 @@ Limitations and Unsupported Features
     throughout its lifetime. Failing to keep that invariant satisfied may result in data inconsistencies,
     performance problems, or other issues.
 
-The following ScyllaDB features are not supported if a keyspace has tablets
-enabled. If you plan to use any of the features listed below, CREATE your keyspace
-:ref:`with tablets disabled <tablets-enable-tablets>`.
-
-* Counters
-
 To enable materialized views and secondary indexes for tablet keyspaces, use
 the `--rf-rack-valid-keyspaces` See :ref:`Views with tablets <admin-views-with-tablets>` for details.
 
