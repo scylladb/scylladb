@@ -549,6 +549,10 @@ def test_table_s_no_ck_keys_only(dynamodb, dynamodbstreams):
     yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'KEYS_ONLY')
 
 @pytest.fixture(scope="function")
+def test_table_s_no_ck_old_image(dynamodb, dynamodbstreams):
+    yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'OLD_IMAGE')
+
+@pytest.fixture(scope="function")
 def test_table_s_no_ck_new_and_old_images(dynamodb, dynamodbstreams):
     yield from create_table_s_no_ck(dynamodb, dynamodbstreams, 'NEW_AND_OLD_IMAGES')
 
@@ -870,8 +874,7 @@ def test_streams_putitem_no_ck_new_items_override_old(test_table_s_no_ck_new_and
 # differently by CDC. In issue #26382 - which this test reproduces - we
 # discovered that our implementation doesn't select a preimage for partition
 # deletions, resulting in a missing OldImage.
-@pytest.mark.xfail(reason="issue #26382")
-def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams):
+def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_images, test_table_s_no_ck_old_image, dynamodb, dynamodbstreams):
     def do_updates(table, p, _):
         events = []
         table.update_item(Key={'p': p},
@@ -881,6 +884,7 @@ def test_streams_deleteitem_old_image_no_ck(test_table_s_no_ck_new_and_old_image
         table.delete_item(Key={'p': p})
         events.append(['REMOVE', {'p': p}, {'p': p, 'x': 1}, None])
         return events
+    do_test(test_table_s_no_ck_old_image, dynamodb, dynamodbstreams, do_updates, 'OLD_IMAGE')
     do_test(test_table_s_no_ck_new_and_old_images, dynamodb, dynamodbstreams, do_updates, 'NEW_AND_OLD_IMAGES')
 
 # Test a single UpdateItem. Should result in a single INSERT event.
