@@ -111,6 +111,15 @@ struct batch {
                 ret.insert(std::make_pair(change.key, all_columns));
             }
         }
+        // While deleting a full partition avoids row-by-row logging for performance
+        // reasons, we must explicitly log single-row deletions for tables without a
+        // clustering key. This ensures consistent behavior with deletions of single
+        // rows from tables with a clustering key. See issue #26382.
+        if (partition_deletions && s.clustering_key_size() == 0) {
+            cdc::one_kind_column_set all_columns{s.regular_columns_count()};
+            all_columns.set(0, s.regular_columns_count(), true);
+            ret.emplace(clustering_key::make_empty(), all_columns);
+        }
 
         auto process_change_type = [&] (const auto& changes) {
             for (const auto& change : changes) {
