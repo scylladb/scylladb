@@ -36,6 +36,8 @@ struct leveled_compaction_strategy_state {
     leveled_compaction_strategy_state();
 };
 
+using leveled_compaction_strategy_state_ptr = seastar::shared_ptr<leveled_compaction_strategy_state>;
+
 class leveled_compaction_strategy : public compaction_strategy_impl {
     static constexpr int32_t DEFAULT_MAX_SSTABLE_SIZE_IN_MB = 160;
     static constexpr auto SSTABLE_SIZE_OPTION = "sstable_size_in_mb";
@@ -45,7 +47,7 @@ class leveled_compaction_strategy : public compaction_strategy_impl {
 private:
     int32_t calculate_max_sstable_size_in_mb(std::optional<sstring> option_value) const;
 
-    leveled_compaction_strategy_state& get_state(compaction_group_view& table_s) const;
+    leveled_compaction_strategy_state_ptr get_state(compaction_group_view& table_s) const;
 public:
     static unsigned ideal_level_for_input(const std::vector<sstables::shared_sstable>& input, uint64_t max_sstable_size);
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
