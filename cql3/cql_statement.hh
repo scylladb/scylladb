@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "seastar/core/scheduling.hh"
 #include "timeout_config.hh"
 #include "service/raft/raft_group0_client.hh"
 #include "audit/audit.hh"
@@ -119,6 +120,8 @@ public:
     void set_audit_info(audit::audit_info_ptr&& info) { _audit_info = std::move(info); }
 
     virtual void sanitize_audit_info() {}
+
+    virtual scheduling_group get_scheduling_group(const service::client_state& state) const { return current_scheduling_group(); }
 };
 
 class cql_statement_no_metadata : public cql_statement {
