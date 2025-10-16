@@ -802,7 +802,6 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         {"dc": "dc1", "rack": "r2"},
     ], config={
         'tablet_load_stats_refresh_interval_in_seconds': 1,
-        'error_injections_at_startup': ['allow_tablet_merge_with_views'],
     })
     cql, hosts = await manager.get_ready_cql(servers)
     await manager.api.disable_tablet_balancing(servers[0].ip_addr)
@@ -857,7 +856,6 @@ async def test_staging_sstables_with_tablet_merge(manager: ManagerClient):
         await manager.api.disable_tablet_balancing(servers[0].ip_addr)
         new_server = await manager.server_add(cmdline=cmdline_loggers + ['--logger-log-level', 'view_update_generator=trace'], property_file={"dc": "dc1", "rack": "r1"}, config={
             'tablet_load_stats_refresh_interval_in_seconds': 1,
-            'error_injections_at_startup': ['allow_tablet_merge_with_views'],
         })
 
         await asyncio.gather(*(manager.api.enable_injection(s.ip_addr, "view_building_coordinator_skip_main_loop", one_shot=False) for s in servers + [new_server]))

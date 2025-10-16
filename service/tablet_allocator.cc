@@ -994,8 +994,7 @@ public:
                 // For more details why, see https://github.com/scylladb/scylladb/issues/17265.
                 // This condition is satisfied when rf-rack-valid keyspaces restriction is turned on.
                 return _db.get_config().rf_rack_valid_keyspaces()
-                        || (_db.column_family_exists(tid) && _db.find_column_family(tid).views().empty())
-                        || utils::get_local_injector().enter("allow_tablet_merge_with_views");
+                        || (_db.column_family_exists(tid) && _db.find_column_family(tid).views().empty());
             } else {
                 return false;
             }
