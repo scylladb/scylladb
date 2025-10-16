@@ -708,10 +708,6 @@ public:
     {
     }
 
-    virtual future<> put(net::packet) override {
-        throw_with_backtrace<std::runtime_error>("s3 put(net::packet) unsupported");
-    }
-
     virtual future<> close() override;
 
     virtual size_t buffer_size() const noexcept override {
@@ -951,12 +947,7 @@ public:
         : upload_sink_base(std::move(cln), std::move(object_name), std::move(tag), as)
     {}
 
-    virtual future<> put(temporary_buffer<char> buf) override {
-        _bufs.put(std::move(buf));
-        return maybe_flush();
-    }
-
-    virtual future<> put(std::vector<temporary_buffer<char>> data) override {
+    virtual future<> put(std::span<temporary_buffer<char>> data) override {
         for (auto&& buf : data) {
             _bufs.put(std::move(buf));
         }
@@ -1060,12 +1051,7 @@ public:
         , _current(std::make_unique<upload_sink>(_client, format("{}_{}", _object_name, parts_count()), piece_tag))
     {}
 
-    virtual future<> put(temporary_buffer<char> buf) override {
-        co_await _current->put(std::move(buf));
-        co_await maybe_flush();
-    }
-
-    virtual future<> put(std::vector<temporary_buffer<char>> data) override {
+    virtual future<> put(std::span<temporary_buffer<char>> data) override {
         co_await _current->put(std::move(data));
         co_await maybe_flush();
     }
