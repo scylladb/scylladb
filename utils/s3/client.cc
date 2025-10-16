@@ -315,7 +315,7 @@ future<> client::make_request(http::request req,
         auto& gc = find_or_create_client();
         try {
             co_return co_await gc.retryable_client.make_request(
-                request, [&handle](const http::reply& reply, input_stream<char>&& body) -> future<> { co_await handle(reply, std::move(body)); }, expected, as);
+                request, [&handle](const http::reply& reply, input_stream<char>&& body) { return handle(reply, std::move(body)); }, expected, as);
         } catch (const aws::aws_exception& ex) {
             if (ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
                 s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
