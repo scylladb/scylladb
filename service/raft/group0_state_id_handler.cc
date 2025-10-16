@@ -18,10 +18,6 @@ namespace service {
 
 static logging::logger slogger("group0_tombstone_gc_handler");
 
-raft::server* group0_server_accessor::get_server() const {
-    return _raft_gr.find_server(_group0_id);
-}
-
 lowres_clock::duration group0_state_id_handler::get_refresh_interval(const replica::database& db) {
     return std::chrono::milliseconds{db.get_config().group0_tombstone_gc_refresh_interval_in_ms()};
 }
@@ -101,11 +97,10 @@ void group0_state_id_handler::refresh() {
     gc_state.update_group0_refresh_time(tombstone_gc_time);
 }
 
-group0_state_id_handler::group0_state_id_handler(topology_state_machine& topo_sm, replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor)
+group0_state_id_handler::group0_state_id_handler(topology_state_machine& topo_sm, replica::database& local_db, gms::gossiper& gossiper)
     : _topo_sm(topo_sm)
     , _local_db(local_db)
     , _gossiper(gossiper)
-    , _server_accessor(server_accessor)
     , _refresh_interval(get_refresh_interval(local_db)) {
 }
 
