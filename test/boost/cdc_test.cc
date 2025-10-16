@@ -6,7 +6,9 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include <fmt/base.h>
 #include <fmt/core.h>
+#include <iostream>
 #include <seastar/util/defer.hh>
 #undef SEASTAR_TESTING_MAIN
 #include <seastar/testing/test_case.hh>
@@ -1987,6 +1989,63 @@ SEASTAR_THREAD_TEST_CASE(test_batch_post_image) {
 
 SEASTAR_THREAD_TEST_CASE(test_batch_pre_post_image) {
     test_batch_images(true, true);
+}
+
+// Deleting a row in a table with a clustering key and preimage enabled logs
+// the preimage. In tables without a clustering key, though, the preimage is
+// missing. Reproduces #26382.
+SEASTAR_THREAD_TEST_CASE(test_preimage_delete_no_clustering_key) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        using oper_ut = std::underlying_type_t<cdc::operation>;
+        for (const auto pre : {cdc::image_mode::on, cdc::image_mode::full}) {
+            cquery_nofail(e, format("CREATE TABLE ks.t (pk INT, val INT, PRIMARY KEY (pk)) WITH cdc = {{'enabled': true, 'preimage': '{}'}}", pre));
+            cquery_nofail(e, "INSERT INTO ks.t (pk, val) VALUES (1, 2)");
+            cquery_nofail(e, "INSERT INTO ks.t (pk, val) VALUES (1, 3)");
+            cquery_nofail(e, "DELETE FROM ks.t WHERE pk = 1");
+
+            const auto result = get_result(e, {
+                    data_type_for<oper_ut>(), int32_type, int32_type},
+                    "SELECT \"cdc$operation\", pk, val FROM ks.t_scylla_cdc_log");
+
+            const std::vector<std::vector<data_value>> expected = {
+                    {oper_ut(cdc::operation::insert), int32_t(1), int32_t(2)},
+                    {oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(2)},
+                    {oper_ut(cdc::operation::insert), int32_t(1), int32_t(3)},
+                    {oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(3)},
+                    {oper_ut(cdc::operation::partition_delete), int32_t(1), data_value::make_null(int32_type)}
+            };
+
+            BOOST_REQUIRE_EQUAL(expected, result);
+            cquery_nofail(e, "DROP TABLE ks.t");
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_preimage_delete_clustering_key) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        using oper_ut = std::underlying_type_t<cdc::operation>;
+        for (const auto pre : {cdc::image_mode::on, cdc::image_mode::full}) {
+            cquery_nofail(e, format("CREATE TABLE ks.t (pk INT, ck INT, val INT, PRIMARY KEY (pk, ck)) WITH cdc = {{'enabled': true, 'preimage': '{}'}}", pre));
+            cquery_nofail(e, "INSERT INTO ks.t (pk, ck, val) VALUES (1, 11, 2)");
+            cquery_nofail(e, "INSERT INTO ks.t (pk, ck, val) VALUES (1, 11, 3)");
+            cquery_nofail(e, "DELETE FROM ks.t WHERE pk = 1 AND ck = 11");
+
+            const auto result = get_result(e, {
+                    data_type_for<oper_ut>(), int32_type, int32_type},
+                    "SELECT \"cdc$operation\", pk, val FROM ks.t_scylla_cdc_log");
+
+            const std::vector<std::vector<data_value>> expected = {
+                    {oper_ut(cdc::operation::insert), int32_t(1), int32_t(2)},
+                    {oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(2)},
+                    {oper_ut(cdc::operation::insert), int32_t(1), int32_t(3)},
+                    {oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(3)},
+                    {oper_ut(cdc::operation::row_delete), int32_t(1), data_value::make_null(int32_type)}
+            };
+
+            BOOST_REQUIRE_EQUAL(expected, result);
+            cquery_nofail(e, "DROP TABLE ks.t");
+        }
+    }).get();
 }
 
 // Regression test for #7716
