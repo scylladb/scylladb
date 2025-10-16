@@ -492,8 +492,7 @@ async def add_new_node(manager: ManagerClient,
 
     LOGGER.info(f"Add a new node to the cluster (to {rack})")
 
-    config = {"rf_rack_valid_keyspaces": False}
-    await manager.server_add(config=config, property_file={"dc": "dc1", "rack": rack}, timeout=TOPOLOGY_TIMEOUT)
+    await manager.server_add(property_file={"dc": "dc1", "rack": rack}, timeout=TOPOLOGY_TIMEOUT)
 
     yield
 
