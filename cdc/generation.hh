@@ -220,8 +220,11 @@ future<utils::chunked_vector<mutation>> get_cdc_generation_mutations_v3(
     size_t mutation_size_threshold, api::timestamp_type mutation_timestamp);
 
 future<mutation> create_table_streams_mutation(table_id, db_clock::time_point, const locator::tablet_map&, api::timestamp_type);
+future<mutation> create_table_streams_mutation(table_id, db_clock::time_point, const std::vector<cdc::stream_id>&, api::timestamp_type);
 utils::chunked_vector<mutation> make_drop_table_streams_mutations(table_id, api::timestamp_type ts);
 
 future<mutation> get_switch_streams_mutation(table_id table, db_clock::time_point stream_ts, cdc_stream_diff diff, api::timestamp_type ts);
+future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id table, db_clock::time_point base_ts, const std::vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts);
+table_streams::const_iterator get_new_base_for_gc(const table_streams&, std::chrono::seconds ttl);
 
 } // namespace cdc
