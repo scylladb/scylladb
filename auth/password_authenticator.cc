@@ -319,9 +319,10 @@ future<authenticated_user> password_authenticator::authenticate(
         if (!salted_hash) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }
-        const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash = std::move(salted_hash)]{
-            return passwords::check(password, *salted_hash);
-        });
+        // const bool password_match = co_await _hashing_worker.submit<bool>([password = std::move(password), salted_hash = std::move(salted_hash)]{
+        //     return passwords::check(password, *salted_hash);
+        // });
+        const bool password_match = passwords::check(password, *salted_hash);
         if (!password_match) {
             throw exceptions::authentication_exception("Username and/or password are incorrect");
         }

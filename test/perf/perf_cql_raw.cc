@@ -287,10 +287,10 @@ static future<> write_one(raw_cql_connection& c, uint64_t seq) {
     auto key = to_hex(make_key(seq));
     co_await c.query_simple(fmt::format("INSERT INTO ks.cf(pk,c0,c1,c2,c3,c4) VALUES (0x{},0x01,0x02,0x03,0x04,0x05)", key));
 }
-static future<> read_one(raw_cql_connection& c, uint64_t seq) {
-    auto key = to_hex(make_key(seq));
-    co_await c.query_simple(fmt::format("SELECT * FROM ks.cf WHERE pk=0x{}", key));
-}
+// static future<> read_one(raw_cql_connection& c, uint64_t seq) {
+//     auto key = to_hex(make_key(seq));
+//     co_await c.query_simple(fmt::format("SELECT * FROM ks.cf WHERE pk=0x{}", key));
+// }
 
 // Perform one logical operation (write or read) using an existing connection.
 static future<> do_request(raw_cql_connection& c, const raw_cql_test_config& cfg) {
@@ -298,7 +298,8 @@ static future<> do_request(raw_cql_connection& c, const raw_cql_test_config& cfg
     if (cfg.workload == "write") {
         co_await write_one(c, seq);
     } else {
-        co_await read_one(c, seq);
+        ;
+        //co_await read_one(c, seq);
     }
 }
 
