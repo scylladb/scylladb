@@ -222,7 +222,7 @@ std::unique_ptr<prepared_statement> create_table_statement::raw_statement::prepa
             throw exceptions::invalid_request_exception("Cannot set default_time_to_live on a table with counters");
         }
 
-        if (ks_uses_tablets && pt.is_counter()) {
+        if (ks_uses_tablets && pt.is_counter() && !db.features().counters_with_tablets) {
             throw exceptions::invalid_request_exception(format("Cannot use the 'counter' type for table {}.{}: Counters are not yet supported with tablets", keyspace(), cf_name));
         }
 
