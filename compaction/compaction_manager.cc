@@ -1506,7 +1506,7 @@ future<> compaction_manager::maybe_wait_for_sstable_count_reduction(compaction_g
         co_return;
     }
     auto num_runs_for_compaction = [&, this] -> future<size_t> {
-        auto& cs = t.get_compaction_strategy();
+        auto cs = t.get_compaction_strategy();
         auto desc = co_await cs.get_sstables_for_compaction(t, get_strategy_control());
         co_return std::ranges::size(desc.sstables
             | std::views::transform(std::mem_fn(&sstables::sstable::run_identifier))
