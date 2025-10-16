@@ -65,6 +65,9 @@ struct global_tablet_id {
 
 struct range_based_tablet_id {
     table_id table;
+
+    // This represents the token range of the tablet in the form (a, b]
+    // and only such ranges are allowed
     dht::token_range range;
 
     bool operator==(const range_based_tablet_id&) const = default;
@@ -475,6 +478,7 @@ struct load_stats {
     }
 
     std::optional<uint64_t> get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const;
+    void reconcile_tablets_resize(token_metadata_ptr tmptr);
 };
 
 using load_stats_v2 = load_stats;
