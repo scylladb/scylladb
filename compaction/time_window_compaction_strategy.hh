@@ -67,6 +67,8 @@ struct time_window_compaction_strategy_state {
     std::unordered_set<api::timestamp_type> recent_active_windows;
 };
 
+using time_window_compaction_strategy_state_ptr = seastar::shared_ptr<time_window_compaction_strategy_state>;
+
 class time_window_compaction_strategy : public compaction_strategy_impl {
     time_window_compaction_strategy_options _options;
     size_tiered_compaction_strategy_options _stcs_options;
@@ -87,7 +89,7 @@ public:
 
     static void validate_options(const std::map<sstring, sstring>& options, std::map<sstring, sstring>& unchecked_options);
 private:
-    time_window_compaction_strategy_state& get_state(compaction_group_view& table_s) const;
+    time_window_compaction_strategy_state_ptr get_state(compaction_group_view& table_s) const;
 
     static api::timestamp_type
     to_timestamp_type(time_window_compaction_strategy_options::timestamp_resolutions resolution, int64_t timestamp_from_sstable) {
