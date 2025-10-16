@@ -8,7 +8,7 @@ import time
 import asyncio
 import logging
 from test.pylib.rest_client import get_host_api_address, read_barrier
-from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
+from test.pylib.util import unique_name, wait_for_cql_and_get_hosts, wait_for
 from test.pylib.manager_client import ManagerClient
 from test.topology.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, wait_for_token_ring_and_group0_consistency
@@ -492,3 +492,28 @@ async def test_reload_service_levels_after_auth_service_is_stopped(manager: Mana
     config = {"error_injections_at_startup": ["reload_service_level_cache_after_auth_service_is_stopped"]}
     s1 = await manager.server_add(config=config)
     await manager.server_stop_gracefully(s1.server_id)
+
+@pytest.mark.asyncio
+async def test_anonymous_user(manager: ManagerClient) -> None:
+    allow_all_config = {'authenticator':'AllowAllAuthenticator', 'authorizer':'AllowAllAuthorizer'}
+    server = await manager.server_add(config=allow_all_config)
+    cql = manager.get_cql()
+    [h] = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+
+    async def connections_ready():
+        rows = list(cql.execute("SELECT connection_stage, username, scheduling_group FROM system.clients"))
+        if len(rows) == 0:
+            return None
+        for row in rows:
+            if row.connection_stage != "READY":
+                return None
+        return rows
+
+    rows = await wait_for(connections_ready, time.time() + 60)
+    for r in rows:
+        assert r.username == 'anonymous'
+        assert r.scheduling_group in ['sl:default', 'sl:driver']
+        if r.scheduling_group == 'sl:default':
+            return
+
+    assert False, f"None of clients use sl:default, rows={rows}"
