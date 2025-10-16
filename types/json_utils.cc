@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "cql3/type_json.hh"
+#include "types/json_utils.hh"
 #include "types/concrete_types.hh"
 #include "mutation/counters.hh"
 #include "types/vector.hh"

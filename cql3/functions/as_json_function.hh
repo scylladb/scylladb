@@ -13,10 +13,10 @@
 #include "cql3/functions/scalar_function.hh"
 #include "cql3/functions/function_name.hh"
 #include "cql3/cql3_type.hh"
-#include "cql3/type_json.hh"
 
 #include "bytes_ostream.hh"
 #include "types/types.hh"
+#include "types/json_utils.hh"
 
 namespace cql3 {
 

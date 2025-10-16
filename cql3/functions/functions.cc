@@ -10,7 +10,6 @@
 #include "functions.hh"
 #include "token_fct.hh"
 #include "cql3/ut_name.hh"
-#include "cql3/type_json.hh"
 #include "cql3/functions/aggregate_fcts.hh"
 #include "cql3/functions/bytes_conversion_fcts.hh"
 #include "cql3/functions/time_uuid_fcts.hh"
@@ -22,6 +21,7 @@
 #include "cql3/prepare_context.hh"
 #include "user_aggregate.hh"
 #include "cql3/expr/expression.hh"
+#include "types/json_utils.hh"
 #include "types/set.hh"
 #include "types/listlike_partial_deserializing_iterator.hh"
 
