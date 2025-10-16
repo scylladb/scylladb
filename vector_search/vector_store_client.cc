@@ -250,7 +250,8 @@ namespace vector_search {
 
 struct vector_store_client::impl {
 
-    using clients_type = std::vector<lw_shared_ptr<client>>;
+    using node = vector_search::client;
+    using clients_type = std::vector<lw_shared_ptr<node>>;
 
     utils::observer<sstring> uri_observer;
     clients_type current_clients;
@@ -282,9 +283,12 @@ struct vector_store_client::impl {
                 co_return current_clients;
             });
         })
-        , dns(vslogger, get_hosts(_uris), [this](auto const& addrs) -> future<> {
-            co_await handle_addresses_changed(addrs);
-        }, dns_refreshes) {
+        , dns(
+                  vslogger, get_hosts(_uris),
+                  [this](auto const& addrs) -> future<> {
+                      co_await handle_addresses_changed(addrs);
+                  },
+                  dns_refreshes) {
         _metrics.add_group("vector_store", {seastar::metrics::make_gauge("dns_refreshes", seastar::metrics::description("Number of DNS refreshes"), [this] {
             return dns_refreshes;
         }).aggregate({seastar::metrics::shard_label})});
@@ -302,7 +306,7 @@ struct vector_store_client::impl {
             auto it = addrs.find(uri.host);
             if (it != addrs.end()) {
                 for (const auto& addr : it->second) {
-                    current_clients.push_back(make_lw_shared<client>(client::endpoint_type{uri.host, uri.port, addr}));
+                    current_clients.push_back(make_lw_shared<node>(client::endpoint_type{uri.host, uri.port, addr}));
                 }
             }
         }
@@ -395,10 +399,14 @@ struct vector_store_client::impl {
                     if (as.abort_requested()) {
                         co_return std::unexpected{aborted{}};
                     }
-                    if (try_catch<std::system_error>(err) == nullptr) {
-                        co_await coroutine::return_exception_ptr(std::move(err));
-                    }
                     // std::system_error means that the server is unavailable, so we retry
+                    if (try_catch<std::system_error>(err) != nullptr) {
+                        continue;
+                    }
+                    if (try_catch<client::is_down_exception>(err) != nullptr) {
+                        continue;
+                    }
+                    co_await coroutine::return_exception_ptr(std::move(err));
                 } else {
                     co_return co_await std::move(result);
                 }
