@@ -305,7 +305,10 @@ client::group_client& client::find_or_create_client() {
     }
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+future<> client::make_request(http::request req,
+                              http::experimental::client::reply_handler handle,
+                              std::optional<http::reply::status_type> expected,
+                              seastar::abort_source* as) {
     co_await authorize(req);
     auto& gc = find_or_create_client();
     co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
