@@ -131,8 +131,6 @@ private:
 
     void verify_ordering_is_valid(const prepared_orderings_type&, const schema&, const restrictions::statement_restrictions& restrictions) const;
 
-    void verify_ann_ordering_is_valid(const std::optional<expr::expression>& limit, const std::optional<expr::expression>& per_partition_limit, const selection::selection& selection) const;
-
     prepared_ann_ordering_type prepare_ann_ordering(const schema& schema, prepare_context& ctx, data_dictionary::database db) const;
 
     // Checks whether this ordering reverses all results.
