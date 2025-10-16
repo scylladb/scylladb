@@ -1318,11 +1318,15 @@ process_batch_internal(service::client_state& client_state, distributed<cql3::qu
             if (!query) {
                 return make_exception_future<cql_server::process_fn_return_type>(std::move(query).assume_error());
             }
-            stmt_ptr = qp.local().get_statement(query.assume_value(), client_state, dialect);
-            ps = stmt_ptr->checked_weak_from_this();
-            if (init_trace) {
-                tracing::add_query(trace_state, query.assume_value());
-            }
+            // TODO: check rewriting to continuation for correctness
+            qp.local().get_statement(sstring{query.assume_value()}, client_state, dialect)
+                    .then([&](auto new_stmt_ptr) mutable {
+                        stmt_ptr = std::move(new_stmt_ptr);
+                        ps = stmt_ptr->checked_weak_from_this();
+                        if (init_trace) {
+                            tracing::add_query(trace_state, query.assume_value());
+                        }
+                    }).get();
             break;
         }
         case 1: {

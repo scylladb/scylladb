@@ -573,7 +573,7 @@ future<::shared_ptr<result_message>>
 query_processor::execute_direct_without_checking_exception_message(const std::string_view& query_string, service::query_state& query_state, dialect d, query_options& options) {
     log.trace("execute_direct: \"{}\"", query_string);
     tracing::trace(query_state.get_trace_state(), "Parsing a statement");
-    auto p = get_statement(query_string, query_state.get_client_state(), d);
+    auto p = co_await get_statement(sstring{query_string}, query_state.get_client_state(), d);
     auto statement = p->statement;
     if (statement->get_bound_terms() != options.get_values_count()) {
         const auto msg = format("Invalid amount of bind variables: expected {:d} received {:d}",
@@ -590,7 +590,7 @@ query_processor::execute_direct_without_checking_exception_message(const std::st
 #endif
     auto user = query_state.get_client_state().user();
     tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
-    return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(p->warnings));
+    co_return co_await execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(p->warnings));
 }
 
 future<::shared_ptr<result_message>>
@@ -683,9 +683,8 @@ future<::shared_ptr<cql_transport::messages::result_message::prepared>>
 query_processor::prepare(sstring query_string, const service::client_state& client_state, cql3::dialect d) {
     try {
         auto key = compute_id(query_string, client_state.get_raw_keyspace(), d);
-        auto prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] {
-                auto prepared = get_statement(query_string, client_state, d);
-                prepared->calculate_metadata_id();
+        auto prep_ptr = co_await _prepared_cache.get(key, [this, &query_string, &client_state, d] -> future<std::unique_ptr<statements::prepared_statement>> {
+                auto prepared = co_await get_statement(query_string, client_state, d);
                 auto bound_terms = prepared->statement->get_bound_terms();
                 if (bound_terms > std::numeric_limits<uint16_t>::max()) {
                     throw exceptions::invalid_request_exception(
@@ -694,7 +693,7 @@ query_processor::prepare(sstring query_string, const service::client_state& clie
                                 std::numeric_limits<uint16_t>::max()));
                 }
                 SCYLLA_ASSERT(bound_terms == prepared->bound_names.size());
-                return make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
+                co_return co_await make_ready_future<std::unique_ptr<statements::prepared_statement>>(std::move(prepared));
             });
 
         const auto& warnings = prep_ptr->warnings;
@@ -722,8 +721,8 @@ prepared_cache_key_type query_processor::compute_id(
     return prepared_cache_key_type(md5_hasher::calculate(hash_target(query_string, keyspace)), d);
 }
 
-std::unique_ptr<prepared_statement>
-query_processor::get_statement(const std::string_view& query, const service::client_state& client_state, dialect d) {
+future<std::unique_ptr<prepared_statement>>
+query_processor::get_statement(std::string query, const service::client_state& client_state, dialect d) {
     std::unique_ptr<raw::parsed_statement> statement = parse_statement(query, d);
 
     // Set keyspace for statement that require login
@@ -732,14 +731,19 @@ query_processor::get_statement(const std::string_view& query, const service::cli
         cf_stmt->prepare_keyspace(client_state);
     }
     ++_stats.prepare_invocations;
-    auto p = statement->prepare(_db, _cql_stats);
+    std::unique_ptr<prepared_statement> p;
+    if (statement->can_prepare_gently()) {
+        p = co_await statement->prepare_gently(_db, _cql_stats);
+    } else {
+        p = statement->prepare(_db, _cql_stats);
+    }
     p->statement->raw_cql_statement = sstring(query);
     auto audit_info = p->statement->get_audit_info();
     if (audit_info) {
         audit_info->set_query_string(query);
         p->statement->sanitize_audit_info();
     }
-    return p;
+    co_return p;
 }
 
 std::unique_ptr<raw::parsed_statement>

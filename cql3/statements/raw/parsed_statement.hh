@@ -42,6 +42,10 @@ public:
 
     void set_bound_variables(const std::vector<::shared_ptr<column_identifier>>& bound_names);
 
+    virtual bool can_prepare_gently() const { return false; }
+    virtual future<std::unique_ptr<prepared_statement>> prepare_gently(data_dictionary::database db, cql_stats& stats) {
+        throw std::runtime_error("This statement does not support gentle preparation");
+    }
     virtual std::unique_ptr<prepared_statement> prepare(data_dictionary::database db, cql_stats& stats) = 0;
 
 protected:
