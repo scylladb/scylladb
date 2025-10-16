@@ -66,8 +66,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 async def four_nodes_cluster(manager: ManagerClient) -> None:
     LOGGER.info("Booting initial 4-node cluster.")
 
-    config = {"rf_rack_valid_keyspaces": False}
-    servers = await manager.servers_add(4, config=config, property_file=[
+    servers = await manager.servers_add(4, property_file=[
         {"dc": "dc1", "rack": "rack1"},
         {"dc": "dc1", "rack": "rack2"},
         {"dc": "dc1", "rack": "rack3"},
@@ -101,8 +100,6 @@ async def test_random_failures(manager: ManagerClient,
         TESTS_COUNT, TESTS_SHUFFLE_SEED, ERROR_INJECTIONS_COUNT, CLUSTER_EVENTS_COUNT,
     )
 
-    rf_rack_cfg = {"rf_rack_valid_keyspaces": False}
-
     table = await random_tables.add_table(ncolumns=5)
     await table.insert_seq()
 
@@ -128,7 +125,7 @@ async def test_random_failures(manager: ManagerClient,
         coordinator_log_mark = await coordinator_log.mark()
 
         rack = get_random_rack()
-        s_info = await manager.server_add(config=rf_rack_cfg, expected_server_up_state=ServerUpState.PROCESS_STARTED,
+        s_info = await manager.server_add(expected_server_up_state=ServerUpState.PROCESS_STARTED,
                                           property_file={"dc": "dc1", "rack": rack})
         await coordinator_log.wait_for(
             "topology_coordinator_pause_after_updating_cdc_generation: waiting",
@@ -142,7 +139,7 @@ async def test_random_failures(manager: ManagerClient,
     else:
         rack = get_random_rack()
         s_info = await manager.server_add(
-            config={"error_injections_at_startup": [{"name": error_injection, "one_shot": True}]} | rf_rack_cfg,
+            config={"error_injections_at_startup": [{"name": error_injection, "one_shot": True}]},
             property_file={"dc": "dc1", "rack": rack},
             expected_server_up_state=ServerUpState.PROCESS_STARTED,
         )
