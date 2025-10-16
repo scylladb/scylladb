@@ -14,6 +14,7 @@
 
 #include "aws_error.hh"
 #include <seastar/util/log.hh>
+#include <seastar/http/exception.hh>
 #include <gnutls/gnutls.h>
 #include <memory>
 
@@ -177,6 +178,8 @@ aws_error aws_error::from_exception_ptr(std::exception_ptr exception) {
             std::rethrow_exception(exception);
         } catch (const aws_exception& ex) {
             return ex.error();
+        } catch (const seastar::httpd::unexpected_status_error& ex) {
+            return from_http_code(ex.status());
         } catch (const std::system_error& ex) {
             return from_system_error(ex);
         } catch (const std::exception& ex) {
