@@ -237,7 +237,7 @@ async def test_tablet_mutation_fragments_unowned_partition(manager: ManagerClien
 
 # The test checks that describe_ring and range_to_address_map API return
 # information that's consistent with system.tablets contents
-@pytest.mark.parametrize("endpoint", ["describe_ring", "range_to_endpoint"])
+@pytest.mark.parametrize("endpoint", ["describe_ring", "range_to_endpoint", "tokens_endpoint"])
 @pytest.mark.asyncio
 async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
     servers = []
@@ -265,13 +265,23 @@ async def test_tablets_api_consistency(manager: ManagerClient, endpoint):
             rte_info.sort(key = lambda x: int(x['key'][1])) # sort by end token
             logger.info(f'api.range_to_endpoint_map: {columnar(rte_info)}')
             api_data = [ { 'token': x['key'][1], 'nodes': set(x['value']) } for x in rte_info ]
+        elif endpoint == 'tokens_endpoint':
+            te_info = await manager.api.tokens_endpoint(servers[0].ip_addr, ks, "test")
+            logger.info(f'api.tokens_endpoint: {columnar(te_info)}')
+            api_data = [ { 'token': x['key'], 'node': x['value'] } for x in te_info ]
         else:
             raise RuntimeError('invalid endpoint parameter')
 
         assert len(replicas) == len(api_data), f"{endpoint} returned wrong number of ranges"
         for x, rep in zip(api_data, replicas):
             assert x['token'] == f'{rep.last_token}'
-            assert x['nodes'] == set([hosts[r[0]] for r in rep.replicas])
+            nodes = set([hosts[r[0]] for r in rep.replicas])
+            if 'nodes' in x:
+                assert x['nodes'] == nodes
+            elif 'node' in x:
+                assert x['node'] in nodes
+            else:
+                raise RuntimeError('api_data is badly prepared')
 
 
 # ALTER KEYSPACE cannot change the replication factor by more than 1 at a time.
