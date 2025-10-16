@@ -64,7 +64,7 @@ logging::logger cdc_log("cdc");
 namespace {
 
 shared_ptr<locator::abstract_replication_strategy> generate_replication_strategy(const keyspace_metadata& ksm, const locator::topology& topo) {
-    locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets());
+    locator::replication_strategy_params params(ksm.strategy_options(), ksm.initial_tablets(), ksm.consistency_option());
     return locator::abstract_replication_strategy::create_replication_strategy(ksm.strategy_name(), params, topo);
 }
 

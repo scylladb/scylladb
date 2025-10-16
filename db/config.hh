@@ -136,7 +136,8 @@ struct experimental_features_t {
         UDF,
         ALTERNATOR_STREAMS,
         BROADCAST_TABLES,
-        KEYSPACE_STORAGE_OPTIONS
+        KEYSPACE_STORAGE_OPTIONS,
+        STRONGLY_CONSISTENT_TABLES
     };
     static std::map<sstring, feature> map(); // See enum_option.
     static std::vector<enum_option<experimental_features_t>> all();

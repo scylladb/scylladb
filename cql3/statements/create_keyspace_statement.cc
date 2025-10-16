@@ -110,7 +110,7 @@ future<std::tuple<::shared_ptr<cql_transport::event::schema_change>, utils::chun
         // remove this check.
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(
             ksm->strategy_name(),
-            locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets()),
+            locator::replication_strategy_params(ksm->strategy_options(), ksm->initial_tablets(), ksm->consistency_option()),
             tmptr->get_topology());
         if (rs->uses_tablets()) {
             warnings.push_back(
@@ -203,7 +203,7 @@ std::vector<sstring> check_against_restricted_replication_strategies(
 
     std::vector<sstring> warnings;
     locator::replication_strategy_config_options opts;
-    locator::replication_strategy_params params(opts, std::nullopt);
+    locator::replication_strategy_params params(opts, std::nullopt, std::nullopt);
     auto replication_strategy = locator::abstract_replication_strategy::create_replication_strategy(
             locator::abstract_replication_strategy::to_qualified_class_name(
                     *attrs.get_replication_strategy_class()), params,

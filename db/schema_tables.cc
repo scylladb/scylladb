@@ -242,6 +242,7 @@ schema_ptr scylla_keyspaces() {
             {"storage_type", utf8_type},
             {"storage_options", map_type_impl::get_instance(utf8_type, utf8_type, false)},
             {"initial_tablets", int32_type},
+            {"consistency", utf8_type},
         },
         // static columns
         {},
@@ -1241,6 +1242,10 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
         if (initial_tablets.has_value()) {
             scylla_m.set_cell(ckey, "initial_tablets", int32_t(*initial_tablets), timestamp);
         }
+        auto consistency = keyspace->consistency_option();
+        if (consistency) {
+            scylla_m.set_cell(ckey, "consistency", data_dictionary::consistency_config_option_to_string(*consistency), timestamp);
+        }
         mutations.emplace_back(std::move(scylla_m));
     }
 
@@ -1306,6 +1311,7 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
 
     data_dictionary::storage_options storage_opts;
     std::optional<unsigned> initial_tablets;
+    std::optional<data_dictionary::consistency_config_option> consistency;
     // Scylla-specific row will only be present if SCYLLA_KEYSPACES schema feature is available in the cluster
     if (scylla_specific_rs) {
         if (!scylla_specific_rs->empty()) {
@@ -1320,9 +1326,13 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
                 storage_opts.value = data_dictionary::storage_options::from_map(std::string_view(*storage_type), values);
             }
             initial_tablets = row.get<int>("initial_tablets");
+            auto copt = row.get<sstring>("consistency");
+            if (copt) {
+                consistency = data_dictionary::consistency_config_option_from_string(*copt);
+            }
         }
     }
-    co_return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, durable_writes, storage_opts);
+    co_return keyspace_metadata::new_keyspace(keyspace_name, strategy_name, strategy_options, initial_tablets, consistency, durable_writes, storage_opts);
 }
 
 template<typename V>

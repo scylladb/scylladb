@@ -161,7 +161,7 @@ private:
         return is_system_keyspace(unwrap(ks).metadata->name());
     }
     virtual const locator::abstract_replication_strategy& get_replication_strategy(data_dictionary::keyspace ks) const override {
-        static const locator::local_strategy strategy{locator::replication_strategy_params{locator::replication_strategy_config_options{}, {}}, nullptr};
+        static const locator::local_strategy strategy{locator::replication_strategy_params{locator::replication_strategy_config_options{}, {}, data_dictionary::consistency_config_option::eventual}, nullptr};
         return strategy;
     }
     virtual const std::vector<view_ptr>& get_table_views(data_dictionary::table t) const override {
@@ -260,6 +260,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
                 db::schema_tables::NAME,
                 "org.apache.cassandra.locator.LocalStrategy",
                 locator::replication_strategy_config_options{},
+                std::nullopt,
                 std::nullopt,
                 false));
     real_db.tables.emplace_back(dd_impl, real_db.keyspaces.back(), db::schema_tables::dropped_columns(), false);
@@ -445,7 +446,7 @@ schema_ptr do_load_schema_from_schema_tables(const db::config& dbcfg, std::files
     if (types_mut) {
         query::result_set result(*types_mut);
 
-        auto ks = make_lw_shared<keyspace_metadata>(keyspace, "org.apache.cassandra.locator.LocalStrategy", locator::replication_strategy_config_options{}, std::nullopt, false);
+        auto ks = make_lw_shared<keyspace_metadata>(keyspace, "org.apache.cassandra.locator.LocalStrategy", locator::replication_strategy_config_options{}, std::nullopt, std::nullopt, false);
         db::cql_type_parser::raw_builder ut_builder(*ks);
 
         auto get_list = [] (const query::result_set_row& row, const char* name) {

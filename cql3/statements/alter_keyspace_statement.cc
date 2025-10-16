@@ -107,10 +107,13 @@ void cql3::statements::alter_keyspace_statement::validate(query_processor& qp, c
                 }
             }
 
-            locator::replication_strategy_params params(new_ks->strategy_options(), new_ks->initial_tablets());
+            locator::replication_strategy_params params(new_ks->strategy_options(), new_ks->initial_tablets(), new_ks->consistency_option());
             auto new_rs = locator::abstract_replication_strategy::create_replication_strategy(new_ks->strategy_name(), params, topo);
             if (new_rs->is_per_table() != ks.get_replication_strategy().is_per_table()) {
                 throw exceptions::invalid_request_exception(format("Cannot alter replication strategy vnode/tablets flavor"));
+            }
+            if (new_ks->consistency_option() && new_ks->consistency_option() != ks.metadata()->consistency_option()) {
+                throw exceptions::invalid_request_exception(format("Cannot alter consistency option"));
             }
         } catch (const std::runtime_error& e) {
             throw exceptions::invalid_request_exception(e.what());
@@ -198,7 +201,7 @@ cql3::statements::alter_keyspace_statement::prepare_schema_mutations(query_proce
 
         auto rs = locator::abstract_replication_strategy::create_replication_strategy(
                 ks_md_update->strategy_name(),
-                locator::replication_strategy_params(ks_md_update->strategy_options(), ks_md_update->initial_tablets()),
+                locator::replication_strategy_params(ks_md_update->strategy_options(), ks_md_update->initial_tablets(), ks_md_update->consistency_option()),
                 topo);
 
         // If `rf_rack_valid_keyspaces` is enabled, it's forbidden to perform a schema change that

@@ -13,6 +13,7 @@
 #include "cql3/statements/property_definitions.hh"
 #include "data_dictionary/storage_options.hh"
 #include "locator/abstract_replication_strategy.hh"
+#include "data_dictionary/consistency_config_options.hh"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/sstring.hh>
@@ -49,6 +50,7 @@ public:
     static constexpr auto KW_REPLICATION = "replication";
     static constexpr auto KW_STORAGE = "storage";
     static constexpr auto KW_TABLETS = "tablets";
+    static constexpr auto KW_CONSISTENCY = "consistency";
 
     static constexpr auto REPLICATION_STRATEGY_CLASS_KEY = "class";
     static constexpr auto DEFAULT_REPLICATION_STRATEGY_CLASS = "NetworkTopologyStrategy";
@@ -74,6 +76,7 @@ public:
     std::optional<sstring> get_replication_strategy_class() const;
     void set_default_replication_strategy_class_option();
     std::optional<unsigned> get_initial_tablets(std::optional<unsigned> default_value, bool enforce_tablets = false) const;
+    std::optional<data_dictionary::consistency_config_option> get_consistency_option() const;
     data_dictionary::storage_options get_storage_options() const;
     bool get_durable_writes() const;
     lw_shared_ptr<data_dictionary::keyspace_metadata> as_ks_metadata(sstring ks_name, const locator::token_metadata&, const gms::feature_service&, const db::config&);
