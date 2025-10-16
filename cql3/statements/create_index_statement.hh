@@ -54,6 +54,7 @@ public:
         index_metadata index;
     };
     std::optional<base_schema_with_new_index> build_index_schema(data_dictionary::database db) const;
+    view_ptr create_view_for_index(const schema_ptr, const index_metadata& im, const data_dictionary::database&) const;
 private:
     void validate_for_local_index(const schema& schema) const;
     void validate_for_frozen_collection(const index_target& target) const;
