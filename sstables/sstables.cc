@@ -3781,9 +3781,9 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
                         : _bufs(bufs)
                     {}
                     future<> put(std::span<temporary_buffer<char>> bufs) override {
-                      for (auto&& buf : bufs) {
-                        _bufs.emplace_back(std::move(buf));
-                      }
+                        for (auto&& buf : bufs) {
+                            _bufs.emplace_back(std::move(buf));
+                        }
                         return make_ready_future<>();
                     }
                     future<> flush() override {

@@ -51,9 +51,9 @@ class memory_data_sink : public data_sink_impl {
 public:
     memory_data_sink(memory_data_sink_buffers& b) : _bufs(b) {}
     virtual future<> put(std::span<temporary_buffer<char>> bufs) override {
-      for (auto&& buf : bufs) {
-        _bufs.put(std::move(buf));
-      }
+        for (auto&& buf : bufs) {
+            _bufs.put(std::move(buf));
+        }
         return make_ready_future<>();
     }
     virtual future<> flush() override {

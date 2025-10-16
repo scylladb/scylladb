@@ -83,9 +83,9 @@ public:
         , _semaphore(1)
     {}
     future<> put(std::span<temporary_buffer<char>> bufs) override {
-      for (auto&& buf : bufs) {
-        _buffers.emplace_back(std::move(buf));
-      }
+        for (auto&& buf : bufs) {
+            _buffers.emplace_back(std::move(buf));
+        }
         co_await maybe_do_upload(false);
     }
     future<> flush() override {

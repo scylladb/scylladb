@@ -85,16 +85,16 @@ public:
         // bufs will usually be a multiple of chunk size, but this won't be the case for
         // the last buffer being flushed.
 
-      for (auto& buf : bufs) {
-        for (size_t offset = 0; offset < buf.size(); offset += _c.chunk_size) {
-            size_t size = std::min(size_t(_c.chunk_size), buf.size() - offset);
-            uint32_t per_chunk_checksum = ChecksumType::init_checksum();
+        for (auto& buf : bufs) {
+            for (size_t offset = 0; offset < buf.size(); offset += _c.chunk_size) {
+                size_t size = std::min(size_t(_c.chunk_size), buf.size() - offset);
+                uint32_t per_chunk_checksum = ChecksumType::init_checksum();
 
-            per_chunk_checksum = ChecksumType::checksum(per_chunk_checksum, buf.begin() + offset, size);
-            _full_checksum = checksum_combine_or_feed<ChecksumType>(_full_checksum, per_chunk_checksum, buf.begin() + offset, size);
-            _c.checksums.push_back(per_chunk_checksum);
+                per_chunk_checksum = ChecksumType::checksum(per_chunk_checksum, buf.begin() + offset, size);
+                _full_checksum = checksum_combine_or_feed<ChecksumType>(_full_checksum, per_chunk_checksum, buf.begin() + offset, size);
+                _c.checksums.push_back(per_chunk_checksum);
+            }
         }
-      }
         return _out.put(std::move(bufs));
     }
 
