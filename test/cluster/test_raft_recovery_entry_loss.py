@@ -20,7 +20,7 @@ from test.cluster.test_group0_schema_versioning import get_group0_schema_version
 
 @pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/26534")
 @pytest.mark.asyncio
-async def test_raft_recovery_entry_lose(manager: ManagerClient):
+async def test_raft_recovery_entry_loss(manager: ManagerClient):
     """
     Test that the Raft-based recovery procedure works correctly if some committed group 0 entry has been permanently
     lost (it has been committed only by dead nodes).
@@ -40,6 +40,9 @@ async def test_raft_recovery_entry_lose(manager: ManagerClient):
     5. Check that node 1 has moved its group 0 state to v2.
     6. Remove nodes 3-5 from topology using the standard removenode procedure.
     7. Add a new node (a sanity check verifying that the cluster is functioning properly).
+
+    Additionally, verify that no schema pulls take place during the recovery procedure at the end of the test. This is
+    a regression test for https://github.com/scylladb/scylladb/issues/26569.
     """
     logging.info('Adding initial servers')
     servers = await manager.servers_add(5)
@@ -159,10 +162,17 @@ async def test_raft_recovery_entry_lose(manager: ManagerClient):
 
     logging.info('Adding a new server')
     new_server = await manager.server_add()
+    live_servers.append(new_server)
 
-    hosts = await wait_for_cql_and_get_hosts(cql, live_servers + [new_server], time.time() + 60)
+    hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
 
     logging.info(f'Performing consistency checks after adding {new_server}')
     await wait_for_cdc_generations_publishing(cql, hosts, time.time() + 60)
     await check_token_ring_and_group0_consistency(manager)
     await check_system_topology_and_cdc_generations_v3_consistency(manager, hosts, ignored_hosts=dead_hosts)
+
+    logging.info(f'Checking that there were no schema pulls on {live_servers}')
+    log_files = await asyncio.gather(*[manager.server_open_log(srv.server_id) for srv in live_servers])
+    for log_file in log_files:
+        matches = await log_file.grep('Requesting schema pull') + await log_file.grep('Pulling schema')
+        assert not matches
