@@ -13,6 +13,7 @@
 
 #include <variant>
 #include <seastar/core/shared_future.hh>
+#include "absl-flat_hash_map.hh"
 #include "gms/endpoint_state.hh"
 #include "gms/i_endpoint_state_change_subscriber.hh"
 #include "schema/schema_fwd.hh"
@@ -80,6 +81,9 @@ namespace view {
 class view_builder;
 class view_building_worker;
 }
+namespace schema_tables {
+class schema_applier;
+}
 }
 
 namespace netw {
@@ -137,6 +141,23 @@ class node_ops_meta_data;
 
 using start_hint_manager = seastar::bool_class<class start_hint_manager_tag>;
 using loosen_constraints = seastar::bool_class<class loosen_constraints_tag>;
+
+struct token_metadata_change {
+    std::vector<locator::mutable_token_metadata_ptr> pending_token_metadata_ptr{smp::count};
+    std::vector<std::unordered_map<sstring, locator::static_effective_replication_map_ptr>> pending_effective_replication_maps{smp::count};
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_table_erms{smp::count};
+    std::vector<std::unordered_map<table_id, locator::effective_replication_map_ptr>> pending_view_erms{smp::count};
+    std::unordered_set<session_id> open_sessions;
+
+    future<> destroy();
+};
+
+class schema_getter {
+public:
+    virtual flat_hash_map<sstring, locator::replication_strategy_ptr> get_keyspaces_replication() const = 0;
+    virtual future<> for_each_table_schema_gently(std::function<future<>(table_id, schema_ptr)> f) const = 0;
+    virtual ~schema_getter() {};
+};
 
 /**
  * This abstraction contains the token/identifier of this node
@@ -260,8 +281,8 @@ public:
     future<> uninit_messaging_service();
 
     // If a hint is provided, only the changed parts of the tablet metadata will be (re)loaded.
-    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
-    future<> commit_tablet_metadata(locator::mutable_token_metadata_ptr tmptr);
+    future<locator::mutable_token_metadata_ptr> prepare_tablet_metadata(const locator::tablet_metadata_change_hint& hint, mutable_token_metadata_ptr pending_token_metadata);
+    void wake_up_topology_state_machine() noexcept;
     future<> update_tablet_metadata(const locator::tablet_metadata_change_hint& hint);
 
     void start_tablet_split_monitor();
@@ -285,6 +306,16 @@ private:
     //
     // Note: must be called on shard 0.
     future<> mutate_token_metadata(std::function<future<> (mutable_token_metadata_ptr)> func, acquire_merge_lock aml = acquire_merge_lock::yes) noexcept;
+
+    // Prepares token metadata change without making it visible. Combined with commit function
+    // and appropiate lock it does exactly the same as mutate_token_metadata.
+    // Note: prepare_token_metadata_change must be called on shard 0.
+    future<token_metadata_change> prepare_token_metadata_change(mutable_token_metadata_ptr tmptr,
+            const schema_getter& loader);
+
+    // Commits prepared token metadata changes. Must be called under token_metadata_lock
+    // and on all shards.
+    void commit_token_metadata_change(token_metadata_change& change) noexcept;
 
     // Update pending ranges locally and then replicate to all cores.
     // Should be serialized under token_metadata_lock.
@@ -311,6 +342,7 @@ private:
 
     friend struct ::node_ops_ctl;
     friend void check_raft_rpc_scheduling_group(storage_service&, std::string_view);
+    friend class db::schema_tables::schema_applier;
 public:
 
     const gms::gossiper& gossiper() const noexcept {

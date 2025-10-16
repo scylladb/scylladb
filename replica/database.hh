@@ -1435,7 +1435,7 @@ public:
             const locator::topology& topology);
     future<locator::static_effective_replication_map_ptr> create_static_effective_replication_map(
             locator::replication_strategy_ptr strategy,
-            const locator::shared_token_metadata& stm) const;
+            const locator::token_metadata_ptr& tm) const;
     void update_static_effective_replication_map(locator::static_effective_replication_map_ptr erm);
 
     data_dictionary::keyspace as_data_dictionary() const;
@@ -1708,7 +1708,7 @@ private:
     future<> flush_system_column_families();
 
     using system_keyspace = bool_class<struct system_keyspace_tag>;
-    future<std::unique_ptr<keyspace>> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<std::unique_ptr<keyspace>> create_in_memory_keyspace(const lw_shared_ptr<keyspace_metadata>& ksm, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system);
     void setup_metrics();
     void setup_scylla_memory_diagnostics_producer();
     reader_concurrency_semaphore& read_concurrency_sem();
@@ -1727,9 +1727,9 @@ private:
     Future update_write_metrics(Future&& f);
     void update_write_metrics_for_timed_out_write();
     void update_write_metrics_for_rejected_writes();
-    future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, system_keyspace system);
+    future<std::unique_ptr<keyspace>> create_keyspace(const lw_shared_ptr<keyspace_metadata>&, locator::effective_replication_map_factory& erm_factory, const locator::token_metadata_ptr& token_metadata, system_keyspace system);
     void remove(table&) noexcept;
-    future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata) const;
+    future<keyspace_change> prepare_update_keyspace(const keyspace& ks, lw_shared_ptr<keyspace_metadata> metadata, const locator::token_metadata_ptr& token_metadata) const;
     static future<> modify_keyspace_on_all_shards(sharded<database>& sharded_db, std::function<future<>(replica::database&)> func);
 
     future<> foreach_reader_concurrency_semaphore(std::function<future<>(reader_concurrency_semaphore&)> func);
@@ -1833,14 +1833,14 @@ public:
      *
      * @return ready future when the operation is complete
      */
-    static future<created_keyspace_per_shard> prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm);
+    static future<created_keyspace_per_shard> prepare_create_keyspace_on_all_shards(sharded<database>& sharded_db, sharded<service::storage_proxy>& proxy, const keyspace_metadata& ksm, const locator::pending_token_metadata& pending_token_metadata);
     /* below, find_keyspace throws no_such_<type> on fail */
     keyspace& find_keyspace(std::string_view name);
     const keyspace& find_keyspace(std::string_view name) const;
     bool has_keyspace(std::string_view name) const;
     void validate_keyspace_update(keyspace_metadata& ksm);
     void validate_new_keyspace(keyspace_metadata& ksm);
-    static future<keyspace_change_per_shard> prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm);
+    static future<keyspace_change_per_shard> prepare_update_keyspace_on_all_shards(sharded<database>& sharded_db, const keyspace_metadata& ksm, const locator::pending_token_metadata& pending_token_metadata);
     std::vector<sstring> get_non_system_keyspaces() const;
     std::vector<sstring> get_user_keyspaces() const;
     std::vector<sstring> get_all_keyspaces() const;
@@ -2006,7 +2006,7 @@ public:
     // If truncated_at_opt is not given, it is set to db_clock::now right after flush/clear.
     static future<> truncate_table_on_all_shards(sharded<database>& db, sharded<db::system_keyspace>& sys_ks, sstring ks_name, sstring cf_name, std::optional<db_clock::time_point> truncated_at_opt = {}, bool with_snapshot = true, std::optional<sstring> snapshot_name_opt = {});
 
-    static future<tables_metadata_lock_on_all_shards> prepare_tables_metadata_change_on_all_shards(sharded<database>& sharded_db);
+    static future<tables_metadata_lock_on_all_shards> lock_tables_metadata(sharded<database>& sharded_db);
 
     // Drops the table and removes the table directory if there are no snapshots,
     // it's executed in 3 steps: prepare, drop and cleanup so that the middle step
