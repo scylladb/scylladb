@@ -4,6 +4,7 @@ add_library(scylla_audit STATIC)
 target_sources(scylla_audit
   PRIVATE
     audit.cc
+    audit_composite_storage_helper.cc
     audit_cf_storage_helper.cc
     audit_syslog_storage_helper.cc)
 target_include_directories(scylla_audit
