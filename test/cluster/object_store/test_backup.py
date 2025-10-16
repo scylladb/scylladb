@@ -410,7 +410,7 @@ async def do_abort_restore(manager: ManagerClient, s3_server):
               'task_ttl_in_seconds': 300,
               }
 
-    servers = await manager.servers_add(servers_num=3, config=config)
+    servers = await manager.servers_add(servers_num=3, config=config, auto_rack_dc="dc1")
 
     # Obtain the CQL interface from the manager.
     cql = manager.get_cql()
@@ -538,7 +538,6 @@ async def do_abort_restore(manager: ManagerClient, s3_server):
     await wait_for_first_completed([l.wait_for("Failed to handle STREAM_MUTATION_FRAGMENTS \(receive and distribute phase\) for .+: Streaming aborted", timeout=10) for l in logs])
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="a very slow test (20+ seconds), skipping it")
 async def test_abort_restore_with_rpc_error(manager: ManagerClient, s3_server):
     await do_abort_restore(manager, s3_server)
 
