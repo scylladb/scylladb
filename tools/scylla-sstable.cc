@@ -21,7 +21,6 @@
 #include "compaction/compaction.hh"
 #include "compaction/compaction_strategy.hh"
 #include "compaction/compaction_strategy_state.hh"
-#include "cql3/type_json.hh"
 #include "cql3/statements/raw/parsed_statement.hh"
 #include "cql3/statements/select_statement.hh"
 #include "db/config.hh"
@@ -47,6 +46,7 @@
 #include "tools/schema_loader.hh"
 #include "tools/sstable_consumer.hh"
 #include "tools/utils.hh"
+#include "types/json_utils.hh"
 #include "locator/host_id.hh"
 
 using namespace seastar;

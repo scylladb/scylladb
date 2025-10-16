@@ -28,7 +28,6 @@ set_property(
 add_library(cql3 STATIC)
 target_sources(cql3
   PRIVATE
-    type_json.cc
     attributes.cc
     cf_name.cc
     cql3_type.cc

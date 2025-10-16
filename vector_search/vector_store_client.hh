@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "dht/decorated_key.hh"
+#include "keys/keys.hh"
 #include "seastarx.hh"
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -15,11 +17,6 @@
 #include <expected>
 
 class schema;
-
-namespace cql3::statements {
-class primary_key;
-}
-
 namespace db {
 class config;
 }
@@ -29,6 +26,11 @@ class inet_address;
 }
 
 namespace vector_search {
+
+struct primary_key {
+    dht::decorated_key partition;
+    clustering_key_prefix clustering;
+};
 
 /// A client with the vector-store service.
 class vector_store_client final {
@@ -43,7 +45,6 @@ public:
     using keyspace_name = sstring;
     using limit = std::size_t;
     using port_number = std::uint16_t;
-    using primary_key = cql3::statements::primary_key;
     using primary_keys = std::vector<primary_key>;
     using schema_ptr = lw_shared_ptr<schema const>;
     using status_type = http::reply::status_type;

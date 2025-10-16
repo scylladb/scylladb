@@ -12,7 +12,7 @@
 #include "serialization.hh"
 #include "error.hh"
 #include "types/concrete_types.hh"
-#include "cql3/type_json.hh"
+#include "types/json_utils.hh"
 #include "mutation/position_in_partition.hh"
 
 static logging::logger slogger("alternator-serialization");

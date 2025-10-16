@@ -13,12 +13,12 @@
 #include <vector>
 
 #include "bytes_ostream.hh"
-#include "cql3/type_json.hh"
 #include "db/marshal/type_parser.hh"
 #include "test/lib/log.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/sstable_test_env.hh"
 #include "types/comparable_bytes.hh"
+#include "types/json_utils.hh"
 #include "types/list.hh"
 #include "types/map.hh"
 #include "types/set.hh"

@@ -9,14 +9,13 @@
 #include "vector_store_client.hh"
 #include "dns.hh"
 #include "load_balancer.hh"
-#include "cql3/statements/select_statement.hh"
-#include "cql3/type_json.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
 #include "utils/sequential_producer.hh"
 #include "dht/i_partitioner.hh"
 #include "keys/keys.hh"
 #include "utils/rjson.hh"
+#include "types/json_utils.hh"
 #include "schema/schema.hh"
 #include <charconv>
 #include <exception>
@@ -32,6 +31,7 @@
 #include <seastar/net/dns.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/net/socket_defs.hh>
+#include <seastar/util/lazy.hh>
 #include <seastar/util/short_streams.hh>
 
 namespace {
@@ -50,7 +50,7 @@ using json_content = sstring;
 using milliseconds = std::chrono::milliseconds;
 using operation_type = httpd::operation_type;
 using port_number = vector_search::vector_store_client::port_number;
-using primary_key = vector_search::vector_store_client::primary_key;
+using primary_key = vector_search::primary_key;
 using primary_keys = vector_search::vector_store_client::primary_keys;
 using service_reply_format_error = vector_search::vector_store_client::service_reply_format_error;
 using tcp_keepalive_params = net::tcp_keepalive_params;
