@@ -366,6 +366,54 @@ def test_desc_log_table_properties_preserved_after_noop_alter(cql, test_keyspace
 
         assert old_log_stmt == new_log_stmt
 
+# Verify that after detaching or reattaching a CDC log table, its properties
+# are preserved.
+#
+# Reproduces scylladb/scylladb#25523.
+def test_log_table_preserves_properties_after_reattachment(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, "p int PRIMARY KEY", "WITH cdc = {'enabled': true}") as table:
+        cdc_log_table = f"{table}_scylla_cdc_log"
+
+        # Every property here should have a non-custom value.
+        properties = [
+            ("bloom_filter_fp_chance", "0.13"),
+            ("caching", "{'keys': 'ALL', 'rows_per_partition': 'NONE'}"),
+            ("comment", "'some not very interesting custom comment'"),
+            ("compaction", "{'class': 'TimeWindowCompactionStrategy', 'compaction_window_size': '37', 'compaction_window_unit': 'MINUTES', 'expired_sstable_check_frequency_seconds': '1351'}"),
+            ("compression", "{'sstable_compression': 'org.apache.cassandra.io.compress.SnappyCompressor'}"),
+
+            # FIXME: Due to scylladb/scylladb#2431, we cannot change this property.
+            # ("crc_check_chance", "1"),
+
+            ("default_time_to_live", "2"),
+            ("gc_grace_seconds", "3"),
+            ("max_index_interval", "2371"),
+            ("memtable_flush_period_in_ms", "60013"),
+            ("min_index_interval", "137"),
+            ("speculative_retry", "'95.0PERCENTILE'"),
+            ("tombstone_gc", "{'mode': 'timeout', 'propagation_delay_in_seconds': '3719'}"),
+        ]
+
+        def validate_properties():
+            desc_row = cql.execute(f"DESC TABLE {cdc_log_table} WITH INTERNALS").one()
+            create_statement = desc_row.create_statement
+
+            for property, value in properties:
+                assert f"{property} = {value}" in create_statement
+
+        for property, value in properties:
+            cql.execute(f"ALTER TABLE {cdc_log_table} WITH {property} = {value}")
+
+        # Step 1. Make sure that we really altered the CDC log table.
+        validate_properties()
+
+        # Step 2. Make sure that after detaching the log table, the properties are preserved.
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': false}}")
+        validate_properties()
+
+        # Step 3. Make sure that after reattaching the log table, the properties are preserved.
+        cql.execute(f"ALTER TABLE {table} WITH cdc = {{'enabled': true}}")
+        validate_properties()
 
 def test_create_if_not_exists_with_cdc(scylla_only, cql, test_keyspace):
     table_name = f"{test_keyspace}.{unique_name()}"
