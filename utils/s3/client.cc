@@ -316,16 +316,16 @@ future<> client::make_request(http::request req,
                 request, [&handle](const http::reply& reply, input_stream<char>&& body) { return handle(reply, std::move(body)); }, expected, as);
         } catch (const aws::aws_exception& ex) {
             if (++attempts <= max_attempts) {
-            if (ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
-                s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
-                         utils::aws::format_time_point(db_clock::now()),
-                         request.get_header("x-amz-date"));
-                continue;
-            }
-            if (ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
-                _credentials = {};
-                continue;
-            }
+                if (ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
+                    s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
+                             utils::aws::format_time_point(db_clock::now()),
+                             request.get_header("x-amz-date"));
+                    continue;
+                }
+                if (ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                    _credentials = {};
+                    continue;
+                }
             }
             map_s3_client_exception(std::current_exception());
         } catch (const storage_io_error&) {
