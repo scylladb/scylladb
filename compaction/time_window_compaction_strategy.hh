@@ -110,9 +110,11 @@ private:
     compaction_mode(const time_window_compaction_strategy_state&, const bucket_t& bucket, api::timestamp_type bucket_key, api::timestamp_type now, size_t min_threshold) const;
 
     std::vector<sstables::shared_sstable>
-    get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time);
+    get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> non_expiring_sstables,
+        gc_clock::time_point compaction_time, time_window_compaction_strategy_state& state);
 
-    std::vector<sstables::shared_sstable> get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidate_sstables);
+    std::vector<sstables::shared_sstable> get_compaction_candidates(compaction_group_view& table_s, strategy_control& control,
+        std::vector<sstables::shared_sstable> candidate_sstables, time_window_compaction_strategy_state& state);
 public:
     // Find the lowest timestamp for window of given size
     static api::timestamp_type
@@ -126,7 +128,7 @@ public:
 
     std::vector<sstables::shared_sstable>
     newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<api::timestamp_type, std::vector<sstables::shared_sstable>> buckets,
-        int min_threshold, int max_threshold, api::timestamp_type now);
+        int min_threshold, int max_threshold, api::timestamp_type now, time_window_compaction_strategy_state& state);
 
     static std::vector<sstables::shared_sstable>
     trim_to_threshold(std::vector<sstables::shared_sstable> bucket, int max_threshold);
