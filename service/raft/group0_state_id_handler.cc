@@ -27,17 +27,18 @@ lowres_clock::duration group0_state_id_handler::get_refresh_interval(const repli
 }
 
 void group0_state_id_handler::refresh() {
-    auto* const group0_server = _server_accessor.get_server();
-    if (!group0_server) {
-        slogger.debug("Skipping due to group0 server not found");
-        return;
-    }
+    // It's not enough to consider only the current group 0 members. In the Raft-based recovery procedure, there can be
+    // nodes that haven't joined the current group 0 yet but they have belonged to a different group 0 and thus have
+    // a non-empty group 0 state ID.
+    //
+    // Ignored nodes are permanently banned, so we can safely filter them out even if they belong to the group 0.
+    const auto& group0_members = std::ranges::join_view(std::to_array({
+        std::views::all(_topo_sm._topology.normal_nodes),
+        std::views::all(_topo_sm._topology.transition_nodes)
+    })) | std::views::keys | std::ranges::views::filter([this] (const raft::server_id& id) {
+        return !_topo_sm._topology.ignored_nodes.contains(id);
+    }) | std::ranges::to<std::vector>();
 
-    const auto& group0_members = std::invoke([&] {
-        auto members = group0_server->get_configuration().current;
-        members.merge(group0_server->get_configuration().previous);
-        return members;
-    });
     if (group0_members.empty()) {
         slogger.info("Skipping due to empty group0");
         return;
@@ -48,10 +49,10 @@ void group0_state_id_handler::refresh() {
     std::vector<raft::server_id> group0_members_missing_endpoint;
     std::vector<raft::server_id> group0_members_missing_state_id;
 
-    const auto& group0_members_state_ids = group0_members | std::ranges::views::transform([&](const auto& member) -> std::optional<utils::UUID> {
-        const auto* state_id_ptr = _gossiper.get_application_state_ptr(locator::host_id{member.addr.id.uuid()}, gms::application_state::GROUP0_STATE_ID);
+    const auto& group0_members_state_ids = group0_members | std::ranges::views::transform([&](const auto& id) -> std::optional<utils::UUID> {
+        const auto* state_id_ptr = _gossiper.get_application_state_ptr(locator::host_id{id.uuid()}, gms::application_state::GROUP0_STATE_ID);
         if (!state_id_ptr) {
-            group0_members_missing_state_id.push_back(member.addr.id);
+            group0_members_missing_state_id.push_back(id);
             return std::nullopt;
         }
 
@@ -100,9 +101,9 @@ void group0_state_id_handler::refresh() {
     gc_state.update_group0_refresh_time(tombstone_gc_time);
 }
 
-group0_state_id_handler::group0_state_id_handler(
-        replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor)
-    : _local_db(local_db)
+group0_state_id_handler::group0_state_id_handler(topology_state_machine& topo_sm, replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor)
+    : _topo_sm(topo_sm)
+    , _local_db(local_db)
     , _gossiper(gossiper)
     , _server_accessor(server_accessor)
     , _refresh_interval(get_refresh_interval(local_db)) {

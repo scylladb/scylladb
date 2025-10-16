@@ -59,7 +59,8 @@ group0_state_machine::group0_state_machine(raft_group0_client& client, migration
     : _client(client), _mm(mm), _sp(sp), _ss(ss)
     , _gate("group0_state_machine")
     , _topology_change_enabled(topology_change_enabled)
-    , _state_id_handler(sp.local_db(), gossiper, server_accessor), _feature_service(feat)
+    , _state_id_handler(ss._topology_state_machine, sp.local_db(), gossiper, server_accessor)
+    , _feature_service(feat)
     , _topology_on_raft_support_listener(feat.supports_consistent_topology_changes.when_enabled([this] () noexcept {
         // Using features to decide whether to start fetching topology snapshots
         // or not is technically not correct because we also use features to guard

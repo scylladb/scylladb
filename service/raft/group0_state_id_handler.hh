@@ -8,6 +8,7 @@
 #pragma once
 
 #include "raft/raft.hh"
+#include "service/topology_state_machine.hh"
 #include "utils/UUID.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/timer.hh>
@@ -45,6 +46,7 @@ public:
 
 class group0_state_id_handler {
 
+    topology_state_machine& _topo_sm;
     replica::database& _local_db;
     gms::gossiper& _gossiper;
     group0_server_accessor _server_accessor;
@@ -60,7 +62,7 @@ class group0_state_id_handler {
     void refresh();
 
 public:
-    group0_state_id_handler(replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor);
+    group0_state_id_handler(topology_state_machine& topo_sm, replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor);
 
     void run();
 
