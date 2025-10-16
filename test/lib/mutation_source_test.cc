@@ -2419,6 +2419,10 @@ schema_ptr random_mutation_generator::schema() const {
     return _impl->_schema;
 }
 
+void random_mutation_generator::set_schema(schema_ptr s) {
+    _impl->_schema = s;
+}
+
 range_tombstone random_mutation_generator::make_random_range_tombstone() {
     return _impl->make_random_range_tombstone();
 }
