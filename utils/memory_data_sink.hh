@@ -51,8 +51,7 @@ class memory_data_sink : public data_sink_impl {
 public:
     memory_data_sink(memory_data_sink_buffers& b) : _bufs(b) {}
     virtual future<> put(net::packet data)  override {
-        abort();
-        return make_ready_future<>();
+        return data_sink_impl::fallback_put(std::move(data));
     }
     virtual future<> put(temporary_buffer<char> buf) override {
         _bufs.put(std::move(buf));
