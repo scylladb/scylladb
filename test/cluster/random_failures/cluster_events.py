@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import asyncio
 import logging
+import random
 import time
 from shutil import rmtree
 from typing import TYPE_CHECKING
@@ -26,6 +27,8 @@ if TYPE_CHECKING:
 
 
 TOPOLOGY_TIMEOUT = 300  # default topology timeout is too big for these tests
+
+RACK_RANDOM_GENERATOR = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +54,47 @@ def deselect_for(reason: str, error_injections: list[str] | None = None) -> Call
             fn.deselected_random_failures[inj] = reason
         return fn
     return add_deselected_metadata
+
+
+def feed_rack_seed(seed):
+    global RACK_RANDOM_GENERATOR
+    RACK_RANDOM_GENERATOR = random.Random(seed)
+
+
+def get_random_rack():
+    assert RACK_RANDOM_GENERATOR is not None, "The object should have already been initialized by `feed_rack_seed`"
+    rack_id = RACK_RANDOM_GENERATOR.randint(1, 3)
+    return f"rack{rack_id}"
+
+
+def select_viable_rack(servers):
+    """
+    Choose the rack with two oldest nodes.
+
+    More precisely, if we denote by R_i the ordered list of nodes in rack_i
+    (from the oldest to the youngest), and by R_i* the prefix of R_i of length
+    at most 2, then the function returns rack_i satisfying the following
+    conditions:
+    * R_i* has two elements.
+    * Each element of R_i* is older than at least one element of any other
+      R_j* having two elements.
+
+    Preconditions:
+    --------------
+    * All of the racks corresponding to `servers` are elements of
+      `{"rack1", "rack2", "rack3"}`.
+    * `servers` are sorted from the oldest to the youngest (creation-time-wise).
+    * Among `servers`, there are at least two nodes residing in the same rack.
+    """
+
+    racks = {"rack1": 0, "rack2": 0, "rack3": 0}
+    for server in servers:
+        assert server.rack in racks
+        racks[server.rack] += 1
+        if racks[server.rack] > 1:
+            return server.rack
+
+    assert False, "Precondition violated: There is no rack with at least two nodes"
 
 
 # Each cluster event is an async generator which has 2 yields and should be used in the following way:
@@ -338,6 +382,15 @@ async def execute_lwt_transaction(manager: ManagerClient,
 async def init_tablet_transfer(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str) -> AsyncIterator[None]:
+    servers = await manager.running_servers()
+
+    target_rack = select_viable_rack(servers)
+    viable_targets = [server for server in servers if server.rack == target_rack]
+
+    if len(viable_targets) <= 1:
+        LOGGER.info("Cannot perform a tablet migration because rack='%s' has only %i node(s)", target_rack, len(viable_targets))
+        return
+
     await manager.cql.run_async(
         "CREATE KEYSPACE test"
         " WITH replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 3 } AND"
@@ -348,11 +401,7 @@ async def init_tablet_transfer(manager: ManagerClient,
         *[manager.cql.run_async(f"INSERT INTO test.test (pk, c) VALUES ({k}, {k})") for k in range(256)]
     )
 
-    servers = await manager.running_servers()
-    host_ids = set()
-    for s in servers:
-        host_ids.add(await manager.get_host_id(s.server_id))
-        await manager.api.disable_tablet_balancing(node_ip=s.ip_addr)
+    await asyncio.gather(*[manager.api.disable_tablet_balancing(node_ip=s.ip_addr) for s in servers])
 
     replicas = await get_all_tablet_replicas(
         manager=manager,
@@ -365,8 +414,13 @@ async def init_tablet_transfer(manager: ManagerClient,
 
     assert len(replicas) == 1 and len(replicas[0].replicas) == 3
 
-    old_host, old_shard = replicas[0].replicas[0]
-    new_host = (host_ids - {r[0] for r in replicas[0].replicas}).pop()
+    viable_host_ids = [await manager.get_host_id(server.server_id) for server in viable_targets]
+    target = next(replica for replica in replicas[0].replicas if replica[0] in viable_host_ids)
+
+    old_host, old_shard = target
+    new_host = next(host_id for host_id in viable_host_ids if host_id != old_host)
+
+    assert new_host is not None
 
     yield
 
@@ -458,8 +512,11 @@ async def add_new_node(manager: ManagerClient,
                        error_injection: str) -> AsyncIterator[None]:
     yield
 
-    LOGGER.info("Add a new node to the cluster")
-    await manager.server_add(config={"rf_rack_valid_keyspaces": False}, timeout=TOPOLOGY_TIMEOUT)
+    rack = get_random_rack()
+    LOGGER.info(f"Add a new node to the cluster (to {rack})")
+
+    config = {"rf_rack_valid_keyspaces": False}
+    await manager.server_add(config=config, property_file={"dc": "dc1", "rack": rack}, timeout=TOPOLOGY_TIMEOUT)
 
     yield
 
@@ -486,9 +543,24 @@ async def decommission_node(manager: ManagerClient,
                             error_injection: str) -> AsyncIterator[None]:
     yield
 
-    LOGGER.info("Decommission a node")
+
+    servers = await manager.running_servers()
+
+    # For the decommission to work, all nodes must be alive,
+    # so we can pass running servers here.
+    target_rack = select_viable_rack(servers)
+    viable_targets = [server for server in servers if server.rack == target_rack]
+
+    LOGGER.info(f"Decommission a node from rack='{target_rack}'")
+
+    # We must preserve RF-rack-validity, so each rack must still have at least one node
+    assert len(viable_targets) > 1
+
+    target = viable_targets[0]
+    LOGGER.info(f"Decommissioning node: server_id={target.server_id}")
+
     await manager.decommission_node(
-        server_id=(await manager.running_servers())[1].server_id,
+        server_id=target.server_id,
         timeout=TOPOLOGY_TIMEOUT,
     )
 
@@ -517,19 +589,33 @@ async def remove_node(manager: ManagerClient,
                       error_injection: str) -> AsyncIterator[None]:
     running_servers = await manager.running_servers()
 
-    LOGGER.info("Kill a node")
-    await manager.server_stop(server_id=running_servers[1].server_id)
+    # The only node that can be dead while removing a node is the node
+    # that's being removed.
+    target_rack = select_viable_rack(running_servers)
+    viable_targets = [server for server in running_servers if server.rack == target_rack]
+
+    # We must preserve RF-rack-validity, so each rack must still have at least one node left.
+    assert len(viable_targets) > 1
+
+    target = viable_targets[0]
+    coordinator = next(server for server in running_servers if server.server_id != target.server_id)
+
+    LOGGER.info(f"Kill a node: target={target.server_id} (rack={target.rack})")
+
+    await manager.server_stop(server_id=target.server_id)
     await manager.server_not_sees_other_server(
-        server_ip=running_servers[0].ip_addr,
-        other_ip=running_servers[1].ip_addr,
+        server_ip=coordinator.ip_addr,
+        other_ip=target.ip_addr,
     )
 
     yield
 
-    LOGGER.info("Remove the dead node")
+    LOGGER.info(f"Remove the dead node: target={target.server_id} (rack={target.rack}), "
+                f"coordinator={coordinator.server_id} (rack={coordinator.rack})")
+
     await manager.remove_node(
-        initiator_id=running_servers[0].server_id,
-        server_id=running_servers[1].server_id,
+        initiator_id=coordinator.server_id,
+        server_id=target.server_id,
         wait_removed_dead=False,
         timeout=TOPOLOGY_TIMEOUT,
     )
