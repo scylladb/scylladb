@@ -93,6 +93,10 @@ def create_perftune_conf(cfg):
     """
     params = ''
     if get_set_nic_and_disks_config_value(cfg) == 'yes':
+        if not check_sysfs_numa_topology_is_valid():
+            print('WARNING: NUMA topology information is corrupted, skip running perftune')
+            return False
+
         nic = cfg.get('IFNAME')
         if not nic:
             nic = 'eth0'
@@ -108,6 +112,10 @@ def create_perftune_conf(cfg):
         params += ' --write-back-cache=false'
 
     if len(params) > 0:
+        if not check_sysfs_numa_topology_is_valid():
+            print('WARNING: NUMA topology information is corrupted, skip running perftune')
+            return False
+
         if os.path.exists('/etc/scylla.d/perftune.yaml'):
             return True
 
