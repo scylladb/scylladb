@@ -102,7 +102,6 @@ class audit final : public seastar::async_sharded_service<audit> {
     std::map<sstring, std::set<sstring>> _audited_tables;
     category_set _audited_categories;
 
-    sstring _storage_helper_class_name;
     std::unique_ptr<storage_helper> _storage_helper_ptr;
 
     const db::config& _cfg;
@@ -132,7 +131,7 @@ public:
     audit(locator::shared_token_metadata& stm,
           cql3::query_processor& qp,
           service::migration_manager& mm,
-          sstring&& storage_helper_name,
+          std::set<sstring>&& audit_modes,
           std::set<sstring>&& audited_keyspaces,
           std::map<sstring, std::set<sstring>>&& audited_tables,
           category_set&& audited_categories,

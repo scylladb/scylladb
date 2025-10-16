@@ -13,9 +13,11 @@
 #include "cql3/statements/batch_statement.hh"
 #include "cql3/statements/modification_statement.hh"
 #include "storage_helper.hh"
+#include "audit_cf_storage_helper.hh"
+#include "audit_syslog_storage_helper.hh"
+#include "audit_composite_storage_helper.hh"
 #include "audit.hh"
 #include "../db/config.hh"
-#include "utils/class_registrator.hh"
 
 #include <boost/algorithm/string/split.hpp>
 #include <boost/algorithm/string/trim.hpp>
@@ -26,15 +28,45 @@ namespace audit {
 
 logging::logger logger("audit");
 
-static std::unique_ptr<storage_helper> create_storage_helper(const sstring& class_name, cql3::query_processor& qp, service::migration_manager& mm) {
-    try {
-        return create_object<storage_helper>(class_name, qp, mm);
-    } catch (no_such_class& e) {
-        logger.error("Can't create audit storage helper {}: not supported", class_name);
-        throw;
-    } catch (...) {
-        throw;
+static std::set<sstring> parse_audit_modes(const sstring& data) {
+    std::set<sstring> result;
+    if (!data.empty()) {
+        std::vector<sstring> audit_modes;
+        boost::split(audit_modes, data, boost::is_any_of(","));
+        if (audit_modes.empty()) {
+            return {};
+        }
+        for (sstring& audit_mode : audit_modes) {
+            boost::trim(audit_mode);
+            if (audit_mode == "none") {
+                return {};
+            }
+            if (audit_mode != "table" && audit_mode != "syslog") {
+                throw audit_exception(fmt::format("Bad configuration: invalid 'audit': {}", audit_mode));
+            }
+            result.insert(std::move(audit_mode));
+        }
     }
+    return result;
+}
+
+static std::unique_ptr<storage_helper> create_storage_helper(const std::set<sstring>& audit_modes, cql3::query_processor& qp, service::migration_manager& mm) {
+    SCYLLA_ASSERT(!audit_modes.empty() && !audit_modes.contains("none"));
+
+    std::vector<std::unique_ptr<storage_helper>> helpers;
+    for (const sstring& audit_mode : audit_modes) {
+        if (audit_mode == "table") {
+            helpers.emplace_back(std::make_unique<audit_cf_storage_helper>(qp, mm));
+        } else if (audit_mode == "syslog") {
+            helpers.emplace_back(std::make_unique<audit_syslog_storage_helper>(qp, mm));
+        }
+    }
+
+    SCYLLA_ASSERT(!helpers.empty());
+    if (helpers.size() == 1) {
+        return std::move(helpers.front());
+    }
+    return std::make_unique<audit_composite_storage_helper>(std::move(helpers));
 }
 
 static sstring category_to_string(statement_category category)
@@ -116,7 +148,7 @@ static std::set<sstring> parse_audit_keyspaces(const sstring& data) {
 audit::audit(locator::shared_token_metadata& token_metadata,
              cql3::query_processor& qp,
              service::migration_manager& mm,
-             sstring&& storage_helper_name,
+             std::set<sstring>&& audit_modes,
              std::set<sstring>&& audited_keyspaces,
              std::map<sstring, std::set<sstring>>&& audited_tables,
              category_set&& audited_categories,
@@ -125,30 +157,21 @@ audit::audit(locator::shared_token_metadata& token_metadata,
     , _audited_keyspaces(std::move(audited_keyspaces))
     , _audited_tables(std::move(audited_tables))
     , _audited_categories(std::move(audited_categories))
-    , _storage_helper_class_name(std::move(storage_helper_name))
     , _cfg(cfg)
     , _cfg_keyspaces_observer(cfg.audit_keyspaces.observe([this] (sstring const& new_value){ update_config<std::set<sstring>>(new_value, parse_audit_keyspaces, _audited_keyspaces); }))
     , _cfg_tables_observer(cfg.audit_tables.observe([this] (sstring const& new_value){ update_config<std::map<sstring, std::set<sstring>>>(new_value, parse_audit_tables, _audited_tables); }))
     , _cfg_categories_observer(cfg.audit_categories.observe([this] (sstring const& new_value){ update_config<category_set>(new_value, parse_audit_categories, _audited_categories); }))
 {
-    _storage_helper_ptr = create_storage_helper(_storage_helper_class_name, qp, mm);
+    _storage_helper_ptr = create_storage_helper(std::move(audit_modes), qp, mm);
 }
 
 audit::~audit() = default;
 
 future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token_metadata>& stm, sharded<cql3::query_processor>& qp, sharded<service::migration_manager>& mm) {
-    sstring storage_helper_name;
-    if (cfg.audit() == "table") {
-        storage_helper_name = "audit_cf_storage_helper";
-    } else if (cfg.audit() == "syslog") {
-        storage_helper_name = "audit_syslog_storage_helper";
-    } else if (cfg.audit() == "none") {
-        // Audit is off
+    std::set<sstring> audit_modes = parse_audit_modes(cfg.audit());
+    if (audit_modes.empty()) {
         logger.info("Audit is disabled");
-
         return make_ready_future<>();
-    } else {
-        throw audit_exception(fmt::format("Bad configuration: invalid 'audit': {}", cfg.audit()));
     }
     category_set audited_categories = parse_audit_categories(cfg.audit_categories());
     std::map<sstring, std::set<sstring>> audited_tables = parse_audit_tables(cfg.audit_tables());
@@ -160,7 +183,7 @@ future<> audit::start_audit(const db::config& cfg, sharded<locator::shared_token
     return audit_instance().start(std::ref(stm),
                                   std::ref(qp),
                                   std::ref(mm),
-                                  std::move(storage_helper_name),
+                                  std::move(audit_modes),
                                   std::move(audited_keyspaces),
                                   std::move(audited_tables),
                                   std::move(audited_categories),
