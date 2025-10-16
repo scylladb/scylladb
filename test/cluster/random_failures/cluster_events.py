@@ -699,15 +699,8 @@ CLUSTER_EVENTS: tuple[ClusterEventType, ...] = (
     sleep_for_30_seconds,
     add_new_table,
     drop_table,
-
-    # FIXME: We omit creating or dropping indexes because the random_failures
-    # tests still haven't been adjusted to work with `rf_rack_valid_keyspaces`.
-    # That option is a requirement for using materialized views
-    # in tablet-based keyspaces, so let's skip them.
-    #
-    # add_index,
-    # drop_index,
-
+    add_index,
+    drop_index,
     add_new_keyspace,
     drop_keyspace,
     add_cdc,
