@@ -129,6 +129,7 @@ static const std::unordered_map<compaction_type, sstring> compaction_types = {
     { compaction_type::Upgrade, "UPGRADE" },
     { compaction_type::Reshape, "RESHAPE" },
     { compaction_type::Split, "SPLIT" },
+    { compaction_type::MajorCompaction, "MAJOR_COMPACTION" },
 };
 
 sstring compaction_name(compaction_type type) {
@@ -150,7 +151,9 @@ compaction_type to_compaction_type(sstring type_name) {
 
 std::string_view to_string(compaction_type type) {
     switch (type) {
-    case compaction_type::Compaction: return "Compact";
+    case compaction_type::Compaction:
+    case compaction_type::MajorCompaction:
+        return "Compact";
     case compaction_type::Cleanup: return "Cleanup";
     case compaction_type::Validation: return "Validate";
     case compaction_type::Scrub: return "Scrub";
@@ -1971,6 +1974,7 @@ compaction_type compaction_type_options::type() const {
         compaction_type::Reshard,
         compaction_type::Reshape,
         compaction_type::Split,
+        compaction_type::MajorCompaction,
     };
     static_assert(std::variant_size_v<compaction_type_options::options_variant> == std::size(index_to_type));
     return index_to_type[_options.index()];
@@ -1990,6 +1994,9 @@ static std::unique_ptr<compaction> make_compaction(compaction_group_view& table_
             return std::make_unique<resharding_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::regular) {
+            return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
+        }
+        std::unique_ptr<compaction> operator()(compaction_type_options::major) {
             return std::make_unique<regular_compaction>(table_s, std::move(descriptor), cdata, progress_monitor);
         }
         std::unique_ptr<compaction> operator()(compaction_type_options::cleanup) {
