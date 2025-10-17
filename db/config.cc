@@ -1186,6 +1186,8 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         {"AllowAllAuthenticator", "PasswordAuthenticator", "CertificateAuthenticator", "org.apache.cassandra.auth.PasswordAuthenticator", "com.scylladb.auth.SaslauthdAuthenticator", "org.apache.cassandra.auth.AllowAllAuthenticator", "com.scylladb.auth.TransitionalAuthenticator", "com.scylladb.auth.CertificateAuthenticator"})
     , internode_authenticator(this, "internode_authenticator", value_status::Unused, "enabled",
         "Internode authentication backend. It implements org.apache.cassandra.auth.AllowAllInternodeAuthenticator to allows or disallow connections from peer nodes.")
+    , authenticator_threads(this, "authenticator_threads_ratio", value_status::Used, 7,
+        "The ratio of smp to number of threads used by selected authenticators for password hashing. The default ratio is 7 meaning there is one password hashing threads per each 7 reactor threads.")
     , authorizer(this, "authorizer", value_status::Used, "org.apache.cassandra.auth.AllowAllAuthorizer",
         "The authorization backend. It implements IAuthenticator, which limits access and provides permissions. The available authorizers are:\n"
         "* AllowAllAuthorizer: Disables authorization; allows any action to any user.\n"
