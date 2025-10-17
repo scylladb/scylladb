@@ -113,6 +113,7 @@ public:
     // Convert the above apply() into the signature needed by cas_request:
     virtual std::optional<mutation> apply(foreign_ptr<lw_shared_ptr<query::result>> qr, const query::partition_slice& slice, api::timestamp_type ts, cdc::per_request_options& cdc_opts) override;
     virtual ~rmw_operation() = default;
+    const wcu_consumed_capacity_counter& consumed_capacity() const noexcept { return _consumed_capacity; }
     schema_ptr schema() const { return _schema; }
     const rjson::value& request() const { return _request; }
     rjson::value&& move_request() && { return std::move(_request); }
