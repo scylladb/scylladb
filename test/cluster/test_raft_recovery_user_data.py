@@ -13,6 +13,7 @@ from cassandra.policies import WhiteListRoundRobinPolicy
 
 from test.pylib.internal_types import ServerInfo
 from test.pylib.manager_client import ManagerClient
+from test.pylib.rest_client import read_barrier
 from test.pylib.scylla_cluster import ReplaceConfig
 from test.pylib.util import unique_name, wait_for_cql_and_get_hosts
 from test.cluster.conftest import cluster_con
@@ -49,22 +50,22 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     rf_rack_cfg = {'rf_rack_valid_keyspaces': False}
     # Workaround for flakiness from https://github.com/scylladb/scylladb/issues/23565.
     hints_cfg = {'hinted_handoff_enabled': False}
-    # Decrease failure_detector_timeout_in_ms from the default 20 s to speed up some graceful shutdowns in the test.
-    # Shutting down the CQL server can hang for failure_detector_timeout_in_ms in the presence of dead nodes and
-    # CQL requests.
+    # Workaround for https://github.com/scylladb/scylladb/issues/25163.
+    # It makes the test ~170 s faster with remove_dead_nodes_with == "replace".
+    tablet_load_stats_cfg = {'tablet_load_stats_refresh_interval_in_seconds': 1}
     cfg = {
         'endpoint_snitch': 'GossipingPropertyFileSnitch',
         'tablets_mode_for_new_keyspaces': 'enabled',
-        'failure_detector_timeout_in_ms': 2000,
-    } | rf_rack_cfg | hints_cfg
+    } | rf_rack_cfg | hints_cfg | tablet_load_stats_cfg
 
     property_file_dc1 = {'dc': 'dc1', 'rack': 'rack1'}
     property_file_dc2 = {'dc': 'dc2', 'rack': 'rack2'}
 
-    logging.info('Adding servers that will survive majority loss to dc1')
-    live_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc1)
+    # Add servers to dc2 first, so 3 out of 5 voters will be there.
     logging.info('Adding servers that will be killed to dc2')
     dead_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc2)
+    logging.info('Adding servers that will survive majority loss to dc1')
+    live_servers = await manager.servers_add(3, config=cfg, property_file=property_file_dc1)
     logging.info(f'Servers to survive majority loss: {live_servers}, servers to be killed: {dead_servers}')
 
     cql, _ = await manager.get_ready_cql(live_servers + dead_servers)
@@ -76,7 +77,12 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     rf: int = 3
     ks_name = unique_name()
-    finish_writes = await start_writes(cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
+    # Use a separate CQL connection for the write workload as `cql` must be reconnected below to prevent hitting
+    # https://github.com/scylladb/python-driver/issues/295.
+    ccluster_all_nodes = cluster_con([srv.ip_addr for srv in live_servers + dead_servers])
+    cql_all_nodes = ccluster_all_nodes.connect()
+    await wait_for_cql_and_get_hosts(cql_all_nodes, live_servers + dead_servers, time.time() + 60)
+    finish_writes = await start_writes(cql_all_nodes, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
                                        ks_name=ks_name, node_shutdowns=True)
 
     # Send some writes before we kill nodes.
@@ -84,21 +90,19 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     await asyncio.sleep(1)
 
     logging.info(f'Killing {dead_servers}')
-    for srv in dead_servers:
-        await manager.server_stop(server_id=srv.server_id)
+    await asyncio.gather(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
+
+    logging.info('Checking that group 0 has no majority')
+    with pytest.raises(Exception, match="raft operation \\[read_barrier\\] timed out"):
+        await read_barrier(manager.api, live_servers[0].ip_addr, timeout=2)
 
     logging.info('Starting the recovery procedure')
 
     logging.info(f'Restarting {live_servers}')
     await manager.rolling_restart(live_servers)
 
-    # We reconnect the driver before calling delete_discovery_state_and_group0_id below due to
-    # https://github.com/scylladb/python-driver/issues/295. We must pause the write workload for reconnection.
-    await finish_writes()
     await reconnect_driver(manager)
     cql, _ = await manager.get_ready_cql(live_servers)
-    finish_writes = await start_writes(cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=5,
-                                       ks_name=ks_name, node_shutdowns=True)
 
     logging.info(f'Deleting the persistent discovery state and group 0 ID on {live_servers}')
     for h in hosts:
@@ -115,13 +119,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     logging.info(f'Restarting {live_servers} with recovery leader {live_servers[0].server_id}')
     await manager.rolling_restart(live_servers, with_down=set_recovery_leader)
 
-    # We reconnect the driver before we send ALTER KEYSPACE requests below (if remove_dead_nodes_with == "remove") due
-    # to https://github.com/scylladb/python-driver/issues/295. We must finish sending writes before reconnecting.
-    await finish_writes()
-
     await reconnect_driver(manager)
     cql, hosts = await manager.get_ready_cql(live_servers)
-    recovery_leader_host = [h for h in hosts if h.address == live_servers[0].ip_addr][0]
 
     # Ensure we keep sending writes only to dc1 for now. At the end of the test, if remove_dead_nodes_with == "remove",
     # we add 3 new nodes to dc2 and increase RF in dc2 from 0 to 3. We increase RF by 1 in each of the 3 steps. When
@@ -129,9 +128,12 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
     # but CL=LOCAL_QUORUM requires 1 normal replica). Writes would also fail after the second step (RF=2, 1 normal
     # replica, 1 pending replica, CL=LOCAL_QUORUM requires 2 normal replicas). So, we can start sending writes to dc2
     # only after increasing RF to 3, which we do - see finish_writes_dc2.
-    dc1_cql = cluster_con(
+    await finish_writes()
+    ccluster_all_nodes.shutdown()
+    ccluster_dc1 = cluster_con(
             [srv.ip_addr for srv in live_servers],
-            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers])).connect()
+            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in live_servers]))
+    dc1_cql = ccluster_dc1.connect()
     finish_writes_dc1 = await start_writes(dc1_cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=3, ks_name=ks_name)
 
     new_servers: list[ServerInfo] = []
@@ -148,12 +150,8 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         logging.info(f'Decreasing RF of {ks_name} to 0 in dc2')
         for i in range(1, rf + 1):
             # ALTER KEYSPACE with tablets can decrease RF only by one.
-            # Send requests to the recovery leader (which is the topology coordinator) to avoid rejection on
-            # "Another global topology request is ongoing, please retry.". Other nodes could receive a second request
-            # before updating the topology state after the first request.
             await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""",
-                                host=recovery_leader_host)
+                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {rf - i}}}""")
 
         logging.info(f'Removing {dead_servers}')
         for i, being_removed in enumerate(dead_servers):
@@ -197,13 +195,13 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
         logging.info(f'Increasing RF of {ks_name} back to {rf} in dc2')
         for i in range(1, rf + 1):
             await cql.run_async(f"""ALTER KEYSPACE {ks_name} WITH replication =
-                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""",
-                                host=recovery_leader_host)
+                                {{'class': 'NetworkTopologyStrategy', 'dc1': {rf}, 'dc2': {i}}}""")
 
     # After increasing RF back to 3 in dc2 (if remove_dead_nodes_with == "remove"), we can start sending writes to dc2.
-    dc2_cql = cluster_con(
+    ccluster_dc2 = cluster_con(
             [srv.ip_addr for srv in new_servers],
-            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in new_servers])).connect()
+            load_balancing_policy=WhiteListRoundRobinPolicy([srv.ip_addr for srv in new_servers]))
+    dc2_cql = ccluster_dc2.connect()
     finish_writes_dc2 = await start_writes(dc2_cql, rf, ConsistencyLevel.LOCAL_QUORUM, concurrency=3, ks_name=ks_name)
 
     # Send some writes to dc2.
@@ -217,3 +215,5 @@ async def test_raft_recovery_user_data(manager: ManagerClient, remove_dead_nodes
 
     await finish_writes_dc1()
     await finish_writes_dc2()
+    ccluster_dc1.shutdown()
+    ccluster_dc2.shutdown()

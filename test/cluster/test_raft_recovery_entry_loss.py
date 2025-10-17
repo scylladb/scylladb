@@ -83,12 +83,10 @@ async def test_raft_recovery_entry_loss(manager: ManagerClient):
     logging.info(f'Found group 0 schema version {v_group0}')
 
     logging.info(f'Killing {dead_servers}')
-    for srv in dead_servers:
-        await manager.server_stop(server_id=srv.server_id)
+    await asyncio.gather(*(manager.server_stop(server_id=srv.server_id) for srv in dead_servers))
 
     logging.info(f'Starting {live_servers}')
-    for srv in live_servers:
-        await manager.server_start(srv.server_id)
+    await asyncio.gather(*(manager.server_start(server_id=srv.server_id) for srv in live_servers))
 
     cql = await reconnect_driver(manager)
     hosts = await wait_for_cql_and_get_hosts(cql, live_servers, time.time() + 60)
