@@ -29,6 +29,12 @@ class view_builder;
 class view_building_worker;
 }
 }
+namespace service {
+class storage_service;
+}
+namespace locator {
+class effective_replication_map;
+}
 
 struct stream_progress {
     float total = 0.;
@@ -66,6 +72,7 @@ public:
 
 private:
     sharded<replica::database>& _db;
+    sharded<service::storage_service>& _ss;
     netw::messaging_service& _messaging;
     sharded<db::view::view_builder>& _view_builder;
     sharded<db::view::view_building_worker>& _view_building_worker;
@@ -86,8 +93,10 @@ private:
             bool primary_replica_only, bool unlink_sstables, stream_scope scope,
             shared_ptr<stream_progress> progress);
 
+    future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
 public:
     sstables_loader(sharded<replica::database>& db,
+            sharded<service::storage_service>& ss,
             netw::messaging_service& messaging,
             sharded<db::view::view_builder>& vb,
             sharded<db::view::view_building_worker>& vbw,
