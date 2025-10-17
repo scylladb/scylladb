@@ -10,7 +10,6 @@
 
 #include <filesystem>
 #include <seastar/core/file.hh>
-#include <seastar/core/queue.hh>
 #include <seastar/util/bool_class.hh>
 #include "enum_set.hh"
 #include "seastarx.hh"
@@ -189,9 +188,9 @@ class directory_lister final : public abstract_lister::impl {
     lister::dir_entry_types _type;
     lister::filter_type _filter;
     lister::show_hidden _do_show_hidden;
-    seastar::queue<std::optional<directory_entry>> _queue;
-    std::unique_ptr<lister> _lister;
-    std::optional<future<>> _opt_done_fut;
+    file _opened;
+    std::optional<coroutine::experimental::generator<directory_entry>> _gen;
+
 public:
     directory_lister(fs::path dir,
             lister::dir_entry_types type = lister::dir_entry_types::full(),
@@ -201,7 +200,6 @@ public:
         , _type(type)
         , _filter(std::move(filter))
         , _do_show_hidden(do_show_hidden)
-        , _queue(512 / sizeof(std::optional<directory_entry>))
     { }
 
     directory_lister(directory_lister&&) noexcept = default;
