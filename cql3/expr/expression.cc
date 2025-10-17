@@ -1676,7 +1676,9 @@ static cql3::raw_value do_evaluate(const function_call& fun_call, const evaluati
         auto partition_key = partition_key::from_exploded(inputs.partition_key);
         auto clustering_key = clustering_key_prefix::from_exploded(inputs.clustering_key);
         vector_similarity_fun->set_primary_key(partition_key, clustering_key);
-        vector_similarity_fun->set_results(inputs.options->get_specific_options().ann_results);
+        auto specific_options = inputs.options->get_specific_options();
+        vector_similarity_fun->set_ann_ordering(specific_options.ann_ordering);
+        vector_similarity_fun->set_results(specific_options.ann_results);
     }
 
     bytes_opt result = scalar_fun->execute(arguments);

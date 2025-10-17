@@ -9,6 +9,7 @@
 #pragma once
 
 #include "cql3/assignment_testable.hh"
+#include "cql3/statements/raw/select_statement.hh"
 #include "native_scalar_function.hh"
 #include "vector_search/vector_store_client.hh"
 
@@ -21,10 +22,13 @@ class vector_similarity_fct : public native_scalar_function {
 private:
     schema_ptr _schema;
     sstring _target;
+    std::optional<statements::raw::select_statement::prepared_ann_ordering_type> _ann_ordering;
     std::unordered_map<vector_search::primary_key, float, vector_search::primary_key::hashing, vector_search::primary_key::equality> _ann_results;
     std::optional<partition_key> _row_partition_key;
     std::optional<clustering_key_prefix> _row_clustering_key;
 
+    void validate_target();
+    void validate_vector(const std::span<const bytes_opt> parameters);
     void validate_similarity_function();
     float find_matching_distance();
 
@@ -44,6 +48,13 @@ public:
     void set_primary_key(const partition_key& partition_key, const clustering_key_prefix& clustering_key) {
         _row_partition_key = partition_key;
         _row_clustering_key = clustering_key;
+    }
+
+    void set_ann_ordering(const std::optional<statements::raw::select_statement::prepared_ann_ordering_type>& ann_ordering) {
+        // The ordering should be set only once
+        if (!_ann_ordering.has_value()) {
+            _ann_ordering = ann_ordering;
+        }
     }
 
     void set_results(const ann_results& ann_results) {

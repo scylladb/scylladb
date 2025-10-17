@@ -9,6 +9,8 @@
 #include "vector_search_fcts.hh"
 #include "dht/i_partitioner.hh"
 #include "cql3/column_identifier.hh"
+#include "cql3/expr/evaluate.hh"
+#include "cql3/query_options.hh"
 #include "types/vector.hh"
 #include "index/vector_index.hh"
 
@@ -24,6 +26,23 @@ float vector_similarity_fct::find_matching_distance() {
         throw std::runtime_error("No matching distance found for given primary key");
     }
     return it->second;
+}
+
+void vector_similarity_fct::validate_target() {
+    sstring ann_ordering_name = _ann_ordering->first->name_as_text();
+    if (ann_ordering_name != _target) {
+        throw exceptions::invalid_request_exception(
+                fmt::format("Vector column '{}' of {} function does not match the ANN ordering vector column '{}'", _target, _name, ann_ordering_name));
+    }
+}
+
+void vector_similarity_fct::validate_vector(const std::span<const bytes_opt> parameters) {
+    auto vector = parameters[1].value();
+    auto ann_vector = expr::evaluate(_ann_ordering->second, cql3::query_options::DEFAULT).to_bytes();
+
+    if (vector != ann_vector) {
+        throw exceptions::invalid_request_exception(fmt::format("Vector argument of {} function does not match the ANN ordering vector", _name));
+    }
 }
 
 void vector_similarity_fct::validate_similarity_function() {
@@ -87,9 +106,12 @@ bytes_opt vector_similarity_fct::execute(std::span<const bytes_opt> parameters) 
     // If the ANN returns no result, we won't call this function at all as it's called once per every row selected.
     // The rows are selected according to the ANN result - the same we use here.
     // No ANN results = no rows selected = no execute() function calls.
-    if (_ann_results.empty()) {
+    if (_ann_results.empty() || !_ann_ordering.has_value()) {
         throw exceptions::invalid_request_exception("Vector similarity functions can only be used with ANN queries");
     }
+
+    validate_target();
+    validate_vector(parameters);
 
     float distance = find_matching_distance();
 
