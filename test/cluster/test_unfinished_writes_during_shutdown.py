@@ -38,6 +38,14 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
      8. The query should have completed, but one write to node 2 should be remaining, making write_response_handler block the topology change in node 3
      9. Start node 3 shutdown. The shutdown should hang since the one of the replicas did not send the response and therefore the response write handler still holds the ERM.
     """
+    manager.ignore_log_patterns.extend([
+        r"mandatory neighbor=.* is not alive",
+        r"raft_topology - send_raft_topology_cmd\(stream_ranges\) failed with exception \(node state is bootstrapping\)",
+        r"raft topology: command::barrier_and_drain, the version has changed",
+        r"raft_topology - raft_topology_cmd barrier failed with: service::raft_group_not_found",
+        r"Rolled back: Failed stream ranges: std::runtime_error",
+        r"init - Startup failed: std::runtime_error \(Bootstrap failed\. See earlier errors \(Rolled back: Failed stream ranges: std::runtime_error"
+    ])
     logger.info("Creating a new cluster")
 
     cmdline = [

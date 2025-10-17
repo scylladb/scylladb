@@ -280,6 +280,10 @@ async def test_fence_lwt_during_bootstap(manager: ManagerClient):
         await s0_log.wait_for('topology_coordinator/write_both_read_old/before_version_increment: waiting for message', from_mark=s0_mark)
 
         logger.info(f"Injecting 'topology_state_load_error' into {servers[1]}")
+        manager.ignore_log_patterns.extend([
+            "topology_state_load_error",
+            "raft_topology - transition_state::write_both_read_new, global_token_metadata_barrier failed",
+        ])
         await manager.api.enable_injection(servers[1].ip_addr, 'topology_state_load_error', one_shot=False)
 
         logger.info(f"Release 'topology_coordinator/write_both_read_old/before_version_increment' on {servers[0]}")
@@ -442,6 +446,7 @@ async def test_fenced_out_on_tablet_migration_while_handling_paxos_verb(manager:
         await s2_log.wait_for('paxos_accept_proposal_wait: waiting for message')
 
         logger.info(f"Injecting 'raft_topology_barrier_and_drain_fail_before' into {servers[2]}")
+        manager.ignore_log_patterns.append("raft_topology_barrier_and_drain_fail_before injected exception")
         await manager.api.enable_injection(servers[2].ip_addr,
                                            'raft_topology_barrier_and_drain_fail_before',
                                            one_shot=False)

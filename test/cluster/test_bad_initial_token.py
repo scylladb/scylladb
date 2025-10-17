@@ -17,4 +17,5 @@ async def test_bad_initial_token(manager: ManagerClient):
     # rollback. Rollback currently gets stuck in case of rolling back the first
     # node, so use two nodes in the test.
     await manager.server_add()
+    manager.ignore_log_patterns.append(r"raft_topology - raft_topology_cmd barrier failed with: service::raft_group_not_found")
     await manager.server_add(config={"initial_token": "etaoin shrdlu"}, expected_error="Failed to assign tokens")

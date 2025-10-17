@@ -44,6 +44,10 @@ async def test_raft_recovery_entry_loss(manager: ManagerClient):
     Additionally, verify that no schema pulls take place during the recovery procedure at the end of the test. This is
     a regression test for https://github.com/scylladb/scylladb/issues/26569.
     """
+    manager.ignore_log_patterns.extend([
+        r"raft .* Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        r"raft - apply_snapshot.* ignore outdated snapshot"
+    ])
     logging.info('Adding initial servers')
     servers = await manager.servers_add(5)
     live_servers = servers[:2]

@@ -85,6 +85,18 @@ async def test_random_failures(manager: ManagerClient,
                                random_tables: RandomTables,
                                error_injection: str,
                                cluster_event: ClusterEventType) -> None:
+    manager.ignore_log_patterns.extend([
+        r"init - (Startup failed:|Scylla version .* initialization completed)",
+        r"repair .* status=failed: mandatory neighbor=.* is not alive",
+        r"raft_topology - raft_topology_cmd stream_ranges failed with: std::runtime_error .* Repair mandatory neighbor=.* is not alive",
+        r"raft .* Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        r"raft_topology - raft_topology_cmd wait_for_ip failed with: seastar::sleep_aborted",
+        r"raft_topology - raft_topology_cmd wait_for_ip failed with: service::wait_for_ip_timeout",
+        r"raft - apply_snapshot.* ignore outdated snapshot",
+        r"raft_topology - send_raft_topology_cmd\(stream_ranges\) failed with exception \(node state is bootstrapping\)",
+        r"mandatory neighbor=.* is not alive",
+        r"raft_topology - raft_topology_cmd barrier_and_drain failed with: service::raft_group_not_found",
+    ])
     LOGGER.info(
         "To repeat this run set TESTS_COUNT to %s, TESTS_SHUFFLE_SEED to %s, ERROR_INJECTIONS_COUNT to %s,"
         " and CLUSTER_EVENTS_COUNT to %s",

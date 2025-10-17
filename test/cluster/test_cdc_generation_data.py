@@ -50,7 +50,7 @@ async def test_group0_apply_while_node_is_being_shutdown(manager: ManagerClient)
     await manager.api.enable_injection(s0.ip_addr, "topology_state_load_before_update_cdc", False)
 
     logger.info("Starting s1")
-    s1_start_task = asyncio.create_task(manager.server_add())
+    s1_start_task = asyncio.create_task(manager.server_add(expected_error="init - Startup failed: seastar::rpc::closed_error"))
 
     logger.info("Waiting for topology_state_load_before_update_cdc on s0")
     log = await manager.server_open_log(s0.server_id)
@@ -66,10 +66,7 @@ async def test_group0_apply_while_node_is_being_shutdown(manager: ManagerClient)
     await manager.api.message_injection(s0.ip_addr, 'topology_state_load_before_update_cdc')
 
     await stop_s0_task
-    try:
-        await s1_start_task
-    except Exception:
-        pass  # ingore errors, since we don't care
+    await s1_start_task
 
     errors = await log.grep_for_errors()
     assert errors == []
