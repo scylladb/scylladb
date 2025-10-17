@@ -27,6 +27,7 @@
 #include "db/config.hh"
 #include "db/large_data_handler.hh"
 #include "db/corrupt_data_handler.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "gms/feature_service.hh"
 #include "reader_concurrency_semaphore.hh"
 #include "readers/combined.hh"
@@ -353,13 +354,24 @@ const std::vector<sstables::shared_sstable> load_sstables(schema_ptr schema, sst
         data_dictionary::storage_options options;
         auto ed = sstables::parse_path(sst_path, schema->ks_name(), schema->cf_name());
 
-        if (s3::is_s3_fqn(sst_path)) {
-            if (sst_man.config().object_storage_endpoints().empty()) {
-                throw std::invalid_argument("Unable to open SSTable in S3: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
-                                            "valid AWS object storage configuration.");
+        using osp = db::object_storage_endpoint_param;
+        static const auto os_types = { osp::s3_type, osp::gs_type };
+        auto is_fqn = os_types | std::views::filter(std::bind_front(&data_dictionary::is_object_storage_fqn, sst_path));
+
+        if (!is_fqn.empty()) {
+            auto type = is_fqn.front();
+            auto endpoints = sst_man.config().object_storage_endpoints() 
+                | std::views::filter(std::bind_back(&osp::is_storage_of_type, type)) 
+                ;
+            if (endpoints.empty()) {
+                throw std::invalid_argument(fmt::format(
+                    "Unable to open SSTable in {}: AWS object storage configuration missing. Please provide a --scylla-yaml-file with "
+                    "valid AWS object storage configuration."
+                    , type
+                ));
             }
-            auto endpoint = sst_man.config().object_storage_endpoints().front().endpoint;
-            options = data_dictionary::make_s3_options(endpoint, sst_path);
+            auto endpoint = endpoints.front().key();
+            options = data_dictionary::make_object_storage_options(endpoint, sst_path);
         } else {
             sst_path = std::filesystem::canonical(std::filesystem::path(sst_name));
             const auto dir_path = sst_path.parent_path();
@@ -2590,7 +2602,7 @@ $ scylla sstable validate /path/to/md-123456-big-Data.db /path/to/md-123457-big-
         abort_source abort;
 
         sstables::storage_manager::config stm_cfg;
-        stm_cfg.s3_clients_memory = 100_MiB;
+        stm_cfg.object_storage_clients_memory = 100_MiB;
         stm_cfg.skip_metrics_registration = true;
         sharded<sstables::storage_manager> sstm;
         sstm.start(std::ref(dbcfg), stm_cfg).get();

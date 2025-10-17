@@ -66,18 +66,18 @@ rest::httpclient::httpclient(std::string host, uint16_t port, shared_ptr<tls::ce
     , _tls_options(options.value_or(tls::tls_options{ .server_name = default_server_name(_host) }))
 {}
 
-seastar::future<rest::httpclient::result_type> rest::httpclient::send() {
+seastar::future<rest::httpclient::result_type> rest::httpclient::send(seastar::abort_source* as) {
     result_type res;
     co_await send([&](const http::reply& r, std::string_view body) {
         res.reply._status = r._status;
         res.reply._content = sstring(body);
         res.reply._headers = r._headers;
         res.reply._version = r._version;
-    });
+    }, as);
     co_return res;
 }
 
-seastar::future<> rest::httpclient::send(const handler_func& f) {
+seastar::future<> rest::httpclient::send(const handler_func& f, seastar::abort_source* as) {
     auto addr = co_await net::dns::resolve_name(_host, net::inet_address::family::INET /* TODO: our client does not handle ipv6 well?*/);
 
     // NOTE: similar to utils::http::dns_connection_factory, but that type does
@@ -113,7 +113,7 @@ seastar::future<> rest::httpclient::send(const handler_func& f) {
             auto& resp_handler = f;
             auto result = co_await util::read_entire_stream_contiguous(in_stream);
             resp_handler(rep, result);
-        });
+        }, as);
     } catch (...) {
         p = std::current_exception();
     }
@@ -125,7 +125,10 @@ seastar::future<> rest::httpclient::send(const handler_func& f) {
     }
 }
 
-seastar::future<> rest::simple_send(seastar::http::experimental::client& client, seastar::http::request& req, const handler_func_ex& f) {
+seastar::future<> rest::simple_send(seastar::http::experimental::client& client, seastar::http::request& req, const handler_func_ex& f, seastar::abort_source* as) {
+    if (as) {
+        as->check();
+    }
     if (req._url.empty()) {
         req._url = "/";
     }
@@ -141,7 +144,7 @@ seastar::future<> rest::simple_send(seastar::http::experimental::client& client,
         auto& resp_handler = f;
         auto in_stream = std::move(in);
         co_await resp_handler(rep, in_stream);
-    });
+    }, std::nullopt, as);
 }
 
 
@@ -154,9 +157,10 @@ future<rjson::value> rest::send_request(std::string_view uri
     , seastar::shared_ptr<seastar::tls::certificate_credentials> creds
     , const rjson::value& body
     , httpclient::method_type op
-    , key_values headers)
+    , key_values headers
+    , seastar::abort_source* as)
 {
-    return send_request(uri, std::move(creds), rjson::print(body), "application/json", op, std::move(headers));
+    return send_request(uri, std::move(creds), rjson::print(body), "application/json", op, std::move(headers), as);
 }
 
 future<rjson::value> rest::send_request(std::string_view uri
@@ -164,7 +168,8 @@ future<rjson::value> rest::send_request(std::string_view uri
     , std::string body
     , std::string_view content_type
     , httpclient::method_type op
-    , key_values headers)
+    , key_values headers
+    , seastar::abort_source* as)
 {
     rjson::value v;
     co_await send_request(uri, std::move(creds), std::move(body), content_type, [&](const http::reply& rep, std::string_view s) {
@@ -173,7 +178,7 @@ future<rjson::value> rest::send_request(std::string_view uri
             throw unexpected_status_error(rep._status, tmp);
         }
         v = rjson::parse(s); 
-    }, op, std::move(headers));
+    }, op, std::move(headers), as);
     co_return v;
 }
 
@@ -183,7 +188,8 @@ future<> rest::send_request(std::string_view uri
     , std::string_view content_type
     , const std::function<void(const http::reply&, std::string_view)>& handler
     , httpd::operation_type op
-    , key_values headers)
+    , key_values headers
+    , seastar::abort_source* as)
 {
     // Extremely simplified URI parsing. Does not handle any params etc. But we do not expect such here.
     static boost::regex simple_url(R"foo((https?):\/\/([^\/:]+)(:\d+)?(\/.*)?)foo");
@@ -225,7 +231,7 @@ future<> rest::send_request(std::string_view uri
 
     co_await client.send([&] (const http::reply& rep, std::string_view result) {
         handler(rep, result);
-    });
+    }, as);
 }
 
 constexpr auto linesep = '\n';

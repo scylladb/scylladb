@@ -7,6 +7,7 @@
  */
 
 #include "io-wrappers.hh"
+#include "seekable_source.hh"
 #include <seastar/util/internal/iovec_utils.hh>
 
 using namespace seastar;
@@ -241,5 +242,133 @@ data_source create_memory_source(std::vector<seastar::temporary_buffer<char>> bu
         }
     };
     return data_source(std::make_unique<buffer_data_source_impl>(std::move(bufs)));
+}
+
+seastar::file create_file_for_seekable_source(seekable_data_source src, seekable_data_source_shard_src src_func) {
+    class seekable_data_source_file_impl : public noop_file_impl {
+        seekable_data_source _source;
+        seekable_data_source_shard_src _src_func;
+    public:
+        seekable_data_source_file_impl(seekable_data_source source, seekable_data_source_shard_src src_func)
+            : _source(std::move(source))
+            , _src_func(std::move(src_func))
+        {}
+        future<size_t> read_dma(uint64_t pos, void* buffer, size_t len, io_intent*) override {
+            co_await _source.seek(pos);
+            size_t res = 0;
+            auto dst = reinterpret_cast<char*>(buffer);
+            while (len) {
+                auto buf = co_await _source.get(len);
+                assert(buf.size() <= len);
+                if (buf.empty()) {
+                    break;
+                }
+                dst = std::copy(buf.begin(), buf.end(), dst);
+                len -= buf.size();
+                res += buf.size();
+            }
+            co_return res;
+        }
+        future<size_t> read_dma(uint64_t pos, std::vector<iovec> iov, io_intent* intent) override {
+            size_t res = 0;
+            for (auto& iv : iov) {
+                auto n = co_await read_dma(pos, iv.iov_base, iv.iov_len, intent);
+                if (n == 0) {
+                    break;
+                }
+                res += n;
+            }
+            co_return res;
+        }
+        future<uint64_t> size(void) override {
+            return _source.size();
+        }
+        future<struct stat> stat(void) override {
+            struct stat res = {};
+            res.st_nlink = 1;
+            res.st_mode = S_IFREG | S_IRUSR | S_IRGRP | S_IROTH;
+            res.st_size = co_await _source.size();
+            res.st_blksize = 1 << 10; // huh?
+            res.st_blocks = res.st_size >> 9;
+            res.st_mtime = std::chrono::system_clock::to_time_t(co_await _source.timestamp());
+            res.st_ctime = res.st_mtime;
+            co_return res;
+        }
+        future<temporary_buffer<uint8_t>> dma_read_bulk(uint64_t offset, size_t range_size, io_intent* intent) override {
+            temporary_buffer<uint8_t> res(range_size);
+            auto n = co_await read_dma(offset, res.get_write(), range_size, intent);
+            res.trim(n);
+            co_return res;
+        }
+        std::unique_ptr<seastar::file_handle_impl> dup() override {
+            if (!_src_func) {
+                not_implemented();
+            }
+            class my_file_handle_impl : public file_handle_impl {
+                seekable_data_source_shard_src _func;
+            public:
+                my_file_handle_impl(seekable_data_source_shard_src func)
+                    : _func(std::move(func))
+                {}
+                std::unique_ptr<file_handle_impl> clone() const override {
+                    return std::make_unique<my_file_handle_impl>(_func);
+                }
+                shared_ptr<file_impl> to_file() && override {
+                    auto src = _func();
+                    return seastar::make_shared<seekable_data_source_file_impl>(std::move(src), std::move(_func));
+                }
+            };
+            return std::make_unique<my_file_handle_impl>(_src_func);
+        }
+        future<> close() override {
+            co_await _source.close();
+        }
+    };
+    return file{seastar::make_shared<seekable_data_source_file_impl>(std::move(src), std::move(src_func))};
+}
+
+seastar::data_source create_ranged_source(data_source src, uint64_t offset, std::optional<uint64_t> len) {
+    class ranged_data_source : public data_source_impl {
+        data_source _src;
+        uint64_t _offset;
+        uint64_t _len;
+        uint64_t _read;
+    public:
+        ranged_data_source(data_source src, uint64_t offset, std::optional<uint64_t> len)
+            : _src(std::move(src))
+            , _offset(offset)
+            , _len(len.value_or(std::numeric_limits<uint64_t>::max()))
+            , _read(0)
+        {}
+
+        temporary_buffer<char> trim(temporary_buffer<char> buf) {
+            auto max = _len - _read;
+            if (buf.size() > max) {
+                buf.trim(max);
+            }
+            _read += buf.size();
+            return buf;
+        }
+        future<temporary_buffer<char>> skip(uint64_t n) override {
+            if (_read == _len) {
+                co_return temporary_buffer<char>{};
+            }
+            if (auto skip = std::exchange(_offset, 0); (skip + n) > 0) {
+                co_return trim(co_await _src.skip(skip + n));
+            }
+            co_return trim(co_await _src.get());
+        }
+        future<temporary_buffer<char>> get() override {
+            return skip(0);
+        }
+        future<> close() override {
+            return _src.close();
+        }
+    };
+
+    if (offset == 0 && !len.has_value()) {
+        return src;
+    }
+    return data_source(std::make_unique<ranged_data_source>(std::move(src), offset, len));
 }
 
