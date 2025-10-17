@@ -210,78 +210,78 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
 
         blogger.debug("Replaying batch {}", id);
 
-      try {
-        auto fms = make_lw_shared<std::deque<canonical_mutation>>();
-        auto in = ser::as_input_stream(data);
-        while (in.size()) {
-            fms->emplace_back(ser::deserialize(in, std::type_identity<canonical_mutation>()));
-            schema_ptr s = _qp.db().find_schema(fms->back().column_family_id());
-            timeout = std::min(timeout, std::chrono::duration_cast<db_clock::duration>(s->tombstone_gc_options().propagation_delay_in_seconds()));
-        }
-
-        if (now < written_at + timeout) {
-            blogger.debug("Skipping replay of {}, too fresh", id);
-            co_return stop_iteration::no;
-        }
-
-        auto size = data.size();
-
-        auto mutations = co_await map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
-            const auto& cf = _qp.proxy().local_db().find_column_family(fm.column_family_id());
-            return make_ready_future<canonical_mutation*>(written_at > cf.get_truncation_time() ? &fm : nullptr);
-        },
-        std::vector<mutation>(),
-        [this] (std::vector<mutation> mutations, canonical_mutation* fm) {
-            if (fm) {
-                schema_ptr s = _qp.db().find_schema(fm->column_family_id());
-                mutations.emplace_back(fm->to_mutation(s));
+        try {
+            auto fms = make_lw_shared<std::deque<canonical_mutation>>();
+            auto in = ser::as_input_stream(data);
+            while (in.size()) {
+                fms->emplace_back(ser::deserialize(in, std::type_identity<canonical_mutation>()));
+                schema_ptr s = _qp.db().find_schema(fms->back().column_family_id());
+                timeout = std::min(timeout, std::chrono::duration_cast<db_clock::duration>(s->tombstone_gc_options().propagation_delay_in_seconds()));
             }
-            return mutations;
-        });
 
-          if (!mutations.empty()) {
-            const auto ttl = [written_at]() -> clock_type {
-                /*
-                 * Calculate ttl for the mutations' hints (and reduce ttl by the time the mutations spent in the batchlog).
-                 * This ensures that deletes aren't "undone" by an old batch replay.
-                 */
-                auto unadjusted_ttl = std::numeric_limits<gc_clock::rep>::max();
-                warn(unimplemented::cause::HINT);
-#if 0
-                for (auto& m : *mutations) {
-                    unadjustedTTL = Math.min(unadjustedTTL, HintedHandOffManager.calculateHintTTL(mutation));
-                }
-#endif
-                return unadjusted_ttl - std::chrono::duration_cast<gc_clock::duration>(db_clock::now() - written_at).count();
-            }();
-
-           if (ttl > 0) {
-            // Origin does the send manually, however I can't see a super great reason to do so.
-            // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
-            // in both cases.
-            // FIXME: verify that the above is reasonably true.
-            co_await limiter->reserve(size);
-                _stats.write_attempts += mutations.size();
-                auto timeout = db::timeout_clock::now() + write_timeout;
-                co_await _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
-           }
-          }
-            } catch (data_dictionary::no_such_keyspace& ex) {
-                // should probably ignore and drop the batch
-            } catch (const data_dictionary::no_such_column_family&) {
-                // As above -- we should drop the batch if the table doesn't exist anymore.
-            } catch (...) {
-                blogger.warn("Replay failed (will retry): {}", std::current_exception());
-                all_replayed = all_batches_replayed::no;
-                // timeout, overload etc.
-                // Do _not_ remove the batch, assuning we got a node write error.
-                // Since we don't have hints (which origin is satisfied with),
-                // we have to resort to keeping this batch to next lap.
+            if (now < written_at + timeout) {
+                blogger.debug("Skipping replay of {}, too fresh", id);
                 co_return stop_iteration::no;
             }
-            // delete batch
-            co_await delete_batch(id);
+
+            auto size = data.size();
+
+            auto mutations = co_await map_reduce(*fms, [this, written_at] (canonical_mutation& fm) {
+                const auto& cf = _qp.proxy().local_db().find_column_family(fm.column_family_id());
+                return make_ready_future<canonical_mutation*>(written_at > cf.get_truncation_time() ? &fm : nullptr);
+            },
+            std::vector<mutation>(),
+            [this] (std::vector<mutation> mutations, canonical_mutation* fm) {
+                if (fm) {
+                    schema_ptr s = _qp.db().find_schema(fm->column_family_id());
+                    mutations.emplace_back(fm->to_mutation(s));
+                }
+                return mutations;
+            });
+
+            if (!mutations.empty()) {
+                const auto ttl = [written_at]() -> clock_type {
+                    /*
+                    * Calculate ttl for the mutations' hints (and reduce ttl by the time the mutations spent in the batchlog).
+                    * This ensures that deletes aren't "undone" by an old batch replay.
+                    */
+                    auto unadjusted_ttl = std::numeric_limits<gc_clock::rep>::max();
+                    warn(unimplemented::cause::HINT);
+#if 0
+                    for (auto& m : *mutations) {
+                        unadjustedTTL = Math.min(unadjustedTTL, HintedHandOffManager.calculateHintTTL(mutation));
+                    }
+#endif
+                    return unadjusted_ttl - std::chrono::duration_cast<gc_clock::duration>(db_clock::now() - written_at).count();
+                }();
+
+                if (ttl > 0) {
+                    // Origin does the send manually, however I can't see a super great reason to do so.
+                    // Our normal write path does not add much redundancy to the dispatch, and rate is handled after send
+                    // in both cases.
+                    // FIXME: verify that the above is reasonably true.
+                    co_await limiter->reserve(size);
+                        _stats.write_attempts += mutations.size();
+                        auto timeout = db::timeout_clock::now() + write_timeout;
+                        co_await _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
+                }
+            }
+        } catch (data_dictionary::no_such_keyspace& ex) {
+            // should probably ignore and drop the batch
+        } catch (const data_dictionary::no_such_column_family&) {
+            // As above -- we should drop the batch if the table doesn't exist anymore.
+        } catch (...) {
+            blogger.warn("Replay failed (will retry): {}", std::current_exception());
+            all_replayed = all_batches_replayed::no;
+            // timeout, overload etc.
+            // Do _not_ remove the batch, assuning we got a node write error.
+            // Since we don't have hints (which origin is satisfied with),
+            // we have to resort to keeping this batch to next lap.
             co_return stop_iteration::no;
+        }
+        // delete batch
+        co_await delete_batch(id);
+        co_return stop_iteration::no;
     };
 
     co_await seastar::with_gate(_gate, [this, cleanup, batch = std::move(batch)] () mutable -> future<> {
