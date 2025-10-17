@@ -947,7 +947,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     new_ks_props.validate();
                     auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, _db.features());
                     size_t unimportant_init_tablet_count = 2; // must be a power of 2
-                    locator::tablet_map new_tablet_map{unimportant_init_tablet_count};
+                    locator::shared_tablet_map new_tablet_map{unimportant_init_tablet_count};
 
                     auto tables_with_mvs = ks.metadata()->tables();
                     auto views = ks.metadata()->views();
@@ -959,13 +959,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             // the base table will coordinate the transition for the entire group.
                             continue;
                         }
-                        auto old_tablets = co_await tmptr->tablets().get_tablet_map(table_or_mv->id()).clone_gently();
+                        const auto& old_tablets = *tmptr->tablets().get_tablet_map(table_or_mv->id()).shared;
                         locator::replication_strategy_params params{ks_md->strategy_options(), old_tablets.tablet_count()};
                         auto new_strategy = locator::abstract_replication_strategy::create_replication_strategy("NetworkTopologyStrategy", params, tmptr->get_topology());
                         new_tablet_map = co_await new_strategy->maybe_as_tablet_aware()->reallocate_tablets(table_or_mv, tmptr, co_await old_tablets.clone_gently());
 
                         replica::tablet_mutation_builder tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id());
-                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const locator::tablet_info& tablet_info) -> future<> {
+                        co_await new_tablet_map.for_each_tablet([&](locator::tablet_id tablet_id, const auto& tablet_info) -> future<> {
                             auto last_token = new_tablet_map.get_last_token(tablet_id);
                             updates.emplace_back(co_await make_canonical_mutation_gently(
                                     replica::tablet_mutation_builder(guard.write_timestamp(), table_or_mv->id())
@@ -976,7 +976,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                             ));
 
                             // Calculate abandoning replica and abort view building tasks on them
-                            auto old_tablet_info = old_tablets.get_tablet_info(last_token);
+                            const auto& old_tablet_info = old_tablets.get_tablet_info(last_token);
                             auto abandoning_replicas = locator::substract_sets(old_tablet_info.replicas, tablet_info.replicas);
                             if (!abandoning_replicas.empty()) {
                                 if (abandoning_replicas.size() != 1) {
@@ -1237,26 +1237,38 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
     void generate_repair_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, const locator::global_tablet_id& gid, db_clock::time_point sched_time) {
         auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
+        auto base_table = get_token_metadata_ptr()->tablets().get_base_table(gid.table);
         auto last_token = tmap.get_last_token(gid.tablet);
         if (tmap.get_tablet_transition_info(gid.tablet)) {
             rtlogger.warn("Tablet already in transition, ignoring repair: {}", gid);
             return;
         }
-        auto& info = tmap.get_tablet_info(gid.tablet);
-        auto repair_task_info = info.repair_task_info;
+        auto&& info = tmap.get_tablet_info(gid.tablet);
+        auto repair_task_info = info.repair_task_info();
         if (!repair_task_info.is_user_repair_request()) {
             repair_task_info = locator::tablet_task_info::make_auto_repair_request();
         }
         repair_task_info.sched_nr++;
         repair_task_info.sched_time = db_clock::now();
-        out.emplace_back(
-            replica::tablet_mutation_builder(guard.write_timestamp(), gid.table)
-                .set_new_replicas(last_token, tmap.get_tablet_info(gid.tablet).replicas)
+
+        // we write a mutation to the shared tablet map in base_table, and an update to the
+        // per-table tablet map of gid.table with the repair task info.
+        // if it's the same table we combine it to one mutation.
+        auto base_update =
+            replica::tablet_mutation_builder(guard.write_timestamp(), base_table)
+                .set_new_replicas(last_token, info.replicas())
                 .set_stage(last_token, locator::tablet_transition_stage::repair)
                 .set_transition(last_token, locator::tablet_transition_kind::repair)
-                .set_repair_task_info(last_token, repair_task_info, _feature_service)
-                .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()))
-                .build());
+                .set_session(last_token, session_id(utils::UUID_gen::get_time_UUID()));
+        if (base_table == gid.table) {
+            base_update.set_repair_task_info(last_token, repair_task_info, _feature_service);
+        } else {
+            out.emplace_back(
+                replica::tablet_mutation_builder(guard.write_timestamp(), gid.table)
+                    .set_repair_task_info(last_token, repair_task_info, _feature_service)
+                    .build());
+        }
+        out.emplace_back(base_update.build());
     }
 
     void generate_resize_update(utils::chunked_vector<canonical_mutation>& out, const group0_guard& guard, table_id table_id, locator::resize_decision resize_decision) {
@@ -1523,9 +1535,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
 
                     auto next_stage = locator::tablet_transition_stage::use_new;
                     if (action_failed(tablet_state.barriers[trinfo.stage])) {
-                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
+                        const auto& tinfo = tmap.get_tablet_info(gid.tablet);
                         unsigned excluded_old = 0;
-                        for (auto r : tinfo.replicas) {
+                        for (auto r : tinfo.replicas()) {
                             if (is_excluded(raft::server_id(r.host.uuid()))) {
                                 excluded_old++;
                             }
@@ -1644,9 +1656,30 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         break;
                     }
+
+                    // if it's a group of colocated tables, we need to choose one table to repair.
+                    // we may have several tables with valid repair task info, but we don't really know which one of them
+                    // was requested in generate_repair_update.
+                    // we will choose the one with the most recent sched_time because it's most likely the one that was requested,
+                    // because sched_time is set with the current time right before transitioning to the repair stage.
+                    auto repair_table =
+                        tables.size() == 1 ?  base_table :
+                            *std::max_element(tables.begin(), tables.end(), [&](auto t1, auto t2) {
+                                auto& info1 = get_token_metadata_ptr()->tablets().get_tablet_map(t1).get_tablet_info(gid.tablet).repair_task_info();
+                                auto& info2 = get_token_metadata_ptr()->tablets().get_tablet_map(t2).get_tablet_info(gid.tablet).repair_task_info();
+                                if (!info1.is_valid())
+                                    return true;
+                                if (!info2.is_valid())
+                                    return false;
+                                return info1.sched_time < info2.sched_time;
+                            });
+
                     if (advance_in_background(gid, tablet_state.repair, "repair", [&] () -> future<> {
-                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
-                        bool valid = tinfo.repair_task_info.is_valid();
+                        auto table = repair_table;
+                        auto gid = locator::global_tablet_id{table, tid};
+                        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table);
+                        auto& repair_task_info = tmap.get_tablet_info(gid.tablet).repair_task_info();
+                        bool valid = repair_task_info.is_valid();
                         if (!valid) {
                             rtlogger.info("Skipping tablet repair for tablet={} which is cancelled by user", gid);
                             co_return;
@@ -1655,17 +1688,17 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         if (trinfo) {
                             tablet_state.session_id = trinfo->session_id;
                         }
-                        auto sched_time = tinfo.repair_task_info.sched_time;
+                        auto sched_time = repair_task_info.sched_time;
                         auto tablet = gid;
-                        auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
-                        auto dcs_filter = tinfo.repair_task_info.repair_dcs_filter;
+                        const auto& hosts_filter = repair_task_info.repair_hosts_filter;
+                        const auto& dcs_filter = repair_task_info.repair_dcs_filter;
                         const auto& topo = _db.get_token_metadata().get_topology();
                         locator::host_id dst;
                         if (hosts_filter.empty() && dcs_filter.empty()) {
                             auto primary = tmap.get_primary_replica(gid.tablet);
                             dst = primary.host;
                         } else {
-                            auto dst_opt = tmap.maybe_get_selected_replica(gid.tablet, topo, tinfo.repair_task_info);
+                            auto dst_opt = tmap.maybe_get_selected_replica(gid.tablet, topo, repair_task_info);
                             if (!dst_opt) {
                                 co_return;
                             }
@@ -1674,47 +1707,60 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         rtlogger.info("Initiating tablet repair host={} tablet={}", dst, gid);
                         auto session_id = utils::get_local_injector().enter("handle_tablet_migration_repair_random_session") ?
                             service::session_id::create_random_id() : trinfo->session_id;
-                        auto res = gids.size() > 1 ?
-                                co_await ser::storage_service_rpc_verbs::send_tablet_repair_colocated(&_messaging,
-                                    dst, _as, raft::server_id(dst.uuid()), gid, gids, session_id)
-                                : co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
-                                    dst, _as, raft::server_id(dst.uuid()), gid, session_id);
+                        auto res = co_await ser::storage_service_rpc_verbs::send_tablet_repair(&_messaging,
+                                dst, _as, raft::server_id(dst.uuid()), gid, session_id);
                         auto duration = std::chrono::duration<float>(db_clock::now() - sched_time);
                         auto& tablet_state = _tablets[tablet];
                         tablet_state.repair_time = db_clock::from_time_t(gc_clock::to_time_t(res.repair_time));
                         rtlogger.info("Finished tablet repair host={} tablet={} duration={} repair_time={}",
                                 dst, tablet, duration, res.repair_time);
                     })) {
-                        auto& tinfo = tmap.get_tablet_info(gid.tablet);
-                        bool valid = tinfo.repair_task_info.is_valid();
-                        auto hosts_filter = tinfo.repair_task_info.repair_hosts_filter;
-                        auto dcs_filter = tinfo.repair_task_info.repair_dcs_filter;
-                        auto incremental = tinfo.repair_task_info.repair_incremental_mode != locator::tablet_repair_incremental_mode::disabled;
+                        auto gid = locator::global_tablet_id{repair_table, tid};
+                        auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(gid.table);
+                        auto&& tinfo = tmap.get_tablet_info(gid.tablet);
+                        const auto& repair_task_info = tinfo.repair_task_info();
+                        bool valid = repair_task_info.is_valid();
+                        const auto& hosts_filter = repair_task_info.repair_hosts_filter;
+                        const auto& dcs_filter = repair_task_info.repair_dcs_filter;
+                        auto incremental = repair_task_info.repair_incremental_mode != locator::tablet_repair_incremental_mode::disabled;
                         bool is_filter_off = hosts_filter.empty() && dcs_filter.empty();
                         rtlogger.debug("Will set tablet {} stage to {}", gid, locator::tablet_transition_stage::end_repair);
-                        auto update = get_mutation_builder()
-                                        .set_stage(last_token, locator::tablet_transition_stage::end_repair)
-                                        .del_repair_task_info(last_token, _feature_service)
-                                        .del_session(last_token);
+
+                        // we write a mutation to the shared tablet map and a mutation to the per-table map of repair_table that
+                        // updates the repair_task_info and repair_time.
+                        // if it's the same table we combine it to one mutation.
+                        auto base_update = get_mutation_builder()
+                                .set_stage(last_token, locator::tablet_transition_stage::end_repair)
+                                .del_session(last_token);
+                        // only used to update the repair_table when repair_table != base_table
+                        auto non_base_update = replica::tablet_mutation_builder(guard.write_timestamp(), repair_table);
+                        auto& repair_table_update = base_table == repair_table ? base_update : non_base_update;
+
+                        repair_table_update.del_repair_task_info(last_token, _feature_service);
+
                         // Skip update repair time in case hosts filter or dcs filter is set.
                         if (valid && is_filter_off) {
-                            auto sched_time = tinfo.repair_task_info.sched_time;
+                            auto& tablet_state = _tablets[gid];
+                            auto sched_time = repair_task_info.sched_time;
                             auto time = tablet_state.repair_time;
-                            update.set_repair_time(last_token, time);
+                            repair_table_update.set_repair_time(last_token, time);
                             auto repaired_at = sstring("None");
                             if (_feature_service.tablet_incremental_repair && incremental) {
-                                auto sstables_repaired_at = tinfo.sstables_repaired_at + 1;
+                                auto sstables_repaired_at = tinfo.sstables_repaired_at() + 1;
                                 if (utils::get_local_injector().enter("repair_tablet_no_update_sstables_repair_at")) {
                                     rtlogger.info("Skip update system.tablet ssstables_repaired_at={}", sstables_repaired_at);
                                 } else {
-                                    update.set_sstables_repair_at(last_token, sstables_repaired_at);
+                                    repair_table_update.set_sstables_repair_at(last_token, sstables_repaired_at);
                                     repaired_at = seastar::format("{}", sstables_repaired_at);
                                 }
                             }
                             rtlogger.debug("Set tablet repair time sched_time={} repair_time={} sstables_repaired_at={} last_token={}",
                                     sched_time, time, repaired_at, last_token);
                         }
-                        updates.emplace_back(update.build());
+                        if (repair_table != base_table) {
+                            updates.emplace_back(non_base_update.build());
+                        }
+                        updates.emplace_back(base_update.build());
                     }
                 }
                     break;
@@ -1728,7 +1774,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         }
                         bool feature = _feature_service.tablet_incremental_repair;
                         if (advance_in_background(gid, tablet_state.repair_update_compaction_ctrl, "repair_update_compaction_ctrl", [ms = &_messaging,
-                                    gid = gid, sid = tablet_state.session_id, _replicas = tmap.get_tablet_info(gid.tablet).replicas, feature] () -> future<> {
+                                    gid = gid, sid = tablet_state.session_id, _replicas = tmap.get_tablet_info(gid.tablet).replicas(), feature] () -> future<> {
                             if (feature) {
                                 auto replicas = std::move(_replicas);
                                 co_await coroutine::parallel_for_each(replicas, [replicas, ms, gid, sid] (locator::tablet_replica& r) -> future<> {
@@ -1854,12 +1900,13 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         utils::chunked_vector<canonical_mutation> updates;
         updates.reserve(plan.resize_plan().finalize_resize.size() * 2 + 1);
 
-        for (auto& table_id : plan.resize_plan().finalize_resize) {
-            auto s = _db.find_schema(table_id);
-            auto new_tablet_map = co_await _tablet_allocator.resize_tablets(tm, table_id);
+        for (auto& base_table_id : plan.resize_plan().finalize_resize) {
+            auto s = _db.find_schema(base_table_id);
+            auto [new_tablet_map, new_per_table_map] = co_await _tablet_allocator.resize_tablets(tm, base_table_id);
             co_await replica::tablet_map_to_mutations(
                 new_tablet_map,
-                table_id,
+                new_per_table_map,
+                base_table_id,
                 s->ks_name(),
                 s->cf_name(),
                 guard.write_timestamp(),
@@ -1868,34 +1915,53 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     updates.emplace_back(co_await make_canonical_mutation_gently(m));
                 });
 
-            // Clears the resize decision for a table.
-            generate_resize_update(updates, guard, table_id, locator::resize_decision{});
-            _vb_coordinator->generate_tablet_resize_updates(updates, guard, table_id, tm->tablets().get_tablet_map(table_id), new_tablet_map);
+            for (auto colocated_table_id : tm->tablets().all_table_groups().at(base_table_id)) {
+                if (colocated_table_id == base_table_id) {
+                    continue;
+                }
+                auto [_new_colocated_tablet_map, new_per_table_map] = co_await _tablet_allocator.resize_tablets(tm, colocated_table_id);
+                auto s = _db.find_schema(colocated_table_id);
+                updates.emplace_back(replica::colocated_tablet_map_to_mutation(
+                    new_tablet_map,
+                    new_per_table_map,
+                    colocated_table_id,
+                    s->ks_name(),
+                    s->cf_name(),
+                    base_table_id,
+                    guard.write_timestamp(),
+                    _feature_service));
+            }
 
-            for (auto table_id : tm->tablets().all_table_groups().at(table_id)) {
+            // Clears the resize decision for a table.
+            generate_resize_update(updates, guard, base_table_id, locator::resize_decision{});
+            _vb_coordinator->generate_tablet_resize_updates(updates, guard, base_table_id, tm->tablets().get_tablet_map(base_table_id), new_tablet_map);
+
+            for (auto table_id : tm->tablets().all_table_groups().at(base_table_id)) {
                 co_await _cdc_gens.generate_tablet_resize_update(updates, table_id, new_tablet_map, guard.write_timestamp());
             }
 
-            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
+            const auto& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(base_table_id);
             auto old_cnt = tmap.tablet_count();
             auto new_cnt = new_tablet_map.tablet_count();
             if (old_cnt > new_cnt) {
                 std::unordered_set<locator::host_id> replicas;
-                for (auto& tinfo : tmap.tablets()) {
-                    for (auto& r : tinfo.replicas) {
+                for (const auto& [tid, tinfo] : tmap.tablets()) {
+                    for (auto& r : tinfo.replicas()) {
                         if (!is_excluded(raft::server_id(r.host.uuid()))) {
                             replicas.insert(r.host);
                         }
                     }
                 }
-                rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", table_id, replicas, old_cnt, new_cnt);
+                rtlogger.info("Send rpc verb repair_update_repaired_at_for_merge table={} replicas={} old_cnt={} new_cnt={}", base_table_id, replicas, old_cnt, new_cnt);
                 if (utils::get_local_injector().enter("handle_tablet_resize_finalization_for_merge_error")) {
                     rtlogger.info("Got handle_tablet_resize_finalization_for_merge_error old_cnt={} new_cnt={}", old_cnt, new_cnt);
                     co_await sleep_abortable(std::chrono::minutes(1), _as);
                 }
-                co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
-                    co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
-                });
+                for (auto table_id : tm->tablets().all_table_groups().at(base_table_id)) {
+                    co_await coroutine::parallel_for_each(replicas, [ms = &_messaging, table_id] (const locator::host_id& h) -> future<> {
+                        co_await ser::repair_rpc_verbs::send_repair_update_repaired_at_for_merge(ms, h, table_id);
+                    });
+                }
             }
         }
 
@@ -1933,7 +1999,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 const std::unordered_set<raft::server_id> excluded_nodes = _topo_sm._topology.get_excluded_nodes();
                 const locator::tablet_map& tmap = get_token_metadata_ptr()->tablets().get_tablet_map(table_id);
                 co_await tmap.for_each_tablet([&] (locator::tablet_id tid, const locator::tablet_info& tinfo) {
-                    for (const locator::tablet_replica& replica: tinfo.replicas) {
+                    for (const locator::tablet_replica& replica: tinfo.replicas()) {
                         if (!excluded_nodes.contains(raft::server_id(replica.host.uuid()))) {
                             replica_hosts.insert(replica.host);
                         }
