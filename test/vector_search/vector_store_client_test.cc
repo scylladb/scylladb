@@ -100,7 +100,17 @@ struct abort_source_timeout {
         t.arm(timeout);
     }
 
+<<<<<<< HEAD
     void reset(milliseconds timeout = STANDARD_WAIT) {
+||||||| parent of 10208c83ca (vector_search: fix flaky dns_refresh_aborted test)
+    abort_source& reset(milliseconds timeout = STANDARD_WAIT) {
+=======
+    abort_source& get() {
+        return as;
+    }
+
+    abort_source& reset(milliseconds timeout = STANDARD_WAIT) {
+>>>>>>> 10208c83ca (vector_search: fix flaky dns_refresh_aborted test)
         t.cancel();
         as = abort_source();
         t.arm(timeout);
@@ -499,18 +509,32 @@ SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_respects_interval) {
 SEASTAR_TEST_CASE(vector_store_client_test_dns_refresh_aborted) {
     auto cfg = config();
     cfg.vector_store_primary_uri.set("http://good.authority.here:6080");
+<<<<<<< HEAD
+||||||| parent of 10208c83ca (vector_search: fix flaky dns_refresh_aborted test)
+    auto as = abort_source_timeout(milliseconds(10));
+=======
+    seastar::condition_variable wait_for_abort;
+    auto as = abort_source_timeout(milliseconds(10));
+>>>>>>> 10208c83ca (vector_search: fix flaky dns_refresh_aborted test)
     auto vs = vector_store_client{cfg};
     configure(vs).with_dns_refresh_interval(milliseconds(10)).with_dns_resolver([&](auto const& host) -> future<std::optional<inet_address>> {
         BOOST_CHECK_EQUAL(host, "good.authority.here");
-        co_await sleep(milliseconds(100));
+        co_await wait_for_abort.when();
         co_return inet_address("127.0.0.1");
     });
 
     vs.start_background_tasks();
 
+<<<<<<< HEAD
     auto as = abort_source_timeout(milliseconds(10));
     auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.as);
+||||||| parent of 10208c83ca (vector_search: fix flaky dns_refresh_aborted test)
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+=======
+    auto addrs = co_await vector_store_client_tester::resolve_hostname(vs, as.get());
+>>>>>>> 10208c83ca (vector_search: fix flaky dns_refresh_aborted test)
     BOOST_CHECK(addrs.empty());
+    wait_for_abort.signal();
 
     co_await vs.stop();
 }
