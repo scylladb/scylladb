@@ -90,7 +90,7 @@ private:
 
     future<> load_and_stream(sstring ks_name, sstring cf_name,
             table_id, std::vector<sstables::shared_sstable> sstables,
-            bool primary_replica_only, bool unlink_sstables, stream_scope scope,
+            bool_class<struct primary_replica_only_tag> primary_replica_only, bool unlink_sstables, stream_scope scope,
             shared_ptr<stream_progress> progress);
 
     future<seastar::shared_ptr<const locator::effective_replication_map>> await_topology_quiesced_and_get_erm(table_id table_id);
@@ -130,7 +130,7 @@ public:
      */
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
             sstring prefix, std::vector<sstring> sstables,
-            sstring endpoint, sstring bucket, stream_scope scope);
+            sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica);
 
     class download_task_impl;
 };
