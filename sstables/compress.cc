@@ -502,8 +502,8 @@ public:
             , _full_checksum(ChecksumType::init_checksum())
     {}
 
-    virtual future<> put(net::packet data) override { abort(); }
-    virtual future<> put(temporary_buffer<char> buf) override {
+private:
+    future<> do_put(temporary_buffer<char> buf) {
         auto output_len = _compression_metadata->get_compressor().compress_max_size(buf.size());
 
         // account space for checksum that goes after compressed data.
@@ -543,6 +543,13 @@ public:
         auto f = _out.write(compressed.get(), compressed.size());
         return f.then([compressed = std::move(compressed)] {});
     }
+public:
+    virtual future<> put(std::span<temporary_buffer<char>> bufs) override {
+        return data_sink_impl::fallback_put(bufs, [this] (temporary_buffer<char>&& buf) {
+            return do_put(std::move(buf));
+        });
+    }
+
     virtual future<> close() override {
         return _out.close();
     }

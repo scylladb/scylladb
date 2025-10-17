@@ -13,7 +13,7 @@
 
 #include "transport/request.hh"
 #include "transport/response.hh"
-
+#include "utils/memory_data_sink.hh"
 #include "test/lib/random_utils.hh"
 #include "test/lib/test_utils.hh"
 
@@ -92,9 +92,13 @@ SEASTAR_THREAD_TEST_CASE(test_response_request_reader) {
     res.serialize({sc::change_type::CREATED, sc::target_type::FUNCTION, "foo", "bar", "zed"}, version);
     res.serialize({sc::change_type::CREATED, sc::target_type::AGGREGATE, "foo", "bar", "zed"}, version);
 
-    auto msg = res.make_message(version, cql_transport::cql_compression::none).value().release();
-    auto total_length = msg.len();
-    auto fbufs = fragmented_temporary_buffer(msg.release(), total_length);
+    memory_data_sink_buffers buffers;
+    {
+        output_stream<char> out(data_sink(std::make_unique<memory_data_sink>(buffers)));
+        res.write_message(out, version, cql_transport::cql_compression::none, deleter()).get();
+    }
+    auto total_length = buffers.size();
+    auto fbufs = fragmented_temporary_buffer(buffers.buffers() | std::views::as_rvalue | std::ranges::to<std::vector>(), total_length);
 
     bytes_ostream linearization_buffer;
     auto req = cql_transport::request_reader(fbufs.get_istream(), linearization_buffer);

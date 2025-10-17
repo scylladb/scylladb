@@ -79,9 +79,7 @@ public:
     void write(const cql3::metadata& m, const cql_metadata_id_wrapper& request_metadata_id, bool no_metadata = false);
     void write(const cql3::prepared_metadata& m, uint8_t version);
 
-    // Make a non-owning scattered_message of the response. Remains valid as long
-    // as the response object is alive.
-    utils::result_with_exception_ptr<scattered_message<char>> make_message(uint8_t version, cql_compression compression);
+    future<> write_message(output_stream<char>& out, uint8_t version, cql_compression compression, seastar::deleter);
 
     cql_binary_opcode opcode() const {
         return _opcode;
@@ -95,9 +93,9 @@ private:
     void compress_snappy();
 
     template <typename CqlFrameHeaderType>
-    sstring make_frame_one(uint8_t version, size_t length) {
-        sstring frame_buf = uninitialized_string(sizeof(CqlFrameHeaderType));
-        auto* frame = reinterpret_cast<CqlFrameHeaderType*>(frame_buf.data());
+    temporary_buffer<char> make_frame_one(uint8_t version, size_t length) {
+        temporary_buffer<char> frame_buf(sizeof(CqlFrameHeaderType));
+        auto* frame = reinterpret_cast<CqlFrameHeaderType*>(frame_buf.get_write());
         frame->version = version | 0x80;
         frame->flags   = _flags;
         frame->opcode  = static_cast<uint8_t>(_opcode);
@@ -107,7 +105,7 @@ private:
         return frame_buf;
     }
 
-    utils::result_with_exception_ptr<sstring> make_frame(uint8_t version, size_t length) {
+    utils::result_with_exception_ptr<temporary_buffer<char>> make_frame(uint8_t version, size_t length) {
         if (version > 0x04) {
             return bo::failure(std::make_exception_ptr(exceptions::protocol_exception(format("Invalid or unsupported protocol version: {:d}", version))));
         }

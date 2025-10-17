@@ -618,16 +618,14 @@ public:
         , _sink(std::move(sink))
     {}
 
-    future<> put(net::packet data) override {
-        return fallback_put(std::move(data));
-    }
-    future<> put(std::vector<temporary_buffer<char>> data) override {
-        for (auto&& buf : data) {
-            co_await put(std::move(buf));
-        }
+    future<> put(std::span<temporary_buffer<char>> bufs) override {
+        return data_sink_impl::fallback_put(bufs, [this] (temporary_buffer<char>&& buf) {
+            return do_put(std::move(buf));
+        });
     }
 
-    future<> put(temporary_buffer<char> buf) override {
+private:
+    future<> do_put(temporary_buffer<char> buf) {
         if (_bufpos != 0) {
             auto add = std::min(buf.size(), sizeof(_buffer) - _bufpos);
             std::copy(buf.get(), buf.get() + add, _buffer + _bufpos);
@@ -655,6 +653,8 @@ public:
             _bufpos = buf.size();
         }
     }
+
+public:
     future<> flush() override {
         /*
         if (std::exchange(_flush_pos, _pos) < _pos) {
