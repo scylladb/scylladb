@@ -204,6 +204,10 @@ public:
         return bool(_mask & mask_for(e));
     }
 
+    bool intersects(const enum_set& other) const {
+        return bool(_mask & other._mask);
+    }
+
     template<enum_type e>
     void remove() {
         _mask &= ~mask_for<e>();
