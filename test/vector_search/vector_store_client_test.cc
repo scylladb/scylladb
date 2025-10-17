@@ -14,7 +14,6 @@
 #include "test/lib/log.hh"
 #include <functional>
 #include <chrono>
-#include <iostream>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/metrics_api.hh>
