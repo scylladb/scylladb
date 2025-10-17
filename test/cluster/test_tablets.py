@@ -1124,9 +1124,7 @@ async def test_two_tablets_concurrent_repair_and_migration(manager: ManagerClien
         await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", repair_replicas.last_token)
 
     async def migration_task():
-        done, pending = await asyncio.wait([asyncio.create_task(log.wait_for('Started to repair', from_mark=mark)) for log, mark in zip(logs, marks)], return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
+        await wait_for_first_completed([log.wait_for('Started to repair', from_mark=mark) for log, mark in zip(logs, marks)])
         await manager.api.move_tablet(servers[0].ip_addr, ks, "test", migration_replicas.replicas[0][0], migration_replicas.replicas[0][1], migration_replicas.replicas[0][0], 0 if migration_replicas.replicas[0][1] != 0 else 1, migration_replicas.last_token)
         [await manager.api.message_injection(s.ip_addr, injection) for s in servers]
         [await manager.api.disable_injection(s.ip_addr, injection) for s in servers]
