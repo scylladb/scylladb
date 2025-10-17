@@ -1930,6 +1930,10 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     auto permit = get_reader_concurrency_semaphore().make_tracking_only_permit(cf.schema(), "counter-read-before-write", timeout, trace_state);
     auto mopt = co_await counter_write_query(cf.schema(), cf.as_mutation_source(), std::move(permit), m.decorated_key(), slice, trace_state);
 
+    if (utils::get_local_injector().enter("apply_counter_update_delay_100ms")) {
+        co_await seastar::sleep(std::chrono::milliseconds(100));
+    }
+
     // ...now, that we got existing state of all affected counter
     // cells we can look for our shard in each of them, increment
     // its clock and apply the delta.
@@ -2037,7 +2041,7 @@ future<> database::apply_in_memory(const mutation& m, column_family& cf, db::rp_
 }
 
 future<mutation> database::apply_counter_update(schema_ptr s, const frozen_mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
-    if (timeout <= db::timeout_clock::now()) {
+    if (timeout <= db::timeout_clock::now() || utils::get_local_injector().is_enabled("database_apply_counter_update_force_timeout")) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<mutation>(timed_out_error{});
     }
@@ -2304,7 +2308,7 @@ future<> database::apply(schema_ptr s, const frozen_mutation& m, tracing::trace_
     if (dblog.is_enabled(logging::log_level::trace)) {
         dblog.trace("apply {}", m.pretty_printer(s));
     }
-    if (timeout <= db::timeout_clock::now()) {
+    if (timeout <= db::timeout_clock::now() || utils::get_local_injector().is_enabled("database_apply_force_timeout")) {
         update_write_metrics_for_timed_out_write();
         return make_exception_future<>(timed_out_error{});
     }

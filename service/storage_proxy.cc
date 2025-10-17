@@ -1221,6 +1221,13 @@ static result<db::per_partition_rate_limit::info> choose_rate_limit_info(
     db::per_partition_rate_limit::account_and_enforce enforce_info{
         .random_variable = random_variable_for_rate_limit(),
     };
+
+    if (utils::get_local_injector().is_enabled("rate_limit_force_defer")) {
+        slogger.trace("Per-partition rate limiting: forced defer (injector)");
+        tracing::trace(tr_state, "Per-partition rate limiting: forced defer (injector)");
+        return enforce_info;
+    }
+
     // It's fine to use shard_for_reads() because in case of no migration this is the
     // shard used by all requests. During migration, it is the shard used for request routing
     // by drivers during most of the migration. It changes after streaming, in which case we'll
