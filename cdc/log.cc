@@ -24,7 +24,6 @@
 #include "index/vector_index.hh"
 #include "locator/abstract_replication_strategy.hh"
 #include "locator/topology.hh"
-#include "mutation/timestamp.hh"
 #include "replica/database.hh"
 #include "db/schema_tables.hh"
 #include "gms/feature_service.hh"
@@ -1715,8 +1714,7 @@ public:
             const mutation& m)
     {
         auto& p = m.partition();
-        bool no_ck_schema_partition_deletion =
-                m.schema()->clustering_key_size() == 0 && p.partition_tombstone().deletion_time.time_since_epoch().count() != api::missing_timestamp;
+        const bool no_ck_schema_partition_deletion = m.schema()->clustering_key_size() == 0 && bool(p.partition_tombstone());
         if (p.clustered_rows().empty() && p.static_row().empty() && !no_ck_schema_partition_deletion) {
             return make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>();
         }
