@@ -1368,6 +1368,13 @@ struct process_row_visitor {
 };
 
 struct process_change_visitor {
+    const per_request_options& _request_options;
+    // The types of the operations used for row / partition deletes. Introduced
+    // to differentiate service operations (e.g. operation::service_row_delete
+    // vs operation::row_delete).
+    const operation _row_delete_op = operation::row_delete;
+    const operation _partition_delete_op = operation::partition_delete;
+
     stats::part_type_set& _touched_parts;
 
     log_mutation_builder& _builder;
@@ -1430,7 +1437,7 @@ struct process_change_visitor {
     void clustered_row_delete(const clustering_key& ckey, const tombstone&) {
         _touched_parts.set<stats::part_type::ROW_DELETE>();
 
-        auto log_ck = _builder.allocate_new_log_row(operation::row_delete);
+        auto log_ck = _builder.allocate_new_log_row(_row_delete_op);
         _builder.set_clustering_columns(log_ck, ckey);
 
         if (_enable_updating_state && get_row_state(_clustering_row_states, ckey)) {
@@ -1474,7 +1481,7 @@ struct process_change_visitor {
 
     void partition_delete(const tombstone&) {
         _touched_parts.set<stats::part_type::PARTITION_DELETE>();
-        auto log_ck = _builder.allocate_new_log_row(operation::partition_delete);
+        auto log_ck = _builder.allocate_new_log_row(_partition_delete_op);
         if (_enable_updating_state) {
             _clustering_row_states.clear();
         }
@@ -1489,6 +1496,7 @@ private:
     schema_ptr _schema;
     dht::decorated_key _dk;
     schema_ptr _log_schema;
+    const per_request_options& _options;
 
     /**
      * #6070, #6084
@@ -1578,11 +1586,12 @@ private:
     stats::part_type_set _touched_parts;
 
 public:
-    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk)
+    transformer(db_context ctx, schema_ptr s, dht::decorated_key dk, const per_request_options& options)
         : _ctx(ctx)
         , _schema(std::move(s))
         , _dk(std::move(dk))
         , _log_schema(ctx._proxy.get_db().local().find_schema(_schema->ks_name(), log_name(_schema->cf_name())))
+        , _options(options)
         , _clustering_row_states(0, clustering_key::hashing(*_schema), clustering_key::equality(*_schema))
         , _uses_tablets(ctx._proxy.get_db().local().find_keyspace(_schema->ks_name()).uses_tablets())
     {
@@ -1683,6 +1692,9 @@ public:
     void process_change(const mutation& m) override {
         SCYLLA_ASSERT(_builder);
         process_change_visitor v {
+            ._request_options = _options,
+            ._row_delete_op = _options.is_system_originated ? operation::service_row_delete : operation::row_delete,
+            ._partition_delete_op = _options.is_system_originated ? operation::service_partition_delete : operation::partition_delete,
             ._touched_parts = _touched_parts,
             ._builder = *_builder,
             ._enable_updating_state = _enable_updating_state,
@@ -1907,7 +1919,7 @@ cdc::cdc_service::impl::augment_mutation_call(lowres_clock::time_point timeout, 
                 return make_ready_future<>();
             }
 
-            transformer trans(_ctxt, s, m.decorated_key());
+            transformer trans(_ctxt, s, m.decorated_key(), options);
 
             auto f = make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>(nullptr);
             if (options.preimage && !options.preimage->empty()) {

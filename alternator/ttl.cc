@@ -17,6 +17,7 @@
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
+#include "cdc/log.hh"
 #include "exceptions/exceptions.hh"
 #include "gms/gossiper.hh"
 #include "gms/inet_address.hh"
@@ -292,7 +293,12 @@ static future<> expire_item(service::storage_proxy& proxy,
         db::consistency_level::LOCAL_QUORUM,
         executor::default_timeout(), // FIXME - which timeout?
         qs.get_trace_state(), qs.get_permit(),
-        db::allow_per_partition_rate_limit::no);
+        db::allow_per_partition_rate_limit::no,
+        false,
+        cdc::per_request_options{
+            .is_system_originated = true,
+        }
+    );
 }
 
 static size_t random_offset(size_t min, size_t max) {

@@ -59,6 +59,9 @@ enum class operation : int8_t {
     pre_image = 0, update = 1, insert = 2, row_delete = 3, partition_delete = 4,
     range_delete_start_inclusive = 5, range_delete_start_exclusive = 6, range_delete_end_inclusive = 7, range_delete_end_exclusive = 8,
     post_image = 9,
+
+    // Operations initiated internally by Scylla. Currently used only by Alternator
+    service_row_delete = -3, service_partition_delete = -4,
 };
 
 struct per_request_options {
@@ -66,6 +69,10 @@ struct per_request_options {
     // layers than CDC. We assume that CDC could have seen the row in this
     // state, i.e. the value isn't 'stale'/'too recent'.
     lw_shared_ptr<cql3::untyped_result_set> preimage;
+    // Whether this mutation is a result of an internal operation initiated by
+    // Scylla. Currently, only TTL expiration implementation for Alternator
+    // uses this.
+    const bool is_system_originated = false;
 };
 
 struct operation_result_tracker;
