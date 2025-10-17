@@ -6551,9 +6551,7 @@ class scylla_gdb_func_coro_frame(gdb.Function):
         block = gdb.block_for_pc((ptr - 2).dereference())
 
         # Look up the coroutine frame type.
-        # I don't understand why, but gdb has problems looking up the coro_frame_ty type if demangling is enabled.
-        with gdb.with_parameter("demangle-style", "none"):
-            coro_ty = gdb.lookup_type(f"{block.function.linkage_name}.coro_frame_ty").pointer()
+        coro_ty = block['__coro_frame'].type.pointer()
 
         return (ptr - 2).cast(coro_ty)
 
