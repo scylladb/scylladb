@@ -42,3 +42,5 @@ class md5_hasher final : public cryptopp_hasher<md5_hasher, 16> {};
 class sha256_hasher final : public cryptopp_hasher<sha256_hasher, 32> {};
 
 std::array<std::byte, 32> get_sha256(std::span<const std::byte>);
+
+class sha512_hasher final : public cryptopp_hasher<sha512_hasher, 64> {};

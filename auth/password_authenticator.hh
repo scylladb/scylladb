@@ -47,7 +47,7 @@ class password_authenticator : public authenticator {
     shared_promise<> _superuser_created_promise;
     // We used to also support bcrypt, SHA-256, and MD5 (ref. scylladb#24524).
     constexpr static auth::passwords::scheme _scheme = passwords::scheme::sha_512;
-    utils::alien_worker& _hashing_worker;
+    [[maybe_unused]] utils::alien_worker& _hashing_worker;
 
 public:
     static db::consistency_level consistency_for_user(std::string_view role_name);

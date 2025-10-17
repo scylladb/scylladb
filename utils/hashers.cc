@@ -18,6 +18,7 @@ static_assert(Hasher<hasher>);
 
 static_assert(HasherReturningBytes<md5_hasher>);
 static_assert(HasherReturningBytes<sha256_hasher>);
+static_assert(HasherReturningBytes<sha512_hasher>); // Add sha512_hasher assertion
 static_assert(HasherReturningBytes<xx_hasher>);
 
 static_assert(SimpleHasher<simple_xx_hasher>);
@@ -25,6 +26,7 @@ static_assert(SimpleHasher<simple_xx_hasher>);
 template <typename T> struct hasher_traits;
 template <> struct hasher_traits<md5_hasher> { using impl_type = CryptoPP::Weak::MD5; };
 template <> struct hasher_traits<sha256_hasher> { using impl_type = CryptoPP::SHA256; };
+template <> struct hasher_traits<sha512_hasher> { using impl_type = CryptoPP::SHA512; }; // Add sha512_hasher traits
 
 template<typename H>
 concept HashUpdater =
@@ -92,6 +94,7 @@ template <typename T, size_t size> bytes cryptopp_hasher<T, size>::calculate(con
 
 template class cryptopp_hasher<md5_hasher, 16>;
 template class cryptopp_hasher<sha256_hasher, 32>;
+template class cryptopp_hasher<sha512_hasher, 64>;
 
 std::array<std::byte, 32> get_sha256(std::span<const std::byte> in) {
     sha256_hasher hasher;
