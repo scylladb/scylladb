@@ -624,6 +624,9 @@ static bool entries_match_row_state(const schema_ptr& base_schema, const cell_ma
             return false;
         }
     }
+    if (nonatomic_entries.empty()) {
+        return true;
+    }
 
     for (const auto& update : nonatomic_entries) {
         const column_definition& cdef = base_schema->column_at(column_kind::regular_column, update.id);
@@ -648,7 +651,11 @@ static bool entries_match_row_state(const schema_ptr& base_schema, const cell_ma
 
         for (const auto& [key, value] : update.cells) {
             const auto key_str = to_string_view(key);
-            if (current_values_map[key_str] != value.value().linearize()) {
+            if (!value.is_live()) {
+                if (current_values_map.contains(key_str)) {
+                    return false;
+                }
+            } else if (current_values_map[key_str] != value.value().linearize()) {
                 return false;
             }
         }
@@ -659,8 +666,7 @@ static bool entries_match_row_state(const schema_ptr& base_schema, const cell_ma
 bool should_skip(batch& changes, const mutation& base_mutation, change_processor& processor) {
     const schema_ptr& base_schema = base_mutation.schema();
     // Alternator doesn't use static updates and clustered range deletions.
-    if (!changes.static_updates.empty() || changes.partition_deletions.has_value() || !changes.clustered_range_deletions.empty()
-        || !changes.clustered_row_deletions.empty()) {
+    if (!changes.static_updates.empty() || !changes.clustered_range_deletions.empty()) {
         return false;
     }
 
@@ -682,6 +688,23 @@ bool should_skip(batch& changes, const mutation& base_mutation, change_processor
         if (!entries_match_row_state(base_schema, *row_state, u.atomic_entries, u.nonatomic_entries)) {
             return false;
         }
+    }
+
+    // Skip only if the row being deleted does not exist (i.e. the deletion is a no-op).
+    for (const auto& row_deletion : changes.clustered_row_deletions) {
+        if (processor.clustering_row_states().contains(row_deletion.key)) {
+            return false;
+        }
+    }
+
+    // Don't skip if the item exists.
+    //
+    // Increased DynamoDB Streams compatibility guarantees that single-item
+    // operations will read the item and store it in the clustering row states.
+    // If it is not found there, we may skip CDC. This is safe as long as the
+    // assumptions of this operation's write isolation are not violated.
+    if (changes.partition_deletions && processor.clustering_row_states().contains(clustering_key::make_empty())) {
+        return false;
     }
 
     cdc_log.trace("Skipping CDC log for mutation {}", base_mutation);
