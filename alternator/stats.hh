@@ -79,6 +79,32 @@ public:
         utils::estimated_histogram batch_get_item_histogram{22}; // a histogram that covers the range 1 - 100
         utils::estimated_histogram batch_write_item_histogram{22}; // a histogram that covers the range 1 - 100
     } api_operations;
+    // Operation size metrics
+    struct {
+        // Item size statistics collected per table and aggregated per node.
+        // Each histogram covers the range 0 - 446. Resolves #25143.
+        // A size is the retrieved item's size.
+        utils::estimated_histogram get_item_op_size_kb{30};
+        // A size is the maximum of the new item's size and the old item's size.
+        utils::estimated_histogram put_item_op_size_kb{30};
+        // A size is the deleted item's size. If the deleted item's size is
+        // unknown (i.e. read-before-write wasn't necessary and it wasn't
+        // forced by a configuration option), it won't be recorded on the
+        // histogram.
+        utils::estimated_histogram delete_item_op_size_kb{30};
+        // A size is the maximum of existing item's size and the estimated size
+        // of the update. This will be changed to the maximum of the existing item's
+        // size and the new item's size in a subsequent PR.
+        utils::estimated_histogram update_item_op_size_kb{30};
+
+        // A size is the sum of the sizes of all items per table. This means
+        // that a single BatchGetItem / BatchWriteItem updates the histogram
+        // for each table that it has items in.
+        // The sizes are the retrieved items' sizes grouped per table.
+        utils::estimated_histogram batch_get_item_op_size_kb{30};
+        // The sizes are the the written items' sizes grouped per table.
+        utils::estimated_histogram batch_write_item_op_size_kb{30};
+    } operation_sizes;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;
@@ -125,5 +151,9 @@ struct table_stats {
     lw_shared_ptr<stats> _stats;
 };
 void register_metrics(seastar::metrics::metric_groups& metrics, const stats& stats);
+
+inline uint64_t bytes_to_kb_ceil(uint64_t bytes) {
+    return (bytes + 1023) / 1024;
+}
 
 }

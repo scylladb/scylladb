@@ -2818,6 +2818,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     per_table_stats->api_operations.put_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->operation_sizes.put_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
     per_table_stats->wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::PUT_ITEM] += wcu_total;
     per_table_stats->api_operations.put_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -2921,6 +2922,9 @@ future<executor::request_return_type> executor::delete_item(client_state& client
     per_table_stats->api_operations.delete_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    if (op->consumed_capacity()._total_bytes > 1) {
+        per_table_stats->operation_sizes.delete_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
+    }
     per_table_stats->wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::DELETE_ITEM] += wcu_total;
     per_table_stats->api_operations.delete_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -3216,7 +3220,8 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         total_wcu = 0;
         // The following loop goes over all items from the same table
         while(pos < mutation_builders.size() && w.second->id() == mutation_builders[pos].first->id()) {
-            size_t wcu = wcu_consumed_capacity_counter::get_units((mutation_builders[pos].second.length_in_bytes())? mutation_builders[pos].second.length_in_bytes() : 1);
+            uint64_t item_size = mutation_builders[pos].second.length_in_bytes();
+            size_t wcu = wcu_consumed_capacity_counter::get_units(item_size ? item_size : 1);
             total_wcu += wcu;
             if (mutation_builders[pos].second.is_put_item()) {
                 w.first->wcu_total[stats::PUT_ITEM] += wcu;
@@ -3225,6 +3230,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
                 w.first->wcu_total[stats::DELETE_ITEM] += wcu;
                 wcu_delete_units += wcu;
             }
+            w.first->operation_sizes.batch_write_item_op_size_kb.add(bytes_to_kb_ceil(item_size));
             pos++;
         }
         if (should_add_wcu) {
@@ -4420,6 +4426,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     per_table_stats->api_operations.update_item++;
     uint64_t wcu_total = 0;
     auto res = co_await op->execute(_proxy, std::move(cas_shard), client_state, trace_state, std::move(permit), needs_read_before_write, _stats, *per_table_stats, wcu_total);
+    per_table_stats->operation_sizes.update_item_op_size_kb.add(bytes_to_kb_ceil(op->consumed_capacity()._total_bytes));
     per_table_stats->wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     _stats.wcu_total[stats::wcu_types::UPDATE_ITEM] += wcu_total;
     per_table_stats->api_operations.update_item_latency.mark(std::chrono::steady_clock::now() - start_time);
@@ -4518,6 +4525,10 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     rjson::value res = describe_item(schema, partition_slice, *selection, *qr.query_result, std::move(attrs_to_get), add_capacity, rcu_half_units);
     per_table_stats->rcu_half_units_total += rcu_half_units;
     _stats.rcu_half_units_total += rcu_half_units;
+    // Update item size metrics only if we found an item.
+    if (qr.query_result->row_count().value_or(0) > 0) {
+        per_table_stats->operation_sizes.get_item_op_size_kb.add(bytes_to_kb_ceil(add_capacity._total_bytes));
+    }
     co_return rjson::print(std::move(res));
 }
 
@@ -4667,8 +4678,12 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
             auto command = ::make_lw_shared<query::read_command>(rs.schema->id(), rs.schema->version(), partition_slice, _proxy.get_max_result_size(partition_slice),
                     query::tombstone_limit(_proxy.get_tombstone_limit()));
             command->allow_limit = db::allow_per_partition_rate_limit::yes;
-            const auto item_callback = [is_quorum, &rcus_per_table = consumed_rcu_half_units_per_table[i]](uint64_t size) {
+            const auto item_callback = [is_quorum, per_table_stats, &rcus_per_table = consumed_rcu_half_units_per_table[i]](uint64_t size) {
                 rcus_per_table += rcu_consumed_capacity_counter::get_half_units(size, is_quorum);
+                // Update item size only if the item exists.
+                if (size > 0) {
+                    per_table_stats->operation_sizes.batch_get_item_op_size_kb.add(bytes_to_kb_ceil(size));
+                }
             };
             future<std::vector<rjson::value>> f = _proxy.query(rs.schema, std::move(command), std::move(partition_ranges), rs.cl,
                     service::storage_proxy::coordinator_query_options(executor::default_timeout(), permit, client_state, trace_state)).then(
