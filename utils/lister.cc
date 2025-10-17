@@ -7,6 +7,7 @@
 #include "utils/assert.hh"
 #include "utils/lister.hh"
 #include "utils/checked-file-impl.hh"
+#include "utils/error_injection.hh"
 
 static seastar::logger llogger("lister");
 
@@ -20,7 +21,11 @@ lister::lister(file f, dir_entry_types type, walker_type walker, filter_type fil
         , _show_hidden(do_show_hidden) {}
 
 future<> lister::visit(directory_entry de) {
-    return guarantee_type(std::move(de)).then([this] (directory_entry de) {
+    return refresh_type(std::move(de)).then([this] (directory_entry de) {
+        // The entry was removed between readdir and stat, just skip it
+        if (!de.type.has_value()) {
+            return make_ready_future<>();
+        }
         // Hide all synthetic directories and hidden files if not requested to show them.
         if ((_expected_type && !_expected_type.contains(*(de.type))) || (!_show_hidden && de.name[0] == '.')) {
             return make_ready_future<>();
@@ -41,16 +46,19 @@ future<> lister::done() {
     });
 }
 
-future<directory_entry> lister::guarantee_type(directory_entry de) {
+future<directory_entry> lister::refresh_type(directory_entry de) {
+    if (utils::get_local_injector().enter("lister_refresh_type")) {
+        de.type.reset();
+        if (de.name == *utils::get_local_injector().inject_parameter<std::string_view>("lister_refresh_type", "unlink_file")) {
+            fs::remove((_dir / de.name).native());
+        }
+    }
+
     if (de.type) {
         return make_ready_future<directory_entry>(std::move(de));
     } else {
         auto f = file_type((_dir / de.name.c_str()).native(), follow_symlink::no);
-        return f.then([dir = _dir, de = std::move(de)] (std::optional<directory_entry_type> t) mutable {
-            // If some FS error occurs - return an exceptional future
-            if (!t) {
-                return make_exception_future<directory_entry>(std::runtime_error(fmt::format("Failed to get {} type.", (dir / de.name.c_str()).native())));
-            }
+        return f.then([de = std::move(de)] (std::optional<directory_entry_type> t) mutable {
             de.type = t;
             return make_ready_future<directory_entry>(std::move(de));
         });

@@ -122,20 +122,22 @@ private:
     future<> visit(directory_entry de);
 
     /**
-     * Validates that the input parameter has its "type" optional field engaged.
+     * Try to get entry "type" if it's missing
      *
      * This helper method is called before further processing the @param de in order
-     * to ensure that its "type" field is engaged.
+     * to have its "type" field engaged.
      *
      * If it is engaged - returns the input value as is.
      * If "type"  isn't engaged - calls the file_type() for file represented by @param de and sets
-     * "type" field of @param de to the returned value and then returns @param de.
+     * "type" field of @param de to the returned value and then returns @param de. The "type" may
+     * still be disengaged after it, meaning that the corresponding file is now missing (because it
+     * was removed or renamed).
      *
      * @param de entry to check and return
      * @return a future that resolves with the @param de with the engaged de.type field or an
      * exceptional future with std::system_error exception if type of the file represented by @param de may not be retrieved.
      */
-    future<directory_entry> guarantee_type(directory_entry de);
+    future<directory_entry> refresh_type(directory_entry de);
 };
 
 class abstract_lister {

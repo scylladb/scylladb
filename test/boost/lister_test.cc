@@ -23,6 +23,7 @@
 
 #include "utils/assert.hh"
 #include "utils/lister.hh"
+#include "utils/error_injection.hh"
 
 class expected_exception : public std::exception {
 public:
@@ -185,4 +186,28 @@ SEASTAR_TEST_CASE(test_directory_lister_extra_get) {
     }
 
     BOOST_REQUIRE_THROW(co_await dl.get(), seastar::broken_pipe_exception);
+}
+
+// regression test of #26314
+SEASTAR_TEST_CASE(test_directory_lister_refresh_type_race) {
+#ifdef SCYLLA_ENABLE_ERROR_INJECTION
+    utils::error_injection_parameters params;
+    params["unlink_file"] = "unlinkme";
+    utils::get_local_injector().enable("lister_refresh_type", false, std::move(params));
+    auto tmp = tmpdir();
+    co_await tests::touch_file(tmp.path() / "unlinkme");
+    co_await tests::touch_file(tmp.path() / "sentinel");
+    std::map<sstring, std::optional<directory_entry_type>> files;
+    co_await lister::scan_dir(tmp.path(), lister::dir_entry_types::full(), [&files] (fs::path dir, directory_entry de) {
+        BOOST_CHECK(!files.contains(de.name));
+        files[de.name] = de.type;
+        return make_ready_future<>();
+    });
+    BOOST_CHECK(!files.contains("unlinkme"));
+    BOOST_CHECK(files.contains("sentinel"));
+    BOOST_CHECK(files.at("sentinel").has_value());
+#else
+    fmt::print("Skipping test as it depends on error injection. Please run in mode where it's enabled (debug,dev).\n");
+    co_return;
+#endif
 }
