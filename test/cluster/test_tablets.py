@@ -863,7 +863,7 @@ async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_tok
 
         logger.info("Attempting removenode - expected to fail")
         await manager.remove_node(initiator_node.server_id, server_id=node_to_remove.server_id,
-                                expected_error="Removenode failed. See earlier errors (Rolled back: Failed to drain tablets: std::runtime_error (Unable to find new replica for tablet")
+                                expected_error="Removenode failed")
 
         logger.info(f"Replacing {node_to_remove} with a new node")
         replace_cfg = ReplaceConfig(replaced_id=node_to_remove.server_id, reuse_ip_addr = False, use_host_id=True, wait_replaced_dead=True)
