@@ -19,8 +19,8 @@ def test_create_and_drop_keyspace(cql, this_dc):
     cql.execute("DROP KEYSPACE test_create_and_drop_keyspace")
 
 def get_replication(cql, keyspace):
-    row = cql.execute(f"SELECT replication FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
-    return parse_replication_options(row.replication)
+    row = cql.execute(f"SELECT replication, replication_v2 FROM system_schema.keyspaces WHERE keyspace_name='{keyspace}'").one()
+    return parse_replication_options(row.replication_v2 or row.replication)
 
 def assert_keyspace(cql, keyspace, expected_class, rf_key):
     rep = get_replication(cql, keyspace)

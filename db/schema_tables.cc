@@ -217,6 +217,7 @@ schema_ptr keyspaces() {
         {
             {"durable_writes", boolean_type},
             {"replication", map_type_impl::get_instance(utf8_type, utf8_type, false)},
+            {"replication_v2", map_type_impl::get_instance(utf8_type, utf8_type, false)}, // with rack list RF
         },
         // static columns
         {},
@@ -1221,12 +1222,21 @@ utils::chunked_vector<mutation> make_create_keyspace_mutations(schema_features f
     schema_ptr s = keyspaces();
     auto pkey = partition_key::from_singular(*s, keyspace->name());
     mutation m(s, pkey);
+    // Delete all data for override semantics. Not all fields are always set, e.g. replication_v2.
+    m.partition().apply(tombstone{timestamp - 1, gc_clock::now()});
     auto ckey = clustering_key_prefix::make_empty();
     m.set_cell(ckey, "durable_writes", keyspace->durable_writes(), timestamp);
 
+    auto map_v1 = keyspace->strategy_options_v1();
     auto map = keyspace->strategy_options();
+    map_v1["class"] = keyspace->strategy_name();
     map["class"] = keyspace->strategy_name();
-    store_map(m, ckey, "replication", timestamp, cql3::statements::to_flattened_map(map));
+    store_map(m, ckey, "replication", timestamp, cql3::statements::to_flattened_map(map_v1));
+    if (map_v1 != map) {
+        // Avoid setting in this case for the sake of rolling upgrade, which must be able to revert to the old schema.
+        // If the maps are different, the upgrade must be already done.
+        store_map(m, ckey, "replication_v2", timestamp, cql3::statements::to_flattened_map(map));
+    }
 
     if (features.contains<schema_feature::SCYLLA_KEYSPACES>()) {
         schema_ptr scylla_keyspaces_s = scylla_keyspaces();
@@ -1299,9 +1309,10 @@ future<lw_shared_ptr<keyspace_metadata>> create_keyspace_metadata(
     // Cannot use copying accessors for "deep" types like map, because we will hit shared_ptr asserts
     // (or screw up shared pointers)
     const auto& replication = row.get_nonnull<map_type_impl::native_type>("replication");
+    const auto& replication_v2 = row.get<map_type_impl::native_type>("replication_v2");
 
     cql3::statements::property_definitions::map_type flat_strategy_options;
-    for (auto& p : replication) {
+    for (auto& p : replication_v2 ? *replication_v2 : replication) {
         flat_strategy_options.emplace(value_cast<sstring>(p.first), value_cast<sstring>(p.second));
     }
     auto strategy_options = cql3::statements::from_flattened_map(flat_strategy_options);
