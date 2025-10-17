@@ -1714,7 +1714,8 @@ public:
             const mutation& m)
     {
         auto& p = m.partition();
-        if (p.clustered_rows().empty() && p.static_row().empty()) {
+        const bool no_ck_schema_partition_deletion = m.schema()->clustering_key_size() == 0 && bool(p.partition_tombstone());
+        if (p.clustered_rows().empty() && p.static_row().empty() && !no_ck_schema_partition_deletion) {
             return make_ready_future<lw_shared_ptr<cql3::untyped_result_set>>();
         }
 
@@ -1763,12 +1764,12 @@ public:
                 });
             }
         }
-        if (!p.clustered_rows().empty()) {
+        if (!p.clustered_rows().empty() || no_ck_schema_partition_deletion) {
             const bool has_row_delete = std::any_of(p.clustered_rows().begin(), p.clustered_rows().end(), [] (const rows_entry& re) {
                 return re.row().deleted_at();
             });
             // for postimage we need everything...
-            if (has_row_delete || _schema->cdc_options().postimage() || _schema->cdc_options().full_preimage()) {
+            if (has_row_delete || _schema->cdc_options().postimage() || _schema->cdc_options().full_preimage() || no_ck_schema_partition_deletion) {
                 for (const column_definition& c: _schema->regular_columns()) {
                     regular_columns.emplace_back(c.id);
                     columns.emplace_back(&c);
