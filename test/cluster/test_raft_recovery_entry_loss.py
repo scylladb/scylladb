@@ -18,7 +18,6 @@ from test.cluster.util import check_system_topology_and_cdc_generations_v3_consi
 from test.cluster.test_group0_schema_versioning import get_group0_schema_version, get_local_schema_version
 
 
-@pytest.mark.skip(reason="https://github.com/scylladb/scylladb/issues/26534")
 @pytest.mark.asyncio
 async def test_raft_recovery_entry_loss(manager: ManagerClient):
     """
