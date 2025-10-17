@@ -14,7 +14,6 @@
 #include "test/lib/log.hh"
 #include <functional>
 #include <chrono>
-#include <iostream>
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/metrics_api.hh>
@@ -955,4 +954,150 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
                 BOOST_CHECK_EQUAL(get_metrics_value("vector_store_dns_refreshes", metrics)->i(), 1);
             },
             cfg);
+}
+
+SEASTAR_TEST_CASE(vector_similarity_fails_on_mismatched_column) {
+
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(fmt::format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await env.execute_cql(R"(
+                    create table ks.test (
+                        pk1 tinyint, pk2 tinyint,
+                        ck1 tinyint, ck2 tinyint,
+                        v1 vector<float, 3>,
+                        v2 vector<float, 3>,
+                        primary key ((pk1, pk2), ck1, ck2))
+                )");
+                (co_await env.execute_cql("INSERT INTO ks.test (pk1, pk2, ck1, ck2, v1, v2) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3], [0.1, 0.2, 0.3])"))
+                        .get()
+                        ->throw_if_exception();
+                auto& vs = env.local_qp().vector_store_client();
+                configure{vs};
+                vs.start_background_tasks();
+
+                co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+
+                for (auto const& similarity_function : {"cosine", "euclidean", "dot_product"}) {
+                    (co_await env.execute_cql(
+                             fmt::format("CREATE CUSTOM INDEX idx1 ON ks.test (v1) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                     similarity_function)))
+                            .get()
+                            ->throw_if_exception();
+                    (co_await env.execute_cql(
+                             fmt::format("CREATE CUSTOM INDEX idx2 ON ks.test (v2) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                     similarity_function)))
+                            .get()
+                            ->throw_if_exception();
+
+                    try {
+                        co_await env.execute_cql(fmt::format(
+                                "SELECT pk1, similarity_{}(v2, [0.1, 0.2, 0.3]) FROM ks.test ORDER BY v1 ANN OF [0.1, 0.2, 0.3] LIMIT 1", similarity_function));
+                        BOOST_FAIL("Expected invalid_request_exception was not thrown");
+                    } catch (exceptions::invalid_request_exception& ex) {
+                        BOOST_CHECK_MESSAGE(
+                                ex.what(), fmt::format("Vector column 'v2' of system.similarity_{} function does not match the ANN ordering vector column 'v1'",
+                                                   similarity_function));
+                    }
+
+                    (co_await env.execute_cql("DROP INDEX ks.idx1")).get()->throw_if_exception();
+                    (co_await env.execute_cql("DROP INDEX ks.idx2")).get()->throw_if_exception();
+                }
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
+SEASTAR_TEST_CASE(vector_similarity_fails_on_mismatched_vector) {
+
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(fmt::format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await create_test_table(env, "ks", "test");
+                (co_await env.execute_cql("INSERT INTO ks.test (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])"))
+                        .get()
+                        ->throw_if_exception();
+                auto& vs = env.local_qp().vector_store_client();
+                configure{vs};
+                vs.start_background_tasks();
+
+                co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+
+                for (auto const& similarity_function : {"cosine", "euclidean", "dot_product"}) {
+                    (co_await env.execute_cql(
+                             fmt::format("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                     similarity_function)))
+                            .get()
+                            ->throw_if_exception();
+
+                    try {
+                        co_await env.execute_cql(fmt::format(
+                                "SELECT pk1, similarity_{}(embedding, [1.0, 2.0, 3.0]) FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 1",
+                                similarity_function));
+                        BOOST_FAIL("Expected invalid_request_exception was not thrown");
+                    } catch (exceptions::invalid_request_exception& ex) {
+                        BOOST_CHECK_MESSAGE(ex.what(), "Vector argument of system.similarity_cosine function does not match the ANN ordering vector");
+                    }
+
+                    (co_await env.execute_cql("DROP INDEX ks.idx")).get()->throw_if_exception();
+                }
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
+SEASTAR_TEST_CASE(vector_similarity_fails_on_null_vector) {
+
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(fmt::format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await create_test_table(env, "ks", "test");
+                (co_await env.execute_cql("INSERT INTO ks.test (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])"))
+                        .get()
+                        ->throw_if_exception();
+                auto& vs = env.local_qp().vector_store_client();
+                configure{vs};
+                vs.start_background_tasks();
+
+                co_await vector_store_client_tester::resolve_hostname(vs, as.reset());
+
+                for (auto const& similarity_function : {"cosine", "euclidean", "dot_product"}) {
+                    (co_await env.execute_cql(
+                             fmt::format("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                     similarity_function)))
+                            .get()
+                            ->throw_if_exception();
+
+                    try {
+                        co_await env.execute_cql(
+                                fmt::format("SELECT pk1, similarity_{}(embedding, null) FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 1",
+                                        similarity_function));
+                        BOOST_FAIL("Expected invalid_request_exception was not thrown");
+                    } catch (exceptions::invalid_request_exception& ex) {
+                        BOOST_CHECK_MESSAGE(ex.what(), "Vector similarity functions cannot be executed with null arguments");
+                    }
+
+                    (co_await env.execute_cql("DROP INDEX ks.idx")).get()->throw_if_exception();
+                }
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
 }
