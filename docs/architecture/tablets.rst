@@ -197,6 +197,10 @@ Limitations and Unsupported Features
     throughout its lifetime. Failing to keep that invariant satisfied may result in data inconsistencies,
     performance problems, or other issues.
 
+    If the `rf_rack_valid_keyspaces` option is set, the invariant is enforced by rejecting topology changes
+    that would violate the RF-rack-valid property. For example, removing the last node from a rack or adding a
+    new node to a new rack, when doing so would make an existing keyspace RF-rack-invalid.
+
 The following ScyllaDB features are not supported if a keyspace has tablets
 enabled. If you plan to use any of the features listed below, CREATE your keyspace
 :ref:`with tablets disabled <tablets-enable-tablets>`.
