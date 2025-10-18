@@ -13,7 +13,7 @@ from test.pylib.manager_client import ManagerClient
 from test.cluster.util import trigger_snapshot, wait_until_topology_upgrade_finishes, enter_recovery_state, reconnect_driver, \
         delete_raft_topology_state, delete_raft_data_and_upgrade_state, wait_until_upgrade_finishes, \
         wait_for_token_ring_and_group0_consistency, wait_until_driver_service_level_created, get_topology_coordinator, \
-        find_server_by_host_id
+        find_server_by_host_id, new_test_keyspace
 from test.cluster.conftest import skip_mode
 from test.cqlpy.test_service_levels import MAX_USER_SERVICE_LEVELS
 from cassandra import ConsistencyLevel
@@ -675,3 +675,43 @@ async def test_driver_service_level_used_for_driver_queries(manager: ManagerClie
     await cql.run_async(f"CREATE SERVICE LEVEL driver", host=h)
     cql, func = await get_control_connection_query_function(manager)
     await _verify_tasks_processed_metrics(manager, server, 'sl:driver', 'sl:test', func)
+
+async def _verify_scheduling_group_was_used(manager, server, used_group, func):
+    number_of_requests = 1
+
+    def get_processed_tasks_for_group(metrics, group):
+        res = metrics.get("scylla_scheduler_tasks_processed", {'group': group})
+        if res is None:
+            return 0
+        return res
+
+    metrics = await manager.metrics.query(server.ip_addr)
+    initial_tasks_processed_by_used_group = get_processed_tasks_for_group(metrics, used_group)
+
+    await asyncio.gather(*[asyncio.to_thread(func) for i in range(number_of_requests)])
+
+    metrics = await manager.metrics.query(server.ip_addr)
+    assert get_processed_tasks_for_group(metrics, used_group) - initial_tasks_processed_by_used_group > number_of_requests
+
+@pytest.mark.asyncio
+async def test_using_service_level_scheduling_group(manager: ManagerClient):
+    server = await manager.server_add(config=auth_config)
+
+    cql = manager.get_cql()
+    await wait_for_cql_and_get_hosts(cql, [server], time.time() + 60)
+    await wait_for_token_ring_and_group0_consistency(manager, time.time() + 30)
+
+    await cql.run_async("CREATE SERVICE LEVEL test WITH shares=500")
+
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.tab (key int, c int, v text, PRIMARY KEY (key))")
+
+        # `SELECT ... USING SERVICE LEVEL sl` uses scheduling group `sl:sl`
+        # only for part of the request (only after we parse the query),
+        # so we cannot use _verify_tasks_processed_metrics() here
+        func = lambda: cql.execute(f"SELECT * FROM {ks}.tab USING SERVICE LEVEL test")
+        await _verify_scheduling_group_was_used(manager, server, 'sl:test', func)
+
+        stmt = cql.prepare(f"SELECT * FROM {ks}.tab USING SERVICE LEVEL test")
+        func = lambda: cql.execute(stmt)
+        await _verify_scheduling_group_was_used(manager, server, 'sl:test', func)

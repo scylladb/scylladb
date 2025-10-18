@@ -225,6 +225,17 @@ db::timeout_clock::duration select_statement::get_timeout(const service::client_
     return state.get_timeout_config().*get_timeout_config_selector();
 }
 
+scheduling_group select_statement::get_scheduling_group(const service::client_state& state) const {
+    if (_attrs->is_service_level_set()) {
+        auto sl_name = *_attrs->get_service_level_name();
+        if (!state.get_service_level_controller().has_service_level(sl_name)) {
+            throw exceptions::invalid_request_exception(fmt::format("Service level {} doesn't exist", sl_name));
+        }
+        return state.get_service_level_controller().get_scheduling_group(sl_name);
+    }
+    return current_scheduling_group();
+}
+
 ::shared_ptr<const cql3::metadata> select_statement::get_result_metadata() const {
     // FIXME: COUNT needs special result metadata handling.
     return _selection->get_result_metadata();

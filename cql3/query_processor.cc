@@ -15,6 +15,7 @@
 #include <seastar/coroutine/parallel_for_each.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include "seastar/core/with_scheduling_group.hh"
 #include "service/storage_proxy.hh"
 #include "service/migration_manager.hh"
 #include "service/mapreduce_service.hh"
@@ -589,7 +590,9 @@ query_processor::execute_direct_without_checking_exception_message(const std::st
 #endif
     auto user = query_state.get_client_state().user();
     tracing::trace(query_state.get_trace_state(), "Processing a statement for authenticated user: {}", user ? (user->name ? *user->name : "anonymous") : "no user authenticated");
-    return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(p->warnings));
+    return with_scheduling_group(statement->get_scheduling_group(query_state.get_client_state()), [&, statement = std::move(statement), warnings = std::move(p->warnings)] {
+        return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_direct, std::move(warnings));
+    });
 }
 
 future<::shared_ptr<result_message>>
@@ -631,7 +634,9 @@ query_processor::execute_prepared_without_checking_exception_message(
         statements::prepared_statement::checked_weak_ptr prepared,
         cql3::prepared_cache_key_type cache_key,
         bool needs_authorization) {
-    return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_prepared, std::move(prepared), std::move(cache_key), needs_authorization);
+    return with_scheduling_group(statement->get_scheduling_group(query_state.get_client_state()), [&, statement = std::move(statement), prepared = std::move(prepared), cache_key = std::move(cache_key)] {
+        return execute_maybe_with_guard(query_state, std::move(statement), options, &query_processor::do_execute_prepared, std::move(prepared), std::move(cache_key), needs_authorization);
+    });
 }
 
 future<::shared_ptr<result_message>>

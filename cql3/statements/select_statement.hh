@@ -157,6 +157,8 @@ public:
 
     db::timeout_clock::duration get_timeout(const service::client_state& state, const query_options& options) const;
 
+    virtual scheduling_group get_scheduling_group(const service::client_state& state) const override;
+
 protected:
     uint64_t get_limit(const query_options& options, const std::optional<expr::expression>& limit, bool is_per_partition_limit = false) const;
     static uint64_t get_inner_loop_limit(uint64_t limit, bool is_aggregate);
