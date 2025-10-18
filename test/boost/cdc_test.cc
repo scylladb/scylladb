@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "exceptions/exceptions.hh"
 #include <fmt/core.h>
 #include <seastar/util/defer.hh>
 #undef SEASTAR_TESTING_MAIN
@@ -1986,6 +1987,40 @@ SEASTAR_THREAD_TEST_CASE(test_batch_post_image) {
 
 SEASTAR_THREAD_TEST_CASE(test_batch_pre_post_image) {
     test_batch_images(true, true);
+}
+
+// Reproduces #26382, where we discovered that deleting rows in tables without
+// a clustering key doesn't produce a preimage in CDC.
+SEASTAR_THREAD_TEST_CASE(test_preimage_no_clustering_key) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        using oper_ut = std::underlying_type_t<cdc::operation>;
+        for (auto pre : {cdc::image_mode::on, cdc::image_mode::full}) {
+            cquery_nofail(e, format("CREATE TABLE ks.t (pk INT, val INT, PRIMARY KEY (pk)) WITH cdc = {{'enabled': true, 'preimage': '{}'}}", pre));
+            cquery_nofail(e, "INSERT INTO ks.t (pk, val) VALUES (1, 2)");
+            cquery_nofail(e, "INSERT INTO ks.t (pk, val) VALUES (1, 3)");
+
+            auto result = get_result(e, {
+                    data_type_for<oper_ut>(), int32_type, int32_type},
+                    "SELECT \"cdc$operation\", pk, val FROM ks.t_scylla_cdc_log");
+
+            std::vector<std::vector<data_value>> expected = {
+                    {oper_ut(cdc::operation::insert), int32_t(1), int32_t(2)},
+                    {oper_ut(cdc::operation::pre_image), int32_t(1), int32_t(2)},
+                    {oper_ut(cdc::operation::insert), int32_t(1), int32_t(3)},
+            };
+
+            BOOST_REQUIRE_EQUAL(expected, result);
+            cquery_nofail(e, "DROP TABLE ks.t");
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_preimage_no_clustering_key_static_column) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+        for (auto pre : {cdc::image_mode::on, cdc::image_mode::full}) {
+            BOOST_REQUIRE_THROW(e.execute_cql(format("CREATE TABLE ks.t (pk INT, val INT, st INT STATIC, PRIMARY KEY (pk)) WITH cdc = {{'enabled': true, 'preimage': '{}'}}", pre)).get(), exceptions::invalid_request_exception);
+        }
+    }).get();
 }
 
 // Regression test for #7716
