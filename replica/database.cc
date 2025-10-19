@@ -1897,12 +1897,7 @@ std::ostream& operator<<(std::ostream& out, const database& db) {
     return out;
 }
 
-future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
-                                                   db::timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
-    auto m = fm.unfreeze(m_schema);
-    m.upgrade(cf.schema());
-
-    // prepare partition slice
+static query::partition_slice partition_slice_for_counter_update(const mutation& m) {
     query::column_id_vector static_columns;
     static_columns.reserve(m.partition().static_row().size());
     m.partition().static_row().for_each_cell([&] (auto id, auto&&) {
@@ -1925,14 +1920,11 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     regular_columns.erase(std::unique(regular_columns.begin(), regular_columns.end()),
                           regular_columns.end());
 
-    auto slice = query::partition_slice(std::move(cr_ranges), std::move(static_columns),
+    return query::partition_slice(std::move(cr_ranges), std::move(static_columns),
         std::move(regular_columns), { }, { }, query::max_rows);
+}
 
-    auto op = cf.write_in_progress();
-
-    tracing::trace(trace_state, "Acquiring counter locks");
-    auto locks = co_await cf.lock_counter_cells(m, timeout);
-
+future<> database::read_and_transform_counter_mutation_to_shards(mutation& m, column_family& cf, query::partition_slice slice, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
     // Before counter update is applied it needs to be transformed from
     // deltas to counter shards. To do that, we need to read the current
     // counter state for each modified cell...
@@ -1949,6 +1941,22 @@ future<mutation> database::do_apply_counter_update(column_family& cf, const froz
     // cells we can look for our shard in each of them, increment
     // its clock and apply the delta.
     transform_counter_updates_to_shards(m, mopt ? &*mopt : nullptr, cf.failed_counter_applies_to_memtable(), get_token_metadata().get_my_id());
+}
+
+future<mutation> database::do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema,
+                                                   db::timeout_clock::time_point timeout,tracing::trace_state_ptr trace_state) {
+    auto m = fm.unfreeze(m_schema);
+    m.upgrade(cf.schema());
+
+    auto slice = partition_slice_for_counter_update(m);
+
+    auto op = cf.write_in_progress();
+
+    tracing::trace(trace_state, "Acquiring counter locks");
+    auto locks = co_await cf.lock_counter_cells(m, timeout);
+
+    co_await read_and_transform_counter_mutation_to_shards(m, cf, std::move(slice), trace_state, timeout);
+
     tracing::trace(trace_state, "Applying counter update");
     co_await apply_with_commitlog(cf, m, timeout);
 

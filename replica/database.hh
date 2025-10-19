@@ -1728,6 +1728,7 @@ private:
     future<> do_apply_many(const utils::chunked_vector<frozen_mutation>&, db::timeout_clock::time_point timeout);
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
+    future<> read_and_transform_counter_mutation_to_shards(mutation& m, column_family& cf, query::partition_slice slice, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
     future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, db::timeout_clock::time_point timeout,
                                              tracing::trace_state_ptr trace_state);
 
