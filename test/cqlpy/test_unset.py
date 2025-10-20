@@ -91,9 +91,6 @@ def test_update_unset_value_expr_arithmetic(cql, table1):
 # The rationale is that "c = c + ?" is not an expression - it doesn't actually
 # calculate c + ?, but rather it is a primitive increment operation, and
 # passing ?=UNSET_VALUE should be able to skip this primitive operation.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def test_unset_counter_increment(cql, test_keyspace):
     with new_test_table(cql, test_keyspace, "p int PRIMARY KEY, c counter") as table:
         p = unique_key_int()

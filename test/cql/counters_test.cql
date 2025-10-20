@@ -1,7 +1,6 @@
 -- Error messages contain a keyspace name. Make the output stable.
 CREATE KEYSPACE ks
-    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}
-    AND TABLETS = {'enabled': false};
+    WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 USE ks;
 
 CREATE TABLE ks.tbl_cnt (pk int PRIMARY KEY, c1 counter);

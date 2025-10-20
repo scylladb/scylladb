@@ -12,9 +12,6 @@ from cassandra.query import UNSET_VALUE
 
 # Test for the validation bug of CASSANDRA-4706,
 # migrated from cql_tests.py:TestCQL.validate_counter_regular_test()
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testRegularCounters(cql, test_keyspace):
     # The Cassandra and Scylla error messages are different: Cassandra says
     # "Cannot mix counter and non counter columns in the same table", Scylla
@@ -31,9 +28,6 @@ def testRegularCounters(cql, test_keyspace):
                                  "CREATE TABLE %s (id bigint PRIMARY KEY, count counter, things set<text>)")
 
 # Migrated from cql_tests.py:TestCQL.collection_counter_test()
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCountersOnCollections(cql, test_keyspace):
     assert_invalid_throw(cql, test_keyspace + "." + unique_name(),
                          InvalidRequest,
@@ -47,9 +41,6 @@ def testCountersOnCollections(cql, test_keyspace):
                          InvalidRequest,
                          "CREATE TABLE %s (k int PRIMARY KEY, m map<text, counter>)")
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterUpdatesWithUnset(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, c counter)") as table:
         # set up
@@ -67,9 +58,6 @@ def testCounterUpdatesWithUnset(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT c FROM %s WHERE k = 10"), [1]) # no change to the counter value
 
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterFiltering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, a counter)") as table:
         for i in range(10):
@@ -97,9 +85,6 @@ def testCounterFiltering(cql, test_keyspace):
         assert_rows_ignoring_order(execute(cql, table, "SELECT * FROM %s WHERE a = ? ALLOW FILTERING", 6),
                                 [6, 6], [10, 6])
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterFilteringWithNull(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, a counter, b counter)") as table:
         execute(cql, table, "UPDATE %s SET a = a + ? WHERE k = ?", 1, 1)
@@ -120,9 +105,6 @@ def testCounterFilteringWithNull(cql, test_keyspace):
                              "SELECT * FROM %s WHERE b = null ALLOW FILTERING")
 
 # Test for the validation bug of CASSANDRA-9395.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testProhibitReversedCounterAsPartOfPrimaryKey(cql, test_keyspace):
     # The Cassandra message and Scylla message differ slightly -
     # counter type is not supported for PRIMARY KEY column 'a'"
@@ -134,9 +116,6 @@ def testProhibitReversedCounterAsPartOfPrimaryKey(cql, test_keyspace):
                                  "CREATE TABLE %s (a counter, b int, PRIMARY KEY (b, a)) WITH CLUSTERING ORDER BY (a desc);")
 
 # Check that a counter batch works as intended
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterBatch(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(userid int, url text, total counter, PRIMARY KEY (userid, url))") as table:
         # Ensure we handle updates to the same CQL row in the same partition properly

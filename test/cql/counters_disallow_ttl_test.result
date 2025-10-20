@@ -1,7 +1,6 @@
 > -- Error messages contain a keyspace name. Make the output stable.
 > CREATE KEYSPACE ks
->     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}
->     AND TABLETS = {'enabled': false};
+>     WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 OK
 > USE ks;
 OK

@@ -92,11 +92,10 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
         Column("pk", IntType),
         Column('int_c', IntType)
     ])
-    if not tablets_enabled:  # issue #18180
-        await random_tables.add_table(name='t2', pks=1, columns=[
-            Column("pk", IntType),
-            Column('counter_c', CounterType)
-        ])
+    await random_tables.add_table(name='t2', pks=1, columns=[
+        Column("pk", IntType),
+        Column('counter_c', CounterType)
+    ])
     cql = manager.get_cql()
     await cql.run_async(f"USE {random_tables.keyspace}")
 
@@ -126,10 +125,9 @@ async def test_fence_writes(request, manager: ManagerClient, tablets_enabled: bo
     with pytest.raises(WriteFailure, match="stale topology exception"):
         await cql.run_async("insert into t1(pk, int_c) values (1, 1)", host=host2)
 
-    if not tablets_enabled:  # issue #18180
-        logger.info(f"trying to write through host2 to counter column [{host2}]")
-        with pytest.raises(WriteFailure, match="stale topology exception"):
-            await cql.run_async("update t2 set counter_c=counter_c+1 where pk=1", host=host2)
+    logger.info(f"trying to write through host2 to counter column [{host2}]")
+    with pytest.raises(WriteFailure, match="stale topology exception"):
+        await cql.run_async("update t2 set counter_c=counter_c+1 where pk=1", host=host2)
 
     random_tables.drop_all()
 
