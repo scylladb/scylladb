@@ -93,9 +93,9 @@ future<> service::client_state::has_function_access(const sstring& ks, const sst
 }
 
 future<> service::client_state::has_column_family_access(const sstring& ks,
-                const sstring& cf, auth::permission p, auth::command_desc::type t) const {
+                const sstring& cf, auth::permission p, auth::command_desc::type t, std::optional<bool> is_vector_indexed) const {
     auto r = auth::make_data_resource(ks, cf);
-    co_return co_await has_access(ks, {p, r, t});
+    co_return co_await has_access(ks, {p, r, t}, is_vector_indexed);
 }
 
 future<> service::client_state::has_schema_access(const schema& s, auth::permission p) const {
@@ -148,7 +148,7 @@ future<> service::client_state::check_internal_table_permissions(std::string_vie
     return make_ready_future<>();
 }
 
-future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd) const {
+future<> service::client_state::has_access(const sstring& ks, auth::command_desc cmd, std::optional<bool> is_vector_indexed) const {
     if (ks.empty()) {
         throw exceptions::invalid_request_exception("You have not set a keyspace for this session");
     }
@@ -224,10 +224,40 @@ future<> service::client_state::has_access(const sstring& ks, auth::command_desc
                 ks + " can be granted only SELECT or DESCRIBE permissions to a non-superuser.");
     }
 
+    if (cmd.resource.kind() == auth::resource_kind::data && cmd.permission == auth::permission::SELECT && is_vector_indexed.has_value() && is_vector_indexed.value()) {
+
+        co_return co_await ensure_has_permission<auth::command_desc_with_permission_set>({auth::permission_set::of<auth::permission::SELECT, auth::permission::VECTOR_SEARCH_INDEXING>(), cmd.resource});
+
+    }
+
     co_return co_await ensure_has_permission(cmd);
 }
 
-future<bool> service::client_state::check_has_permission(auth::command_desc cmd) const {
+static bool intersects_permissions(const auth::permission_set& permissions, const auth::command_desc_with_permission_set& cmd) {
+    return permissions.intersects(cmd.permission);
+}
+
+static bool intersects_permissions(const auth::permission_set& permissions, const auth::command_desc& cmd) {
+    return permissions.contains(cmd.permission);
+}
+
+sstring service::client_state::generate_authorization_error_msg(const auth::command_desc& cmd) const {
+    return format("User {} has no {} permission on {} or any of its parents",
+            *_user,
+            auth::permissions::to_string(cmd.permission),
+            cmd.resource);
+}
+
+sstring service::client_state::generate_authorization_error_msg(const auth::command_desc_with_permission_set& cmd) const {
+    sstring perm_names = fmt::format("{}", fmt::join(auth::permissions::to_strings(cmd.permission), ", "));
+    return format("User {} has none of the permissions ({}) on {} or any of its parents",
+            *_user,
+            perm_names,
+            cmd.resource);
+}
+
+template <typename Cmd>
+future<bool> service::client_state::check_has_permission(Cmd cmd) const {
     if (_is_internal) {
         co_return true;
     }
@@ -235,27 +265,29 @@ future<bool> service::client_state::check_has_permission(auth::command_desc cmd)
     std::optional<auth::resource> parent_r = cmd.resource.parent();
 
     auth::permission_set set = co_await auth::get_permissions(*_auth_service, *_user, cmd.resource);
-    if (set.contains(cmd.permission)) {
+    if (intersects_permissions(set, cmd)) {
         co_return true;
     }
     if (parent_r) {
-        co_return co_await check_has_permission({cmd.permission, *parent_r});
+        co_return co_await check_has_permission<Cmd>({cmd.permission, *parent_r});
     }
     co_return false;
 }
+template future<bool> service::client_state::check_has_permission(auth::command_desc) const;
+template future<bool> service::client_state::check_has_permission<auth::command_desc_with_permission_set>(auth::command_desc_with_permission_set) const;
 
-future<> service::client_state::ensure_has_permission(auth::command_desc cmd) const {
+template <typename Cmd>
+future<> service::client_state::ensure_has_permission(Cmd cmd) const {
     return check_has_permission(cmd).then([this, cmd](bool ok) {
         if (!ok) {
             return make_exception_future<>(exceptions::unauthorized_exception(
-                format("User {} has no {} permission on {} or any of its parents",
-                        *_user,
-                        auth::permissions::to_string(cmd.permission),
-                        cmd.resource)));
+                generate_authorization_error_msg(cmd)));
         }
         return make_ready_future<>();
     });
 }
+template future<> service::client_state::ensure_has_permission(auth::command_desc) const;
+template future<> service::client_state::ensure_has_permission<auth::command_desc_with_permission_set>(auth::command_desc_with_permission_set) const;
 
 void service::client_state::set_keyspace(replica::database& db, std::string_view keyspace) {
     // Skip keyspace validation for non-authenticated users. Apparently, some client libraries

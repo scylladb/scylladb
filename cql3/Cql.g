@@ -1197,7 +1197,7 @@ listPermissionsStatement returns [std::unique_ptr<list_permissions_statement> st
     ;
 
 permission returns [auth::permission perm = auth::permission{}]
-    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE)
+    : p=(K_CREATE | K_ALTER | K_DROP | K_SELECT | K_MODIFY | K_AUTHORIZE | K_DESCRIBE | K_EXECUTE | K_VECTOR_SEARCH_INDEXING)
     { $perm = auth::permissions::from_string($p.text); }
     ;
 
@@ -2370,6 +2370,8 @@ K_PRUNE:       P R U N E;
 K_EXECUTE:     E X E C U T E;
 
 K_MUTATION_FRAGMENTS:    M U T A T I O N '_' F R A G M E N T S;
+
+K_VECTOR_SEARCH_INDEXING: V E C T O R '_' S E A R C H '_' I N D E X I N G;
 
 // Case-insensitive alpha characters
 fragment A: ('a'|'A');
