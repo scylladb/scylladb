@@ -154,9 +154,6 @@ public:
             , _unlink_sstables(unlink)
             , _stream_scope(scope)
     {
-        if (_primary_replica_only && _stream_scope != stream_scope::all) {
-            throw std::runtime_error("Scoped streaming of primary replica only is not supported yet");
-        }
         // By sorting SSTables by their primary key, we allow SSTable runs to be
         // incrementally streamed.
         // Overlapping run fragments can have their content deduplicated, reducing
@@ -211,7 +208,7 @@ private:
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
-    return get_all_endpoints(token) | std::views::filter([&topo = _erm->get_topology(), scope = _stream_scope] (const auto& ep) {
+    auto filtered_endpoints = get_all_endpoints(token) | std::views::filter([&topo = _erm->get_topology(), scope = _stream_scope] (const auto& ep) {
         switch (scope) {
         case stream_scope::all:
             return true;
@@ -223,6 +220,11 @@ host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& tok
             return topo.is_me(ep);
         }
     }) | std::ranges::to<host_id_vector_replica_set>();
+
+    if (_primary_replica_only && !filtered_endpoints.empty()) {
+        filtered_endpoints.resize(1);
+    }
+    return filtered_endpoints;
 }
 
 host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token& token) const {
@@ -237,7 +239,6 @@ host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token&
 
 host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token) const {
     auto current_targets = _erm->get_natural_replicas(token);
-    current_targets.resize(1);
     return current_targets;
 }
 
@@ -559,6 +560,7 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
+
     // streamer guarantees topology stability, for correctness, by holding effective_replication_map
     // throughout its lifetime.
     auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
