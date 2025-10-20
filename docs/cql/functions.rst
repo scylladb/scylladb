@@ -227,6 +227,39 @@ A number of functions are provided to “convert” the native types into binary
 takes a 64-bit ``blob`` argument and converts it to a ``bigint`` value. For example, ``bigintAsBlob(3)`` is
 ``0x0000000000000003`` and ``blobAsBigint(0x0000000000000003)`` is ``3``.
 
+
+.. _vector-similarity-functions:
+
+Vector similarity functions
+```````````````````````````
+
+To obtain the similarity of the given vectors, use a ``SELECT`` query::
+
+    SELECT comment, similarity_cosine(comment_vector, [0.1, 0.15, 0.3, 0.12, 0.05])
+        FROM cycling.comments_vs;
+
+The supported functions for this type of query are:
+
+- ``similarity_cosine``
+- ``similarity_euclidean``
+- ``similarity_dot_product``
+
+with the parameters of (``<vector>``, ``<vector>``).
+
+The ``vector`` is either the name of the float vector column or :ref:`vector of floats <vectors>`.
+Both arguments must be of the same dimension.
+
+These functions return a ``float`` value representing the similarity between the given vectors for each row.
+The similarity value is a floating-point number in a range of [0, 1] that describes how similar two vectors are.
+Values closer to 1 indicate greater similarity.
+The ``similarity_euclidean`` and ``similarity_dot_product`` functions do not perform vector normalization prior to computing similarity.
+
+.. note::
+    The ``similarity_dot_product`` function assumes that all input vectors are L2-normalized.
+    Supplying non-normalized vectors will result in dot product values that do not represent cosine similarity and therefore are not meaningful for similarity comparison.
+    If the input vectors are not normalized, consider using the ``similarity_cosine`` function instead.
+
+
 .. _udfs:
 
 User-defined functions :label-caution:`Experimental`
