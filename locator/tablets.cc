@@ -844,9 +844,11 @@ table_load_stats& table_load_stats::operator+=(const table_load_stats& s) noexce
 
 uint64_t tablet_load_stats::add_tablet_sizes(const tablet_load_stats& tls) {
     uint64_t table_sizes_sum = 0;
-    for (auto& [rb_tid, tablet_size] : tls.tablet_sizes) {
-        tablet_sizes[rb_tid] = tablet_size;
-        table_sizes_sum += tablet_size;
+    for (auto& [table, sizes] : tls.tablet_sizes) {
+        for (auto& [range, tablet_size] : sizes) {
+            tablet_sizes[table][range] = tablet_size;
+            table_sizes_sum += tablet_size;
+        }
     }
     return table_sizes_sum;
 }
@@ -873,10 +875,13 @@ load_stats& load_stats::operator+=(const load_stats& s) {
 }
 
 std::optional<uint64_t> load_stats::get_tablet_size(host_id host, const range_based_tablet_id& rb_tid) const {
-    if (auto node_i = tablet_stats.find(host); node_i != tablet_stats.end()) {
-        const tablet_load_stats& tls = node_i->second;
-        if (auto ts_i = tls.tablet_sizes.find(rb_tid); ts_i != tls.tablet_sizes.end()) {
-            return ts_i->second;
+    if (auto host_i = tablet_stats.find(host); host_i != tablet_stats.end()) {
+        auto& sizes_per_table = host_i->second.tablet_sizes;
+        if (auto table_i = sizes_per_table.find(rb_tid.table); table_i != sizes_per_table.end()) {
+            auto& tablet_sizes = table_i->second;
+            if (auto size_i = tablet_sizes.find(rb_tid.range); size_i != tablet_sizes.end()) {
+                return size_i->second;
+            }
         }
     }
     tablet_logger.debug("Unable to find tablet size on host: {} for tablet: {}", host, rb_tid);

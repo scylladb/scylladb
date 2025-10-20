@@ -65,6 +65,9 @@ struct global_tablet_id {
 
 struct range_based_tablet_id {
     table_id table;
+
+    // This represents the token range of the tablet in the form (a, b]
+    // and only such ranges are allowed
     dht::token_range range;
 
     bool operator==(const range_based_tablet_id&) const = default;
@@ -441,7 +444,9 @@ struct tablet_load_stats {
     // Sum of all tablet sizes on a node and available disk space.
     uint64_t effective_capacity = 0;
 
-    std::unordered_map<range_based_tablet_id, uint64_t> tablet_sizes;
+    // Contains tablet sizes per table.
+    // The token ranges must be in the form (a, b] and only such ranges are allowed
+    std::unordered_map<table_id, std::unordered_map<dht::token_range, uint64_t>> tablet_sizes;
 
     // returns the aggregated size of all the tablets added
     uint64_t add_tablet_sizes(const tablet_load_stats& tls);
