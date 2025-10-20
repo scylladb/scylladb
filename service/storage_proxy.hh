@@ -493,7 +493,7 @@ private:
 
     future<> mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
                                        tracing::trace_state_ptr trace_state, service_permit permit);
-    future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout,
+    future<> mutate_counter_on_leader_and_replicate(schema_ptr s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout,
                                                     tracing::trace_state_ptr trace_state, service_permit permit);
 
     locator::host_id find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl);
