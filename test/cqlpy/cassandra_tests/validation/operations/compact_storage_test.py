@@ -126,9 +126,6 @@ def testCounters(cql, test_keyspace):
         assert_rows(execute(cql, table, "SELECT total FROM %s WHERE userid = 1 AND url = 'http://foo.com'"),
                    [1])
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterFiltering(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, a COUNTER) WITH COMPACT STORAGE") as table:
         for i in range(10):
@@ -171,9 +168,6 @@ def testCounterFiltering(cql, test_keyspace):
                                 [10, 6])
 
 # Test for the bug of CASSANDRA-11726.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterAndColumnSelection(cql, test_keyspace):
     for compactStorageClause in ["", " WITH COMPACT STORAGE"]:
         with create_table(cql, test_keyspace, "(k int PRIMARY KEY, c counter) " + compactStorageClause) as table:
@@ -188,9 +182,6 @@ def testCounterAndColumnSelection(cql, test_keyspace):
             assert_rows(execute(cql, table, "SELECT k FROM %s"), [0])
 
 # Check that a counter batch works as intended
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterBatch(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(userid int, url text, total counter, PRIMARY KEY (userid, url)) WITH COMPACT STORAGE") as table:
         # Ensure we handle updates to the same CQL row in the same partition properly

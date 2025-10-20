@@ -636,9 +636,6 @@ def test_drop(cql, test_keyspace, table1, scylla_with_wasm_only, metrics):
         assert(get_metric(metrics, 'scylla_user_functions_cache_instace_count_any') == 0)
 
 # Test that we can use counters as the return type of a WASM UDF.
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def test_counter(cql, test_keyspace, scylla_only):
     schema = "p int, c counter, PRIMARY KEY (p)"
     ri_counter_name = unique_name()
