@@ -1228,9 +1228,19 @@ void tablet_metadata_guard::check() noexcept {
     auto erm = _table->get_effective_replication_map();
     auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_tablet.table);
     auto* trinfo = tmap.get_tablet_transition_info(_tablet.tablet);
+    tablet_logger.debug("tablet_metadata_guard::check: table {}.{}, tablet {}, "
+        "old erm version {}, new erm version {}, old tablet map {}, new tablet map {}",
+        _table->schema()->ks_name(), _table->schema()->cf_name(), 
+        _tablet,
+        _erm.get()->get_token_metadata().get_version(),
+        erm.get()->get_token_metadata().get_version(),
+        _erm->get_token_metadata().tablets().get_tablet_map(_tablet.table),
+        tmap);
     if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage)) {
+        tablet_logger.debug("tablet_metadata_guard::check: retain the erm and abort the guard");
         _abort_source.request_abort();
     } else {
+        tablet_logger.debug("tablet_metadata_guard::check: refresh the erm");
         _erm = std::move(erm);
         subscribe();
     }
