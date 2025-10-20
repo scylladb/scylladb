@@ -5928,7 +5928,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                 }
                 co_await container().invoke_on_all([version] (storage_service& ss) -> future<> {
                     const auto current_version = ss._shared_token_metadata.get()->get_version();
-                    rtlogger.debug("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
+                    rtlogger.info("Got raft_topology_cmd::barrier_and_drain, version {}, current version {}",
                         version, current_version);
 
                     // This shouldn't happen under normal operation, it's only plausible
@@ -5949,7 +5949,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
                     co_await ss._shared_token_metadata.stale_versions_in_use();
                     co_await get_topology_session_manager().drain_closing_sessions();
 
-                    rtlogger.debug("raft_topology_cmd::barrier_and_drain done");
+                    rtlogger.info("raft_topology_cmd::barrier_and_drain done");
                 });
 
                 co_await utils::get_local_injector().inject("raft_topology_barrier_and_drain_fail", [this] (auto& handler) -> future<> {
