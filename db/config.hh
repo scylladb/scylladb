@@ -25,6 +25,7 @@
 #include "utils/error_injection.hh"
 #include "utils/dict_trainer.hh"
 #include "utils/advanced_rpc_compressor.hh"
+#include "compress.hh"
 
 namespace boost::program_options {
 
@@ -438,6 +439,7 @@ public:
     named_value<bool> enable_sstables_mc_format;
     named_value<bool> enable_sstables_md_format;
     named_value<sstring> sstable_format;
+    named_value<compression_parameters> sstable_compression_user_table_options;
     named_value<bool> sstable_compression_dictionaries_allow_in_ddl;
     named_value<bool> sstable_compression_dictionaries_enable_writing;
     named_value<float> sstable_compression_dictionaries_memory_budget_fraction;
