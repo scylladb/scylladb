@@ -13,6 +13,7 @@
 #include "sstables/sstables.hh"
 #include "sstables/sstable_set_impl.hh"
 #include "compaction_strategy_state.hh"
+#include "utils/error_injection.hh"
 
 #include <ranges>
 
@@ -22,8 +23,8 @@ extern logging::logger clogger;
 
 using timestamp_type = api::timestamp_type;
 
-time_window_compaction_strategy_state& time_window_compaction_strategy::get_state(compaction_group_view& table_s) const {
-    return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state>();
+time_window_compaction_strategy_state_ptr time_window_compaction_strategy::get_state(compaction_group_view& table_s) const {
+    return table_s.get_compaction_strategy_state().get<time_window_compaction_strategy_state_ptr>();
 }
 
 const std::unordered_map<sstring, std::chrono::seconds> time_window_compaction_strategy_options::valid_window_units = {
@@ -335,7 +336,7 @@ time_window_compaction_strategy::get_reshaping_job(std::vector<sstables::shared_
 
 future<compaction_descriptor>
 time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_view& table_s, strategy_control& control) {
-    auto& state = get_state(table_s);
+    auto state = get_state(table_s);
     auto compaction_time = gc_clock::now();
     auto candidates = co_await control.candidates(table_s);
 
@@ -344,7 +345,7 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
     }
 
     auto now = db_clock::now();
-    if (now - state.last_expired_check > _options.expired_sstable_check_frequency) {
+    if (now - state->last_expired_check > _options.expired_sstable_check_frequency) {
         clogger.debug("[{}] TWCS expired check sufficiently far in the past, checking for fully expired SSTables", fmt::ptr(this));
 
         // Find fully expired SSTables. Those will be included no matter what.
@@ -356,12 +357,14 @@ time_window_compaction_strategy::get_sstables_for_compaction(compaction_group_vi
         // Keep checking for fully_expired_sstables until we don't find
         // any among the candidates, meaning they are either already compacted
         // or registered for compaction.
-        state.last_expired_check = now;
+        state->last_expired_check = now;
     } else {
         clogger.debug("[{}] TWCS skipping check for fully expired SSTables", fmt::ptr(this));
     }
 
-    auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time);
+    co_await utils::get_local_injector().inject("twcs_get_sstables_for_compaction", utils::wait_for_message(30s));
+
+    auto compaction_candidates = get_next_non_expired_sstables(table_s, control, std::move(candidates), compaction_time, *state);
     clogger.debug("[{}] Going to compact {} non-expired sstables", fmt::ptr(this), compaction_candidates.size());
     co_return compaction_descriptor(std::move(compaction_candidates));
 }
@@ -384,8 +387,8 @@ time_window_compaction_strategy::compaction_mode(const time_window_compaction_st
 
 std::vector<sstables::shared_sstable>
 time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_view& table_s, strategy_control& control,
-        std::vector<sstables::shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time) {
-    auto most_interesting = get_compaction_candidates(table_s, control, non_expiring_sstables);
+        std::vector<sstables::shared_sstable> non_expiring_sstables, gc_clock::time_point compaction_time, time_window_compaction_strategy_state& state) {
+    auto most_interesting = get_compaction_candidates(table_s, control, non_expiring_sstables, state);
 
     if (!most_interesting.empty()) {
         return most_interesting;
@@ -410,14 +413,14 @@ time_window_compaction_strategy::get_next_non_expired_sstables(compaction_group_
 }
 
 std::vector<sstables::shared_sstable>
-time_window_compaction_strategy::get_compaction_candidates(compaction_group_view& table_s, strategy_control& control, std::vector<sstables::shared_sstable> candidate_sstables) {
-    auto& state = get_state(table_s);
+time_window_compaction_strategy::get_compaction_candidates(compaction_group_view& table_s, strategy_control& control,
+    std::vector<sstables::shared_sstable> candidate_sstables, time_window_compaction_strategy_state& state) {
     auto [buckets, max_timestamp] = get_buckets(std::move(candidate_sstables), _options);
     // Update the highest window seen, if necessary
     state.highest_window_seen = std::max(state.highest_window_seen, max_timestamp);
 
     return newest_bucket(table_s, control, std::move(buckets), table_s.min_compaction_threshold(), table_s.schema()->max_compaction_threshold(),
-        state.highest_window_seen);
+        state.highest_window_seen, state);
 }
 
 timestamp_type
@@ -465,8 +468,7 @@ namespace compaction {
 
 std::vector<sstables::shared_sstable>
 time_window_compaction_strategy::newest_bucket(compaction_group_view& table_s, strategy_control& control, std::map<timestamp_type, std::vector<sstables::shared_sstable>> buckets,
-        int min_threshold, int max_threshold, timestamp_type now) {
-    auto& state = get_state(table_s);
+        int min_threshold, int max_threshold, timestamp_type now, time_window_compaction_strategy_state& state) {
     clogger.debug("time_window_compaction_strategy::newest_bucket:\n  now {}\n{}", now, buckets);
 
     for (auto&& [key, bucket] : buckets | std::views::reverse) {
@@ -517,7 +519,7 @@ time_window_compaction_strategy::trim_to_threshold(std::vector<sstables::shared_
 }
 
 future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(compaction_group_view& table_s) const {
-    auto& state = get_state(table_s);
+    auto state = get_state(table_s);
     auto min_threshold = table_s.min_compaction_threshold();
     auto max_threshold = table_s.schema()->max_compaction_threshold();
     auto main_set = co_await table_s.main_sstable_set();
@@ -526,7 +528,7 @@ future<int64_t> time_window_compaction_strategy::estimated_pending_compactions(c
 
     int64_t n = 0;
     for (auto& [bucket_key, bucket] : buckets) {
-        switch (compaction_mode(state, bucket, bucket_key, max_timestamp, min_threshold)) {
+        switch (compaction_mode(*state, bucket, bucket_key, max_timestamp, min_threshold)) {
         case bucket_compaction_mode::size_tiered:
             n += size_tiered_compaction_strategy::estimated_pending_compactions(bucket, min_threshold, max_threshold, _stcs_options);
             break;
