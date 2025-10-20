@@ -3599,13 +3599,28 @@ future<>
 storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, const frozen_mutation& fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state, service_permit permit,
                                                       fencing_token fence, locator::host_id caller) {
-    // FIXME: This does not handle intra-node tablet migration properly.
-    // Refs https://github.com/scylladb/scylladb/issues/18180
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
     const auto& rs = s->table().get_effective_replication_map()->get_replication_strategy();
 
     return run_fenceable_write(rs, fence, caller, [this, erm, s, &fm, timeout, trace_state] (this auto) -> future<mutation> {
-        auto guard = co_await _db.local().acquire_counter_locks(s, fm, timeout, trace_state);
+        // lock the reading shards in sorted order.
+        // usually there is only a single read shard, which is the current shard. we need to lock the
+        // counter on this shard to protect the counter's read-modify-write operation against concurrent updates.
+        // during intranode migration, the read shard switches, creating a phase where both shards
+        // may receive updates concurrently for the same counter. therefore, we need to lock both shards.
+        auto lock_shards = erm->shards_ready_for_reads(*s, fm.token(*s));
+        std::ranges::sort(lock_shards);
+
+        using foreign_counter_guard = foreign_ptr<lw_shared_ptr<replica::counter_update_guard>>;
+        utils::small_vector<foreign_counter_guard, 2> counter_locks;
+        for (auto shard : lock_shards) {
+            counter_locks.push_back(co_await _db.invoke_on(shard, {_write_smp_service_group, timeout},
+                    [s = global_schema_ptr(s), &fm, gtr = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) mutable -> future<foreign_counter_guard> {
+                return db.acquire_counter_locks(s, fm, timeout, gtr.get()).then([] (replica::counter_update_guard g) {
+                    return make_foreign(make_lw_shared<replica::counter_update_guard>(std::move(g)));
+                });
+            }));
+        }
 
         // read the current counter value and transform the counter update mutation
         auto m = co_await _db.local().prepare_counter_update(s, fm, timeout, trace_state);
