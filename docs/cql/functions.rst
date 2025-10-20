@@ -227,6 +227,40 @@ A number of functions are provided to “convert” the native types into binary
 takes a 64-bit ``blob`` argument and converts it to a ``bigint`` value. For example, ``bigintAsBlob(3)`` is
 ``0x0000000000000003`` and ``blobAsBigint(0x0000000000000003)`` is ``3``.
 
+
+Vector similarity functions :label-caution:`Experimental` :label-note:`ScyllaDB Cloud`
+``````````````````````````````````````````````````````````````````````````````````````
+
+To obtain the similarity distances of the best scoring vectors closest to the query data as part of the results, use a ``SELECT`` query::
+
+    SELECT comment, similarity_cosine(comment_vector, [0.1, 0.15, 0.3, 0.12, 0.05])
+        FROM cycling.comments_vs
+        ORDER BY comment_vector ANN OF [0.1, 0.15, 0.3, 0.12, 0.05]
+        LIMIT 1;
+
+The supported functions for this type of query are:
+
+- ``similarity_cosine``
+- ``similarity_euclidean``
+- ``similarity_dot_product``
+
+with the parameters of (``<vector_column>``, ``<vector_value>``).
+
+The ``vector_column`` is the name of the vector column target of a vector index, and the ``vector_value`` is the vector expression provided as part of the :ref:`ANN vector query <vector-queries>`.
+
+.. note::
+    The ``vector_column`` and the ``vector_value`` must be **exactly the same** as used in the ``ORDER BY ... ANN OF ...`` clause of the query.
+    Otherwise the query will fail with an error.
+
+These functions return a ``float`` value representing the similarity distance between the found vector and the query vector for each row.
+The lower the distance value, the more similar the vectors are. The distance value is computed according to the similarity metric defined when creating the vector index.
+
+.. note::
+    Each vector similarity function must match the similarity metric specified when :ref:`creating the vector index <create-vector-index-statement>`.
+    For example, if the index was created with the cosine similarity metric, use ``similarity_cosine`` in your queries.
+    Using a different similarity function than the one defined for the index will result in an error.
+
+
 .. _udfs:
 
 User-defined functions :label-caution:`Experimental`
