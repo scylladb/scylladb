@@ -3510,9 +3510,26 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, frozen_mutat
                                                       tracing::trace_state_ptr trace_state, service_permit permit) {
     auto erm = _db.local().find_column_family(s).get_effective_replication_map();
 
-    // FIXME: This does not handle intra-node tablet migration properly.
-    // Refs https://github.com/scylladb/scylladb/issues/18180
-    auto guard = co_await _db.local().acquire_counter_locks(s, fm, timeout, trace_state);
+    // lock the reading shards in sorted order.
+    // usually there is only a single read shard, which is the current shard. we need to lock the
+    // counter on this shard to protect the counter's read-modify-write operation against concurrent updates.
+    // during intranode migration, the read shard switches, creating a phase where both shards
+    // may receive updates concurrently for the same counter. therefore, we need to lock both shards.
+    auto lock_shards = erm->shards_ready_for_reads(*s, fm.token(*s));
+    std::ranges::sort(lock_shards);
+
+    using counter_guard_ptr = lw_shared_ptr<replica::counter_update_guard>;
+    using foreign_counter_guard = foreign_ptr<counter_guard_ptr>;
+    std::vector<foreign_counter_guard> counter_locks;
+    counter_locks.reserve(lock_shards.size());
+    for (auto shard : lock_shards) {
+        counter_locks.push_back(co_await _db.invoke_on(shard, {_write_smp_service_group, timeout},
+                [s = global_schema_ptr(s), fm, gtr = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) mutable -> future<foreign_counter_guard> {
+            return db.acquire_counter_locks(s, fm, timeout, gtr.get()).then([] (replica::counter_update_guard g) {
+                return make_foreign(make_lw_shared<replica::counter_update_guard>(std::move(g)));
+            });
+        }));
+    }
 
     // read the current counter value and transform the counter update mutation
     auto m = co_await _db.local().prepare_counter_update(s, fm, timeout, trace_state);
@@ -3525,7 +3542,12 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, frozen_mutat
     };
     co_await apply_on_shards(erm, *s, m.token(), std::move(apply));
 
-    guard = {}; // release locks
+    // release locks
+    while (!counter_locks.empty()) {
+        auto l = std::move(counter_locks.back());
+        counter_locks.pop_back();
+        co_await l.destroy();
+    }
 
     co_await replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(permit));
 }
