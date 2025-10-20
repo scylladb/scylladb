@@ -8,6 +8,7 @@
 
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <ranges>
 #include <seastar/core/abort_source.hh>
@@ -30,7 +31,11 @@
 #include "utils/assert.hh"
 #include "idl/view.dist.hh"
 
+using namespace std::chrono_literals;
+
 static logging::logger vbc_logger("view_building_coordinator");
+
+static constexpr std::chrono::milliseconds min_time_between_iterations = 200ms;
 
 namespace db {
 
@@ -102,6 +107,7 @@ future<> view_building_coordinator::run() {
         _vb_sm.event.broadcast();
     });
 
+    auto previously_finished_iteration = std::chrono::steady_clock::now();
     while (!_as.abort_requested()) {
         co_await utils::get_local_injector().inject("view_building_coordinator_pause_main_loop", utils::wait_for_message(std::chrono::minutes(2)));
         if (utils::get_local_injector().enter("view_building_coordinator_skip_main_loop")) {
@@ -111,11 +117,19 @@ future<> view_building_coordinator::run() {
 
         bool sleep = false;
         try {
+            auto since_last_iteration = std::chrono::steady_clock::now() - previously_finished_iteration;
+            if (since_last_iteration < min_time_between_iterations) {
+                auto sleep_duration = min_time_between_iterations - since_last_iteration;
+                vbc_logger.debug("Only {} elapsed since last iteration, sleeping for {}", std::chrono::duration_cast<std::chrono::milliseconds>(since_last_iteration), std::chrono::duration_cast<std::chrono::milliseconds>(sleep_duration));
+                co_await seastar::sleep_abortable(sleep_duration, _as);
+            }
+
             auto guard_opt = co_await update_state(co_await start_operation());
             if (!guard_opt) {
                 // If `update_state()` returned guard, this means it committed some mutations
                 // and the state was changed.
                 vbc_logger.debug("view building coordinator state was changed, do next iteration without waiting for event");
+                previously_finished_iteration = std::chrono::steady_clock::now();
                 continue;
             }
 
@@ -123,8 +137,11 @@ future<> view_building_coordinator::run() {
             if (started_new_work) {
                 // If any tasks were started, do another iteration, so the coordinator can attach itself to the tasks (via RPC)
                 vbc_logger.debug("view building coordinator started new tasks, do next iteration without waiting for event");
+                previously_finished_iteration = std::chrono::steady_clock::now();
                 continue;
             }
+
+            previously_finished_iteration = std::chrono::steady_clock::now();
             co_await await_event();
         } catch (...) {
             handle_coordinator_error(std::current_exception());
