@@ -107,7 +107,7 @@ async def test_group0_tombstone_gc(manager: ManagerClient):
     async def alter_system_schema(keyspace=None, table_count=3):
         if not keyspace:
             async with new_test_keyspace(manager, "with replication = { 'class': 'NetworkTopologyStrategy', 'replication_factor': 2}", host=host_primary) as keyspace:
-                alter_system_schema(keyspace, table_count)
+                await alter_system_schema(keyspace, table_count)
                 return
 
         for _ in range(table_count):
