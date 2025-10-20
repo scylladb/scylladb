@@ -20,7 +20,7 @@ import time
 import pytest
 import requests
 
-from test.alternator.util import random_string, full_scan, full_query, create_test_table
+from test.alternator.util import random_string, full_scan, full_query, create_test_table, scylla_config_temporary
 
 
 # The "with_tracing" fixture ensures that tracing is enabled throughout
@@ -97,7 +97,7 @@ def with_slow_query_logging(rest_api):
 # longer), but is good enough for tests on a throwable boot of Scylla as in
 # test/alternator/run.
 last_scan = None
-def find_tracing_session(dynamodb, str):
+def iterate_tracing_sessions(dynamodb):
     # The tracing session table does not get updated immediately - we may need
     # to sleep a bit until the requested string appears. We save the previous
     # session table in last_scan, so if we're looking for sessions of number of
@@ -113,11 +113,15 @@ def find_tracing_session(dynamodb, str):
         last_scan = full_scan(trace_sessions_table, ConsistentRead=False)
     while time.time() - start < 100:
         for entry in last_scan:
-            if str in entry['parameters']:
-                print(f'find_tracing_session time {time.time()-start}')
-                return entry['session_id']
+            yield entry
         time.sleep(0.3)
         last_scan = full_scan(trace_sessions_table, ConsistentRead=False)
+
+
+def find_tracing_session(dynamodb, str):
+    for entry in iterate_tracing_sessions(dynamodb):
+        if str in entry['parameters']:
+            return entry['session_id']
     pytest.fail("Couldn't find tracing session")
 
 # For the given tracing session_id of a request, read the list of "activities"
@@ -213,6 +217,19 @@ def test_tracing_all(with_tracing, test_table_s_isolation_always, dynamodb):
     p_scan = random_string(20)
     full_scan(table, FilterExpression='p = :p', ExpressionAttributeValues={':p': p_scan})
 
+    # we will fetch tracing sessions based on operation and beginning of the long unique string
+    # we have set max trace output size to the length of the string, so we can expect truncation
+    # to happen at the end of the string and the beginning should be present
+
+    p_putitem_really_long = random_string(1024 * 8)
+    beginning_of_p_putitem_really_long = p_putitem_really_long[:1024]
+    with scylla_config_temporary(dynamodb, 'alternator_max_users_query_size_in_trace_output', str(len(p_putitem_really_long))):
+        table.put_item(Item={'p': p_putitem_really_long})
+
+    with scylla_config_temporary(dynamodb, 'alternator_max_users_query_size_in_trace_output', str(len(p_putitem_really_long) + 1024 * 256)):
+        table.put_item(Item={'p': '_' + p_putitem_really_long})
+
+
     # Check the traces. NOTE: the following checks are fairly arbitrary, and
     # may break in the future if we change the tracing messages...
     expect_tracing_events(dynamodb, p_putitem, ['PutItem', 'CAS successful'])
@@ -223,6 +240,21 @@ def test_tracing_all(with_tracing, test_table_s_isolation_always, dynamodb):
     expect_tracing_events(dynamodb, p_batchwriteitem, ['BatchWriteItem', 'CAS successful'])
     expect_tracing_events(dynamodb, p_query, ['Query', 'Querying is done'])
     expect_tracing_events(dynamodb, p_scan, ['Scan', 'Performing a database query'])
+
+    op = 'Alternator PutItem'
+    found_truncated = False
+    found_not_truncated = False
+    for entry in iterate_tracing_sessions(dynamodb):
+        if entry['request'] == op:
+            p = entry['parameters']
+            if beginning_of_p_putitem_really_long in p:
+                if '<truncated>' in p:
+                    found_truncated = True
+                else:
+                    found_not_truncated = True
+                if found_truncated and found_not_truncated:
+                    break
+    assert found_truncated and found_not_truncated
 
 # TODO:
 # We could use traces to show that the right things actually happen during a

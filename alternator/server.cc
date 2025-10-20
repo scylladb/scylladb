@@ -378,35 +378,82 @@ static tracing::trace_state_ptr create_tracing_session(tracing::tracing& tracing
     return tracing_instance.create_session(tracing::trace_type::QUERY, props);
 }
 
-// truncated_content_view() prints a potentially long chunked_content for
-// debugging purposes. In the common case when the content is not excessively
-// long, it just returns a view into the given content, without any copying.
-// But when the content is very long, it is truncated after some arbitrary
-// max_len (or one chunk, whichever comes first), with "<truncated>" added at
-// the end. To do this modification to the string, we need to create a new
-// std::string, so the caller must pass us a reference to one, "buf", where
-// we can store the content. The returned view is only alive for as long this
-// buf is kept alive.
-static std::string_view truncated_content_view(const chunked_content& content, std::string& buf) {
-    constexpr size_t max_len = 1024;
-    if (content.empty()) {
-        return std::string_view();
-    } else if (content.size() == 1 && content.begin()->size() <= max_len) {
-        return std::string_view(content.begin()->get(), content.begin()->size());
-    } else {
-        buf = std::string(content.begin()->get(), std::min(content.begin()->size(), max_len)) + "<truncated>";
-        return std::string_view(buf);
+// A helper class to represent a potentially truncated view of a chunked_content.
+// If the content is short enough and single chunked, it just holds a view into the content.
+// Otherwise it will be copied into an internal buffer, possibly truncated (depending on maximum allowed size passed in),
+// and the view will point into that buffer.
+// `as_view()` method will return the view.
+// `take_as_sstring()` will either move out the internal buffer (if any), or create a new sstring from the view.
+// You should consider `as_view()` valid as long both the original chunked_content and the truncated_content object are alive.
+class truncated_content {
+    std::string_view _view;
+    sstring _content_maybe;
+
+    void copy_from_content(const chunked_content& content) {
+        size_t offset = 0;
+        for(auto &tmp : content) {
+            size_t to_copy = std::min(tmp.size(), _content_maybe.size() - offset);
+            std::copy(tmp.get(), tmp.get() + to_copy, _content_maybe.data() + offset);
+            offset += to_copy;
+            if (offset >= _content_maybe.size()) {
+                break;
+            }
+        }
     }
+public:
+    truncated_content(const chunked_content& content, size_t max_len = std::numeric_limits<size_t>::max()) {
+        if (content.empty()) return;
+        if (content.size() == 1 && content.begin()->size() <= max_len) {
+            _view = std::string_view(content.begin()->get(), content.begin()->size());
+            return;
+        }
+
+        constexpr std::string_view truncated_text = "<truncated>";
+        size_t content_size = 0;
+        for(auto &tmp : content) {
+            content_size += tmp.size();
+        }
+        if (content_size <= max_len) {
+            _content_maybe = sstring{ sstring::initialized_later{}, content_size };
+            copy_from_content(content);
+        }
+        else {
+            _content_maybe = sstring{ sstring::initialized_later{}, max_len + truncated_text.size() };
+            copy_from_content(content);
+            std::copy(truncated_text.begin(), truncated_text.end(), _content_maybe.data() + _content_maybe.size() - truncated_text.size());
+        }
+        _view = std::string_view(_content_maybe);
+    }
+
+    std::string_view as_view() const { return _view; }
+    sstring take_as_sstring() && {
+        if (_content_maybe.empty() && !_view.empty()) {
+            return sstring{_view};
+        }
+        return std::move(_content_maybe);
+    }
+};
+
+// `truncated_content_view` will produce an object representing a view to a passed content
+// possibly truncated at some length. The value returned is used in two ways:
+// - to print it in logs (use `as_view()` method for this)
+// - to pass it to tracing object, where it will be stored and used later
+//   (use `take_as_sstring()` method as this produces a copy in form of a sstring)
+// `truncated_content` delays constructing `sstring` object until it's actually needed.
+// `truncated_content` is valid as long as passed `content` is alive.
+// if the content is truncated, `<truncated>` will be appended at the maximum size limit
+// and total size will be `max_users_query_size_in_trace_output() + strlen("<truncated>")`.
+static truncated_content truncated_content_view(const chunked_content& content, size_t max_size) {
+    return truncated_content{content, max_size};
 }
 
-static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_state, std::string_view username, std::string_view op, const chunked_content& query) {
+static tracing::trace_state_ptr maybe_trace_query(service::client_state& client_state, std::string_view username, std::string_view op, const chunked_content& query, size_t max_users_query_size_in_trace_output) {
     tracing::trace_state_ptr trace_state;
     tracing::tracing& tracing_instance = tracing::tracing::get_local_tracing_instance();
     if (tracing_instance.trace_next_query() || tracing_instance.slow_query_tracing_enabled()) {
         trace_state = create_tracing_session(tracing_instance);
-        std::string buf;
         tracing::add_session_param(trace_state, "alternator_op", op);
-        tracing::add_query(trace_state, truncated_content_view(query, buf));
+        tracing::add_query(trace_state, truncated_content_view(query, max_users_query_size_in_trace_output).take_as_sstring());
         tracing::begin(trace_state, seastar::format("Alternator {}", op), client_state.get_client_address());
         if (!username.empty()) {
             tracing::set_username(trace_state, auth::authenticated_user(username));
@@ -444,8 +491,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
         req->get_protocol_name() == "https");
 
     if (slogger.is_enabled(log_level::trace)) {
-        std::string buf;
-        slogger.trace("Request: {} {} {}", op, truncated_content_view(content, buf), req->_headers);
+        slogger.trace("Request: {} {} {}", op, truncated_content_view(content, _max_users_query_size_in_trace_output).as_view(), req->_headers);
     }
     auto callback_it = _callbacks.find(op);
     if (callback_it == _callbacks.end()) {
@@ -465,7 +511,7 @@ future<executor::request_return_type> server::handle_api_request(std::unique_ptr
     }
     co_await client_state.maybe_update_per_service_level_params();
 
-    tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content);
+    tracing::trace_state_ptr trace_state = maybe_trace_query(client_state, username, op, content, _max_users_query_size_in_trace_output.get());
     tracing::trace(trace_state, "{}", op);
 
     auto user = client_state.user();
@@ -517,6 +563,7 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
         , _sl_controller(sl_controller)
         , _key_cache(1024, 1min, slogger)
         , _enforce_authorization(false)
+        , _max_users_query_size_in_trace_output(1024)
         , _enabled_servers{}
         , _pending_requests("alternator::server::pending_requests")
         , _timeout_config(_proxy.data_dictionary().get_config())
@@ -597,10 +644,12 @@ server::server(executor& exec, service::storage_proxy& proxy, gms::gossiper& gos
 }
 
 future<> server::init(net::inet_address addr, std::optional<uint16_t> port, std::optional<uint16_t> https_port, std::optional<tls::credentials_builder> creds,
-        utils::updateable_value<bool> enforce_authorization, semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
+        utils::updateable_value<bool> enforce_authorization, utils::updateable_value<uint64_t> max_users_query_size_in_trace_output,
+        semaphore* memory_limiter, utils::updateable_value<uint32_t> max_concurrent_requests) {
     _memory_limiter = memory_limiter;
     _enforce_authorization = std::move(enforce_authorization);
     _max_concurrent_requests = std::move(max_concurrent_requests);
+    _max_users_query_size_in_trace_output = std::move(max_users_query_size_in_trace_output);
     if (!port && !https_port) {
         return make_exception_future<>(std::runtime_error("Either regular port or TLS port"
                 " must be specified in order to init an alternator HTTP server instance"));
