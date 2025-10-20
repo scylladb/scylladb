@@ -1204,6 +1204,7 @@ effective_replication_map_ptr tablet_aware_replication_strategy::do_make_replica
 void tablet_metadata_guard::check() noexcept {
     auto erm = _table->get_effective_replication_map();
     auto& tmap = erm->get_token_metadata_ptr()->tablets().get_tablet_map(_tablet.table);
+    auto& old_tmap = _erm->get_token_metadata().tablets().get_tablet_map(_tablet.table);
     auto* trinfo = tmap.get_tablet_transition_info(_tablet.tablet);
     tablet_logger.debug("tablet_metadata_guard::check: table {}.{}, tablet {}, "
         "old erm version {}, new erm version {}, old tablet map {}, new tablet map {}",
@@ -1211,9 +1212,11 @@ void tablet_metadata_guard::check() noexcept {
         _tablet,
         _erm.get()->get_token_metadata().get_version(),
         erm.get()->get_token_metadata().get_version(),
-        _erm->get_token_metadata().tablets().get_tablet_map(_tablet.table),
+        old_tmap,
         tmap);
-    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage)) {
+    if (bool(_stage) != bool(trinfo) || (_stage && _stage != trinfo->stage) || 
+        old_tmap.tablet_count() != tmap.tablet_count())
+    {
         tablet_logger.debug("tablet_metadata_guard::check: retain the erm and abort the guard");
         _abort_source.request_abort();
     } else {
