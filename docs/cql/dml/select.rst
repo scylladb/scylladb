@@ -272,9 +272,17 @@ For example::
 This query returns up to 5 rows with the closest distance of ``embedding`` vector to the provided query vector,
 in this case ``[0.1, 0.2, 0.3, 0.4]``.
 
+There's also possibility to return the similarity score along with the results by using the :ref:`similarity functions <vector-similarity-functions>`.
+
+For example::
+
+    SELECT image_id, similarity_cosine(embedding, [0.1, 0.2, 0.3, 0.4])
+      FROM ImageEmbeddings
+      ORDER BY embedding ANN OF [0.1, 0.2, 0.3, 0.4] LIMIT 5;
+
 .. warning:: 
 
-  Currently, vector queries do not support filtering with ``WHERE`` clause, returning similarity distances,
+  Currently, vector queries do not support filtering with ``WHERE`` clause,
   grouping with ``GROUP BY`` and paging. This will be added in the future releases.
 
 
