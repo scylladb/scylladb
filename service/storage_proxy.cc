@@ -3582,32 +3582,32 @@ storage_proxy::mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_a
     {
         auto& update_ms = mutations;
         co_await coroutine::parallel_for_each(update_ms, [&] (frozen_mutation_and_schema& fm_a_s) -> future<> {
-            co_await mutate_counter_on_leader_and_replicate(fm_a_s.s, std::move(fm_a_s.fm), cl, timeout, trace_state, permit, fence, caller);
+            auto erm = _db.local().find_column_family(fm_a_s.s).get_effective_replication_map();
+            auto shard = erm->get_sharder(*fm_a_s.s).shard_for_reads(fm_a_s.fm.token(*fm_a_s.s));
+            bool local = shard == this_shard_id();
+            get_stats().replica_cross_shard_ops += !local;
+
+            return container().invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(fm_a_s.s), fm = std::move(fm_a_s.fm), cl, timeout, gt = tracing::global_trace_state_ptr(trace_state), permit, local, fence, caller] (storage_proxy& sp) mutable -> future<> {
+                auto p = local ? std::move(permit) : empty_service_permit(); // FIXME: either obtain a real permit on this shard or hold original one across shard
+                return sp.mutate_counter_on_leader_and_replicate(gs, std::move(fm), cl, timeout, gt.get(), std::move(p), fence, caller);
+            });
         });
     }
 }
 
 future<>
-storage_proxy::mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
+storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state, service_permit permit,
                                                       fencing_token fence, locator::host_id caller) {
-    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
     // FIXME: This does not handle intra-node tablet migration properly.
     // Refs https://github.com/scylladb/scylladb/issues/18180
-    auto shard = erm->get_sharder(*s).shard_for_reads(fm.token(*s));
-    bool local = shard == this_shard_id();
-    get_stats().replica_cross_shard_ops += !local;
-    return _db.invoke_on(shard, {_write_smp_service_group, timeout}, [&proxy = container(), gs = global_schema_ptr(s), fm = std::move(fm), cl, timeout, gt = tracing::global_trace_state_ptr(std::move(trace_state)), permit = std::move(permit), local, fence, caller] (replica::database& db) {
-        auto trace_state = gt.get();
-        auto p = local ? std::move(permit) : /* FIXME: either obtain a real permit on this shard or hold original one across shard */ empty_service_permit();
-        const auto& rs = gs.get()->table().get_effective_replication_map()->get_replication_strategy();
-        return proxy.local().run_fenceable_write(rs, fence, caller,
-            [&db, fm = std::move(fm), timeout, trace_state, gs = std::move(gs)]() mutable {
-                return db.apply_counter_update(std::move(gs), fm, timeout, std::move(trace_state));
-            })
-            .then([&proxy, cl, timeout, trace_state, p = std::move(p)] (mutation m) mutable {
-                return proxy.local().replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(p));
-            });
+
+    const auto& rs = s->table().get_effective_replication_map()->get_replication_strategy();
+
+    return run_fenceable_write(rs, fence, caller, [this, s, fm = std::move(fm), timeout, trace_state] {
+        return _db.local().apply_counter_update(s, fm, timeout, trace_state);
+    }).then([this, cl, timeout, trace_state, permit = std::move(permit)] (mutation m) mutable {
+        return replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(permit));
     });
 }
 
