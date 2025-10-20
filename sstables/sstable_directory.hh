@@ -26,6 +26,7 @@
 #include "utils/disk-error-handler.hh"
 #include "sstables/generation_type.hh"
 #include "sstables/sstables_registry.hh"
+#include "sstables/object_storage_client.hh"
 
 namespace compaction { class compaction_manager; }
 namespace s3 { class client; }
@@ -120,7 +121,7 @@ public:
 
         std::filesystem::path _directory;
         std::unique_ptr<scan_state> _state;
-        shared_ptr<s3::client> _client;
+        shared_ptr<object_storage_client> _client;
         sstring _bucket;
 
         future<> garbage_collect(storage&);
@@ -131,7 +132,7 @@ public:
 
     public:
         filesystem_components_lister(std::filesystem::path dir);
-        filesystem_components_lister(std::filesystem::path dir, sstables_manager&, const data_dictionary::storage_options::s3&);
+        filesystem_components_lister(std::filesystem::path dir, sstables_manager&, const data_dictionary::storage_options::object_storage&);
 
         virtual future<> process(sstable_directory& directory, process_flags flags) override;
         virtual future<> commit() override;

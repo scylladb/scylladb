@@ -525,7 +525,7 @@ private:
     friend struct component_name;
     friend class sstable_stream_sink_impl;
     friend class filesystem_storage;
-    friend class s3_storage;
+    friend class object_storage_base;
     friend class tiered_storage;
 
     const size_t sstable_buffer_size;
@@ -1155,7 +1155,7 @@ public:
     virtual future<data_sink> wrap_sink(const sstable&, component_type, data_sink);
 
     virtual future<data_source>
-    wrap_source(const sstable&, component_type, sstables::data_source_creator_fn, uint64_t offset, uint64_t len);
+    wrap_source(const sstable&, component_type, data_source);
     // optionally return a map of attributes for a given sstable,
     // suitable for "describe".
     // This would preferably be interesting info on what/why the extension did

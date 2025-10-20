@@ -158,6 +158,14 @@ future<utils::gcp::google_credentials> utils::gcp::google_credentials::from_file
     co_return from_data(std::string_view(buf.get(), buf.size()));
 }
 
+utils::gcp::google_credentials utils::gcp::google_credentials::uninitialized_default_credentials() {
+    return google_credentials(unresolved_credentials{});
+}
+
+utils::gcp::google_credentials utils::gcp::google_credentials::uninitialized_from_file(const std::string& path) {
+    return google_credentials(unresolved_credentials{ .src = path });
+}
+
 utils::gcp::google_credentials
 utils::gcp::google_credentials::from_data(std::string_view content) {
     auto json = rjson::parse(content);
@@ -308,8 +316,16 @@ static std::string body(key_values kv) {
 }
 
 static future<utils::gcp::access_token> 
-get_access_token(const google_credentials& creds, const scopes_type& scope, shared_ptr<tls::certificate_credentials> certs) {
+get_access_token(google_credentials& creds, const scopes_type& scope, shared_ptr<tls::certificate_credentials> certs) {
     co_return co_await std::visit(overloaded_functor {
+        [&](const unresolved_credentials& c) -> future<access_token> {
+            if (std::holds_alternative<std::string>(c.src)) {
+                creds = co_await google_credentials::from_file(std::get<std::string>(c.src));
+            } else {
+                creds = co_await google_credentials::get_default_credentials();
+            }
+            co_return co_await get_access_token(creds, scope, certs);
+        },
         [&](const user_credentials& c) -> future<access_token> {
             assert(!c.refresh_token.empty());
             auto json = co_await send_request(TOKEN_SERVER_URI, certs, body(key_values({

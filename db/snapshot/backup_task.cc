@@ -12,7 +12,6 @@
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include "utils/lister.hh"
-#include "utils/s3/client.hh"
 #include "replica/database.hh"
 #include "db/config.hh"
 #include "db/snapshot-ctl.hh"
@@ -23,6 +22,7 @@
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/component_type.hh"
+#include "sstables/object_storage_client.hh"
 #include "utils/error_injection.hh"
 
 extern logging::logger snap_log;
@@ -67,7 +67,7 @@ future<tasks::task_manager::task::progress> backup_task_impl::get_progress() con
     auto p = co_await _sstm.map_reduce0(
         [this](const auto&) {
             return _progress_per_shard[this_shard_id()];
-        }, s3::upload_progress(), std::plus<>());
+        }, utils::upload_progress(), std::plus<>());
     co_return tasks::task_manager::task::progress{
         .completed = p.uploaded,
         .total = p.total,
@@ -80,7 +80,7 @@ tasks::is_user_task backup_task_impl::is_user_task() const noexcept {
 
 future<> backup_task_impl::worker::upload_component(sstring name) {
     auto component_name = _task._snapshot_dir / name;
-    auto destination = fmt::format("/{}/{}/{}", _task._bucket, _task._prefix, name);
+    auto destination = sstables::object_name(_task._bucket, _task._prefix, name);
     snap_log.trace("Upload {} to {}", component_name.native(), destination);
 
     // Start uploading in the background. The caller waits for these fibers
@@ -89,7 +89,7 @@ future<> backup_task_impl::worker::upload_component(sstring name) {
     //  - s3::client::claim_memory semaphore
     //  - http::client::max_connections limitation
     try {
-        co_await _client->upload_file(component_name, destination, _task._progress_per_shard[this_shard_id()], &_as);
+        co_await _client->upload_file(component_name, std::move(destination), _task._progress_per_shard[this_shard_id()], &_as);
     } catch (const abort_requested_exception&) {
         snap_log.info("Upload aborted per requested: {}", component_name.native());
         throw;
@@ -296,6 +296,8 @@ backup_task_impl::worker::worker(const replica::database& db, table_id t, backup
 {
     _manager.subscribe(*this);
 }
+
+backup_task_impl::worker::~worker() = default;
 
 void backup_task_impl::worker::abort() {
     _as.request_abort();

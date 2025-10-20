@@ -842,14 +842,12 @@ public:
 
     future<data_source> wrap_source(const sstables::sstable& sst,
                                                          sstables::component_type type,
-                                                         sstables::data_source_creator_fn data_source_creator,
-                                                         uint64_t offset,
-                                                         uint64_t len) override {
+                                                         data_source src) override {
         switch (type) {
         case sstables::component_type::Scylla:
         case sstables::component_type::TemporaryTOC:
         case sstables::component_type::TOC:
-            co_return data_source_creator(offset, len);
+            co_return src;
         case sstables::component_type::CompressionInfo:
         case sstables::component_type::CRC:
         case sstables::component_type::Data:
@@ -866,10 +864,9 @@ public:
             auto [id, esx] = get_encryption_schema_extension(sst, type);
             if (esx) {
                 auto key = co_await esx->key_for_read(std::move(id));
-                auto block_size = key->block_size();
-                co_return data_source(make_encrypted_source(data_source_creator(align_down(offset, block_size), align_up(len, block_size)), std::move(key)));
+                co_return data_source(make_encrypted_source(std::move(src), std::move(key)));
             }
-            co_return data_source_creator(offset, len);
+            co_return src;
         }
     }
 };

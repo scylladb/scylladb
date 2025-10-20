@@ -24,6 +24,7 @@
 #include "schema/schema_registry.hh"
 #include "db/extensions.hh"
 #include "db/schema_tables.hh"
+#include "db/object_storage_endpoint_param.hh"
 #include "types/list.hh"
 #include "types/user.hh"
 #include "db/config.hh"

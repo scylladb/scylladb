@@ -306,6 +306,8 @@ add_scylla_test(wrapping_interval_test
   KIND BOOST)
 add_scylla_test(address_map_test
   KIND SEASTAR)
+add_scylla_test(object_storage_upload_test
+  KIND SEASTAR)
 
 add_scylla_test(combined_tests
   KIND SEASTAR

@@ -5,14 +5,21 @@
 #
 
 import os
+import shutil
+import socket
+import asyncio
 import boto3
+import requests
 import logging
 import pytest
 import pathlib
+import time
+import io
 # use minio_server
 from test.pylib.minio_server import MinioServer
 from test.pylib.suite.python import add_s3_options
-
+from operator import attrgetter
+from datetime import datetime
 
 def pytest_addoption(parser):
     add_s3_options(parser)
@@ -40,15 +47,53 @@ class S3_Server:
     def __repr__(self):
         return f"[unknown] {self.address}:{self.port}/{self.bucket_name}"
 
+    @property
+    def type(self):
+        return 'S3'
+
+    def create_endpoint_conf(self):
+        return MinioServer.create_conf(self.address, self.port, self.region)
+
+    def get_resource(self):
+        """Creates boto3.resource object that can be used to communicate to the given server"""
+        return boto3.resource('s3',
+            endpoint_url=f'http://{self.address}:{self.port}',
+            aws_access_key_id=self.acc_key,
+            aws_secret_access_key=self.secret_key,
+            aws_session_token=None,
+            config=boto3.session.Config(signature_version='s3v4'),
+            verify=False
+        )
+
     async def start(self):
         pass
 
     async def stop(self):
         pass
 
+class MinioWrapper(S3_Server):
+    def __init__(self, tempdir):
+        self.server = MinioServer(tempdir,
+                                  '127.0.0.1',
+                                  logging.getLogger('minio'))
+        self.tempdir = tempdir
+        self.address = self.server.address
+        self.port = self.server.port
+        self.acc_key = self.server.access_key
+        self.secret_key = self.server.access_key
+        self.region = MinioServer.DEFAULT_REGION
+        self.bucket_name = self.server.bucket_name
 
-@pytest.fixture(scope="function")
-async def s3_server(pytestconfig, tmpdir):
+    def create_endpoint_conf(self):
+        return MinioServer.create_conf(self.address, self.port, self.region)
+
+    async def start(self):
+        return self.server.start()
+
+    async def stop(self):
+        return self.server.stop()
+
+def create_s3_server(pytestconfig, tmpdir):
     server = None
     s3_server_address = pytestconfig.getoption('--s3-server-address')
     s3_server_port = pytestconfig.getoption('--s3-server-port')
@@ -82,15 +127,17 @@ async def s3_server(pytestconfig, tmpdir):
                            default_region,
                            default_bucket)
     else:
-        server = MinioServer(tempdir,
-                             '127.0.0.1',
-                             logging.getLogger('minio'))
+        server = MinioWrapper(tempdir)
+    return server
+
+@pytest.fixture(scope="function")
+async def s3_server(pytestconfig, tmpdir):
+    server = create_s3_server(pytestconfig, tmpdir)
     await server.start()
     try:
         yield server
     finally:
         await server.stop()
-
 
 def get_s3_resource(s3_server):
     """Creates boto3.resource object that can be used to communicate to the given server"""
@@ -102,3 +149,171 @@ def get_s3_resource(s3_server):
         config=boto3.session.Config(signature_version='s3v4'),
         verify=False
     )
+
+class GSFront:
+    def __init__(self, endpoint, bucket_name, credentials_file):
+        self.endpoint = endpoint
+        self.bucket_name = bucket_name
+        self.credentials_file = credentials_file
+
+    @property
+    def address(self):
+        return self.endpoint
+
+    @property
+    def type(self):
+        return 'GS'
+
+    def create_endpoint_conf(self):
+        endpoint = {'name': self.endpoint, 
+                    'type': 'gs',
+                    'credentials_file': self.credentials_file if self.credentials_file else 'none'
+                    }
+        return [endpoint]
+
+    def get_resource(self):
+        """Creates boto3.resource object that can be used to communicate to the given server"""
+        return boto3.resource('s3',
+            endpoint_url=self.endpoint,
+            config=boto3.session.Config(signature_version='s3v4'),
+            verify=False
+        )
+
+    async def start(self):
+        pass
+    async def stop(self):
+        pass
+
+class GSServer(GSFront):
+    def __init__(self, tmpdir):
+        super(GSServer, self).__init__(None, 'testbucket', None)
+        self.host = '127.0.0.1'
+        self.port = None
+        self.oldvars = {}
+        self.vars = { 'GS_SERVER_ADDRESS_FOR_TEST': attrgetter('endpoint'),
+                      'GS_BUCKET_FOR_TEST': attrgetter('bucket_name'), 
+                      'GS_CREDENTIALS_FILE': attrgetter('credentials_file'), 
+                      }
+        self.proc = None
+        self.io = None
+        self.stopped = False
+        self.tmpdir = tmpdir
+        self.logfilename = None
+        self.logfile = None
+
+    def publish(self):
+        self.endpoint = f'http://{self.host}:{self.port}'
+        self.oldvars = { k : os.environ.get(k) for k in self.vars }
+        for k, v in self.vars.items():
+            val = v(self)
+            if val:
+                os.environ[k] = val
+
+    def unpublish(self):
+        for k in self.vars:
+            v = self.oldvars[k]
+            if v:
+                os.environ[k] = v
+            elif os.environ.get(k):
+                del os.environ[k]
+
+    async def start(self):
+        exe = pathlib.Path(next(exe for exe in [shutil.which(path) for path in ["podman", "docker"]] if exe is not None)).resolve()
+
+        while True:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.bind((self.host, 0))
+            port = sock.getsockname()[1]
+
+            self.logfilename = (pathlib.Path(self.tmpdir) / f'fake-gcs-server-{port}').with_suffix(".log")
+            self.logfile = self.logfilename.open("wb")
+
+
+            args = ["run", "--rm", "-p", f'{port}:{port}', "docker.io/fsouza/fake-gcs-server:1.52.3", 
+                    "-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', f'127.0.0.1:{port}']
+
+            sock.close()
+
+            proc = await asyncio.create_subprocess_exec(exe, *args, 
+                                                        stderr=self.logfile
+                                                        )
+            failed = False
+
+            # In any sane world we would just pipe stderr to a pipe and launch a background
+            # task to just readline from there to both check the start message as well as 
+            # add it to the log (preferrably via logger).
+            # This works fine when doing this in a standalone python script. 
+            # However, for some reason, when run in a pytest fixture, the pipe will fill up,
+            # without or reader waking up and doing anyhing, and for any test longer than very
+            # short, we will fill the stderr buffer and hang.
+            # I cannot figure out how to get around this, so we workaround it
+            # instead by directing stderr to a log file, and simply repeatedly
+            # try to read the info from this file until we are happy.
+            async with asyncio.timeout(120):
+                done = False
+                while not done and not failed:
+                    with self.logfilename.open("r") as f:
+                        for line in f:
+                            if "server started at" in line:
+                                print(f'Got start message: {line}')
+                                done = True
+                                break
+                            if "address already in use" in line:
+                                print(f'Got fail message: {line}')
+                                failed = True
+                                break
+
+            if failed:
+                self.logfile.close()
+                await proc.wait()
+                continue
+
+            self.proc = proc
+            self.port = port
+            self.publish()
+
+            # create bucket. can't use boto, because fake server does not support xml syntax 
+            # for anything beyong listing
+            response = requests.post(f'{self.endpoint}/storage/v1/b?project=testproject', json = {
+                'name': self.bucket_name, 'location' : 'US', 'storageClass' : 'STANDARD',
+                'iamConfiguration': {
+                    'uniformBucketLevelAccess' : {
+                        'enabled': True,
+                    }
+                }
+            }, timeout = 10)
+            if response.status_code not in [200, 201]:
+                raise Exception(f'Could not create test bucket: {response}')
+
+            break
+
+    async def stop(self):
+        self.stopped = True
+        if self.proc:
+            self.proc.terminate()
+            await self.proc.wait()
+        if self.logfile:
+            self.logfile.close()
+        self.unpublish()
+
+@pytest.fixture(scope="function", params=['s3','gs'])
+async def object_storage(request, pytestconfig, tmpdir):
+    server = None
+
+    if request.param == 'gs':
+        endpoint = os.environ.get('GS_SERVER_ADDRESS_FOR_TEST')
+        bucket = os.environ.get('GS_BUCKET_FOR_TEST')
+        credentials_file = os.environ.get('GS_CREDENTIALS_FILE')
+
+        if endpoint is not None and bucket is not None:
+            server = GSFront(endpoint, bucket, credentials_file)
+        else:
+            server = GSServer(tmpdir)
+    else:
+        server = create_s3_server(pytestconfig, tmpdir)
+
+    try:
+        await server.start()
+        yield server
+    finally:
+        await server.stop()

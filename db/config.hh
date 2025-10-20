@@ -21,7 +21,6 @@
 #include "utils/enum_option.hh"
 #include "gms/inet_address.hh"
 #include "db/hints/host_filter.hh"
-#include "utils/s3/creds.hh"
 #include "utils/error_injection.hh"
 #include "message/dict_trainer.hh"
 #include "message/advanced_rpc_compressor.hh"
@@ -87,34 +86,14 @@ struct error_injection_at_startup {
 
 std::istream& operator>>(std::istream& is, error_injection_at_startup&);
 
-struct object_storage_endpoint_param {
-    sstring endpoint;
-    s3::endpoint_config config;
+struct object_storage_endpoint_param;
 
-    bool operator==(const object_storage_endpoint_param& other) const {
-        return endpoint == other.endpoint && config == other.config;
-    }
-
-    sstring to_json_string() const {
-            return fmt::format("{{ \"port\": {}, \"use_https\": {}, \"aws_region\": \"{}\", \"iam_role_arn\": \"{}\" }}",
-            config.port, config.use_https, config.region, config.role_arn);
-    }
-
-    friend fmt::formatter<object_storage_endpoint_param>;
-};
-
-std::istream& operator>>(std::istream& is, object_storage_endpoint_param& f);
 }
 
 template<>
 struct fmt::formatter<db::error_injection_at_startup> {
     constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
     auto format(const db::error_injection_at_startup&, fmt::format_context& ctx) const -> decltype(ctx.out());
-};
-
-template <>
-struct fmt::formatter<db::object_storage_endpoint_param> : fmt::formatter<sstring_view> {
-    auto format(const db::object_storage_endpoint_param&, fmt::format_context& ctx) const -> decltype(ctx.out());
 };
 
 namespace utils {

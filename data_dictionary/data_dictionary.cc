@@ -291,7 +291,7 @@ std::vector<view_ptr> keyspace_metadata::views() const {
             | std::ranges::to<std::vector<view_ptr>>();
 }
 
-storage_options::local storage_options::local::from_map(const std::map<sstring, sstring>& values) {
+static storage_options::local local_from_map(const std::map<sstring, sstring>& values) {
     if (!values.empty()) {
         throw std::runtime_error("Local storage does not accept any custom options");
     }
@@ -302,9 +302,13 @@ std::map<sstring, sstring> storage_options::local::to_map() const {
     return {};
 }
 
-storage_options::s3 storage_options::s3::from_map(const std::map<sstring, sstring>& values) {
-    s3 options;
-    const std::array<std::pair<sstring, sstring*>, 2> allowed_options {
+std::string_view storage_options::local::name() const {
+    return LOCAL_NAME;
+}
+
+static storage_options::object_storage object_storage_from_map(std::string_view type, const std::map<sstring, sstring>& values) {
+    storage_options::object_storage options;
+    const std::array<std::pair<sstring, std::string*>, 2> allowed_options {
         std::make_pair("bucket", &options.bucket),
         std::make_pair("endpoint", &options.endpoint),
     };
@@ -312,38 +316,61 @@ storage_options::s3 storage_options::s3::from_map(const std::map<sstring, sstrin
         if (auto it = values.find(option.first); it != values.end()) {
             *option.second = it->second;
         } else {
-            throw std::runtime_error(fmt::format("Missing S3 option: {}", option.first));
+            throw std::runtime_error(fmt::format("Missing {} option: {}", type, option.first));
         }
     }
     if (values.size() > allowed_options.size()) {
-        throw std::runtime_error(fmt::format("Extraneous options for S3: {}; allowed: {}",
-            fmt::join(values | std::views::keys, ","),
+        throw std::runtime_error(fmt::format("Extraneous options for {}: {}; allowed: {}",
+            fmt::join(values | std::views::keys, ","), type,
             fmt::join(allowed_options | std::views::keys, ",")));
     }
+    options.type = std::string(type);
     return options;
 }
 
-std::map<sstring, sstring> storage_options::s3::to_map() const {
+std::map<sstring, sstring> storage_options::object_storage::to_map() const {
     return {{"bucket", bucket},
             {"endpoint", endpoint}};
 }
+
+std::string_view storage_options::object_storage::name() const {
+    return type;
+}
+
+bool storage_options::object_storage::operator==(const object_storage&) const = default;
 
 bool storage_options::is_local_type() const noexcept {
     return std::holds_alternative<local>(value);
 }
 
+bool storage_options::is_object_storage_type() const noexcept {
+    return std::holds_alternative<object_storage>(value);
+}
+
+bool storage_options::is_s3_type() const noexcept {
+    return is_object_storage_type() && type_string() == S3_NAME;
+}
+
+bool storage_options::is_gs_type() const noexcept {
+    return is_object_storage_type() && type_string() == GS_NAME;
+}
+
+const std::string storage_options::LOCAL_NAME = "LOCAL";
+const std::string storage_options::S3_NAME = "S3";
+const std::string storage_options::GS_NAME = "GS";
+
 storage_options::value_type storage_options::from_map(std::string_view type, const std::map<sstring, sstring>& values) {
-    if (type == local::name) {
-        return local::from_map(values);
+    if (type == LOCAL_NAME) {
+        return local_from_map(values);
     }
-    if (type == s3::name) {
-        return s3::from_map(values);
+    if (type == S3_NAME || type == GS_NAME) {
+        return object_storage_from_map(type, values);
     }
     throw std::runtime_error(fmt::format("Unknown storage type: {}", type));
 }
 
 std::string_view storage_options::type_string() const {
-    return std::visit([] (auto& opt) { return opt.name; }, value);
+    return std::visit([] (auto& opt) { return opt.name(); }, value);
 }
 
 std::map<sstring, sstring> storage_options::to_map() const {
@@ -354,7 +381,7 @@ bool storage_options::can_update_to(const storage_options& new_options) {
     return value == new_options.value;
 }
 
-storage_options storage_options::append_to_s3_prefix(const sstring& s) const {
+storage_options storage_options::append_to_object_storage_prefix(const sstring& s) const {
     // when restoring from object storage, the API of /storage_service/restore
     // provides:
     // 1. a shared prefix
@@ -369,7 +396,7 @@ storage_options storage_options::append_to_s3_prefix(const sstring& s) const {
     //
     // note, this example shows three sstables from two different snapshot backups.
     //
-    // we assume all sstables' locations share the same base prefix (storage_options::s3::prefix).
+    // we assume all sstables' locations share the same base prefix (storage_options::object_storage::prefix).
     // however, sstable in different backups have different prefixes. to handle this, we compose
     // a per-sstable prefix by concatenating the shared prefix and the "parent directory" of the
     // sstable's location. the resulting structure looks like:
@@ -389,12 +416,107 @@ storage_options storage_options::append_to_s3_prefix(const sstring& s) const {
         return ret;
     }
 
-    s3 s3_options = std::get<s3>(value);
-    SCYLLA_ASSERT(std::holds_alternative<sstring>(s3_options.location));
-    sstring prefix = std::get<sstring>(s3_options.location);
-    s3_options.location = seastar::format("{}/{}", prefix, s);
-    ret.value = std::move(s3_options);
+    object_storage options = std::get<object_storage>(value);
+    SCYLLA_ASSERT(std::holds_alternative<sstring>(options.location));
+    sstring prefix = std::get<sstring>(options.location);
+    options.location = seastar::format("{}/{}", prefix, s);
+    ret.value = std::move(options);
     return ret;
+}
+
+storage_options make_local_options(std::filesystem::path dir) {
+    storage_options so;
+    so.value = data_dictionary::storage_options::local { .dir = std::move(dir) };
+    return so;
+}
+
+static std::string fqn_type(const std::string& fqn) {
+    auto i = fqn.find_first_of(':');
+    return fqn.substr(0, i) | std::views::transform(&toupper) | std::ranges::to<std::string>();
+}
+
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& fqn, abort_source* as) {
+    std::string bucket;
+    std::string object;
+    auto type = fqn_type(fqn);
+    object_storage_fqn_to_parts(fqn, type, bucket, object);
+    object = std::filesystem::path(object).parent_path().string(); // remove the filename and trailing separator from the path
+    return make_object_storage_options(endpoint, type, bucket, object, as);
+}
+
+storage_options make_object_storage_options(const std::string& endpoint, const std::string& type, const std::string& bucket, const std::string& prefix, abort_source* as) {
+    storage_options so;
+    storage_options::object_storage os{
+        .bucket = std::move(bucket), .endpoint = endpoint, .location = std::move(prefix),
+        .abort_source = as,
+        .type = type | std::views::transform(&toupper) | std::ranges::to<std::string>()
+    };
+    so.value = std::move(os);
+    return so;
+}
+
+namespace fs = std::filesystem;
+using namespace std::string_literals;
+
+static fs::path object_store_canonicalize(const fs::path& path, std::string_view type) {
+    if (!is_object_storage_fqn(path, type) || path.string().length() < (type.length() + 2)) {
+        return path;
+    }
+    // Canonicalizing the original "<type>://" changes it to "<type>:/". Trim and re-add the "type://" prefix.
+    auto canonical = path.lexically_normal().string().substr(type.length() + 2);
+    return (type | std::views::transform(&tolower) | std::ranges::to<std::string>()) + "://"s + canonical;
+}
+
+bool is_object_storage_fqn(const fs::path& fqn, std::string_view type) {
+    if (fqn.empty()) {
+        return false;
+    }
+    std::string tmp = *(fqn.begin());
+    return tmp.size() == (type.size() + 1) // additional ':'
+        && tmp.back() == ':'
+        // allow case insensitive checks, like type=S3 as well as type=s3. Only because ::name 
+        // members (history) are upper case.
+        && std::equal(tmp.begin(), tmp.begin() + type.size(), type.begin(), [](char c1, char c2) {
+            return ::tolower(c1) == ::tolower(c2);
+        })
+        ;
+}
+
+bool object_storage_fqn_to_parts(const fs::path& fqn, std::string_view type, std::string& bucket_name, std::string& object_name) {
+    if (!is_object_storage_fqn(fqn, type)) {
+        return false;
+    }
+
+    const auto canonical = object_store_canonicalize(fqn, type);
+    auto it = canonical.begin();
+
+    // Expect at least two components: the scheme (e.g., "s3:") and the bucket name.
+    if (std::distance(it, canonical.end()) < 2) {
+        return false;
+    }
+
+    // Skip the scheme component.
+    ++it;
+
+    // The next component is the bucket name.
+    bucket_name = it->string();
+
+    // Advance to check for object parts.
+    ++it;
+    if (it == canonical.end()) {
+        // No object parts – default to root.
+        object_name = "/";
+        return true;
+    }
+
+    // Combine remaining parts into the object path.
+    fs::path obj;
+    for (; it != canonical.end(); ++it) {
+        obj /= *it;
+    }
+
+    object_name = obj.string().empty() ? "/" : obj.string();
+    return true;
 }
 
 no_such_keyspace::no_such_keyspace(std::string_view ks_name)
@@ -527,17 +649,18 @@ auto fmt::formatter<data_dictionary::keyspace_metadata>::format(const data_dicti
 }
 
 auto fmt::formatter<data_dictionary::storage_options>::format(const data_dictionary::storage_options& so, fmt::format_context& ctx) const -> decltype(ctx.out()) {
+    auto type = so.type_string() | std::views::transform(&tolower) | std::ranges::to<std::string>();
     return std::visit(overloaded_functor {
         [&ctx] (const data_dictionary::storage_options::local& so) -> decltype(ctx.out()) {
             return fmt::format_to(ctx.out(), "{}", so.dir);
         },
-        [&ctx] (const data_dictionary::storage_options::s3& so) -> decltype(ctx.out()) {
+        [&ctx, &type] (const data_dictionary::storage_options::object_storage& so) -> decltype(ctx.out()) {
             return std::visit(overloaded_functor {
-                [&ctx, &so] (const sstring& prefix) -> decltype(ctx.out()) {
-                    return fmt::format_to(ctx.out(), "s3://{}/{}", so.bucket, prefix);
+                [&] (const sstring& prefix) -> decltype(ctx.out()) {
+                    return fmt::format_to(ctx.out(), "{}://{}/{}", type, so.bucket, prefix);
                 },
-                [&ctx, &so] (const table_id& owner) -> decltype(ctx.out()) {
-                    return fmt::format_to(ctx.out(), "s3://{} (owner {})", so.bucket, owner);
+                [&] (const table_id& owner) -> decltype(ctx.out()) {
+                    return fmt::format_to(ctx.out(), "{}://{} (owner {})", type, so.bucket, owner);
                 }
             }, so.location);
         }

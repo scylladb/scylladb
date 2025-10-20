@@ -126,5 +126,4 @@ future<> init_keyspace_storage(const sstables_manager&, const data_dictionary::s
 
 std::vector<std::filesystem::path> get_local_directories(const db::config& db, const data_dictionary::storage_options::local& so);
 
-using data_source_creator_fn = std::function<data_source(uint64_t, uint64_t)>;
 } // namespace sstables

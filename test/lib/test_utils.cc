@@ -52,6 +52,59 @@ void fail(std::string_view msg, seastar::compat::source_location sl) {
     throw_with_backtrace<std::runtime_error>(format_msg(__FUNCTION__, false, sl, msg));
 }
 
+std::string getenv_safe(std::string_view name) {
+    auto v = std::getenv(std::string(name).c_str());
+    if (!v) {
+        throw std::logic_error(fmt::format("Environment variable {} not set", name));
+    }
+    return std::string(v);
+}
+
+std::string getenv_or_default(std::span<const std::string_view> names, std::string_view def) {
+    for (auto n : names) {
+        auto v = std::getenv(std::string(n).c_str());
+        if (v) {
+            return std::string(v);
+        }
+    }
+    return std::string(def);
+}
+
+std::string getenv_or_default(std::initializer_list<const std::string_view> names, std::string_view def) {
+    return getenv_or_default(std::span(names), def);
+}
+
+std::string getenv_or_default(std::string_view name, std::string_view def) {
+    return getenv_or_default(std::ranges::single_view{name}, def);
+}
+
+tmp_set_env::tmp_set_env(std::string_view var, std::string_view value)
+    : _var(var)
+    , _old(getenv_or_default(_var))
+    , _was_set(std::getenv(_var.data()) != nullptr)
+{
+    ::setenv(_var.c_str(), value.data(), 1);
+}
+
+tmp_set_env::tmp_set_env(tmp_set_env&&) = default;
+
+tmp_set_env::~tmp_set_env() {
+    if (_was_set) {
+        ::setenv(_var.c_str(), _old.c_str(), 1);
+    } else {
+        ::unsetenv(_var.c_str());
+    }
+}
+
+bool check_run_test(std::string_view var, bool defval) {
+    auto do_test = getenv_or_default(var, std::to_string(defval));
+
+    if (!strcasecmp(do_test.data(), "0") || !strcasecmp(do_test.data(), "false")) {
+        BOOST_TEST_MESSAGE(fmt::format("Skipping test. Set {}=1 to run", var));
+        return false;
+    }
+    return true;
+}
 
 extern boost::test_tools::assertion_result has_scylla_test_env(boost::unit_test::test_unit_id) {
     if (::getenv("SCYLLA_TEST_ENV")) {

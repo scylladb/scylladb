@@ -1,4 +1,4 @@
-# Keeping sstables on S3
+# Keeping sstables on S3/GS
 
 On of the ways to use object storage is to keep sstables directly on it as objects.
 
@@ -26,9 +26,36 @@ object_storage_endpoints:
     aws_region: us-east-1
 ```
 
+## Configuring GCP storage access
+
+Similarly to AWS, define endpoint details in `scylla.yaml` like:
+```yaml
+object_storage_endpoints:
+  - name: https://storage.googleapis.com
+    type: gs
+    credentials_file: <gcp account credentials json file>
+```
+
+Typically, google compute storage only uses the same endpoint URI (unless using private proxy or mock
+server), so `name` can also use the `default` moniker.
+
+`credentials_file` can be omitted, in which case the default credentials on the machine
+will be used, i.e. resolving the current users credentials or fallback to machine credentials
+if running on a GCP instance.
+
+If set, the environment variable `GOOGLE_APPLICATION_CREDENTIALS` can be set to point to a 
+credentials file. 
+
+If no credentials file is set, the default credentials will be searched, i.e. `application_default_credentials.json`
+in the gcp local data folder.
+
+You can also set the `credentials_file` to `none` to completely skip authentication. Useful for testing
+on mock servers.
+
+
 ### Local/Development Environment
 
-In a local or development environment, you usually need to set authentication tokens in environment variables to ensure the client works properly. For instance:
+In a local or development environment, you usually need to set AWS authentication tokens in environment variables to ensure the client works properly. For instance:
 ```sh
 export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
 export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
@@ -41,6 +68,9 @@ export AWS_ACCESS_KEY_ID=EXAMPLE_ACCESS_KEY_ID
 export AWS_SECRET_ACCESS_KEY=EXAMPLE_SECRET_ACCESS_KEY
 export AWS_SESSION_TOKEN=EXAMPLE_TEMPORARY_SESSION_TOKEN
 ```
+
+For gs, when using local mock server, authentication is normally not used.
+
 ### Important Note
 
 The examples above are intended for development or local environments. You should *never* use this approach in production. The Scylla S3 client will first attempt to access credentials from environment variables. If it fails to obtain credentials, it will then try to retrieve them from the AWS Security Token Service (STS) or the EC2 Instance Metadata Service.
@@ -55,7 +85,7 @@ object_storage_endpoints:
     iam_role_arn: arn:aws:iam::123456789012:instance-profile/my-instance-instance-profile
 ```
 
-## Creating keyspace
+## Creating keyspace with S3
 
 Sstables location is keyspace-scoped. In order to create a keyspace with S3
 storage use `CREATE KEYSPACE` with `STORAGE = { 'type': 'S3', 'endpoint': '$endpoint_name', 'bucket': '$bucket' }`
@@ -91,7 +121,35 @@ CREATE KEYSPACE ks
   };
 ```
 
-# Copying sstables on S3 (backup)
+
+## Creating keyspace with GS
+
+This mirrors AWS S3 config.
+
+in `scylla.yaml`:
+
+```yaml
+object_storage_endpoints:
+  - name: default
+    credentials_file: <credentials file>|none
+```
+
+and when creating the keyspace:
+
+```cql
+CREATE KEYSPACE ks
+  WITH REPLICATION = {
+   'class' : 'NetworkTopologyStrategy',
+   'replication_factor' : 1
+  }
+  AND STORAGE = {
+   'type' : 'GS',
+   'endpoint' : 'default',
+   'bucket' : 'bucket-for-testing'
+  };
+```
+
+# Copying sstables on S3/GS (backup)
 
 It's possible to upload sstables from data/ directory on S3 via API. This is good
 to do because in that case all the resources that are needed for that operation (like
@@ -104,7 +162,7 @@ found [here](./api/api-doc/storage_service.json). Accepted parameters are
 * *keyspace*: the keyspace to copy sstables from
 * *table*: the table to copy sstables from
 * *snapshot*: the snapshot name to copy sstables from
-* *endpoint*: the key in the object storage configuration file
+* *endpoint*: the key in the object storage configuration file. Can be either an AWS or GCP endpoint
 * *bucket*: bucket name to put sstables' files in
 * *prefix*: prefix to put sstables' files under
 
@@ -112,6 +170,8 @@ Currently only snapshot backup is possible, so first one needs to take [snapshot
 
 All tables in a keyspace are uploaded, the destination object names will look like
 `s3://bucket/some/prefix/to/store/data/.../sstable`
+or 
+`gs://bucket/some/prefix/to/store/data/.../sstable`
 
 # Manipulating S3 data
 
@@ -130,7 +190,7 @@ Issue tracking the document [here](https://github.com/scylladb/scylladb/issues/2
 
 ## Object Storage Layout
 
-There are currently three mechanisms in Scylla which write data to S3:
+There are currently three mechanisms in Scylla which write data to S3/GS:
 
 1. Scylla Manager backup
 
@@ -167,10 +227,10 @@ scylla-bucket/prefix/
 ```
 See the API [documentation](#copying-sstables-on-s3-backup) for more details about the actual backup request.
 
-3. `CREATE KEYSPACE` with S3 storage
+3. `CREATE KEYSPACE` with S3/GS storage
 
-When creating a keyspace with S3 storage, the data is stored under the bucket passed as argument to the `CREATE KEYSPACE` statement.  
-Once the statement is issued, Scylla will use transparently the S3 bucket as the location of the SSTables for that keyspace.  
+When creating a keyspace with S3/GS storage, the data is stored under the bucket passed as argument to the `CREATE KEYSPACE` statement.  
+Once the statement is issued, Scylla will transparently use the S3/GS bucket as the location of the SSTables for that keyspace.  
 Like in the case above, there is no hierarchy for the data, *all SSTables components are stored flat within the bucket*.
 ```perl
 scylla-sstables-bucket/

@@ -15,7 +15,7 @@ To run `test.py`, Python 3.11 or higher is required.
 modules. If `install-dependencies.sh` does not support your distribution,
 please manually install all Python modules it lists with `pip`.
 
-Additionally, `toolchain/dbuid` could be used to run `test.py`. In this
+Additionally, `toolchain/dbuild` could be used to run `test.py`. In this
 case you don't need to run `./install-dependencies.sh`
 
 By default `test.py` has `--gather-metrics` parameter, that is used to gather
@@ -68,7 +68,12 @@ If the requirement isn't satisfied, here is how you can do to run `test.py`.
       user needs RW permissions to both cgroups: the old one and the new one.
       ***NOTE:*** This operation needs to be executed each time the terminal is opened
 
-
+Some tests utilize (nested) docker images to provide mock/test services against which to 
+run scylla features. In general, these images will be pulled on first usage by the test.
+Some images used:
+    
+    * docker.io/fsouza/fake-gcs-server:1.52.3
+    * (add as needed)
 
 ## Usage
 

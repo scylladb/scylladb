@@ -24,6 +24,7 @@
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "sstables/exceptions.hh"
+#include "sstables/object_storage_client.hh"
 #include "sstables/sstable_directory.hh"
 #include "sstables/sstables_manager.hh"
 #include "sstables/sstable_version.hh"
@@ -36,8 +37,8 @@
 #include "utils/s3/client.hh"
 #include "utils/exceptions.hh"
 #include "utils/to_string.hh"
-
 #include "utils/checked-file-impl.hh"
+#include "utils/io-wrappers.hh"
 
 namespace sstables {
 
@@ -564,8 +565,10 @@ future<> filesystem_storage::unlink_component(const sstable& sst, component_type
     }
 }
 
-class s3_storage : public sstables::storage {
-    shared_ptr<s3::client> _client;
+class object_storage_base : public sstables::storage {
+protected:
+    sstring _type;
+    shared_ptr<sstables::object_storage_client> _client;
     sstring _bucket;
     std::variant<sstring, table_id> _location;
     seastar::abort_source* _as;
@@ -574,7 +577,7 @@ class s3_storage : public sstables::storage {
     static constexpr auto status_sealed = "sealed";
     static constexpr auto status_removing = "removing";
 
-    sstring make_s3_object_name(const sstable& sst, component_type type) const;
+    object_name make_object_name(const sstable& sst, component_type type) const;
 
     table_id owner() const {
         if (std::holds_alternative<sstring>(_location)) {
@@ -582,57 +585,87 @@ class s3_storage : public sstables::storage {
         }
         return std::get<table_id>(_location);
     }
-
+    seastar::abort_source* abort_source() const {
+        return _as;
+    }
 public:
-    s3_storage(shared_ptr<s3::client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
-        : _client(std::move(client))
+    object_storage_base(sstring type, shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+        : _type(type) 
+        , _client(std::move(client))
         , _bucket(std::move(bucket))
         , _location(std::move(loc))
         , _as(as)
-    {
-    }
+    {}
 
-    virtual future<> seal(const sstable& sst) override;
-    virtual future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>) const override;
-    virtual future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
+    future<> seal(const sstable& sst) override;
+    future<> snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type>) const override;
+    future<> change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) override;
     // runs in async context
-    virtual void open(sstable& sst) override;
-    virtual future<> wipe(const sstable& sst, sync_dir) noexcept override;
-    virtual future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
-    virtual future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
+    void open(sstable& sst) override;
+    future<> wipe(const sstable& sst, sync_dir) noexcept override;
+    future<file> open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) override;
+    future<data_sink> make_data_or_index_sink(sstable& sst, component_type type) override;
     future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
-    virtual future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
-    virtual future<> destroy(const sstable& sst) override {
+
+    future<data_sink> make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) override;
+    future<> destroy(const sstable& sst) override {
         return make_ready_future<>();
     }
-    virtual future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
-    virtual future<> atomic_delete_complete(atomic_delete_context ctx) const override;
-    virtual future<> remove_by_registry_entry(entry_descriptor desc) override;
-    virtual future<uint64_t> free_space() const override {
-        // assumes infinite space on s3 (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
+    future<atomic_delete_context> atomic_delete_prepare(const std::vector<shared_sstable>&) const override;
+    future<> atomic_delete_complete(atomic_delete_context ctx) const override;
+    future<> remove_by_registry_entry(entry_descriptor desc) override;
+    future<uint64_t> free_space() const override {
+        // assumes infinite space on s3/gs (https://aws.amazon.com/s3/faqs/#How_much_data_can_I_store).
         return make_ready_future<uint64_t>(std::numeric_limits<uint64_t>::max());
     }
-    virtual future<> unlink_component(const sstable& sst, component_type) noexcept override;
+    future<> unlink_component(const sstable& sst, component_type) noexcept override;
 
-    virtual sstring prefix() const override { return std::visit([] (const auto& v) { return fmt::to_string(v); }, _location); }
+    sstring prefix() const override { 
+        return std::visit([] (const auto& v) { return fmt::to_string(v); }, _location); 
+    }
+
+    future<> put_object(object_name name, ::memory_data_sink_buffers bufs) {
+        return _client->put_object(std::move(name), std::move(bufs), abort_source());
+    }
+    future<> delete_object(object_name name) {
+        return _client->delete_object(std::move(name));
+    }
+    file make_readable_file(object_name name) {
+        return _client->make_readable_file(std::move(name), abort_source());
+    }
+    data_sink make_data_upload_sink(object_name name, std::optional<unsigned> max_parts_per_piece) {
+        return _client->make_data_upload_sink(std::move(name), max_parts_per_piece, abort_source());
+    }
+    data_sink make_upload_sink(object_name name) {
+        return _client->make_upload_sink(std::move(name), abort_source());
+    }
 };
 
-sstring s3_storage::make_s3_object_name(const sstable& sst, component_type type) const {
+class s3_storage : public object_storage_base {
+public:
+    s3_storage(shared_ptr<sstables::object_storage_client> client, sstring bucket, std::variant<sstring, table_id> loc, seastar::abort_source* as)
+        : object_storage_base("S3", std::move(client), std::move(bucket), std::move(loc), as)
+    {}
+
+    future<data_source> make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options opt) const override;
+};
+
+object_name object_storage_base::make_object_name(const sstable& sst, component_type type) const {
     if (!sst.generation().is_uuid_based()) {
-        throw std::runtime_error("'S3' STORAGE only works with uuid_sstable_identifier enabled");
+        throw std::runtime_error(fmt::format("'{}' STORAGE only works with uuid_sstable_identifier enabled", _type));
     }
 
     return std::visit(overloaded_functor {
-        [&] (const sstring& prefix) -> sstring {
-            return format("/{}/{}/{}", _bucket, prefix, sst.component_basename(type));
+        [&] (const sstring& prefix) {
+            return object_name(_bucket, prefix, sst.component_basename(type));
         },
-        [&] (const table_id& owner) -> sstring {
-            return format("/{}/{}/{}", _bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
+        [&] (const table_id& owner) {
+            return object_name(_bucket, sst.generation(), sstable_version_constants::get_component_map(sst.get_version()).at(type));
         }
     }, _location);
 }
 
-void s3_storage::open(sstable& sst) {
+void object_storage_base::open(sstable& sst) {
     entry_descriptor desc(sst._generation, sst._version, sst._format, component_type::TOC);
     sst.manager().sstables_registry().create_entry(owner(), status_creating, sst._state, std::move(desc)).get();
 
@@ -646,11 +679,11 @@ void s3_storage::open(sstable& sst) {
             )
         )
     );
-    _client->put_object(make_s3_object_name(sst, component_type::TOC), std::move(bufs)).get();
+    put_object(make_object_name(sst, component_type::TOC), std::move(bufs)).get();
 }
 
-future<file> s3_storage::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
-    return maybe_wrap_file(sst, type, flags, _client->make_readable_file(make_s3_object_name(sst, type), _as));
+future<file> object_storage_base::open_component(const sstable& sst, component_type type, open_flags flags, file_open_options options, bool check_integrity) {
+    return maybe_wrap_file(sst, type, flags, make_readable_file(make_object_name(sst, type)));
 }
 
 static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type, data_sink sink) {
@@ -671,12 +704,12 @@ static future<data_sink> maybe_wrap_sink(const sstable& sst, component_type type
     co_return sink;
 }
 
-static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source_creator_fn source_creator, uint64_t offset, uint64_t len) {
+static future<data_source> maybe_wrap_source(const sstable& sst, component_type type, data_source src, uint64_t offset, uint64_t len) {
     if (type != component_type::TOC && type != component_type::TemporaryTOC) {
         for (auto* ext : sst.manager().config().extensions().sstable_file_io_extensions()) {
             std::exception_ptr p;
             try {
-                co_return co_await ext->wrap_source(sst, type, std::move(source_creator), offset, len);
+                src = co_await ext->wrap_source(sst, type, std::move(src));
             } catch (...) {
                 p = std::current_exception();
             }
@@ -685,44 +718,42 @@ static future<data_source> maybe_wrap_source(const sstable& sst, component_type 
             }
         }
     }
-    co_return source_creator(offset, len);
+    co_return create_ranged_source(std::move(src), offset, len);
 }
 
-future<data_sink> s3_storage::make_data_or_index_sink(sstable& sst, component_type type) {
+future<data_sink> object_storage_base::make_data_or_index_sink(sstable& sst, component_type type) {
     SCYLLA_ASSERT(
         type == component_type::Data
         || type == component_type::Index
         || type == component_type::Rows
         || type == component_type::Partitions);
     // FIXME: if we have file size upper bound upfront, it's better to use make_upload_sink() instead
-    return maybe_wrap_sink(sst, type, _client->make_upload_jumbo_sink(make_s3_object_name(sst, type), std::nullopt, _as));
+    return maybe_wrap_sink(sst, type, make_data_upload_sink(make_object_name(sst, type), std::nullopt));
+}
+
+future<data_source>
+object_storage_base::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
+    co_return co_await maybe_wrap_source(sst, type, _client->make_download_source(make_object_name(sst, type), abort_source()), offset, len);
 }
 
 future<data_source>
 s3_storage::make_data_or_index_source(sstable& sst, component_type type, file f, uint64_t offset, uint64_t len, file_input_stream_options options) const {
     if (offset == 0) {
-        co_return co_await maybe_wrap_source(
-            sst,
-            type,
-            [this, object_name = make_s3_object_name(sst, type)](uint64_t, uint64_t) {
-                return _client->make_chunked_download_source(object_name, s3::full_range, _as);
-            },
-            offset,
-            len);
+        co_return co_await object_storage_base::make_data_or_index_source(sst, type, std::move(f), offset, len, std::move(options));
     }
     co_return make_file_data_source(
-        co_await maybe_wrap_file(sst, type, open_flags::ro, _client->make_readable_file(make_s3_object_name(sst, type), _as)), offset, len, std::move(options));
+        co_await maybe_wrap_file(sst, type, open_flags::ro, _client->make_readable_file(make_object_name(sst, type), abort_source())), offset, len, std::move(options));
 }
 
-future<data_sink> s3_storage::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
-    return maybe_wrap_sink(sst, type, _client->make_upload_sink(make_s3_object_name(sst, type), _as));
+future<data_sink> object_storage_base::make_component_sink(sstable& sst, component_type type, open_flags oflags, file_output_stream_options options) {
+    return maybe_wrap_sink(sst, type, make_upload_sink(make_object_name(sst, type)));
 }
 
-future<> s3_storage::seal(const sstable& sst) {
+future<> object_storage_base::seal(const sstable& sst) {
     co_await sst.manager().sstables_registry().update_entry_status(owner(), sst.generation(), status_sealed);
 }
 
-future<> s3_storage::change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) {
+future<> object_storage_base::change_state(const sstable& sst, sstable_state state, generation_type generation, delayed_commit_changes* delay) {
     if (generation != sst._generation) {
         // The 'generation' field is clustering key in system.sstables and cannot be
         // changed. However, that's fine, state AND generation change means the sstable
@@ -732,33 +763,32 @@ future<> s3_storage::change_state(const sstable& sst, sstable_state state, gener
     co_await sst.manager().sstables_registry().update_entry_state(owner(), sst.generation(), state);
 }
 
-future<> s3_storage::wipe(const sstable& sst, sync_dir) noexcept {
+future<> object_storage_base::wipe(const sstable& sst, sync_dir) noexcept {
     auto& sstables_registry = sst.manager().sstables_registry();
 
     co_await sstables_registry.update_entry_status(owner(), sst.generation(), status_removing);
 
     co_await coroutine::parallel_for_each(sst._recognized_components, [this, &sst] (auto type) -> future<> {
-        co_await _client->delete_object(make_s3_object_name(sst, type));
+        co_await delete_object(make_object_name(sst, type));
     });
 
     co_await sstables_registry.delete_entry(owner(), sst.generation());
 }
 
-future<atomic_delete_context> s3_storage::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
+future<atomic_delete_context> object_storage_base::atomic_delete_prepare(const std::vector<shared_sstable>&) const {
     // FIXME -- need atomicity, see #13567
     co_return atomic_delete_context{};
 }
 
-future<> s3_storage::atomic_delete_complete(atomic_delete_context ctx) const {
+future<> object_storage_base::atomic_delete_complete(atomic_delete_context ctx) const {
     co_return;
 }
 
-future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
-    auto prefix = format("/{}/{}", _bucket, desc.generation);
+future<> object_storage_base::remove_by_registry_entry(entry_descriptor desc) {
     std::vector<sstring> components;
 
     try {
-        auto f = _client->make_readable_file(prefix + "/" + sstable_version_constants::get_component_map(desc.version).at(component_type::TOC));
+        auto f = make_readable_file(object_name(_bucket, desc.generation, sstable_version_constants::get_component_map(desc.version).at(component_type::TOC)));
         components = co_await with_closeable(std::move(f), [] (file& f) {
             return sstable::read_and_parse_toc(f);
         });
@@ -768,16 +798,16 @@ future<> s3_storage::remove_by_registry_entry(entry_descriptor desc) {
         }
     }
 
-    co_await coroutine::parallel_for_each(components, [this, &prefix] (sstring comp) -> future<> {
+    co_await coroutine::parallel_for_each(components, [this, &desc] (sstring comp) -> future<> {
         if (comp != sstable_version_constants::TOC_SUFFIX) {
-            co_await _client->delete_object(prefix + "/" + comp);
+            co_await delete_object(object_name(_bucket, desc.generation, comp));
         }
     });
-    co_await _client->delete_object(prefix + "/" + sstable_version_constants::TOC_SUFFIX);
+    co_await delete_object(object_name(_bucket, desc.generation, sstable_version_constants::TOC_SUFFIX));
 }
 
-future<> s3_storage::unlink_component(const sstable& sst, component_type type) noexcept {
-    auto name = make_s3_object_name(sst, type);
+future<> object_storage_base::unlink_component(const sstable& sst, component_type type) noexcept {
+    auto name = make_object_name(sst, type);
     try {
         co_await _client->delete_object(name);
     } catch (...) {
@@ -785,7 +815,7 @@ future<> s3_storage::unlink_component(const sstable& sst, component_type type) n
     }
 }
 
-future<> s3_storage::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
+future<> object_storage_base::snapshot(const sstable& sst, sstring dir, absolute_path abs, std::optional<generation_type> gen) const {
     on_internal_error(sstlog, "Snapshotting S3 objects not implemented");
     co_return;
 }
@@ -798,19 +828,25 @@ std::unique_ptr<sstables::storage> make_storage(sstables_manager& manager, const
             }
             return std::make_unique<sstables::filesystem_storage>(loc.dir.native(), state);
         },
-        [&manager] (const data_dictionary::storage_options::s3& os) mutable -> std::unique_ptr<sstables::storage> {
+        [&] (const data_dictionary::storage_options::object_storage& os) mutable -> std::unique_ptr<sstables::storage> {
             if (std::visit(overloaded_functor {
                         [] (const sstring& prefix) { return prefix.empty(); },
                         [] (const table_id& owner) { return owner.id.is_null(); }
                     }, os.location)) {
-                on_internal_error(sstlog, "S3 storage options is missing 'location'");
+                on_internal_error(sstlog, fmt::format("{} storage options is missing 'location'", os.name()));
             }
-            return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+            if (s_opts.is_s3_type()) {
+                return std::make_unique<sstables::s3_storage>(manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+            }
+            if (s_opts.is_gs_type()) {
+                return std::make_unique<sstables::object_storage_base>("GS", manager.get_endpoint_client(os.endpoint), os.bucket, os.location, os.abort_source);
+            }
+            throw std::runtime_error(fmt::format("Not implemented: '{}'", os.type));
         }
     }, s_opts.value);
 }
 
-future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
+static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::local& so) {
     std::vector<sstring> dirs;
     for (const auto& dd : mgr.config().data_file_directories()) {
         auto uuid_sstring = s.id().to_sstring();
@@ -841,12 +877,13 @@ std::vector<std::filesystem::path> get_local_directories(const db::config& db, c
             | std::ranges::to<std::vector<std::filesystem::path>>();
 }
 
-future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::s3& so) {
+static future<lw_shared_ptr<const data_dictionary::storage_options>> init_table_storage(const sstables_manager& mgr, const schema& s, const data_dictionary::storage_options::object_storage& so) {
     data_dictionary::storage_options nopts;
-    nopts.value = data_dictionary::storage_options::s3 {
+    nopts.value = data_dictionary::storage_options::object_storage {
         .bucket = so.bucket,
         .endpoint = so.endpoint,
         .location = s.id(),
+        .type = so.type
     };
     co_return make_lw_shared<const data_dictionary::storage_options>(std::move(nopts));
 }
@@ -864,7 +901,7 @@ future<> init_keyspace_storage(const sstables_manager& mgr, const data_dictionar
                 co_await io_check([&dir] { return touch_directory(dir); });
             }
         },
-        [] (const data_dictionary::storage_options::s3&) -> future<> {
+        [] (const data_dictionary::storage_options::object_storage&) -> future<> {
             co_return;
         }
     }, so.value);
@@ -878,7 +915,7 @@ future<> destroy_table_storage(const data_dictionary::storage_options& so) {
             }
             co_await sstables::remove_table_directory_if_has_no_snapshots(so.dir);
         },
-        [] (const data_dictionary::storage_options::s3&) -> future<> {
+        [] (const data_dictionary::storage_options::object_storage&) -> future<> {
             co_return;
         }
     }, so.value);
