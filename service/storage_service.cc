@@ -2195,6 +2195,7 @@ future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded
             // First, wait for the feature to become enabled
             shared_promise<> p;
             auto sub = _feature_service.supports_consistent_topology_changes.when_enabled([&] () noexcept { p.set_value(); });
+            rtlogger.debug("Waiting for cluster feature `SUPPORTS_CONSISTENT_TOPOLOGY_CHANGES`");
             co_await p.get_shared_future(_group0_as);
             rtlogger.info("The cluster is ready to start upgrade to the raft topology. The procedure needs to be manually triggered. Refer to the documentation");
 
