@@ -75,8 +75,12 @@ void trace_state::set_response_size(size_t s) noexcept {
     _records->session_rec.response_size = s;
 }
 
-void trace_state::add_query(std::string_view val) {
+void trace_state::add_query(sstring &&val) {
     _params_ptr->queries.emplace_back(std::move(val));
+}
+
+void trace_state::add_query(std::string_view val) {
+    _params_ptr->queries.emplace_back(sstring{ val });
 }
 
 void trace_state::add_session_param(std::string_view key, std::string_view val) {
