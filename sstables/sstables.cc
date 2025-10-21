@@ -3780,11 +3780,10 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
                     buffer_data_sink_impl(std::vector<temporary_buffer<char>>& bufs)
                         : _bufs(bufs)
                     {}
-                    future<> put(net::packet data) override {
-                        throw std::logic_error("unsupported operation");
-                    }
-                    future<> put(temporary_buffer<char> buf) override {
-                        _bufs.emplace_back(std::move(buf));
+                    future<> put(std::span<temporary_buffer<char>> bufs) override {
+                        for (auto&& buf : bufs) {
+                            _bufs.emplace_back(std::move(buf));
+                        }
                         return make_ready_future<>();
                     }
                     future<> flush() override {

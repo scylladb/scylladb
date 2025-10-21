@@ -182,17 +182,10 @@ data_sink create_memory_sink(std::vector<seastar::temporary_buffer<char>>& bufs)
         buffer_data_sink_impl(std::vector<temporary_buffer<char>>& bufs)
             : _bufs(bufs)
         {}
-        future<> put(net::packet p) override {
-            return put(p.release());
-        }
-        future<> put(std::vector<temporary_buffer<char>> bufs) override {
+        future<> put(std::span<temporary_buffer<char>> bufs) override {
             for (auto&& buf : bufs) {
                 _bufs.emplace_back(std::move(buf));
             }
-            return make_ready_future<>();
-        }
-        future<> put(temporary_buffer<char> buf) override {
-            _bufs.emplace_back(std::move(buf));
             return make_ready_future<>();
         }
         future<> flush() override {

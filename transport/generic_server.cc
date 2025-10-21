@@ -74,19 +74,14 @@ public:
     virtual temporary_buffer<char> allocate_buffer(size_t size) override {
         return _ds.allocate_buffer(size);
     }
-    virtual future<> put(net::packet data) override {
-        return invoke_with_counting([this, data = std::move(data)] () mutable {
+    virtual future<> put(std::span<temporary_buffer<char>> data)  override {
+        if (_cpu_concurrency.stopped) {
             return _ds.put(std::move(data));
-        });
-    }
-    virtual future<> put(std::vector<temporary_buffer<char>> data)  override {
-        return invoke_with_counting([this, data = std::move(data)] () mutable {
-            return _ds.put(std::move(data));
-        });
-    }
-    virtual future<> put(temporary_buffer<char> buf) override {
-        return invoke_with_counting([this, buf = std::move(buf)] () mutable {
-            return _ds.put(std::move(buf));
+        }
+
+        _cpu_concurrency.units.return_all();
+        return _ds.put(std::move(data)).finally([this] {
+            _cpu_concurrency.units.adopt(consume_units(_cpu_concurrency.semaphore, 1));
         });
     }
     virtual future<> flush() override {

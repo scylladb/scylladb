@@ -92,16 +92,10 @@ public:
         , _semaphore(1)
         , _as(as)
     {}
-    future<> put(net::packet data) override {
-        return fallback_put(std::move(data));
-    }
-    future<> put(std::vector<temporary_buffer<char>> data) override {
-        for (auto&& buf : data) {
-            co_await put(std::move(buf));
+    future<> put(std::span<temporary_buffer<char>> bufs) override {
+        for (auto&& buf : bufs) {
+            _buffers.emplace_back(std::move(buf));
         }
-    }
-    future<> put(temporary_buffer<char> buf) override {
-        _buffers.emplace_back(std::move(buf));
         co_await maybe_do_upload(false);
     }
     future<> flush() override {
