@@ -7,10 +7,12 @@
  */
 
 #include "client.hh"
+#include "utils/exceptions.hh"
 #include <seastar/http/request.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/api.hh>
+#include <seastar/coroutine/as_future.hh>
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -39,6 +41,25 @@ public:
     }
 };
 
+bool is_server_unavailable(std::exception_ptr& err) {
+    return try_catch<std::system_error>(err) != nullptr;
+}
+
+bool is_request_aborted(std::exception_ptr& err) {
+    return try_catch<abort_requested_exception>(err) != nullptr;
+}
+
+future<client::request_error> map_err(std::exception_ptr& err) {
+    if (is_server_unavailable(err)) {
+        co_return service_unavailable_error{};
+    }
+    if (is_request_aborted(err)) {
+        co_return aborted_error{};
+    }
+    co_await coroutine::return_exception_ptr(err); // rethrow
+    co_return client::request_error{};             // unreachable
+}
+
 } // namespace
 
 client::client(endpoint_type endpoint_)
@@ -46,7 +67,7 @@ client::client(endpoint_type endpoint_)
     , http_client_(std::make_unique<client_connection_factory>(socket_address(endpoint_.ip, endpoint_.port))) {
 }
 
-seastar::future<client::response> client::request(
+seastar::future<client::request_result> client::request(
         seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as) {
 
     auto req = http::request::make(method, endpoint_.host, std::move(path));
@@ -59,7 +80,11 @@ seastar::future<client::response> client::request(
         resp.content = co_await util::read_entire_stream(body);
     };
 
-    co_await http_client_.make_request(std::move(req), std::move(handler), std::nullopt, &as);
+    auto f = co_await seastar::coroutine::as_future(http_client_.make_request(std::move(req), std::move(handler), std::nullopt, &as));
+    if (f.failed()) {
+        auto err = f.get_exception();
+        co_return std::unexpected(co_await map_err(err));
+    }
     co_return resp;
 }
 
