@@ -2063,8 +2063,11 @@ future<mutation> database::prepare_counter_update(schema_ptr s, const frozen_mut
                 std::move(slice), std::move(trace_state), timeout));
 }
 
-future<> database::apply_counter_update(schema_ptr s, const mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
-    auto& cf = find_column_family(m.column_family_id());
+future<> database::apply_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state) {
+    auto& cf = find_column_family(fm.column_family_id());
+
+    auto m = fm.unfreeze(s);
+    m.upgrade(cf.schema());
 
     tracing::trace(trace_state, "Applying counter update");
     co_await update_write_metrics(seastar::futurize_invoke([&] {
