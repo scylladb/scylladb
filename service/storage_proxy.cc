@@ -3587,25 +3587,31 @@ storage_proxy::mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_a
             bool local = shard == this_shard_id();
             get_stats().replica_cross_shard_ops += !local;
 
-            return container().invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(fm_a_s.s), fm = std::move(fm_a_s.fm), cl, timeout, gt = tracing::global_trace_state_ptr(trace_state), permit, local, fence, caller] (storage_proxy& sp) mutable -> future<> {
+            return container().invoke_on(shard, {_write_smp_service_group, timeout}, [gs = global_schema_ptr(fm_a_s.s), &fm = fm_a_s.fm, cl, timeout, gt = tracing::global_trace_state_ptr(trace_state), permit, local, fence, caller] (storage_proxy& sp) mutable -> future<> {
                 auto p = local ? std::move(permit) : empty_service_permit(); // FIXME: either obtain a real permit on this shard or hold original one across shard
-                return sp.mutate_counter_on_leader_and_replicate(gs, std::move(fm), cl, timeout, gt.get(), std::move(p), fence, caller);
+                return sp.mutate_counter_on_leader_and_replicate(gs, fm, cl, timeout, gt.get(), std::move(p), fence, caller);
             });
         });
     }
 }
 
 future<>
-storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, frozen_mutation fm, db::consistency_level cl, clock_type::time_point timeout,
+storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, const frozen_mutation& fm, db::consistency_level cl, clock_type::time_point timeout,
                                                       tracing::trace_state_ptr trace_state, service_permit permit,
                                                       fencing_token fence, locator::host_id caller) {
     // FIXME: This does not handle intra-node tablet migration properly.
     // Refs https://github.com/scylladb/scylladb/issues/18180
-
     const auto& rs = s->table().get_effective_replication_map()->get_replication_strategy();
 
-    return run_fenceable_write(rs, fence, caller, [this, s, fm = std::move(fm), timeout, trace_state] {
-        return _db.local().apply_counter_update(s, fm, timeout, trace_state);
+    return run_fenceable_write(rs, fence, caller, [this, s, &fm, timeout, trace_state] (this auto) -> future<mutation> {
+        auto guard = co_await _db.local().acquire_counter_locks(s, fm, timeout, trace_state);
+
+        // read the current counter value and transform the counter update mutation
+        auto m = co_await _db.local().prepare_counter_update(s, fm, timeout, trace_state);
+
+        co_await _db.local().apply_counter_update(s, m, timeout, trace_state);
+
+        co_return std::move(m);
     }).then([this, cl, timeout, trace_state, permit = std::move(permit)] (mutation m) mutable {
         return replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(permit));
     });
