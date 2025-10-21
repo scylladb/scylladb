@@ -126,10 +126,13 @@ class AuditBackend:
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    def audit_mode(self) -> str:
+        raise NotImplementedError
+
     def before_cluster_start(self):
         pass
 
-    def get_audit_log_list(self, session, consistency_level):
+    def get_audit_log_dict(self, session, consistency_level):
         raise NotImplementedError
 
 
@@ -144,6 +147,10 @@ class AuditBackendTable(AuditBackend):
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
+    @override
+    def audit_mode(self) -> str:
+        return "table"
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         if modifiers is None:
             modifiers = {}
@@ -153,10 +160,10 @@ class AuditBackendTable(AuditBackend):
         return new_audit_settings
 
     @override
-    def get_audit_log_list(self, session, consistency_level):
+    def get_audit_log_dict(self, session, consistency_level):
         """_summary_
-        returns a sorted list of audit log, the logs are sorted by the event times (time-uuid)
-        with the node as tie breaker.
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
         """
         # We would like to have named tuples as results so we can verify the
         # order in which the fields are returned as the tests make assumptions about this.
@@ -164,7 +171,7 @@ class AuditBackendTable(AuditBackend):
         res = session.execute(SimpleStatement(self.AUDIT_LOG_QUERY, consistency_level=consistency_level))
         res_list = list(res)
         res_list.sort(key=lambda row: (row.event_time.time, row.node))
-        return res_list
+        return { self.audit_mode(): res_list }
 
 
 class UnixSockerListener:
@@ -236,24 +243,35 @@ class AuditBackendSyslog(AuditBackend):
         if os.path.exists(self.socket_path):
             os.remove(self.socket_path)
 
+    @override
+    def audit_mode(self) -> str:
+        return "syslog"
+
     def update_audit_settings(self, audit_settings, modifiers=None):
         if modifiers is None:
             modifiers = {}
         new_audit_settings = copy.deepcopy(audit_settings or self.audit_default_settings)
+        # This is a hack. The test framework uses "table" as "not none".
+        # Appropriate audit mode should be passed from the test itself, and not set here.
+        # This converts "table" to its own audit mode, or keeps "none" as is.
         if "audit" in new_audit_settings and new_audit_settings["audit"] == "table":
-            new_audit_settings["audit"] = "syslog"
+            new_audit_settings["audit"] = self.audit_mode()
         new_audit_settings["audit_unix_socket_path"] = self.socket_path
         for key in modifiers:
             new_audit_settings[key] = modifiers[key]
         return new_audit_settings
 
     @override
-    def get_audit_log_list(self, session, consistency_level):
+    def get_audit_log_dict(self, session, consistency_level):
+        """_summary_
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
+        """
         lines = self.unix_socket_listener.get_lines()
         entries = []
         for idx, line in enumerate(lines):
             entries.append(self.line_to_row(line, idx))
-        return entries
+        return { self.audit_mode(): entries }
 
     def line_to_row(self, line, idx):
         metadata, data = line.split(": ", 1)
@@ -286,33 +304,36 @@ class TestCQLAudit(AuditTester):
 
     AUDIT_LOG_QUERY = "SELECT * FROM audit.audit_log"
 
-    def deduplicate_audit_entries(self, entries):
+    def deduplicate_audit_entries(self, entries_dict):
         """
-        Returns a list of audit entries with duplicate entries removed.
+        Returns a dictionary mapping audit mode name to a list of audit entries with duplicate entries removed.
         """
-        unique = set()
-        deduplicated_entries = []
+        deduplicated_entries_dict = dict[str, list[AuditEntry]]()
 
-        for entry in entries:
-            fields_subset = (entry.node, entry.category, entry.consistency, entry.error, entry.keyspace_name, entry.operation, entry.source, entry.table_name, entry.username)
+        for mode, entries in entries_dict.items():
+            unique = set()
+            deduplicated_entries = list[AuditEntry]()
+            for entry in entries:
+                fields_subset = (entry.node, entry.category, entry.consistency, entry.error, entry.keyspace_name, entry.operation, entry.source, entry.table_name, entry.username)
 
-            if fields_subset in unique:
-                continue
+                if fields_subset in unique:
+                    continue
 
-            unique.add(fields_subset)
-            deduplicated_entries.append(entry)
+                unique.add(fields_subset)
+                deduplicated_entries.append(entry)
+            deduplicated_entries_dict[mode] = deduplicated_entries
 
-        return deduplicated_entries
+        return deduplicated_entries_dict
 
-    def get_audit_log_list(self, session):
+    def get_audit_log_dict(self, session):
         """_summary_
-        returns a sorted list of audit log, the logs are sorted by the event times (time-uuid)
-        with the node as tie breaker.
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
         """
         consistency_level = ConsistencyLevel.QUORUM if len(self.cluster.nodelist()) > 1 else ConsistencyLevel.ONE
-        log_list = self.helper.get_audit_log_list(session, consistency_level)
-        logger.debug(f"get_audit_log_list: {log_list}")
-        return log_list
+        log_dict = self.helper.get_audit_log_dict(session, consistency_level)
+        logger.debug(f"get_audit_log_dict: {log_dict}")
+        return log_dict
 
     # This assert is added just in order to still fail the test if the order of columns is changed, this is an implied assumption
     def assert_audit_row_fields(self, row):
@@ -341,13 +362,17 @@ class TestCQLAudit(AuditTester):
         assert row.table_name == table
         assert row.username == user
 
-    def get_audit_entries_count(self, session):
-        res_list = self.get_audit_log_list(session)
-        res_list = self.filter_out_noise(res_list, filter_out_all_auth=True, filter_out_use=True)
-        logger.debug("Printing audit table content:")
-        for row in res_list:
-            logger.debug("  %s", row)
-        return len(res_list)
+    def get_audit_entries_count_dict(self, session) -> dict[str, int]:
+        """_summary_
+        returns a dictionary mapping audit mode name to the count of audit log entries for that mode.
+        """
+        reg_dict = self.get_audit_log_dict(session)
+        reg_dict = self.filter_out_noise(reg_dict, filter_out_all_auth=True, filter_out_use=True)
+        for mode, reg_list in reg_dict.items():
+            logger.debug(f"Printing audit {mode} content:")
+            for row in reg_list:
+                logger.debug("  %s", row)
+        return { mode: len(reg_list) for mode, reg_list in reg_dict.items() }
 
     @staticmethod
     def token_in_range(token, start_token, end_token):
@@ -395,17 +420,23 @@ class TestCQLAudit(AuditTester):
 
     @contextmanager
     def assert_exactly_n_audit_entries_were_added(self, session: Session, expected_entries: int):
-        count_before = self.get_audit_entries_count(session)
+        counts_before = self.get_audit_entries_count_dict(session)
         yield
-        count_after = self.get_audit_entries_count(session)
-        assert count_after == count_before + expected_entries, f"Expected {expected_entries} new audit entries, but got {count_after - count_before} new entries"
+        counts_after = self.get_audit_entries_count_dict(session)
+        assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
+        for mode, count_before in counts_before.items():
+            count_after = counts_after[mode]
+            assert count_after == count_before + expected_entries, f"Expected {expected_entries} new audit entries, but got {count_after - count_before} new entries"
 
     @contextmanager
     def assert_no_audit_entries_were_added(self, session):
-        count_before = self.get_audit_entries_count(session)
+        counts_before = self.get_audit_entries_count_dict(session)
         yield
-        count_after = self.get_audit_entries_count(session)
-        assert count_before == count_after, f"audit entries count changed (before: {count_before} after: {count_after})"
+        counts_after = self.get_audit_entries_count_dict(session)
+        assert set(counts_before.keys()) == set(counts_after.keys()), f"audit modes changed (before: {list(counts_before.keys())} after: {list(counts_after.keys())})"
+        for mode, count_before in counts_before.items():
+            count_after = counts_after[mode]
+            assert count_before == count_after, f"audit entries count changed (before: {count_before} after: {count_after})"
 
     def execute_and_validate_audit_entry(  # noqa: PLR0913
         self,
@@ -456,56 +487,70 @@ class TestCQLAudit(AuditTester):
 
     # Filter out queries that can appear in random moments of the tests,
     # such as LOGINs and USE statements.
-    def filter_out_noise(self, rows, filter_out_all_auth=False, filter_out_cassandra_auth=False, filter_out_use=False):
-        if filter_out_all_auth:
-            rows = [row for row in rows if row.category != "AUTH"]
-        if filter_out_cassandra_auth:
-            rows = [row for row in rows if not (row.category == "AUTH" and row.username == "cassandra")]
-        if filter_out_use:
-            rows = [row for row in rows if "USE " not in row.operation]
-        return rows
+    def filter_out_noise(self, rows_dict, filter_out_all_auth=False, filter_out_cassandra_auth=False, filter_out_use=False) -> dict[str, list[AuditEntry]]:
+        for mode, rows in rows_dict.items():
+            if filter_out_all_auth:
+                rows = [row for row in rows if row.category != "AUTH"]
+            if filter_out_cassandra_auth:
+                rows = [row for row in rows if not (row.category == "AUTH" and row.username == "cassandra")]
+            if filter_out_use:
+                rows = [row for row in rows if "USE " not in row.operation]
+            rows_dict[mode] = rows
+        return rows_dict
 
     @contextmanager
     def assert_entries_were_added(self, session: Session, expected_entries: list[AuditEntry], merge_duplicate_rows: bool = True, filter_out_cassandra_auth: bool = False):
         # Get audit entries before executing the query, to later compare with
         # audit entries after executing the query.
-        rows_before = self.get_audit_log_list(session)
-        set_of_rows_before = set(rows_before)
-        assert len(set_of_rows_before) == len(rows_before), f"audit table contains duplicate rows: {rows_before}"
-
+        set_of_rows_before_dict = dict[str, set[AuditEntry]]()
+        rows_before_dict = self.get_audit_log_dict(session)
+        for mode, rows_before in rows_before_dict.items():
+            set_of_rows_before = set(rows_before)
+            assert len(set_of_rows_before) == len(rows_before), f"audit {mode} contains duplicate rows: {rows_before}"
+            set_of_rows_before_dict[mode] = set_of_rows_before
         yield
 
-        new_rows = []
+        new_rows_dict = dict[str, list[AuditEntry]]()
         def is_number_of_new_rows_correct():
-            rows_after = self.get_audit_log_list(session)
-            set_of_rows_after = set(rows_after)
-            assert len(set_of_rows_after) == len(rows_after), f"audit table contains duplicate rows: {rows_after}"
+            rows_after_dict = self.get_audit_log_dict(session)
+            set_of_rows_after_dict = dict[str, set[AuditEntry]]()
+            for mode, rows_after in rows_after_dict.items():
+                set_of_rows_after = set(rows_after)
+                assert len(set_of_rows_after) == len(rows_after), f"audit {mode} contains duplicate rows: {rows_after}"
+                set_of_rows_after_dict[mode] = set_of_rows_after
 
-            nonlocal new_rows
-            new_rows = rows_after[len(rows_before) :]
-            assert set(new_rows) == set_of_rows_after - set_of_rows_before, f"new rows are not the last rows in the audit table: rows_after={rows_after}, set_of_rows_after={set_of_rows_after}, set_of_rows_before={set_of_rows_before}"
+            nonlocal new_rows_dict
+            for mode, rows_after in rows_after_dict.items():
+                rows_before = rows_before_dict[mode]
+                new_rows_dict[mode] = rows_after[len(rows_before) :]
+                assert set(new_rows_dict[mode]) == set_of_rows_after_dict[mode] - set_of_rows_before_dict[mode], f"new rows are not the last rows in the audit table: rows_after={rows_after}, set_of_rows_after_dict[{mode}]={set_of_rows_after_dict[mode]}, set_of_rows_before_dict[{mode}]={set_of_rows_before_dict[mode]}"
 
             if merge_duplicate_rows:
-                new_rows = self.deduplicate_audit_entries(new_rows)
+                new_rows_dict = self.deduplicate_audit_entries(new_rows_dict)
 
             auth_not_expected = (len([entry for entry in expected_entries if entry.category == "AUTH"]) == 0)
             use_not_expected = (len([entry for entry in expected_entries if "USE " in entry.statement]) == 0)
 
-            new_rows = self.filter_out_noise(
-                new_rows,
+            new_rows_dict = self.filter_out_noise(
+                new_rows_dict,
                 filter_out_all_auth=auth_not_expected,
                 filter_out_cassandra_auth=filter_out_cassandra_auth,
                 filter_out_use=use_not_expected
             )
 
-            assert len(new_rows) <= len(expected_entries)
-            return len(new_rows) == len(expected_entries)
+            for new_rows in new_rows_dict.values():
+                assert len(new_rows) <= len(expected_entries)
+                if len(new_rows) != len(expected_entries):
+                    return False
+
+            return True
 
         wait_for(is_number_of_new_rows_correct, timeout=60)
-        sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row.operation, row.source, row.table_name, row.username))
-        assert len(sorted_new_rows) == len(expected_entries)
-        for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
-            self.assert_audit_row_eq(row, entry.category, entry.statement, entry.table, entry.ks, entry.user, entry.cl, entry.error)
+        for mode, new_rows in new_rows_dict.items():
+            sorted_new_rows = sorted(new_rows, key=lambda row: (row.node, row.category, row.consistency, row.error, row.keyspace_name, row.operation, row.source, row.table_name, row.username))
+            assert len(sorted_new_rows) == len(expected_entries)
+            for row, entry in zip(sorted_new_rows, sorted(expected_entries)):
+                self.assert_audit_row_eq(row, entry.category, entry.statement, entry.table, entry.ks, entry.user, entry.cl, entry.error)
 
     def verify_keyspace(self, audit_settings=None, helper=None):
         """
@@ -1094,23 +1139,32 @@ class TestCQLAudit(AuditTester):
                 pytest.fail("Expected insert to fail")
         node_to_stop.start(wait_for_binary_proto=True, wait_other_notice=True)
 
-        rows = []
+        rows_dict = dict[str, list[AuditEntry]]()
         timestamp_before = datetime.datetime.now()
         for i in itertools.count(start=1):
             if datetime.datetime.now() - timestamp_before > datetime.timedelta(seconds=60):
                 pytest.fail(f"audit log not updated after {i} iterations")
 
-            rows = self.get_audit_log_list(session)
-            rows_with_error = list(filter(lambda r: r.error, rows))
-            if len(rows_with_error) == 6:
-                logger.info(f"audit log updated after {i} iterations ({i / 10}s)")
-                assert rows_with_error[0].error is True
-                assert rows_with_error[0].consistency == "THREE"
+            rows_dict = self.get_audit_log_dict(session)
+            # We need to satisfy the end state condition for all audit modes.
+            # If any audit mode is not done yet, continue polling.
+            all_modes_done = True
+            for mode, rows in rows_dict.items():
+                rows_with_error = list(filter(lambda r: r.error, rows))
+                if len(rows_with_error) == 6:
+                    logger.info(f"audit mode {mode} log updated after {i} iterations ({i / 10}s)")
+                    assert rows_with_error[0].error is True
+                    assert rows_with_error[0].consistency == "THREE"
 
-                # We expect the initial insert to be in the audit log.
-                # it is executed in _test_insert_failure_doesnt_report_success_assign_nodes
-                rows_without_error = [row for row in rows if row.operation == query_to_fail and not row.error]
-                assert len(rows_without_error) == 1
+                    # We expect the initial insert to be in the audit log.
+                    # it is executed in _test_insert_failure_doesnt_report_success_assign_nodes
+                    rows_without_error = [row for row in rows if row.operation == query_to_fail and not row.error]
+                    assert len(rows_without_error) == 1
+                else:
+                    # An audit mode is not done yet, early exit to continue polling.
+                    all_modes_done = False
+                    break
+            if all_modes_done:
                 break
 
     @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
