@@ -19,6 +19,7 @@
 #include "types/user.hh"
 #include "utils/assert.hh"
 #include "utils/hash.hh"
+#include "cell_locking.hh"
 #include "db_clock.hh"
 #include "gc_clock.hh"
 #include <chrono>
@@ -1500,6 +1501,11 @@ struct string_pair_eq {
     bool operator()(spair lhs, spair rhs) const;
 };
 
+struct counter_update_guard {
+    utils::phased_barrier::operation op;
+    std::vector<locked_cell> locks;
+};
+
 class db_user_types_storage;
 
 // Policy for sharded<database>:
@@ -1729,6 +1735,7 @@ private:
     future<> apply_with_commitlog(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout);
 
     future<> read_and_transform_counter_mutation_to_shards(mutation& m, column_family& cf, query::partition_slice slice, tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout);
+    future<counter_update_guard> acquire_counter_locks(column_family& cf, const mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     future<mutation> do_apply_counter_update(column_family& cf, const frozen_mutation& fm, schema_ptr m_schema, db::timeout_clock::time_point timeout,
                                              tracing::trace_state_ptr trace_state);
 
