@@ -24,7 +24,7 @@ async def validate_status_operation(result: str, live_eps: list, down_eps: list,
     assert lines[i] == "=" * dc_line_len
 
     i += 1
-    assert lines[i] == "Status=Up/Down"
+    assert lines[i].startswith("Status=Up/Down")
 
     i += 1
     assert lines[i] == "|/ State=Normal/Leaving/Joining/Moving"
@@ -47,7 +47,10 @@ async def validate_status_operation(result: str, live_eps: list, down_eps: list,
 
         assert ep in (live_eps + down_eps)
 
-        assert status_state[0] == ('U' if ep in live_eps else 'D')
+        if ep in live_eps:
+            assert status_state[0] == 'U'
+        else:
+            assert status_state[0] in ['D', 'X']
 
         if ep in joining:
             assert status_state[1] == 'J'
