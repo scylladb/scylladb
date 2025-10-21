@@ -291,6 +291,48 @@ class AuditBackendSyslog(AuditBackend):
         self.socket_path = new_socket_path
 
 
+class AuditBackendComposite(AuditBackend):
+    audit_default_settings = {"audit": "table,syslog", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "ks"}
+
+    backends: list[AuditBackend]
+
+    def __init__(self):
+        super().__init__()
+        self.backends = [AuditBackendTable(), AuditBackendSyslog()]
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def audit_mode(self):
+        return ",".join([backend.audit_mode() for backend in self.backends])
+
+    def update_audit_settings(self, audit_settings, modifiers=None):
+        if modifiers is None:
+            modifiers = {}
+        new_audit_settings = copy.deepcopy(audit_settings or self.audit_default_settings)
+        for backend in self.backends:
+            new_audit_settings = backend.update_audit_settings(new_audit_settings)
+        if "audit" in new_audit_settings and (new_audit_settings["audit"] == "table" or new_audit_settings["audit"] == "syslog"):
+            new_audit_settings["audit"] = "table,syslog"
+        for key in modifiers:
+            new_audit_settings[key] = modifiers[key]
+        return new_audit_settings
+
+    @override
+    def get_audit_log_dict(self, session, consistency_level):
+        """_summary_
+        returns a dictionary mapping audit mode name to a sorted list of audit log,
+        the logs are sorted by the event times (time-uuid) with the node as tie breaker.
+        """
+        rows_dict = dict[str, list[AuditEntry]]()
+        for backend in self.backends:
+            backend_rows_dict = backend.get_audit_log_dict(session, consistency_level)
+            for mode, backend_rows in backend_rows_dict.items():
+                assert mode not in rows_dict
+                rows_dict[mode] = backend_rows
+        return rows_dict
+
+
 @pytest.mark.single_node
 class TestCQLAudit(AuditTester):
     """
@@ -588,7 +630,7 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_using_non_existent_keyspace(self, helper_class):
         """
         Test tha using a non-existent keyspace generates an audit entry with an
@@ -704,22 +746,22 @@ class TestCQLAudit(AuditTester):
             for query in query_sequence:
                 session.execute(query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings=AuditTester.audit_default_settings, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace_extra_parameter(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,DML,DDL,DCL", "audit_keyspaces": "ks", "extra_parameter": "new"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace_many_ks(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "ADMIN,AUTH,QUERY,DML,DDL,DCL", "audit_keyspaces": "a,b,c,ks"}, helper=helper)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_keyspace_table_not_exists(self, helper_class):
         with helper_class() as helper:
             self.verify_keyspace(audit_settings={"audit": "table", "audit_categories": "DML,DDL", "audit_keyspaces": "ks", "audit_tables": "ks.fake"}, helper=helper)
@@ -786,7 +828,7 @@ class TestCQLAudit(AuditTester):
         self.execute_and_validate_audit_entry(session, query=self.AUDIT_LOG_QUERY, category="QUERY", ks="audit", table="audit_log", audit_settings=audit_settings)
 
     @pytest.mark.single_node
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_categories_invalid(self, helper_class):
         """
         'audit_categories': invalid
@@ -832,20 +874,20 @@ class TestCQLAudit(AuditTester):
         self.verify_table(audit_settings={"audit": "table", "audit_categories": "AUTH,QUERY,DDL"}, table_prefix="test_audit_categories_part1", overwrite_audit_tables=True)
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_categories_part2(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH,DCL", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part2")
 
     @pytest.mark.cluster_options(enable_create_table_with_compact_storage=True)
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_audit_categories_part3(self, helper_class):
         with helper_class() as helper:
             self.verify_table(audit_settings={"audit": "table", "audit_categories": "DDL, ADMIN,AUTH", "audit_keyspaces": "ks"}, helper=helper, table_prefix="test_audit_categories_part3")
 
     PasswordMaskingCase = namedtuple("PasswordMaskingCase", ["name", "password", "new_password"])
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_user_password_masking(self, helper_class):
         """
         CREATE USER, ALTER USER, DROP USER statements
@@ -962,7 +1004,7 @@ class TestCQLAudit(AuditTester):
         with self.assert_entries_were_added(session, [expected_entry]):
             assert_invalid(session, stmt, expected=Unavailable)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_role_password_masking(self, helper_class):
         """
         CREATE ROLE, ALTER ROLE, DROP ROLE statements
@@ -1157,7 +1199,7 @@ class TestCQLAudit(AuditTester):
             if audit_modes_done == len(rows_dict):
                 break
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_prepare(self, helper_class):
         """Test prepare statement"""
         with helper_class() as helper:
@@ -1185,7 +1227,7 @@ class TestCQLAudit(AuditTester):
                 table="cf",
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_permissions(self, helper_class):
         """Test user permissions"""
 
@@ -1217,7 +1259,7 @@ class TestCQLAudit(AuditTester):
                 expected_error=Unauthorized,
             )
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_batch(self, helper_class):
         """
         BATCH statement
@@ -1353,7 +1395,7 @@ class TestCQLAudit(AuditTester):
                     self.verify_change(node, param, settings[param], mark, expected_result)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_config_liveupdate(self, helper_class, audit_config_changer):
         """
         Test liveupdate config changes in audit.
@@ -1414,7 +1456,7 @@ class TestCQLAudit(AuditTester):
                 session.execute(auditted_query)
 
     @pytest.mark.parametrize("audit_config_changer", [AuditSighupConfigChanger, AuditCqlConfigChanger])
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_config_no_liveupdate(self, helper_class, audit_config_changer):
         """
         Test audit config parameters that don't allow config changes.
@@ -1446,7 +1488,7 @@ class TestCQLAudit(AuditTester):
             with self.assert_entries_were_added(session, expected_new_entries, merge_duplicate_rows=False):
                 session.execute(auditted_query)
 
-    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog])
+    @pytest.mark.parametrize("helper_class", [AuditBackendTable, AuditBackendSyslog, AuditBackendComposite])
     def test_parallel_syslog_audit(self, helper_class):
         """
         Test that cluster doesn't fail if multiple queries are audited in parallel
