@@ -16,10 +16,10 @@ namespace aws {
 
 static logging::logger rs_logger("default_retry_strategy");
 
-default_retry_strategy::default_retry_strategy(unsigned max_retries, unsigned scale_factor) : _max_retries(max_retries), _scale_factor(scale_factor) {
+default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, unsigned scale_factor) : _max_retries(max_retries), _scale_factor(scale_factor) {
 }
 
-seastar::future<bool> default_retry_strategy::should_retry(const aws_error& error, unsigned attempted_retries) const {
+seastar::future<bool> default_aws_retry_strategy::should_retry(const aws_error& error, unsigned attempted_retries) const {
     if (attempted_retries >= _max_retries) {
         rs_logger.warn("Retries exhausted. Retry# {}", attempted_retries);
         co_return false;
@@ -36,7 +36,7 @@ seastar::future<bool> default_retry_strategy::should_retry(const aws_error& erro
     co_return should_retry;
 }
 
-std::chrono::milliseconds default_retry_strategy::delay_before_retry(const aws_error&, unsigned attempted_retries) const {
+std::chrono::milliseconds default_aws_retry_strategy::delay_before_retry(const aws_error&, unsigned attempted_retries) const {
     if (attempted_retries == 0) {
         return 0ms;
     }
