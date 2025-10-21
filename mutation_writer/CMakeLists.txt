@@ -16,6 +16,9 @@ target_link_libraries(mutation_writer
     xxHash::xxhash
   PRIVATE
     schema)
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(mutation_writer REUSE_FROM scylla-precompiled-header)
+endif()
 
 check_headers(check-headers mutation_writer
   GLOB_RECURSE ${CMAKE_CURRENT_SOURCE_DIR}/*.hh)

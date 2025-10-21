@@ -18,6 +18,9 @@ target_link_libraries(scylla_dht
   PRIVATE
     replica)
 
+if (Scylla_USE_PRECOMPILED_HEADER_USE)
+  target_precompile_headers(scylla_dht REUSE_FROM scylla-precompiled-header)
+endif()
 add_whole_archive(dht scylla_dht)
 
 check_headers(check-headers scylla_dht

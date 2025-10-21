@@ -60,7 +60,7 @@ static int64_t make_node() {
     static int64_t global_node = [] {
         int64_t node = 0;
 #ifdef __linux__
-        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
         if (fd >= 0) {
             // Get a hardware address for an interface, if there is more than one, use any
             struct ifreq ifr_list[32];
