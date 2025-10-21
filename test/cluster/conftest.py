@@ -24,6 +24,7 @@ from test.pylib.async_cql import run_async
 from test.pylib.scylla_cluster import ScyllaClusterManager, ScyllaVersionDescription, get_scylla_2025_1_description
 from test.pylib.suite.base import get_testpy_test
 from test.pylib.suite.python import add_cql_connection_options
+from test.pylib.encryption_provider import KeyProvider, make_key_provider_factory
 import logging
 import pytest
 from cassandra.auth import PlainTextAuthProvider                         # type: ignore # pylint: disable=no-name-in-module
@@ -339,3 +340,9 @@ def internet_dependency_enabled(request) -> None:
 @pytest.fixture(scope="function")
 async def scylla_2025_1(request, build_mode, internet_dependency_enabled) -> AsyncIterator[ScyllaVersionDescription]:
     yield await get_scylla_2025_1_description(build_mode)
+
+@pytest.fixture(scope="function", params=list(KeyProvider))
+async def key_provider(request, tmpdir):
+    """Encryption providers fixture"""
+    async with make_key_provider_factory(request.param, tmpdir) as res:
+        yield res
