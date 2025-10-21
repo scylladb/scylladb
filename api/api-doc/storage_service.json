@@ -1572,6 +1572,30 @@
          ]
       },
       {
+         "path":"/storage_service/exclude_node",
+         "operations":[
+            {
+               "method":"POST",
+               "summary":"Marks the node as permanently down (excluded).",
+               "type":"void",
+               "nickname":"exclude_node",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+                  {
+                     "name":"hosts",
+                     "description":"Comma-separated list of host ids to exclude",
+                     "required":true,
+                     "allowMultiple":false,
+                     "type":"string",
+                     "paramType":"query"
+                  }
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/removal_status",
          "operations":[
             {

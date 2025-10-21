@@ -4293,6 +4293,36 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
     rtlogger.info("Removenode succeeded. Request ID: {}", request_id);
 }
 
+future<> storage_service::mark_excluded(const std::vector<locator::host_id>& hosts) {
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        std::unordered_set<raft::server_id> raft_hosts;
+        for (auto host : hosts) {
+            if (_gossiper.is_alive(host)) {
+                const std::string message = ::format("Cannot mark host {} as excluded because it's alive", host);
+                rtlogger.warn("{}", message);
+                throw std::runtime_error(message);
+            }
+            raft_hosts.insert(raft::server_id(host.uuid()));
+        }
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.add_ignored_nodes(raft_hosts);
+        topology_change change{{builder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("Mark as excluded: {}", hosts));
+        rtlogger.info("Marking nodes as excluded: {}, previous set: {}", hosts, _topology_state_machine._topology.ignored_nodes);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            rtlogger.info("mark_excluded: concurrent operation is detected, retrying.");
+            continue;
+        }
+        rtlogger.info("Nodes marked as excluded: {}", hosts);
+        break;
+    }
+}
+
 future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
     return run_with_api_lock_in_gossiper_mode_only(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
         return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
