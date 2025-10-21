@@ -6,6 +6,8 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
+#include "seastar/core/future.hh"
+#include "seastar/core/when_all.hh"
 #include "vector_search/vector_store_client.hh"
 #include "db/config.hh"
 #include "exceptions/exceptions.hh"
@@ -68,13 +70,25 @@ auto listen_on_port(std::unique_ptr<http_server> server, sstring host, uint16_t 
     co_return std::make_tuple(std::move(server), listeners[0].local_address().port());
 }
 
-auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
-        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+auto make_http_server(std::function<void(routes& r)> set_routes) {
     static unsigned id = 0;
     auto server = std::make_unique<http_server>(fmt::format("test_vector_store_client_{}", id++));
     set_routes(server->_routes);
     server->set_content_streaming(true);
-    co_return co_await listen_on_port(std::move(server), std::move(host), port);
+    return server;
+}
+
+auto new_http_server(std::function<void(routes& r)> set_routes, sstring host = LOCALHOST, uint16_t port = 0)
+        -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    co_return co_await listen_on_port(make_http_server(set_routes), std::move(host), port);
+}
+
+auto new_http_server(std::function<void(routes& r)> set_routes, server_socket socket) -> future<std::tuple<std::unique_ptr<http_server>, socket_address>> {
+    auto server = make_http_server(set_routes);
+    auto& listeners = http_server_tester::listeners(*server);
+    listeners.push_back(std::move(socket));
+    co_await server->do_accepts(listeners.size() - 1);
+    co_return std::make_tuple(std::move(server), listeners.back().local_address().port());
 }
 
 auto repeat_until(milliseconds timeout, std::function<future<bool>()> func) -> future<bool> {
@@ -238,8 +252,10 @@ public:
     }
 
     future<> stop() {
-        _socket.abort_accept();
-        co_await _gate.close();
+        if (_socket) {
+            _socket.abort_accept();
+            co_await _gate.close();
+        }
     }
 
     sstring host() const {
@@ -251,7 +267,27 @@ public:
     }
 
     size_t connections() const {
-        return _connections;
+        return _connections.size();
+    }
+
+    future<seastar::server_socket> take_socket() {
+        _running = false;
+        // Make a connection to unblock accept() in run loop.
+        co_await seastar::connect(socket_address(net::inet_address(_host), _port));
+        co_await _gate.close();
+        co_return std::move(_socket);
+    }
+
+    void auto_shutdown_off() {
+        _auto_shutdown = false;
+    }
+
+    future<> shutdown_all_and_clear() {
+        std::vector<seastar::accept_result> tmp;
+        std::swap(tmp, _connections);
+        for (auto& conn : tmp) {
+            co_await shutdown(conn.connection);
+        }
     }
 
 private:
@@ -267,24 +303,32 @@ private:
     }
 
     future<> run() {
-        while (true) {
+        while (_running) {
             try {
-                auto s = co_await _socket.accept();
-                _connections++;
-                s.connection.shutdown_output();
-                s.connection.shutdown_input();
-                co_await s.connection.wait_input_shutdown();
+                _connections.push_back(co_await _socket.accept());
+                if (_auto_shutdown) {
+                    co_await shutdown(_connections.back().connection);
+                }
             } catch (...) {
                 break;
             }
         }
     }
 
+    future<> shutdown(connected_socket& cs) {
+        cs.shutdown_output();
+        cs.shutdown_input();
+        co_await cs.wait_input_shutdown();
+    }
+
+
     seastar::server_socket _socket;
     seastar::gate _gate;
     uint16_t _port;
     sstring _host;
-    size_t _connections = 0;
+    std::vector<seastar::accept_result> _connections;
+    bool _running = true;
+    bool _auto_shutdown = true;
 };
 
 auto make_unavailable_server(uint16_t port = 0) -> future<std::unique_ptr<unavailable_server>> {
@@ -319,6 +363,16 @@ public:
         co_await listen();
     }
 
+    future<> start(server_socket socket) {
+        auto [server, addr] = co_await new_http_server(
+                [this](auto& r) {
+                    set_routes(r);
+                },
+                std::move(socket));
+        _http_server = std::move(server);
+        _port = addr.port();
+    }
+
     future<> stop() {
         co_await _http_server->stop();
     }
@@ -343,11 +397,8 @@ private:
     future<> listen() {
         co_await try_on_loopback_address([this](auto host) -> future<> {
             auto [s, addr] = co_await new_http_server(
-                    [this](routes& r) {
-                        auto ann = [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
-                            return handle_request(std::move(req), std::move(rep));
-                        };
-                        r.add(operation_type::POST, url(INDEXES_PATH).remainder("path"), new function_handler(ann, "json"));
+                    [this](auto& r) {
+                        set_routes(r);
                     },
                     host.c_str(), _port);
             _http_server = std::move(s);
@@ -356,12 +407,33 @@ private:
         });
     }
 
-    future<std::unique_ptr<reply>> handle_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+    future<std::unique_ptr<reply>> handle_ann_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
         ann_req r{.path = INDEXES_PATH + "/" + req->get_path_param("path"), .body = co_await util::read_entire_stream_contiguous(*req->content_stream)};
         _ann_requests.push_back(std::move(r));
         rep->set_status(_next_ann_response.status);
         rep->write_body("json", _next_ann_response.body);
         co_return rep;
+    }
+
+    future<std::unique_ptr<reply>> handle_status_request(std::unique_ptr<request> req, std::unique_ptr<reply> rep) {
+        rep->set_status(status_type::ok);
+        rep->write_body("json", "SERVING");
+        co_return rep;
+    }
+
+    void set_routes(routes& r) {
+        r.add(operation_type::POST, url(INDEXES_PATH).remainder("path"),
+                new function_handler(
+                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                            return handle_ann_request(std::move(req), std::move(rep));
+                        },
+                        "json"));
+        r.add(operation_type::GET, url("/api/v1/status").remainder("status"),
+                new function_handler(
+                        [this](std::unique_ptr<request> req, std::unique_ptr<reply> rep) -> future<std::unique_ptr<reply>> {
+                            return handle_status_request(std::move(req), std::move(rep));
+                        },
+                        "json"));
     }
 
     uint16_t _port = 0;
@@ -952,4 +1024,90 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
                 BOOST_CHECK_EQUAL(get_metrics_value("vector_store_dns_refreshes", metrics)->i(), 1);
             },
             cfg);
+}
+
+SEASTAR_TEST_CASE(vector_store_client_node_recovery_after_backoff) {
+    auto s1 = co_await make_unavailable_server();
+    auto s2 = co_await make_vs_mock_server();
+    std::unique_ptr<vs_mock_server> s1_available;
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://s1.node:{},http://s2.node:{}", s1->port(), s2->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"s1.node", std::vector<std::string>{s1->host()}}, {"s2.node", std::vector<std::string>{s2->host()}}});
+                vs.start_background_tasks();
+
+                // Wait until a request is sent to s1. On failure, it is placed into backoff.
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_return s1->connections() > 0;
+                }));
+
+                // Make s1 available
+                s1_available = std::make_unique<vs_mock_server>();
+                co_await s1_available->start(co_await s1->take_socket());
+
+                // Wait until s1 is taken out of the backoff state and used for requests again.
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    co_return !s1_available->requests().empty();
+                }));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await s1->stop();
+                co_await s2->stop();
+                if (s1_available) {
+                    co_await s1_available->stop();
+                }
+            }));
+}
+
+SEASTAR_TEST_CASE(vector_store_client_single_status_check_after_concurrent_failures) {
+    using keys = std::expected<vector_store_client::primary_keys, vector_store_client::ann_error>;
+
+    auto unavail_s = co_await make_unavailable_server();
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(format("http://unavail.node:{}", unavail_s->port()));
+    co_await do_with_cql_env(
+            [&](cql_test_env& env) -> future<> {
+                std::vector<future<keys>> requests;
+                unavail_s->auto_shutdown_off();
+                constexpr auto NUM_OF_PARALLEL_REQUESTS = 50;
+                auto as = abort_source_timeout();
+                auto schema = co_await create_test_table(env, "ks", "idx");
+                auto& vs = env.local_qp().vector_store_client();
+                configure(vs).with_dns({{"unavail.node", std::vector<std::string>{unavail_s->host()}}});
+                vs.start_background_tasks();
+
+                for (int i = 0; i < NUM_OF_PARALLEL_REQUESTS; ++i) {
+                    requests.push_back(vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset()));
+                }
+                // Wait for all requests to establish a connection with the server.
+                co_await repeat_until([&unavail_s]() -> future<bool> {
+                    co_return unavail_s->connections() == NUM_OF_PARALLEL_REQUESTS;
+                });
+                // Shutdown all connections, causing all requests to fail.
+                // The number of connections will drop to zero.
+                co_await unavail_s->shutdown_all_and_clear();
+                // Wait for all requests to complete.
+                co_await when_all(requests.begin(), requests.end());
+
+                // After the backoff period, a single status check is expected to verify node recovery.
+                // The test server keeps the subsequent status check connection open (auto_shutdown_off()).
+                // This prevents the client's backoff mechanism from sending another status request
+                // while the first one is pending, ensuring that exactly one new connection is made.
+                // This makes the test assertion deterministic.
+                BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
+                    co_return unavail_s->connections() == 1;
+                }));
+            },
+            cfg)
+            .finally(coroutine::lambda([&] -> future<> {
+                co_await unavail_s->stop();
+            }));
 }
