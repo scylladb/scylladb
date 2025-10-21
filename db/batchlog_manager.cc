@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <exception>
+#include <ranges>
 #include <seastar/core/future-util.hh>
 #include <seastar/core/do_with.hh>
 #include <seastar/core/semaphore.hh>
@@ -25,6 +26,7 @@
 #include "system_keyspace.hh"
 #include "utils/rate_limiter.hh"
 #include "utils/log.hh"
+#include "utils/murmur_hash.hh"
 #include "db_clock.hh"
 #include "unimplemented.hh"
 #include "idl/frozen_schema.dist.hh"
@@ -34,15 +36,57 @@
 #include "cql3/untyped_result_set.hh"
 #include "service_permit.hh"
 #include "cql3/query_processor.hh"
-#include "replica/database.hh"
 
 static logging::logger blogger("batchlog_manager");
 
 namespace db {
 
-mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now) {
-    auto key = partition_key::from_singular(*schema, id);
+// Yields 256 batchlog shards. Even on the largest nodes we currently run on,
+// this should be enough to give every core a batchlog partition.
+static constexpr unsigned batchlog_shard_bits = 8;
+
+int32_t batchlog_shard_of(db_clock::time_point written_at) {
+    const int64_t count = written_at.time_since_epoch().count();
+    std::array<uint64_t, 2> result;
+    utils::murmur_hash::hash3_x64_128(bytes_view(reinterpret_cast<const signed char*>(&count), sizeof(count)), 0, result);
+    uint64_t hash = result[0] ^ result[1];
+    return hash & ((1ULL << batchlog_shard_bits) - 1);
+}
+
+std::pair<partition_key, clustering_key>
+get_batchlog_key(const schema& schema, int32_t version, db::batchlog_stage stage, int32_t batchlog_shard, db_clock::time_point written_at, std::optional<utils::UUID> id) {
+    auto pkey = partition_key::from_exploded(schema, {serialized(version), serialized(int8_t(stage)), serialized(batchlog_shard)});
+
+    std::vector<bytes> ckey_components;
+    ckey_components.reserve(2);
+    ckey_components.push_back(serialized(written_at));
+    if (id) {
+        ckey_components.push_back(serialized(*id));
+    }
+    auto ckey = clustering_key::from_exploded(schema, ckey_components);
+
+    return {std::move(pkey), std::move(ckey)};
+}
+
+std::pair<partition_key, clustering_key>
+get_batchlog_key(const schema& schema, int32_t version, db::batchlog_stage stage, db_clock::time_point written_at, std::optional<utils::UUID> id) {
+    return get_batchlog_key(schema, version, stage, batchlog_shard_of(written_at), written_at, id);
+}
+
+mutation get_batchlog_mutation_for(schema_ptr schema, managed_bytes data, int32_t version, db::batchlog_stage stage, db_clock::time_point now, const utils::UUID& id) {
+    auto [key, ckey] = get_batchlog_key(*schema, version, stage, now, id);
+
     auto timestamp = api::new_timestamp();
+
+    mutation m(schema, key);
+    // Avoid going through data_value and therefore `bytes`, as it can be large (#24809).
+    auto cdef_data = schema->get_column_definition(to_bytes("data"));
+    m.set_cell(ckey, *cdef_data, atomic_cell::make_live(*cdef_data->type, timestamp, std::move(data)));
+
+    return m;
+}
+
+mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db::batchlog_stage stage, db_clock::time_point now, const utils::UUID& id) {
     auto data = [&mutations] {
         utils::chunked_vector<canonical_mutation> fm(mutations.begin(), mutations.end());
         bytes_ostream out;
@@ -52,22 +96,23 @@ mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vecto
         return std::move(out).to_managed_bytes();
     }();
 
-    mutation m(schema, key);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("version"), version, timestamp);
-    m.set_cell(clustering_key_prefix::make_empty(), to_bytes("written_at"), now, timestamp);
-    // Avoid going through data_value and therefore `bytes`, as it can be large (#24809).
-    auto cdef_data = schema->get_column_definition(to_bytes("data"));
-    m.set_cell(clustering_key_prefix::make_empty(), *cdef_data, atomic_cell::make_live(*cdef_data->type, timestamp, std::move(data)));
+    return get_batchlog_mutation_for(std::move(schema), std::move(data), version, stage, now, id);
+}
 
+mutation get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, int32_t version, db_clock::time_point now, const utils::UUID& id) {
+    return get_batchlog_mutation_for(std::move(schema), mutations, version, batchlog_stage::initial, now, id);
+}
+
+mutation get_batchlog_delete_mutation(schema_ptr schema, int32_t version, db::batchlog_stage stage, db_clock::time_point now, const utils::UUID& id) {
+    auto [key, ckey] = get_batchlog_key(*schema, version, stage, now, id);
+    mutation m(schema, key);
+    auto timestamp = api::new_timestamp();
+    m.partition().apply_delete(*schema, ckey, tombstone(timestamp, gc_clock::now()));
     return m;
 }
 
-mutation get_batchlog_delete_mutation(schema_ptr schema, const utils::UUID& id) {
-    auto key = partition_key::from_exploded(*schema, {uuid_type->decompose(id)});
-    auto now = service::client_state(service::client_state::internal_tag()).get_timestamp();
-    mutation m(schema, key);
-    m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
-    return m;
+mutation get_batchlog_delete_mutation(schema_ptr schema, int32_t version, db_clock::time_point now, const utils::UUID& id) {
+    return get_batchlog_delete_mutation(std::move(schema), version, batchlog_stage::initial, now, id);
 }
 
 } // namespace db
@@ -183,7 +228,7 @@ future<> db::batchlog_manager::stop() {
 }
 
 future<size_t> db::batchlog_manager::count_all_batches() const {
-    sstring query = format("SELECT count(*) FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG);
+    sstring query = format("SELECT count(*) FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
     return _qp.execute_internal(query, cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> rs) {
        return size_t(rs->one().get_as<int64_t>("count"));
     });
@@ -194,7 +239,75 @@ db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     return _write_request_timeout * 2;
 }
 
+<<<<<<< HEAD
 future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+=======
+future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
+    if (_migration_done) {
+        return make_ready_future<>();
+    }
+    return with_gate(_gate, [this] () mutable -> future<> {
+        blogger.info("Migrating batchlog entries from v1 -> v2");
+
+        auto schema_v1 = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+        auto schema_v2 = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
+
+        auto batch = [this, schema_v1, schema_v2] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+            // check version of serialization format
+            if (!row.has("version")) {
+                blogger.warn("Not migrating logged batch because of unknown version");
+                co_return stop_iteration::no;
+            }
+
+            auto version = row.get_as<int32_t>("version");
+            if (version != netw::messaging_service::current_version) {
+                blogger.warn("Not migrating logged batch because of incorrect version");
+                co_return stop_iteration::no;
+            }
+
+            auto id = row.get_as<utils::UUID>("id");
+            auto written_at = row.get_as<db_clock::time_point>("written_at");
+            auto data = row.get_blob_fragmented("data");
+
+            auto& sp = _qp.proxy();
+
+            utils::get_local_injector().inject("batchlog_manager_fail_migration", [] { throw std::runtime_error("Error injection: failing batchlog migration"); });
+
+            auto migrate_mut = get_batchlog_mutation_for(schema_v2, std::move(data), version, batchlog_stage::failed_replay, written_at, id);
+            co_await sp.mutate_locally(migrate_mut, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+
+            mutation delete_mut(schema_v1, partition_key::from_single_value(*schema_v1, serialized(id)));
+            delete_mut.partition().apply_delete(*schema_v1, clustering_key_prefix::make_empty(), tombstone(api::new_timestamp(), gc_clock::now()));
+            co_await sp.mutate_locally(delete_mut, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+
+            co_return stop_iteration::no;
+        };
+        try {
+            co_await _qp.query_internal(
+                    format("SELECT * FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
+                    db::consistency_level::ONE,
+                    {},
+                    page_size,
+                    std::move(batch));
+        } catch (...) {
+            blogger.warn("Batchlog v1 to v2 migration failed: {}; will retry", std::current_exception());
+            co_return;
+        }
+
+        co_await container().invoke_on_all([] (auto& bm) {
+            bm._migration_done = true;
+        });
+
+        blogger.info("Done migrating batchlog entries from v1 -> v2");
+    });
+}
+
+future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
+    co_await maybe_migrate_v1_to_v2();
+
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
     typedef db_clock::rep clock_type;
 
     // rate limit is in bytes per second. Uses Double.MAX_VALUE if disabled (set to 0 in cassandra.yaml).
@@ -202,6 +315,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
     auto throttle = _replay_rate / _qp.proxy().get_token_metadata_ptr()->count_normal_token_owners();
     auto limiter = make_lw_shared<utils::rate_limiter>(throttle);
 
+<<<<<<< HEAD
 <<<<<<< HEAD
     auto batch = [this, limiter](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
 ||||||| parent of 9434ec2fd1 (service,db: extract generation of batchlog delete mutation)
@@ -220,10 +334,36 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
     auto delete_batch = [this, schema = std::move(schema)] (utils::UUID id) {
         auto m = get_batchlog_delete_mutation(schema, id);
         return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG);
+    auto delete_batch = [this, schema = std::move(schema)] (utils::UUID id) {
+        auto m = get_batchlog_delete_mutation(schema, id);
+        return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+=======
+    auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
+
+    struct replay_stats {
+        std::optional<db_clock::time_point> min_too_fresh;
+        bool need_cleanup = false;
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
     };
 
+<<<<<<< HEAD
     auto batch = [this, limiter, delete_batch = std::move(delete_batch), &all_replayed](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
 >>>>>>> 9434ec2fd1 (service,db: extract generation of batchlog delete mutation)
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+    auto batch = [this, limiter, delete_batch = std::move(delete_batch), &all_replayed](const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+=======
+    std::unordered_map<int32_t, replay_stats> replay_stats_per_shard;
+
+    // Use a stable `now` accross all batches, so skip/replay decisions are the
+    // same accross a while prefix of written_at (accross all ids).
+    const auto now = db_clock::now();
+
+    auto batch = [this, cleanup, limiter, schema, &all_replayed, &replay_stats_per_shard, now] (const cql3::untyped_result_set::row& row) -> future<stop_iteration> {
+        const auto stage = static_cast<batchlog_stage>(row.get_as<int8_t>("stage"));
+        const auto batch_shard = row.get_as<int32_t>("shard");
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
@@ -238,6 +378,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
 
+<<<<<<< HEAD
         // check version of serialization format
         if (!row.has("version")) {
             blogger.warn("Skipping logged batch because of unknown version");
@@ -250,9 +391,31 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
 
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+        // check version of serialization format
+        if (!row.has("version")) {
+            blogger.warn("Skipping logged batch because of unknown version");
+            co_await delete_batch(id);
+            co_return stop_iteration::no;
+        }
+
+        auto version = row.get_as<int32_t>("version");
+        if (version != netw::messaging_service::current_version) {
+            blogger.warn("Skipping logged batch because of incorrect version {}; current version = {}", version, netw::messaging_service::current_version);
+            co_await delete_batch(id);
+            co_return stop_iteration::no;
+        }
+
+=======
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
         auto data = row.get_blob_unfragmented("data");
 
-        blogger.debug("Replaying batch {}", id);
+        blogger.debug("Replaying batch {} from stage {} and batch shard {}", id, int32_t(stage), batch_shard);
+
+        utils::chunked_vector<mutation> mutations;
+        bool send_failed = false;
+
+        auto& shard_written_at = replay_stats_per_shard.try_emplace(batch_shard, replay_stats{}).first->second;
 
 <<<<<<< HEAD
         auto fms = make_lw_shared<std::deque<canonical_mutation>>();
@@ -331,7 +494,6 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
 =======
         try {
             utils::chunked_vector<std::pair<canonical_mutation, schema_ptr>> fms;
-            utils::chunked_vector<mutation> mutations;
             auto in = ser::as_input_stream(data);
             while (in.size()) {
                 auto fm = ser::deserialize(in, std::type_identity<canonical_mutation>());
@@ -351,6 +513,9 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
 
             if (now < written_at + timeout) {
                 blogger.debug("Skipping replay of {}, too fresh", id);
+
+                shard_written_at.min_too_fresh = std::min(shard_written_at.min_too_fresh.value_or(written_at), written_at);
+
                 co_return stop_iteration::no;
             }
 
@@ -385,7 +550,11 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
                     co_await limiter->reserve(size);
                     _stats.write_attempts += mutations.size();
                     auto timeout = db::timeout_clock::now() + write_timeout;
-                    co_await _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
+                    if (cleanup) {
+                        co_await _qp.proxy().send_batchlog_replay_to_all_replicas(mutations, timeout);
+                    } else {
+                        co_await _qp.proxy().send_batchlog_replay_to_all_replicas(std::move(mutations), timeout);
+                    }
                 }
             }
         } catch (data_dictionary::no_such_keyspace& ex) {
@@ -399,9 +568,19 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             // Do _not_ remove the batch, assuning we got a node write error.
             // Since we don't have hints (which origin is satisfied with),
             // we have to resort to keeping this batch to next lap.
+<<<<<<< HEAD
             co_return stop_iteration::no;
 >>>>>>> 337f417b13 (db/batchlog_manager: batch(): replace map_reduce() with simple loop)
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+            co_return stop_iteration::no;
+=======
+            if (!cleanup || stage == batchlog_stage::failed_replay) {
+                co_return stop_iteration::no;
+            }
+            send_failed = true;
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
         }
+<<<<<<< HEAD
 
         auto size = data.size();
 
@@ -470,22 +649,80 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
             m.partition().apply_delete(*schema, clustering_key_prefix::make_empty(), tombstone(now, gc_clock::now()));
             return _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
         }).then([] { return make_ready_future<stop_iteration>(stop_iteration::no); });
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+        // delete batch
+        co_await delete_batch(id);
+        co_return stop_iteration::no;
+=======
+
+        auto& sp = _qp.proxy();
+
+        if (send_failed) {
+            blogger.debug("Moving batch {} to stage failed_replay", id);
+            auto m = get_batchlog_mutation_for(schema, mutations, netw::messaging_service::current_version, batchlog_stage::failed_replay, written_at, id);
+            co_await sp.mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+        }
+
+        // delete batch
+        auto m = get_batchlog_delete_mutation(schema, netw::messaging_service::current_version, stage, written_at, id);
+        co_await _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+
+        shard_written_at.need_cleanup = true;
+
+        co_return stop_iteration::no;
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
     };
 
-    co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch)] () mutable -> future<> {
+    co_await with_gate(_gate, [this, cleanup, &all_replayed, batch = std::move(batch), now, &replay_stats_per_shard] () mutable -> future<> {
         blogger.debug("Started replayAllFailedBatches with cleanup: {}", cleanup);
         co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
-        co_await _qp.query_internal(
-                format("SELECT id, data, written_at, version FROM {}.{} BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG),
-                db::consistency_level::ONE,
-                {},
-                page_size,
-                std::move(batch));
-        if (cleanup == post_replay_cleanup::yes) {
-            // Replaying batches could have generated tombstones, flush to disk,
-            // where they can be compacted away.
-            co_await replica::database::flush_table_on_all_shards(_qp.proxy().get_db(), system_keyspace::NAME, system_keyspace::BATCHLOG);
-        }
+
+        auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
+
+        co_await coroutine::parallel_for_each(std::views::iota(0, 16), [&] (int32_t chunk) -> future<> {
+            const int32_t batchlog_chunk_base = chunk * 16;
+            for (int32_t i = 0; i < 16; ++i) {
+                int32_t batchlog_shard = batchlog_chunk_base + i;
+
+                co_await _qp.query_internal(
+                        format("SELECT * FROM {}.{} WHERE version = ? AND stage = ? AND shard = ? BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG_V2),
+                        db::consistency_level::ONE,
+                        {data_value(netw::messaging_service::current_version), data_value(int8_t(batchlog_stage::failed_replay)), data_value(batchlog_shard)},
+                        page_size,
+                        batch);
+
+                co_await _qp.query_internal(
+                        format("SELECT * FROM {}.{} WHERE version = ? AND stage = ? AND shard = ? BYPASS CACHE", system_keyspace::NAME, system_keyspace::BATCHLOG_V2),
+                        db::consistency_level::ONE,
+                        {data_value(netw::messaging_service::current_version), data_value(int8_t(batchlog_stage::initial)), data_value(batchlog_shard)},
+                        page_size,
+                        batch);
+
+                if (cleanup != post_replay_cleanup::yes) {
+                    continue;
+                }
+
+                auto it = replay_stats_per_shard.find(batchlog_shard);
+                if (it == replay_stats_per_shard.end() || !it->second.need_cleanup) {
+                    // Nothing was replayed on this batchlog shard, nothing to cleanup.
+                    continue;
+                }
+
+                const auto write_time = it->second.min_too_fresh.value_or(now - get_batch_log_timeout());
+                const auto end_weight  = it->second.min_too_fresh ? bound_weight::before_all_prefixed : bound_weight::after_all_prefixed;
+                auto [key, ckey] = get_batchlog_key(*schema, netw::messaging_service::current_version, batchlog_stage::initial, batchlog_shard, write_time, {});
+                auto end_pos = position_in_partition(partition_region::clustered, end_weight, std::move(ckey));
+
+                range_tombstone rt(position_in_partition::before_all_clustered_rows(), std::move(end_pos), tombstone(api::new_timestamp(), gc_clock::now()));
+
+                blogger.trace("Clean up batchlog shard {} with range tombstone {}", batchlog_shard, rt);
+
+                mutation m(schema, key);
+                m.partition().apply_row_tombstone(*schema, std::move(rt));
+                co_await _qp.proxy().mutate_locally(m, tracing::trace_state_ptr(), db::commitlog::force_sync::no);
+            }
+        });
+
         blogger.debug("Finished replayAllFailedBatches with all_replayed: {}", all_replayed);
     });
 }
