@@ -150,10 +150,14 @@ class client : public enable_shared_from_this<client> {
     future<> update_credentials_and_rearm();
     future<> authorize(http::request&);
     group_client& find_or_create_client();
+
     using error_handler = std::function<void(std::exception_ptr)>;
+    using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
+
     http::experimental::client::reply_handler wrap_handler(http::request& request,
                                                            http::experimental::client::reply_handler handler,
                                                            std::optional<http::reply::status_type> expected);
+
     future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
                               http::experimental::client::reply_handler handle,
@@ -161,7 +165,7 @@ class client : public enable_shared_from_this<client> {
                               error_handler err_handler,
                               std::optional<http::reply::status_type> expected,
                               seastar::abort_source* as);
-    using reply_handler_ext = noncopyable_function<future<>(group_client&, const http::reply&, input_stream<char>&& body)>;
+
     future<> make_request(http::request req, reply_handler_ext handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
                           reply_handler_ext handle,
