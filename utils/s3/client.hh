@@ -158,15 +158,21 @@ class client : public enable_shared_from_this<client> {
                                                            http::experimental::client::reply_handler handler,
                                                            std::optional<http::reply::status_type> expected);
 
-    future<> make_request(http::request req, http::experimental::client::reply_handler handle = ignore_reply, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
-                              http::experimental::client::reply_handler handle,
-                              const http::experimental::retry_strategy& rs,
-                              error_handler err_handler,
-                              std::optional<http::reply::status_type> expected,
-                              seastar::abort_source* as);
+                          http::experimental::client::reply_handler handle = ignore_reply,
+                          std::optional<http::reply::status_type> expected = std::nullopt,
+                          seastar::abort_source* = nullptr);
+    future<> make_request(http::request req,
+                          http::experimental::client::reply_handler handle,
+                          const http::experimental::retry_strategy& rs,
+                          error_handler err_handler,
+                          std::optional<http::reply::status_type> expected,
+                          seastar::abort_source* as);
 
-    future<> make_request(http::request req, reply_handler_ext handle, std::optional<http::reply::status_type> expected = std::nullopt, seastar::abort_source* = nullptr);
+    future<> make_request(http::request req,
+                          reply_handler_ext handle,
+                          std::optional<http::reply::status_type> expected = std::nullopt,
+                          seastar::abort_source* = nullptr);
     future<> make_request(http::request req,
                           reply_handler_ext handle,
                           const seastar::http::experimental::retry_strategy& rs,
