@@ -32,7 +32,7 @@ namespace db {
 class system_keyspace;
 
 struct batchlog_manager_config {
-    std::chrono::duration<double> write_request_timeout;
+    db_clock::duration replay_timeout;
     uint64_t replay_rate = std::numeric_limits<uint64_t>::max();
     std::chrono::milliseconds delay = std::chrono::milliseconds(0);
     unsigned replay_cleanup_after_replays;
@@ -62,7 +62,7 @@ private:
 
     cql3::query_processor& _qp;
     db::system_keyspace& _sys_ks;
-    db_clock::duration _write_request_timeout;
+    db_clock::duration _replay_timeout;
     uint64_t _replay_rate;
     std::chrono::milliseconds _delay;
     unsigned _replay_cleanup_after_replays = 100;
@@ -102,7 +102,6 @@ public:
     future<> do_batch_log_replay(post_replay_cleanup cleanup);
 
     future<size_t> count_all_batches() const;
-    db_clock::duration get_batch_log_timeout() const;
     gc_clock::time_point get_last_replay() const {
         return _last_replay;
     }
