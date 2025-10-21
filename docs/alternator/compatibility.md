@@ -211,11 +211,6 @@ In Alternator, the expiration delay is configurable - it can be set
 with the `--alternator-ttl-period-in-seconds` configuration option.
 The default is 24 hours.
 
-One thing the implementation is missing is that expiration
-events appear in the Streams API as normal deletions - without the
-distinctive marker on deletions which are really expirations.
-See <https://github.com/scylladb/scylla/issues/5060>.
-
 ## Scan ordering
 
 In DynamoDB, scanning the _entire_ table returns the partitions sorted by
