@@ -346,8 +346,8 @@ struct vector_store_client::impl {
             auto& client = old_clients[it];
             if (client && client.owned()) {
                 auto client_cloned = client;
+                client = nullptr;
                 co_await client_cloned->close();
-                client_cloned = nullptr;
             }
         }
         std::erase_if(old_clients, [](auto const& client) {
