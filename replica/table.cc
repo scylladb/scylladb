@@ -725,6 +725,13 @@ public:
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         return get_compaction_group().make_sstable_set();
     }
+
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) const override {
+        return end_consumer;
+    }
+    uint64_t adjust_partition_estimate(uint64_t partition_estimation) const override {
+        return partition_estimation;
+    }
 };
 
 class tablet_storage_group_manager final : public storage_group_manager {
@@ -883,6 +890,23 @@ public:
     lw_shared_ptr<sstables::sstable_set> make_sstable_set() const override {
         // FIXME: avoid recreation of compound_set for groups which had no change. usually, only one group will be changed at a time.
         return make_tablet_sstable_set(schema(), *this, *_tablet_map);
+    }
+
+    mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) const override {
+        if (tablet_map().needs_split()) {
+            return [this, end_consumer = std::move(end_consumer)] (mutation_reader reader) mutable -> future<> {
+                auto end_consumer_ = std::move(end_consumer);
+                auto options = co_await split_compaction_options();
+                co_return co_await mutation_writer::segregate_by_token_group(std::move(reader),
+                                                                             std::move(options.classifier),
+                                                                             std::move(end_consumer_));
+            };
+        }
+        return end_consumer;
+    }
+
+    uint64_t adjust_partition_estimate(uint64_t partition_estimation) const override {
+        return tablet_map().needs_split() ? std::max(partition_estimation / 2, uint64_t(1)) : partition_estimation;
     }
 };
 
@@ -4255,6 +4279,22 @@ table::as_mutation_source_excluding_staging() const {
                                    mutation_reader::forwarding fwd_mr) {
         return this->make_mutation_reader_excluding_staging(std::move(s), std::move(permit), range, slice, std::move(trace_state), fwd, fwd_mr);
     });
+}
+
+mutation_reader_consumer table::make_interposer_consumer(const mutation_source_metadata& metadata, mutation_reader_consumer end_consumer, sstables::offstrategy offstrategy) const {
+    // The interposer consumer of compaction strategy is only used when the data to be written
+    // will be eligible for regular compaction, i.e. it's not off-the-strategy.
+    if (!offstrategy) {
+        end_consumer = _compaction_strategy.make_interposer_consumer(metadata, std::move(end_consumer));
+    }
+    return _sg_manager->make_interposer_consumer(std::move(end_consumer));
+}
+
+uint64_t table::adjust_partition_estimate(const mutation_source_metadata& metadata, uint64_t partition_estimate, sstables::offstrategy offstrategy) const {
+    if (!offstrategy) {
+        partition_estimate = _compaction_strategy.adjust_partition_estimate(metadata, partition_estimate, schema());
+    }
+    return _sg_manager->adjust_partition_estimate(partition_estimate);
 }
 
 std::vector<mutation_source> table::select_memtables_as_mutation_sources(dht::token token) const {

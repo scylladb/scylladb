@@ -436,6 +436,9 @@ public:
     virtual dht::token_range get_token_range_after_split(const dht::token&) const noexcept = 0;
 
     virtual lw_shared_ptr<sstables::sstable_set> make_sstable_set() const = 0;
+
+    virtual mutation_reader_consumer make_interposer_consumer(mutation_reader_consumer end_consumer) const = 0;
+    virtual uint64_t adjust_partition_estimate(uint64_t partition_estimation) const = 0;
 };
 
 }
