@@ -389,7 +389,7 @@ future<> client::make_request(http::request req,
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    co_await make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
+    return make_request(std::move(req), std::move(handle), rs, std::move(err_handler), expected, as);
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
