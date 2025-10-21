@@ -17,11 +17,19 @@
 #include <optional>
 #include <expected>
 #include <variant>
+#include <seastar/core/gate.hh>
 
 namespace vector_search {
 
 class client {
 public:
+    class is_down_exception : public std::exception {
+    public:
+        const char* what() const noexcept override {
+            return "Client is down";
+        }
+    };
+
     struct response {
         seastar::http::reply::status_type status;
         std::vector<seastar::temporary_buffer<char>> content;
@@ -48,9 +56,18 @@ public:
     }
 
 private:
+    seastar::future<response> request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
+            std::optional<seastar::http::reply::status_type>&& expected, seastar::abort_source& as);
+
+    seastar::future<bool> check_status();
+    seastar::future<> handle_server_unavailable();
+    seastar::future<> run_checking_status();
+    bool is_checking_status_in_progress() const;
+
     endpoint_type endpoint_;
     seastar::http::experimental::client http_client_;
+    seastar::gate gate_;
+    seastar::abort_source as_;
 };
-
 
 } // namespace vector_search

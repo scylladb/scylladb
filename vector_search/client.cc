@@ -8,11 +8,14 @@
 
 #include "client.hh"
 #include "utils/exceptions.hh"
+#include "utils/exponential_backoff_retry.hh"
 #include <seastar/http/request.hh>
 #include <seastar/http/short_streams.hh>
 #include <seastar/net/socket_defs.hh>
 #include <seastar/net/api.hh>
+
 #include <seastar/coroutine/as_future.hh>
+#include <chrono>
 
 using namespace seastar;
 using namespace std::chrono_literals;
@@ -60,6 +63,9 @@ future<client::request_error> map_err(std::exception_ptr& err) {
     co_return client::request_error{};             // unreachable
 }
 
+auto constexpr BACKOFF_RETRY_MIN_TIME = 100ms;
+auto constexpr BACKOFF_RETRY_MAX_TIME = 20s;
+
 } // namespace
 
 client::client(endpoint_type endpoint_)
@@ -69,6 +75,23 @@ client::client(endpoint_type endpoint_)
 
 seastar::future<client::request_result> client::request(
         seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content, seastar::abort_source& as) {
+    if (is_checking_status_in_progress()) {
+        co_return std::unexpected(service_unavailable_error{});
+    }
+
+    auto f = co_await seastar::coroutine::as_future(request_impl(method, std::move(path), std::move(content), std::nullopt, as));
+    if (f.failed()) {
+        auto err = f.get_exception();
+        if (is_server_unavailable(err)) {
+            co_await handle_server_unavailable();
+        }
+        co_return std::unexpected{co_await map_err(err)};
+    }
+    co_return co_await std::move(f);
+}
+
+seastar::future<client::response> client::request_impl(seastar::httpd::operation_type method, seastar::sstring path, std::optional<seastar::sstring> content,
+        std::optional<seastar::http::reply::status_type>&& expected_status, seastar::abort_source& as) {
 
     auto req = http::request::make(method, endpoint_.host, std::move(path));
     if (content) {
@@ -80,16 +103,45 @@ seastar::future<client::request_result> client::request(
         resp.content = co_await util::read_entire_stream(body);
     };
 
-    auto f = co_await seastar::coroutine::as_future(http_client_.make_request(std::move(req), std::move(handler), std::nullopt, &as));
-    if (f.failed()) {
-        auto err = f.get_exception();
-        co_return std::unexpected(co_await map_err(err));
-    }
+    co_await http_client_.make_request(std::move(req), std::move(handler), std::move(expected_status), &as);
     co_return resp;
 }
 
+seastar::future<bool> client::check_status() {
+    auto f = co_await coroutine::as_future(request_impl(httpd::operation_type::GET, "/api/v1/status", "", http::reply::status_type::ok, as_));
+    auto ret = !f.failed();
+    co_await std::move(f).discard_result().handle_exception([](const auto&) {});
+    co_return ret;
+}
+
 seastar::future<> client::close() {
-    return http_client_.close();
+    as_.request_abort();
+    co_await gate_.close();
+    co_await http_client_.close();
+}
+
+seastar::future<> client::handle_server_unavailable() {
+    if (!is_checking_status_in_progress()) {
+        (void)try_with_gate(gate_, [this]() {
+            return run_checking_status().handle_exception([](const auto&) {});
+        });
+    }
+    co_return;
+}
+
+seastar::future<> client::run_checking_status() {
+    struct stop_retry {};
+    co_await exponential_backoff_retry::do_until_value(BACKOFF_RETRY_MIN_TIME, BACKOFF_RETRY_MAX_TIME, as_, [this] -> future<std::optional<stop_retry>> {
+        auto success = co_await check_status();
+        if (success) {
+            co_return stop_retry{};
+        }
+        co_return std::nullopt;
+    });
+}
+
+bool client::is_checking_status_in_progress() const {
+    return gate_.get_count() > 0;
 }
 
 } // namespace vector_search
