@@ -357,7 +357,10 @@ http::experimental::client::reply_handler client::wrap_handler(http::request& re
     };
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
+future<> client::make_request(http::request req,
+                              http::experimental::client::reply_handler handle,
+                              std::optional<http::reply::status_type> expected,
+                              seastar::abort_source* as) {
     return make_request(
         std::move(req), std::move(handle), *_retry_strategy, [](std::exception_ptr ex) {
             map_s3_client_exception(std::move(ex));
