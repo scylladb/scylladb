@@ -655,9 +655,14 @@ def test_ttl_expiration_lsi_key(dynamodb, waits_for_expiration):
 # becoming expired. This event should contain be a REMOVE event, contain
 # the appropriate information about the expired item (its key and/or its
 # content), and a special userIdentity flag saying that this is not a regular
-# REMOVE but an expiration.
-@pytest.mark.veryslow
-def test_ttl_expiration_streams(dynamodb, dynamodbstreams):
+# REMOVE but an expiration. Reproduces issue #11523.
+def test_ttl_expiration_streams(dynamodb, dynamodbstreams, waits_for_expiration):
+    # Alternator Streams currently doesn't work with tablets, so until
+    # #23838 is solved, skip this test on tablets.
+    for tag in TAGS:
+        if tag['Key'] == 'experimental:initial_tablets' and tag['Value'].isdigit():
+            pytest.skip("Streams test skipped on tablets due to #23838")
+
     # In my experiments, a 30-minute (1800 seconds) is the typical
     # expiration delay in this test. If the test doesn't finish within
     # max_duration, we report a failure.
