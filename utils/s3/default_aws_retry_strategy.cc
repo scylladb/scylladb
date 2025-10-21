@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 
-#include "retry_strategy.hh"
+#include "default_aws_retry_strategy.hh"
 #include "aws_error.hh"
 #include "utils/log.hh"
 
