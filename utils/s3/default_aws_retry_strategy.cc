@@ -8,40 +8,38 @@
 
 #include "default_aws_retry_strategy.hh"
 #include "aws_error.hh"
+#include "seastar/http/exception.hh"
+#include "seastar/util/short_streams.hh"
 #include "utils/log.hh"
 
+namespace seastar::http::experimental {
+extern logging::logger rs_logger;
+}
+
 using namespace std::chrono_literals;
+using namespace seastar::http::experimental;
 
 namespace aws {
 
-static logging::logger rs_logger("default_retry_strategy");
-
-default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries, unsigned scale_factor) : _max_retries(max_retries), _scale_factor(scale_factor) {
+default_aws_retry_strategy::default_aws_retry_strategy(unsigned max_retries) : _max_retries(max_retries) {
 }
 
-seastar::future<bool> default_aws_retry_strategy::should_retry(const aws_error& error, unsigned attempted_retries) const {
+seastar::future<bool> default_aws_retry_strategy::should_retry(std::exception_ptr error, unsigned attempted_retries) const {
     if (attempted_retries >= _max_retries) {
         rs_logger.warn("Retries exhausted. Retry# {}", attempted_retries);
         co_return false;
     }
-    bool should_retry = error.is_retryable() == retryable::yes;
+    auto err = aws_error::from_exception_ptr(error);
+    bool should_retry = err.is_retryable() == retryable::yes;
     if (should_retry) {
-        rs_logger.debug("AWS HTTP client request failed. Reason: {}. Retry# {}", error.get_error_message(), attempted_retries);
+        rs_logger.debug("AWS HTTP client request failed. Reason: {}. Retry# {}", err.get_error_message(), attempted_retries);
     } else {
         rs_logger.warn("AWS HTTP client encountered non-retryable error. Reason: {}. Code: {}. Retry# {}",
-                       error.get_error_message(),
-                       std::to_underlying(error.get_error_type()),
+                       err.get_error_message(),
+                       std::to_underlying(err.get_error_type()),
                        attempted_retries);
     }
     co_return should_retry;
-}
-
-std::chrono::milliseconds default_aws_retry_strategy::delay_before_retry(const aws_error&, unsigned attempted_retries) const {
-    if (attempted_retries == 0) {
-        return 0ms;
-    }
-
-    return std::chrono::milliseconds((1UL << attempted_retries) * _scale_factor);
 }
 
 } // namespace aws
