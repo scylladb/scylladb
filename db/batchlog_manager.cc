@@ -123,7 +123,7 @@ const uint32_t db::batchlog_manager::page_size;
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, batchlog_manager_config config)
         : _qp(qp)
         , _sys_ks(sys_ks)
-        , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
+        , _replay_timeout(config.replay_timeout)
         , _replay_rate(config.replay_rate)
         , _delay(config.delay)
         , _replay_cleanup_after_replays(config.replay_cleanup_after_replays)
@@ -234,6 +234,7 @@ future<size_t> db::batchlog_manager::count_all_batches() const {
     });
 }
 
+<<<<<<< HEAD
 db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
     // enough time for the actual write + BM removal mutation
     return _write_request_timeout * 2;
@@ -244,6 +245,14 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
 ||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
 future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cleanup) {
 =======
+||||||| parent of e309b5dbe1 (db/batchlog_manager: config: s/write_timeout/reply_timeot/)
+db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
+    // enough time for the actual write + BM removal mutation
+    return _write_request_timeout * 2;
+}
+
+=======
+>>>>>>> e309b5dbe1 (db/batchlog_manager: config: s/write_timeout/reply_timeot/)
 future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
     if (_migration_done) {
         return make_ready_future<>();
@@ -367,11 +376,17 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
         auto written_at = row.get_as<db_clock::time_point>("written_at");
         auto id = row.get_as<utils::UUID>("id");
         // enough time for the actual write + batchlog entry mutation delivery (two separate requests).
+<<<<<<< HEAD
         auto timeout = get_batch_log_timeout();
         if (db_clock::now() < written_at + timeout) {
             blogger.debug("Skipping replay of {}, too fresh", id);
             return make_ready_future<stop_iteration>(stop_iteration::no);
         }
+||||||| parent of e309b5dbe1 (db/batchlog_manager: config: s/write_timeout/reply_timeot/)
+        auto timeout = get_batch_log_timeout();
+=======
+        auto timeout = _replay_timeout;
+>>>>>>> e309b5dbe1 (db/batchlog_manager: config: s/write_timeout/reply_timeot/)
 
         if (utils::get_local_injector().is_enabled("skip_batch_replay")) {
             blogger.debug("Skipping batch replay due to skip_batch_replay injection");
@@ -708,7 +723,7 @@ future<db::all_batches_replayed> db::batchlog_manager::replay_all_failed_batches
                     continue;
                 }
 
-                const auto write_time = it->second.min_too_fresh.value_or(now - get_batch_log_timeout());
+                const auto write_time = it->second.min_too_fresh.value_or(now - _replay_timeout);
                 const auto end_weight  = it->second.min_too_fresh ? bound_weight::before_all_prefixed : bound_weight::after_all_prefixed;
                 auto [key, ckey] = get_batchlog_key(*schema, netw::messaging_service::current_version, batchlog_stage::initial, batchlog_shard, write_time, {});
                 auto end_pos = position_in_partition(partition_region::clustered, end_weight, std::move(ckey));
