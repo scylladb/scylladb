@@ -2385,7 +2385,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
 
             checkpoint(stop_signal, "starting batchlog manager");
             db::batchlog_manager_config bm_cfg;
-            bm_cfg.write_request_timeout = cfg->write_request_timeout_in_ms() * 1ms;
+            bm_cfg.replay_timeout = cfg->write_request_timeout_in_ms() * 1ms * 2;
             bm_cfg.replay_rate = cfg->batchlog_replay_throttle_in_kb() * 1000;
             bm_cfg.delay = std::chrono::milliseconds(cfg->ring_delay_ms());
             bm_cfg.replay_cleanup_after_replays = cfg->batchlog_replay_cleanup_after_replays();
