@@ -320,6 +320,21 @@ private:
     class cancellable_write_handlers_list;
     std::unique_ptr<cancellable_write_handlers_list> _cancellable_write_handlers_list;
 
+    // shared_ptr<abstract_write_response_handler> instances are captured in the lmutate/rmutate
+    // lambdas of send_to_live_endpoints(). As a result, an abstract_write_response_handler object
+    // may outlive its removal from the _response_handlers map. We use write_handler_destroy_promise to
+    // wait for such pending instances in cancel_write_handlers() and cancel_all_write_response_handlers().
+    class write_handler_destroy_promise {
+        abstract_write_response_handler* _handler;
+        std::optional<shared_promise<void>> _promise;
+    public:
+        write_handler_destroy_promise(abstract_write_response_handler& handler);
+        future<> get_future();
+        abstract_write_response_handler& handler() { return *_handler; }
+        void on_destroy();
+    };
+    std::vector<write_handler_destroy_promise> _write_handler_destroy_promises;
+
     /* This is a pointer to the shard-local part of the sharded cdc_service:
      * storage_proxy needs access to cdc_service to augment mutations.
      *
@@ -502,7 +517,7 @@ private:
     future<> mutate_counters(Range&& mutations, db::consistency_level cl, tracing::trace_state_ptr tr_state, service_permit permit, clock_type::time_point timeout);
 
     // Retires (times out) write response handlers which were constructed as `cancellable` and pass the given filter.
-    void cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
+    future<> cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun);
 
     /**
      * Returns whether for a range query doing a query against merged is likely
