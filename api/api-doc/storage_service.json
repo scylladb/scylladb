@@ -221,6 +221,25 @@
          ]
       },
       {
+         "path":"/storage_service/nodes/excluded",
+         "operations":[
+            {
+               "method":"GET",
+               "summary":"Retrieve host ids of nodes which are marked as excluded",
+               "type":"array",
+               "items":{
+                  "type":"string"
+               },
+               "nickname":"get_excluded_nodes",
+               "produces":[
+                  "application/json"
+               ],
+               "parameters":[
+               ]
+            }
+         ]
+      },
+      {
          "path":"/storage_service/nodes/joining",
          "operations":[
             {
