@@ -2109,7 +2109,13 @@ sharded<locator::shared_token_metadata> token_metadata;
             });
 
             checkpoint(stop_signal, "starting sstables loader");
+<<<<<<< HEAD
             sst_loader.start(std::ref(db), std::ref(messaging), std::ref(view_builder), std::ref(task_manager), std::ref(sstm), maintenance_scheduling_group).get();
+||||||| parent of 3abc66da5a (sstables_loader: Synchronize tablet split and load-and-stream)
+            sst_loader.start(std::ref(db), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), maintenance_scheduling_group).get();
+=======
+            sst_loader.start(std::ref(db), std::ref(ss), std::ref(messaging), std::ref(view_builder), std::ref(view_building_worker), std::ref(task_manager), std::ref(sstm), maintenance_scheduling_group).get();
+>>>>>>> 3abc66da5a (sstables_loader: Synchronize tablet split and load-and-stream)
             auto stop_sst_loader = defer_verbose_shutdown("sstables loader", [&sst_loader] {
                 sst_loader.stop().get();
             });
