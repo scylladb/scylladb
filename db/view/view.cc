@@ -3311,15 +3311,6 @@ public:
                           _step.base->schema()->cf_name(), _step.current_token(), view_names);
         }
         if (_step.reader.is_end_of_stream() && _step.reader.is_buffer_empty()) {
-            if (_step.current_key.key().is_empty()) {
-                // consumer got end-of-stream without consuming a single partition
-                vlogger.debug("Reader didn't produce anything, marking views as built");
-                while (!_step.build_status.empty()) {
-                    _built_views.views.push_back(std::move(_step.build_status.back()));
-                    _step.build_status.pop_back();
-                }
-            }
-
             // before going back to the minimum token, advance current_key to the end
             // and check for built views in that range.
             _step.current_key = { _step.prange.end().value_or(dht::ring_position::max()).value().token(), partition_key::make_empty()};
@@ -3338,6 +3329,7 @@ public:
 
 // Called in the context of a seastar::thread.
 void view_builder::execute(build_step& step, exponential_backoff_retry r) {
+    inject_failure("dont_start_build_step");
     gc_clock::time_point now = gc_clock::now();
     auto compaction_state = make_lw_shared<compact_for_query_state>(
             *step.reader.schema(),
@@ -3372,6 +3364,7 @@ void view_builder::execute(build_step& step, exponential_backoff_retry r) {
     seastar::when_all_succeed(bookkeeping_ops.begin(), bookkeeping_ops.end()).handle_exception([] (std::exception_ptr ep) {
         vlogger.warn("Failed to update materialized view bookkeeping ({}), continuing anyway.", ep);
     }).get();
+    utils::get_local_injector().inject("delay_finishing_build_step", utils::wait_for_message(60s)).get();
 }
 
 future<> view_builder::mark_as_built(view_ptr view) {
