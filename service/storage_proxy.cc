@@ -3601,15 +3601,22 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, const frozen
                                                       fencing_token fence, locator::host_id caller) {
     // FIXME: This does not handle intra-node tablet migration properly.
     // Refs https://github.com/scylladb/scylladb/issues/18180
+    auto erm = _db.local().find_column_family(s).get_effective_replication_map();
     const auto& rs = s->table().get_effective_replication_map()->get_replication_strategy();
 
-    return run_fenceable_write(rs, fence, caller, [this, s, &fm, timeout, trace_state] (this auto) -> future<mutation> {
+    return run_fenceable_write(rs, fence, caller, [this, erm, s, &fm, timeout, trace_state] (this auto) -> future<mutation> {
         auto guard = co_await _db.local().acquire_counter_locks(s, fm, timeout, trace_state);
 
         // read the current counter value and transform the counter update mutation
         auto m = co_await _db.local().prepare_counter_update(s, fm, timeout, trace_state);
 
-        co_await _db.local().apply_counter_update(s, m, timeout, trace_state);
+        auto apply = [this, erm, &m, trace_state, timeout] (shard_id shard) {
+            return _db.invoke_on(shard, {_write_smp_service_group, timeout},
+                    [s = global_schema_ptr(m.schema()), fm = freeze(m), gtr = tracing::global_trace_state_ptr(trace_state), timeout] (replica::database& db) mutable -> future<> {
+                return db.apply_counter_update(s, std::move(fm), timeout, gtr.get());
+            });
+        };
+        co_await apply_on_shards(erm, *s, m.token(), std::move(apply));
 
         co_return std::move(m);
     }).then([this, cl, timeout, trace_state, permit = std::move(permit)] (mutation m) mutable {

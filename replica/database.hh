@@ -1922,7 +1922,7 @@ public:
 
     future<counter_update_guard> acquire_counter_locks(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
     future<mutation> prepare_counter_update(schema_ptr s, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
-    future<> apply_counter_update(schema_ptr, const mutation& m, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
+    future<> apply_counter_update(schema_ptr, const frozen_mutation& fm, db::timeout_clock::time_point timeout, tracing::trace_state_ptr trace_state);
 
     const sstring& get_snitch_name() const;
     /*!
