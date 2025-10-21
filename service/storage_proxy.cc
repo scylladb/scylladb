@@ -4022,12 +4022,13 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
         service_permit _permit;
 
         const utils::UUID _batch_uuid;
+        const db_clock::time_point _batch_write_time;
         const host_id_vector_replica_set _batchlog_endpoints;
 
     public:
         context(storage_proxy & p, std::vector<mutation>&& mutations, lw_shared_ptr<cdc::operation_result_tracker>&& cdc_tracker, db::consistency_level cl, clock_type::time_point timeout, tracing::trace_state_ptr tr_state, service_permit permit)
                 : _p(p)
-                , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG))
+                , _schema(_p.local_db().find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2))
                 , _ermp(_p.local_db().find_column_family(_schema->id()).get_effective_replication_map())
                 , _mutations(std::move(mutations))
                 , _cdc_tracker(std::move(cdc_tracker))
@@ -4037,6 +4038,7 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
                 , _stats(p.get_stats())
                 , _permit(std::move(permit))
                 , _batch_uuid(utils::UUID_gen::get_time_UUID())
+                , _batch_write_time(db_clock::now())
                 , _batchlog_endpoints(
                         [this]() -> host_id_vector_replica_set {
                             auto local_addr = _p.my_host_id(*_ermp);
@@ -4074,14 +4076,14 @@ storage_proxy::mutate_atomically_result(std::vector<mutation> mutations, db::con
             }));
         }
         future<result<>> sync_write_to_batchlog() {
-            auto m = db::get_batchlog_mutation_for(_schema, _mutations, _batch_uuid, netw::messaging_service::current_version, db_clock::now());
+            auto m = db::get_batchlog_mutation_for(_schema, _mutations, netw::messaging_service::current_version, _batch_write_time, _batch_uuid);
             tracing::trace(_trace_state, "Sending a batchlog write mutation");
             return send_batchlog_mutation(std::move(m));
         };
         future<> async_remove_from_batchlog() {
             // delete batch
             utils::get_local_injector().inject("storage_proxy_fail_remove_from_batchlog", [] { throw std::runtime_error("Error injection: failing remove from batchlog"); });
-            auto m = db::get_batchlog_delete_mutation(_schema, _batch_uuid);
+            auto m = db::get_batchlog_delete_mutation(_schema, netw::messaging_service::current_version, _batch_write_time, _batch_uuid);
 
             tracing::trace(_trace_state, "Sending a batchlog remove mutation");
             return send_batchlog_mutation(std::move(m), db::consistency_level::ANY).then_wrapped([] (future<result<>> f) {
