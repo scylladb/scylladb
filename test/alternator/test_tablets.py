@@ -17,7 +17,7 @@ import pytest
 import boto3
 from botocore.exceptions import ClientError
 
-from .util import new_test_table
+from .util import new_test_table, wait_for_gsi
 
 # All tests in this file are scylla-only
 @pytest.fixture(scope="function", autouse=True)
@@ -135,3 +135,37 @@ def test_alternator_tablets_without_lwt(dynamodb):
         assert uses_tablets(dynamodb, table)
         table.put_item(Item={'p': 'hello'})
         assert table.get_item(Key={'p': 'hello'})['Item'] == {'p': 'hello'}
+
+# Reproduces scylladb/scylladb#26615
+def test_gsi_with_tablets(dynamodb):
+    schema = {
+        'Tags': [{'Key': initial_tablets_tag, 'Value': '4'}],
+        'KeySchema': [ { 'AttributeName': 'p', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'c', 'KeyType': 'RANGE' }
+        ],
+        'AttributeDefinitions': [
+                    { 'AttributeName': 'p', 'AttributeType': 'S' },
+                    { 'AttributeName': 'c', 'AttributeType': 'S' },
+        ],
+        'GlobalSecondaryIndexes': [
+            {   'IndexName': 'hello',
+                'KeySchema': [
+                    { 'AttributeName': 'c', 'KeyType': 'HASH' },
+                    { 'AttributeName': 'p', 'KeyType': 'RANGE' },
+                ],
+                'Projection': { 'ProjectionType': 'ALL' }
+            }
+        ],
+    }
+    with new_test_table(dynamodb, **schema) as table:
+        desc = table.meta.client.describe_table(TableName=table.name)
+        table_status = desc['Table']['TableStatus']
+        assert table_status == 'ACTIVE'
+
+        index_desc = [x for x in desc['Table']['GlobalSecondaryIndexes'] if x['IndexName'] == 'hello']
+        assert len(index_desc) == 1
+        index_status = index_desc[0]['IndexStatus']
+        assert index_status == 'ACTIVE'
+
+        # When the index is ACTIVE, this must be after backfilling completed
+        assert not 'Backfilling' in index_desc[0]
