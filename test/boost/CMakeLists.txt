@@ -207,9 +207,11 @@ add_scylla_test(rust_test
   KIND BOOST
   LIBRARIES inc)
 add_scylla_test(s3_test
-  KIND SEASTAR)
+  KIND SEASTAR
+  LIBRARIES scylla_encryption)
 add_scylla_test(gcp_object_storage_test
-  KIND SEASTAR)
+  KIND SEASTAR
+  LIBRARIES scylla_encryption)
 add_scylla_test(aws_errors_test
   KIND BOOST)
 add_scylla_test(aws_error_injection_test
