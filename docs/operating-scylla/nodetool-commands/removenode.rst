@@ -18,6 +18,17 @@ Once a node is banned, the only way forward is to remove or replace it - you won
 perform other topology operations, such as decommission or bootstrap, until the banned node 
 is removed from the cluster or replaced.
 
+.. _removenode-only-mark:
+
+Running ``removenode`` with the ``--only-mark`` flag will only perform the banning mentioned
+above, without performing actual data movement and without removing the node from topology.
+This is useful because it unblocks any topology operation, which otherwise would be blocked
+trying to synchronize with nodes which are down. Nodes which are banned are not synchronized
+with because they are assumed to not go up ever again.
+
+It is recommended to start recovery by marking all lost nodes with ``--only-mark``, and then
+restoring cluster state to desired shape by running replace, ALTER KEYSPACE (in case of lost rack/DC), or removenode.
+
 Prerequisites
 ------------------------
 
@@ -31,6 +42,8 @@ Prerequisites
   request may fail. In such a case, you should follow the procedure to
   :doc:`replace a dead node </operating-scylla/procedures/cluster-management/replace-dead-node>`
   instead of running ``nodetool removenode``.
+  This recommendation does not apply for the ``--only-mark`` mode, as it doesn't perform
+  data movement.
 
 Usage
 --------
@@ -46,6 +59,12 @@ Example:
 .. code-block:: console
 
     nodetool removenode 675ed9f4-6564-6dbd-can8-43fddce952gy
+
+To only mark the node as :ref:`permanently down <removenode-only-mark>` without doing actual removal:
+
+.. code-block:: console
+
+    nodetool removenode --only-mark <Host ID of the node>
 
 
 .. _removenode-ignore-dead-nodes:

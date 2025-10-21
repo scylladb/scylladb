@@ -1674,6 +1674,9 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
         }
     } else {
         std::unordered_map<sstring, sstring> params{{"host_id", op}};
+        if (vm.contains("only-mark")) {
+            params["only_mark"] = "true";
+        }
         if (vm.contains("ignore-dead-nodes")) {
             params["ignore_nodes"] = vm["ignore-dead-nodes"].as<sstring>();
             const auto str_ids  = utils::split_comma_separated_list(params["ignore_nodes"]);
@@ -4278,6 +4281,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/removenode.html")),
                 {
                     typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead node host IDs to ignore during removenode"),
+                    typed_option<>("only-mark", "Does not perform the removal, only marks the node as \"excluded\" so that topology operations can proceed without this node being UP. Cannot be reverted."),
                 },
                 {
                     typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),
