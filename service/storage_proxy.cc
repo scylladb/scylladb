@@ -3510,8 +3510,14 @@ storage_proxy::mutate_counter_on_leader_and_replicate(schema_ptr s, frozen_mutat
                                                       tracing::trace_state_ptr trace_state, service_permit permit) {
     // FIXME: This does not handle intra-node tablet migration properly.
     // Refs https://github.com/scylladb/scylladb/issues/18180
+    auto guard = co_await _db.local().acquire_counter_locks(s, fm, timeout, trace_state);
 
-    auto m = co_await _db.local().apply_counter_update(s, fm, timeout, trace_state);
+    // read the current counter value and transform the counter update mutation
+    auto m = co_await _db.local().prepare_counter_update(s, fm, timeout, trace_state);
+
+    co_await _db.local().apply_counter_update(s, m, timeout, trace_state);
+
+    guard = {}; // release locks
 
     co_await replicate_counter_from_leader(std::move(m), cl, std::move(trace_state), timeout, std::move(permit));
 }
