@@ -1002,9 +1002,9 @@ future<executor::request_return_type> executor::get_records(client_state& client
             case cdc::operation::service_row_delete:
             case cdc::operation::service_partition_delete:
             {
-                auto user_identity = rjson::value();
-                rjson::add(user_identity, "type", "Service");
-                rjson::add(user_identity, "principalId", "dynamodb.amazonaws.com");
+                auto user_identity = rjson::empty_object();
+                rjson::add(user_identity, "Type", "Service");
+                rjson::add(user_identity, "PrincipalId", "dynamodb.amazonaws.com");
                 rjson::add(record, "userIdentity", std::move(user_identity));
                 rjson::add(record, "eventName", "REMOVE");
                 break;
