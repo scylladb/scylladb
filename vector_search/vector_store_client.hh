@@ -11,6 +11,7 @@
 #include "dht/decorated_key.hh"
 #include "keys/keys.hh"
 #include "seastarx.hh"
+#include "error.hh"
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
@@ -49,48 +50,15 @@ public:
     using schema_ptr = lw_shared_ptr<schema const>;
     using status_type = http::reply::status_type;
 
-    /// The vector_store_client service is disabled.
-    struct disabled {};
-
-    /// The operation was aborted.
-    struct aborted {};
-
-    /// The vector-store addr is unavailable (not possible to get an addr from the dns service).
-    struct addr_unavailable {};
-
-    /// The vector-store service is unavailable.
-    struct service_unavailable {};
-
-    /// The error from the vector-store service.
-    struct service_error {
-        status_type status; ///< The HTTP status code from the vector-store service.
-    };
-
-    /// An unsupported reply format from the vector-store service.
-    struct service_reply_format_error {};
+    using disabled = disabled_error;
+    using aborted = aborted_error;
+    using addr_unavailable = addr_unavailable_error;
+    using service_unavailable = service_unavailable_error;
+    using service_error = service_error;
+    using service_reply_format_error = service_reply_format_error;
 
     using ann_error = std::variant<disabled, aborted, addr_unavailable, service_unavailable, service_error, service_reply_format_error>;
-
-    struct ann_error_visitor {
-        sstring operator()(vector_store_client::service_error e) const {
-            return fmt::format("Vector Store error: HTTP status {}", e.status);
-        }
-        sstring operator()(vector_store_client::disabled) const {
-            return fmt::format("Vector Store is disabled");
-        }
-        sstring operator()(vector_store_client::aborted) const {
-            return fmt::format("Vector Store request was aborted");
-        }
-        sstring operator()(vector_store_client::addr_unavailable) const {
-            return fmt::format("Vector Store service address could not be fetched from DNS");
-        }
-        sstring operator()(vector_store_client::service_unavailable) const {
-            return fmt::format("Vector Store service is unavailable");
-        }
-        sstring operator()(vector_store_client::service_reply_format_error) const {
-            return fmt::format("Vector Store returned an invalid JSON");
-        }
-    };
+    using ann_error_visitor = error_visitor;
 
     explicit vector_store_client(config const& cfg);
     ~vector_store_client();
