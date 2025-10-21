@@ -38,6 +38,11 @@ struct batchlog_manager_config {
     unsigned replay_cleanup_after_replays;
 };
 
+enum class batchlog_stage : int8_t {
+    initial,
+    failed_replay
+};
+
 class batchlog_manager : public peering_sharded_service<batchlog_manager> {
 public:
     using post_replay_cleanup = bool_class<class post_replay_cleanup_tag>;
@@ -69,7 +74,21 @@ private:
 
     gc_clock::time_point _last_replay;
 
+<<<<<<< HEAD
     future<> replay_all_failed_batches(post_replay_cleanup cleanup);
+||||||| parent of 846b656610 (db,service: switch to system.batchlog_v2)
+    future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
+=======
+    // Was the v1 -> v2 migration already done since last restart?
+    // The migration is attempted once after each restart. This is redundant but
+    // keeps thing simple. Once no upgrade path exists from a ScyllaDB version
+    // which can still produce v1 entries, this migration code can be removed.
+    bool _migration_done = false;
+
+    future<> maybe_migrate_v1_to_v2();
+
+    future<all_batches_replayed> replay_all_failed_batches(post_replay_cleanup cleanup);
+>>>>>>> 846b656610 (db,service: switch to system.batchlog_v2)
 public:
     // Takes a QP, not a distributes. Because this object is supposed
     // to be per shard and does no dispatching beyond delegating the the
