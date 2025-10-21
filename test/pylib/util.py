@@ -13,13 +13,14 @@ import asyncio
 import logging
 import pathlib
 import os
+import universalasync
 from collections.abc import Awaitable, Callable, Coroutine
 from functools import cache
 
 import random
 import string
 
-from typing import Optional, TypeVar, Any
+from typing import Optional, TypeVar, Any, cast
 
 from cassandra.cluster import NoHostAvailable, Session, Cluster # type: ignore # pylint: disable=no-name-in-module
 from cassandra.protocol import InvalidRequest # type: ignore # pylint: disable=no-name-in-module
@@ -364,3 +365,7 @@ def execute_with_tracing(cql : Session, statement : str | Statement, log : bool 
         logger.debug("Tracing {}:\n{}\n".format(statement, "\n".join(page_traces)))
 
     return ret
+
+
+def universalasync_typed_wrap(cls: T) -> T:
+    return cast(T, universalasync.wrap(cls))

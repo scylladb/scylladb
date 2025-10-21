@@ -17,7 +17,7 @@ from time import time
 import logging
 from test.pylib.log_browsing import ScyllaLogFile
 from test.pylib.rest_client import UnixRESTClient, ScyllaRESTAPIClient, ScyllaMetricsClient
-from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, Host
+from test.pylib.util import wait_for, wait_for_cql_and_get_hosts, universalasync_typed_wrap, Host
 from test.pylib.internal_types import ServerNum, IPAddress, HostID, ServerInfo, ServerUpState
 from test.pylib.scylla_cluster import ReplaceConfig, ScyllaServer, ScyllaVersionDescription
 from cassandra.cluster import Session as CassandraSession, \
@@ -29,8 +29,6 @@ import aiohttp
 import asyncio
 import allure
 
-import universalasync
-
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +37,7 @@ class NoSuchProcess(Exception):
     ...
 
 
-@universalasync.wrap
+@universalasync_typed_wrap
 class ManagerClient:
     """Helper Manager API client
     Args:
