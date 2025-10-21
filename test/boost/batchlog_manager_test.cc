@@ -38,7 +38,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
         return e.execute_cql("create table cf (p1 varchar, c1 int, r1 int, PRIMARY KEY (p1, c1));").discard_result().then([&qp, &e, &bp] () mutable {
             auto& db = e.local_db();
             auto s = db.find_schema("ks", "cf");
-            const auto batchlog_schema = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG);
+            const auto batchlog_schema = db.find_schema(db::system_keyspace::NAME, db::system_keyspace::BATCHLOG_V2);
 
             const column_definition& r1_col = *s->get_column_definition("r1");
             auto key = partition_key::from_exploded(*s, {to_bytes("key1")});
@@ -50,7 +50,7 @@ SEASTAR_TEST_CASE(test_execute_batch) {
             using namespace std::chrono_literals;
 
             auto version = netw::messaging_service::current_version;
-            auto bm = db::get_batchlog_mutation_for(batchlog_schema, { m }, s->id().uuid(), version, db_clock::now() - db_clock::duration(3h));
+            auto bm = db::get_batchlog_mutation_for(batchlog_schema, { m }, version, db_clock::now() - db_clock::duration(3h), s->id().uuid());
 
             return qp.proxy().mutate_locally(bm, tracing::trace_state_ptr(), db::commitlog::force_sync::no).then([&bp] () mutable {
                 return bp.count_all_batches().then([](auto n) {
