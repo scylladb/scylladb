@@ -124,7 +124,7 @@ const uint32_t db::batchlog_manager::page_size;
 db::batchlog_manager::batchlog_manager(cql3::query_processor& qp, db::system_keyspace& sys_ks, batchlog_manager_config config)
         : _qp(qp)
         , _sys_ks(sys_ks)
-        , _write_request_timeout(std::chrono::duration_cast<db_clock::duration>(config.write_request_timeout))
+        , _replay_timeout(config.replay_timeout)
         , _replay_rate(config.replay_rate)
         , _delay(config.delay)
         , _replay_cleanup_after_replays(config.replay_cleanup_after_replays)
@@ -233,11 +233,6 @@ future<size_t> db::batchlog_manager::count_all_batches() const {
     return _qp.execute_internal(query, cql3::query_processor::cache_internal::yes).then([](::shared_ptr<cql3::untyped_result_set> rs) {
        return size_t(rs->one().get_as<int64_t>("count"));
     });
-}
-
-db_clock::duration db::batchlog_manager::get_batch_log_timeout() const {
-    // enough time for the actual write + BM removal mutation
-    return _write_request_timeout * 2;
 }
 
 future<> db::batchlog_manager::maybe_migrate_v1_to_v2() {
@@ -404,7 +399,7 @@ future<> db::batchlog_manager::replay_all_failed_batches(post_replay_cleanup cle
         co_await utils::get_local_injector().inject("add_delay_to_batch_replay", std::chrono::milliseconds(1000));
 
         // Exclude batches too fresh to be replayed.
-        const auto written_at_limit = db_clock::now() - get_batch_log_timeout();
+        const auto written_at_limit = db_clock::now() - _replay_timeout;
 
         auto schema = _qp.db().find_schema(system_keyspace::NAME, system_keyspace::BATCHLOG_V2);
 
