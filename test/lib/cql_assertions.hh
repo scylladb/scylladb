@@ -78,6 +78,7 @@ class rows_assertions {
 public:
     rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, std::source_location loc);
     rows_assertions with_size(size_t size);
+    rows_assertions with_size(std::function<bool(size_t)> predicate);
     rows_assertions is_empty();
     rows_assertions is_not_empty();
     rows_assertions with_column_types(std::initializer_list<data_type> column_types);
