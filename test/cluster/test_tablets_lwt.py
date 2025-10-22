@@ -11,6 +11,7 @@ from cassandra.query import SimpleStatement, ConsistencyLevel
 from cassandra.protocol import InvalidRequest, WriteTimeout
 from cassandra import Unauthorized
 
+from test.cluster.lwt.lwt_common import wait_for_tablet_count
 from test.cluster.util import new_test_keyspace, unique_name, reconnect_driver
 from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for_cql_and_get_hosts
@@ -911,3 +912,106 @@ async def test_lwt_shutdown(manager: ManagerClient):
         row = rows[0]
         assert row.pk == 1
         assert row.v == 2
+
+
+@pytest.mark.asyncio
+@skip_mode('debug', 'dev is enough')
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_tablets_merge_waits_for_lwt(manager: ManagerClient):
+    """
+    This is a regression test for #26437:
+    1. A cluster with one node, a table with rf=1 and two tablets on the same shard.
+    2. Run an LWT on the second tablet, make it hang on the paxos_accept_proposal_wait injection.
+    The LWT coordinator holds a tablet_metadata_guard with a non-migrating topology erm and global_shard=1.
+    3. Trigger tablets merge with the tablet_force_tablet_count_decrease injection, wait for tablet_count == 1.
+    This step invalidates the global_shard, the tablet_metadata_guard should stop refreshing erms.
+    4. Start tablet migration for the merged tablet, check it hangs on the first global barrier.
+    4. Release the paxos_accept_proposal_wait injection, check the barrier is released, the tablet is
+    migrated and the LWT succeeded.
+    """
+    logger.info("Bootstrapping cluster")
+    cmdline = [
+        '--logger-log-level', 'paxos=trace',
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'tablets=debug'
+    ]
+    config = {
+        # to force faster tablet balancer reactions
+        'tablet_load_stats_refresh_interval_in_seconds': 1
+    }
+    s0 = await manager.server_add(cmdline=cmdline,
+                                  config=config,
+                                  property_file={'dc': 'dc1', 'rack': 'r1'})
+    (cql, _) = await manager.get_ready_cql([s0])
+
+    # Disable automatic tablet migrations so that they don't interfere with
+    # the global barrier checks the test wants to run for the table migration track.
+    await manager.api.enable_injection(s0.ip_addr, "tablet_migration_bypass", one_shot=False)
+
+    logger.info("Create a keyspace")
+    async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1} AND tablets = {'initial': 2}") as ks:
+        logger.info("Create a table")
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        tablets = await get_all_tablet_replicas(manager, s0, ks, 'test')
+        assert len(tablets) == 2
+        for t in tablets:
+            assert len(t.replicas) == 1
+            (s0_host_id, shard) = t.replicas[0]
+            if shard != 0:
+                logger.info(f"Migrating tablet {t.last_token} to shard0")
+                await manager.api.move_tablet(s0.ip_addr, ks, "test", s0_host_id, shard, s0_host_id, 0, t.last_token)
+
+        logger.info("Inject paxos_accept_proposal_wait")
+        await inject_error_one_shot_on(manager, "paxos_accept_proposal_wait", [s0])
+
+        logger.info("Run an LWT")
+        # We use 3 as a key since its token is handled by the second tablet, which is important for the test.
+        lwt = cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES (3, 3) IF NOT EXISTS")
+
+        logger.info("Open log")
+        log0 = await manager.server_open_log(s0.server_id)
+
+        logger.info("Wait for paxos_accept_proposal_wait")
+        await log0.wait_for("paxos_accept_proposal_wait: waiting for message")
+
+        logger.info("Injecting tablet_force_tablet_count_decrease")
+        await manager.api.enable_injection(s0.ip_addr, "tablet_force_tablet_count_decrease", one_shot=False)
+
+        m = await log0.mark()
+
+        logger.info("Wait for tablet merge to complete")
+        await wait_for_tablet_count(manager, s0, ks, 'test', lambda c: c == 1, 1, timeout_s=15)
+
+        logger.info("Ensure the guard decided to retain the erm")
+        await log0.wait_for("tablet_metadata_guard::check: retain the erm and abort the guard",
+                            from_mark=m, timeout=10)
+
+        tablets = await get_all_tablet_replicas(manager, s0, ks, 'test')
+        assert len(tablets) == 1
+        tablet = tablets[0]
+        assert tablet.replicas == [(s0_host_id, 0)]
+
+        m = await log0.mark()
+        migration_task = asyncio.create_task(manager.api.move_tablet(s0.ip_addr, ks, "test",
+                                                                     s0_host_id, 0,
+                                                                     s0_host_id, 1,
+                                                                     tablet.last_token))
+        logger.info("Wait for the global barrier to start draining on shard0")
+        await log0.wait_for("\\[shard 0: gms\\] raft_topology - Got raft_topology_cmd::barrier_and_drain", from_mark=m)
+        # Just to confirm that the guard still holds the erm
+        matches = await log0.grep("\\[shard 0: gms\\] raft_topology - raft_topology_cmd::barrier_and_drain done", from_mark=m)
+        assert len(matches) == 0
+
+        # Before the fix, the tablet migration global barrier did not wait for the LWT operation.
+        # As a result, the merged tablet could be migrated to another shard while the LWT is still running.
+        # This caused the LWT to crash in paxos_state::prepare/shards_for_writes because of the
+        # unexpected tablet shard change.
+        logger.info("Trigger 'paxos_accept_proposal_wait'")
+        await manager.api.message_injection(s0.ip_addr, "paxos_accept_proposal_wait")
+
+        logger.info("Wait for the tablet migration task to finish")
+        await migration_task
+
+        logger.info("Wait for the LWT to finish")
+        await lwt

@@ -89,8 +89,16 @@ future<paxos_state::guard> paxos_state::get_cas_lock(const dht::token& key, cloc
 static dht::shard_replica_set shards_for_writes(const schema& s, dht::token token) {
     auto shards = s.table().shard_for_writes(token);
     if (const auto it = std::ranges::find(shards, this_shard_id()); it == shards.end()) {
+        const auto& erm = s.table().get_effective_replication_map();
+        const auto& rs = erm->get_replication_strategy();
+        sstring tablet_map_desc;
+        if (rs.uses_tablets()) {
+            const auto& tablet_map = erm->get_token_metadata().tablets().get_tablet_map(s.id());
+            tablet_map_desc = ::format(", tablet id {}, tablet map {}",
+                tablet_map.get_tablet_id(token), tablet_map);
+        }
         on_internal_error(paxos_state::logger,
-            format("invalid shard, this_shard_id {}, shard_for_writes {}", this_shard_id(), shards));
+            format("invalid shard, shard_for_writes {}, token {}{}", shards, token, tablet_map_desc));
     }
     std::ranges::sort(shards);
     return shards;

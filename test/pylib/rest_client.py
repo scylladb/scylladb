@@ -16,11 +16,11 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional, AsyncIterator
 
 import pytest
-import universalasync
 from aiohttp import request, BaseConnector, UnixConnector, ClientTimeout
 from cassandra.pool import Host                          # type: ignore # pylint: disable=no-name-in-module
 
 from test.pylib.internal_types import IPAddress, HostID
+from test.pylib.util import universalasync_typed_wrap
 
 
 logger = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ class TCPRESTClient(RESTClient):
         self.default_port: int = port
 
 
-@universalasync.wrap
+@universalasync_typed_wrap
 class ScyllaRESTAPIClient:
     """Async Scylla REST API client"""
 
