@@ -1643,8 +1643,8 @@ void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         params["skip_reshape"] = "true";
     }
     if (vm.contains("scope")) {
-        if (vm.contains("primary-replica-only")) {
-            throw std::invalid_argument("Scoped streaming of primary replica only is not supported yet");
+        if (vm.contains("primary-replica-only") && vm["scope"].as<sstring>() == "node") {
+            throw std::invalid_argument("Cannot set both primary_replica_only and scope=node");
         }
         if (!vm.contains("load-and-stream")) {
             throw std::invalid_argument("--scope takes no effect without --load-and-stream|-las");
@@ -1817,11 +1817,11 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     if (vm.contains("scope")) {
         params["scope"] = vm["scope"].as<sstring>();
     }
-    
+
     std::stringstream output;
     rjson::streaming_writer writer(output);
     writer.StartArray();
-    
+
     // add the list given by the file param
     if (sstables_as_file_list) {
         sstring sstables_list_file = vm["sstables-file-list"].as<sstring>();
@@ -1842,7 +1842,7 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
     }
     writer.EndArray();
     sstring sstables_body = make_sstring(output.view());
-    
+
     const auto restore_res = client.post("/storage_service/restore", std::move(params),
                                          request_body{"application/json", std::move(sstables_body)});
     const auto task_id = rjson::to_string_view(restore_res);
