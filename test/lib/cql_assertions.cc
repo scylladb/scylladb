@@ -78,6 +78,16 @@ rows_assertions::with_size(size_t size) {
 }
 
 rows_assertions
+rows_assertions::with_size(std::function<bool(size_t)> predicate) {
+    const auto& rs = _rows->rs().result_set();
+    auto row_count = rs.size();
+    if (!predicate(row_count)) {
+        fail(format("Predicate failed for row count {}", row_count), _loc);
+    }
+    return {*this};
+}
+
+rows_assertions
 rows_assertions::is_empty() {
     const auto& rs = _rows->rs().result_set();
     auto row_count = rs.size();
