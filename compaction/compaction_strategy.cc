@@ -804,9 +804,9 @@ compaction_strategy_state compaction_strategy_state::make(const compaction_strat
         case compaction_strategy_type::incremental:
             return compaction_strategy_state(default_empty_state{});
         case compaction_strategy_type::leveled:
-            return compaction_strategy_state(leveled_compaction_strategy_state{});
+            return compaction_strategy_state(seastar::make_shared<leveled_compaction_strategy_state>());
         case compaction_strategy_type::time_window:
-            return compaction_strategy_state(time_window_compaction_strategy_state{});
+            return compaction_strategy_state(seastar::make_shared<time_window_compaction_strategy_state>());
         default:
             throw std::runtime_error("strategy not supported");
     }

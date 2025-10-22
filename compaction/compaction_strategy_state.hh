@@ -18,7 +18,7 @@ namespace compaction {
 class compaction_strategy_state {
 public:
     struct default_empty_state {};
-    using states_variant = std::variant<default_empty_state, leveled_compaction_strategy_state, time_window_compaction_strategy_state>;
+    using states_variant = std::variant<default_empty_state, leveled_compaction_strategy_state_ptr, time_window_compaction_strategy_state_ptr>;
 private:
     states_variant _state;
 public:
