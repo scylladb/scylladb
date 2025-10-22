@@ -904,6 +904,42 @@ async def test_remove_failure_with_no_normal_token_owners_in_dc(manager: Manager
         await manager.server_add(replace_cfg=replace_cfg, property_file=node_to_remove.property_file())
 
 @pytest.mark.asyncio
+async def test_remove_onlymark(manager: ManagerClient):
+    """
+    Verifies recovery scenario involving marking the node as excluded using removenode --only-mark.
+
+    1. Create a cluster with 3 racks, 1 node in rack1, 2 nodes in rack2, and 1 in rack3.
+    2. The keyspace is initially replicated to rack1 and rack2.
+    3. We down one node in rack2, which should cause unavailability.
+    4. We mark the node as excluded using removenode --only-mark. This unblocks the next ALTER
+    5. We add rack3 to RF of the keyspace. This wouldn't succeed without marking the node as excluded.
+    6. We verify that downed node can be removed successfully, while there are still tablets on it. That's
+       why we need two nodes in rack2.
+    """
+    servers = await manager.servers_add(servers_num=3, auto_rack_dc='dc1')
+    await manager.server_add(property_file={'dc': 'dc1', 'rack': 'rack2'})
+
+    cql = manager.get_cql()
+    async with new_test_keyspace(manager, "WITH replication = { 'class': 'NetworkTopologyStrategy', "
+                                          "'dc1': ['rack1', 'rack2']} AND tablets = { 'initial': 8 }") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int);")
+
+        live_node = servers[0]
+        node_to_remove = servers[1]
+        with pytest.raises(Exception, match="Cannot mark host .* as excluded because it's alive"):
+            await manager.remove_node(live_node.server_id, wait_removed_dead=False, server_id=node_to_remove.server_id, only_mark=True)
+
+        await manager.server_stop(node_to_remove.server_id)
+        await manager.remove_node(live_node.server_id, server_id=node_to_remove.server_id, only_mark=True)
+
+        # Check that tablets can be rebuilt in a new rack with rack2 down.
+        # await manager.server_add(property_file={'dc': 'dc1', 'rack': 'rack3'})
+        await cql.run_async(f"ALTER KEYSPACE {ks} WITH REPLICATION = {{ 'class': 'NetworkTopologyStrategy', 'dc1': ['rack1', 'rack2', 'rack3']}}")
+
+        # Check that removenode succeeds on the node which is excluded
+        await manager.remove_node(live_node.server_id, server_id=node_to_remove.server_id)
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("with_zero_token_node", [False, True])
 async def test_remove_failure_then_replace(manager: ManagerClient, with_zero_token_node: bool):
     """
