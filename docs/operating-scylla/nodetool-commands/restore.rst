@@ -53,6 +53,7 @@ Options
 * ``--nowait`` - Don't wait on the restore process
 * ``--scope <scope>`` - Use specified load-and-stream scope
 * ``--sstables-file-list <file>`` - restore the sstables listed in the given <file>. the list should be new-line separated.
+* ``--primary-replica-only`` - Load the sstables and stream to primary replica node that owns the data. Repair is needed after the restore process
 * ``<sstables>`` - Remainder of keys of the TOC (Table of Contents) components of SSTables to restore, relative to the specified prefix
 
 The `scope` parameter describes the subset of cluster nodes where you want to load data:

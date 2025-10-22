@@ -1780,6 +1780,9 @@ void restore_operation(scylla_rest_client& client, const bpo::variables_map& vm)
       throw std::invalid_argument("missing both argument: sstables and --sstables-file-list (at least one is required)");
     }
     if (vm.contains("scope")) {
+        if (vm.contains("primary-replica-only") && vm["scope"].as<sstring>() == "node") {
+            throw std::invalid_argument("Cannot set both primary_replica_only and scope=node");
+        }
         params["scope"] = vm["scope"].as<sstring>();
     }
     
@@ -4324,6 +4327,7 @@ For more information, see: {}
                     typed_option<>("nowait", "Don't wait on the restore process"),
                     typed_option<sstring>("scope", "Load-and-stream scope (node, rack or dc)"),
                     typed_option<sstring>("sstables-file-list", "A file containing the list of sstables to restore (optional)"),
+                    typed_option<>("primary-replica-only", "Load the sstables and stream to primary replica node that owns the data. Repair is needed after the restore process"),
                 },
                 {
                     typed_option<std::vector<sstring>>("sstables", "The object keys of the TOC component of the SSTables to be restored", -1),
