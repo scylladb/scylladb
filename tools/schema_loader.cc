@@ -334,7 +334,7 @@ std::vector<schema_ptr> do_load_schemas(const db::config& cfg, std::string_view 
             }
             it->schema = std::move(new_base_schema);
             it->secondary_idx_man.reload();
-            auto view = it->secondary_idx_man.create_view_for_index(index);
+            auto view = p->create_view_for_index(it->schema, index, db);
             real_db.tables.emplace_back(dd_impl, dd_impl.unwrap(ks), view, true);
         } else if (auto p = dynamic_cast<cql3::statements::update_statement*>(statement)) {
             if (p->keyspace() != db::schema_tables::NAME && p->column_family() != db::schema_tables::DROPPED_COLUMNS) {
