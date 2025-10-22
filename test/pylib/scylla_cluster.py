@@ -1882,6 +1882,7 @@ class ScyllaClusterManager:
             await self.cluster.api.remove_node(initiator.ip_addr,
                                                await to_remove.get_host_id(self.cluster.api),
                                                ignore_dead,
+                                               only_mark=data["only_mark"] if "only_mark" in data else None,
                                                timeout=ScyllaServer.TOPOLOGY_TIMEOUT)
         except (RuntimeError, HTTPError) as exc:
             if expected_error:

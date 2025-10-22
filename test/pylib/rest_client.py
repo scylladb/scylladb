@@ -189,12 +189,15 @@ class ScyllaRESTAPIClient:
         return data
 
     async def remove_node(self, initiator_ip: IPAddress, host_id: HostID,
-                          ignore_dead: list[IPAddress], timeout: float) -> None:
+                          ignore_dead: list[IPAddress], timeout: float, only_mark: bool = None) -> None:
         """Initiate remove node of host_id in initiator initiator_ip"""
         logger.info("remove_node for %s on %s", host_id, initiator_ip)
+        params = {"host_id": host_id,
+                  "ignore_nodes": ",".join(ignore_dead)}
+        if only_mark:
+            params["only_mark"] = only_mark
         await self.client.post("/storage_service/remove_node",
-                               params = {"host_id": host_id,
-                                         "ignore_nodes": ",".join(ignore_dead)},
+                               params=params,
                                host = initiator_ip, timeout = timeout)
         logger.debug("remove_node for %s finished", host_id)
 
