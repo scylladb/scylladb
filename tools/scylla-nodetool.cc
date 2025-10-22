@@ -1608,8 +1608,8 @@ void refresh_operation(scylla_rest_client& client, const bpo::variables_map& vm)
         params["skip_reshape"] = "true";
     }
     if (vm.contains("scope")) {
-        if (vm.contains("primary-replica-only")) {
-            throw std::invalid_argument("Scoped streaming of primary replica only is not supported yet");
+        if (vm.contains("primary-replica-only") && vm["scope"].as<sstring>() == "node") {
+            throw std::invalid_argument("Cannot set both primary_replica_only and scope=node");
         }
         if (!vm.contains("load-and-stream")) {
             throw std::invalid_argument("--scope takes no effect without --load-and-stream|-las");
