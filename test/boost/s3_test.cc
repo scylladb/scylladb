@@ -886,7 +886,7 @@ SEASTAR_THREAD_TEST_CASE(test_creds) {
      * environment variables. Therefore, running such a test in parallel is not feasible. However, all S3-based tests will use
      * `aws::environment_aws_credentials_provider` to obtain credentials. As a result, if this functionality fails, all S3-related tests will fail immediately.
      */
-
+    std::abort();
     auto host = tests::getenv_safe("MOCK_S3_SERVER_HOST");
     auto port = std::stoul(tests::getenv_safe("MOCK_S3_SERVER_PORT"));
     tmpdir tmp;
