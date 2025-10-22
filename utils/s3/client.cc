@@ -1212,6 +1212,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
     }
 
     future<> make_filling_fiber() {
+        seastar::http::experimental::no_retry_strategy no_retry;
         s3l.trace("Fiber starts cycle for object '{}'", _object_name);
         while (!_is_finished) {
             try {
@@ -1273,8 +1274,6 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             s3l.trace("No range for object '{}' was provided. Setting the range to {} from the Content-Range header", _object_name, _range);
                         }
                         auto in = std::move(in_);
-                        std::exception_ptr ex;
-                        try {
                             while (_buffers_size < _max_buffers_size && !_is_finished) {
                                 utils::get_local_injector().inject("kill_s3_inflight_req", [] {
                                     // Inject non-retryable error to emulate source failure
@@ -1316,31 +1315,21 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                                     throw std::system_error(ECONNRESET, std::system_category());
                                 });
                             }
-                        } catch (...) {
-                            ex = std::current_exception();
-                        }
                         co_await in.close();
-                        if (ex) {
-                            auto aws_ex = aws::aws_error::from_exception_ptr(ex);
-                            s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
-                            throw filler_exception(
-                                ex, aws_ex.is_retryable() == aws::retryable::no && aws_ex.get_error_type() != aws::aws_error_type::EXPIRED_TOKEN);
-                        }
                     },
+                    no_retry,
+                    [](std::exception_ptr ex) { std::rethrow_exception(std::move(ex)); },
                     {},
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
-            } catch (const filler_exception& ex) {
-                if (ex._should_abort) {
-                    s3l.info("Fiber for object '{}' experienced a non-retryable error in buffer filling loop. Reason: {}. Exiting", _object_name, ex._original_exception);
-                    _get_cv.broken(ex._original_exception);
+            } catch (...) {
+                auto ex = std::current_exception();
+                auto aws_ex = aws::aws_error::from_exception_ptr(ex);
+                if (!aws_ex.is_retryable()) {
+                    s3l.info("Fiber for object '{}' failed: {}, exiting", _object_name, ex);
+                    _get_cv.broken(ex);
                     co_return;
                 }
-                s3l.info("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex._original_exception);
-            } catch (...) {
-                s3l.info("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
-                _get_cv.broken(std::current_exception());
-                co_return;
             }
         }
         s3l.trace("Fiber for object '{}' completed", _object_name);
