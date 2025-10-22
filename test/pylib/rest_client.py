@@ -198,6 +198,14 @@ class ScyllaRESTAPIClient:
                                host = initiator_ip, timeout = timeout)
         logger.debug("remove_node for %s finished", host_id)
 
+    async def exclude_node(self, initiator_ip: IPAddress, hosts: list[HostID], timeout: float = 60) -> None:
+        """Initiate exclude node of hosts in initiator initiator_ip"""
+        logger.info("exclude_node for %s on %s", hosts, initiator_ip)
+        await self.client.post("/storage_service/exclude_node",
+                               params = {"hosts": ",".join(hosts)},
+                               host = initiator_ip, timeout = timeout)
+        logger.debug("exclude_node for %s finished", hosts)
+
     async def decommission_node(self, host_ip: str, timeout: float) -> None:
         """Initiate decommission node of host_ip"""
         logger.debug("decommission_node %s", host_ip)
