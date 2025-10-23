@@ -1144,6 +1144,14 @@
                      "allowMultiple":false,
                      "type":"string",
                      "paramType":"query"
+                  },
+                  {
+                     "name": "drop_unfixable_sstables",
+                     "description": "When set to true, drop unfixable sstables. Applies only to scrub mode SEGREGATE.",
+                     "required":false,
+                     "allowMultiple":false,
+                     "type":"boolean",
+                     "paramType":"query"
                   }
                ]
             }

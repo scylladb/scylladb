@@ -3090,7 +3090,7 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_skip_mode_test) {
     });
 }
 
-SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
+void test_sstable_scrub_segregate_mode(compaction::compaction_type_options::scrub::drop_unfixable_sstables drop_unfixable) {
     scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
 
     auto schema = test.schema();
@@ -3127,6 +3127,35 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
         testlog.info("Scrub resulted in {} sstables", in_strategy_sstables(ts).get().size());
         BOOST_REQUIRE(in_strategy_sstables(ts).get().size() > 1);
         verify_fragments(in_strategy_sstables(ts).get(), test.env().make_reader_permit(), explode(test.env().make_reader_permit(), muts));
+    });
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_test) {
+    test_sstable_scrub_segregate_mode(compaction::compaction_type_options::scrub::drop_unfixable_sstables::no);
+    test_sstable_scrub_segregate_mode(compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes);
+}
+
+SEASTAR_THREAD_TEST_CASE(sstable_scrub_segregate_mode_drop_unfixable_sstables_test) {
+    scrub_test_framework<random_schema::yes> test(compress_sstable::yes);
+
+    auto schema = test.schema();
+
+    auto muts = tests::generate_random_mutations(test.random_schema(), 3).get();
+
+    test.run(schema, muts, [] (table_for_tests& table, compaction::compaction_group_view& ts, std::vector<sstables::shared_sstable> sstables) {
+        BOOST_REQUIRE(sstables.size() == 1);
+        auto sst = sstables.front();
+        corrupt_sstable(sst);
+
+        testlog.info("Scrub in segregate mode");
+
+        compaction::compaction_type_options::scrub opts = {};
+        opts.operation_mode = compaction::compaction_type_options::scrub::mode::segregate;
+        opts.drop_unfixable = compaction::compaction_type_options::scrub::drop_unfixable_sstables::yes;
+
+        BOOST_REQUIRE_NO_THROW(table->get_compaction_manager().perform_sstable_scrub(ts, opts, tasks::task_info{}).get());
+
+        BOOST_REQUIRE(in_strategy_sstables(ts).get().empty());
     });
 }
 
@@ -3285,8 +3314,10 @@ SEASTAR_THREAD_TEST_CASE(test_scrub_segregate_stack) {
     std::list<std::deque<mutation_fragment_v2>> segregated_fragment_streams;
 
     uint64_t validation_errors = 0;
+    bool failed_to_fix_sstable = false;
     mutation_writer::segregate_by_partition(
-            make_scrubbing_reader(make_mutation_reader_from_fragments(schema, permit, std::move(all_fragments)), compaction::compaction_type_options::scrub::mode::segregate, validation_errors),
+            make_scrubbing_reader(make_mutation_reader_from_fragments(schema, permit, std::move(all_fragments)), compaction::compaction_type_options::scrub::mode::segregate,
+                    validation_errors, failed_to_fix_sstable, compaction::compaction_type_options::scrub::drop_unfixable_sstables::no),
             mutation_writer::segregate_config{100000},
             [&schema, &segregated_fragment_streams] (mutation_reader rd) {
         return async([&schema, &segregated_fragment_streams, rd = std::move(rd)] () mutable {
@@ -3426,8 +3457,9 @@ SEASTAR_THREAD_TEST_CASE(sstable_scrub_reader_test) {
     scrubbed_fragments.emplace_back(*schema, permit, partition_end{}); // missing partition-end - at EOS
 
     uint64_t validation_errors = 0;
+    bool failed_to_fix_sstable = false;
     auto r = assert_that(make_scrubbing_reader(make_mutation_reader_from_fragments(schema, permit, std::move(corrupt_fragments)),
-                compaction::compaction_type_options::scrub::mode::skip, validation_errors));
+                compaction::compaction_type_options::scrub::mode::skip, validation_errors, failed_to_fix_sstable, compaction::compaction_type_options::scrub::drop_unfixable_sstables::no));
     for (const auto& mf : scrubbed_fragments) {
        testlog.info("Expecting {}", mutation_fragment_v2::printer(*schema, mf));
        r.produces(*schema, mf);
