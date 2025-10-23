@@ -105,6 +105,17 @@ public:
         // The sizes are the the written items' sizes grouped per table.
         utils::estimated_histogram batch_write_item_op_size_kb{30};
     } operation_sizes;
+    // Count of authentication and authorization failures, counted if either
+    // alternator_enforce_authorization or alternator_warn_authorization are
+    // set to true. If both are false, no authentication or authorization
+    // checks are performed, so failures are not recognized or counted.
+    // "authentication" failure means the request was not signed with a valid
+    // user and key combination. "authorization" failure means the request was
+    // authenticated to a valid user - but this user did not have permissions
+    // to perform the operation (considering RBAC settings and the user's
+    // superuser status).
+    uint64_t authentication_failures = 0;
+    uint64_t authorization_failures = 0;
     // Miscellaneous event counters
     uint64_t total_operations = 0;
     uint64_t unsupported_operations = 0;

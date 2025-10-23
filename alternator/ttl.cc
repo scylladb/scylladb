@@ -95,7 +95,7 @@ future<executor::request_return_type> executor::update_time_to_live(client_state
     }
     sstring attribute_name(v->GetString(), v->GetStringLength());
 
-    co_await verify_permission(_enforce_authorization, client_state, schema, auth::permission::ALTER);
+    co_await verify_permission(_enforce_authorization, _warn_authorization, client_state, schema, auth::permission::ALTER, _stats);
     co_await db::modify_tags(_mm, schema->ks_name(), schema->cf_name(), [&](std::map<sstring, sstring>& tags_map) {
         if (enabled) {
             if (tags_map.contains(TTL_TAG_KEY)) {
