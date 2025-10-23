@@ -5,21 +5,17 @@
 #
 
 import os
-import shutil
-import socket
-import asyncio
-import boto3
-import requests
 import logging
-import pytest
-import pathlib
-import time
-import io
+
 # use minio_server
 from test.pylib.minio_server import MinioServer
 from test.pylib.suite.python import add_s3_options
+from test.pylib.dockerized_service import DockerizedServer
 from operator import attrgetter
-from datetime import datetime
+
+import pytest
+import boto3
+import requests
 
 def pytest_addoption(parser):
     add_s3_options(parser)
@@ -187,19 +183,15 @@ class GSFront:
 class GSServer(GSFront):
     def __init__(self, tmpdir):
         super(GSServer, self).__init__(None, 'testbucket', None)
-        self.host = '127.0.0.1'
+        self.server = None
+        self.host = None
         self.port = None
         self.oldvars = {}
         self.vars = { 'GS_SERVER_ADDRESS_FOR_TEST': attrgetter('endpoint'),
                       'GS_BUCKET_FOR_TEST': attrgetter('bucket_name'), 
                       'GS_CREDENTIALS_FILE': attrgetter('credentials_file'), 
                       }
-        self.proc = None
-        self.io = None
-        self.stopped = False
         self.tmpdir = tmpdir
-        self.logfilename = None
-        self.logfile = None
 
     def publish(self):
         self.endpoint = f'http://{self.host}:{self.port}'
@@ -217,83 +209,43 @@ class GSServer(GSFront):
             elif os.environ.get(k):
                 del os.environ[k]
 
+    def _docker_args(self, host, port):
+        # pylint: disable=unused-argument
+        return ["-p", f'{port}:{port}']
+
+    def _image_args(self, host, port):
+        # pylint: disable=unused-argument
+        return ["-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', f'127.0.0.1:{port}']
+
     async def start(self):
-        exe = pathlib.Path(next(exe for exe in [shutil.which(path) for path in ["podman", "docker"]] if exe is not None)).resolve()
+        self.server = DockerizedServer("docker.io/fsouza/fake-gcs-server:1.52.3", self.tmpdir, 
+                                       logfilenamebase="fake-gcs-server",
+                                       docker_args=self._docker_args,
+                                       image_args=self._image_args,
+                                       success_string="server started at",
+                                       failure_string="address already in use"
+                                       )
+        await self.server.start()
+        self.port = self.server.port
+        self.host = self.server.host
+        self.publish()
 
-        while True:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.bind((self.host, 0))
-            port = sock.getsockname()[1]
-
-            self.logfilename = (pathlib.Path(self.tmpdir) / f'fake-gcs-server-{port}').with_suffix(".log")
-            self.logfile = self.logfilename.open("wb")
-
-
-            args = ["run", "--rm", "-p", f'{port}:{port}', "docker.io/fsouza/fake-gcs-server:1.52.3", 
-                    "-scheme", "http", "-log-level", "debug", "--port", f'{port}', '-public-host', f'127.0.0.1:{port}']
-
-            sock.close()
-
-            proc = await asyncio.create_subprocess_exec(exe, *args, 
-                                                        stderr=self.logfile
-                                                        )
-            failed = False
-
-            # In any sane world we would just pipe stderr to a pipe and launch a background
-            # task to just readline from there to both check the start message as well as 
-            # add it to the log (preferrably via logger).
-            # This works fine when doing this in a standalone python script. 
-            # However, for some reason, when run in a pytest fixture, the pipe will fill up,
-            # without or reader waking up and doing anyhing, and for any test longer than very
-            # short, we will fill the stderr buffer and hang.
-            # I cannot figure out how to get around this, so we workaround it
-            # instead by directing stderr to a log file, and simply repeatedly
-            # try to read the info from this file until we are happy.
-            async with asyncio.timeout(120):
-                done = False
-                while not done and not failed:
-                    with self.logfilename.open("r") as f:
-                        for line in f:
-                            if "server started at" in line:
-                                print(f'Got start message: {line}')
-                                done = True
-                                break
-                            if "address already in use" in line:
-                                print(f'Got fail message: {line}')
-                                failed = True
-                                break
-
-            if failed:
-                self.logfile.close()
-                await proc.wait()
-                continue
-
-            self.proc = proc
-            self.port = port
-            self.publish()
-
-            # create bucket. can't use boto, because fake server does not support xml syntax 
-            # for anything beyong listing
-            response = requests.post(f'{self.endpoint}/storage/v1/b?project=testproject', json = {
-                'name': self.bucket_name, 'location' : 'US', 'storageClass' : 'STANDARD',
-                'iamConfiguration': {
-                    'uniformBucketLevelAccess' : {
-                        'enabled': True,
-                    }
+        # create bucket. can't use boto, because fake server does not support xml syntax 
+        # for anything beyong listing
+        response = requests.post(f'{self.endpoint}/storage/v1/b?project=testproject', json = {
+            'name': self.bucket_name, 'location' : 'US', 'storageClass' : 'STANDARD',
+            'iamConfiguration': {
+                'uniformBucketLevelAccess' : {
+                    'enabled': True,
                 }
-            }, timeout = 10)
-            if response.status_code not in [200, 201]:
-                raise Exception(f'Could not create test bucket: {response}')
-
-            break
+            }
+        }, timeout = 10)
+        if response.status_code not in [200, 201]:
+            raise Exception(f'Could not create test bucket: {response}')
 
     async def stop(self):
-        self.stopped = True
-        if self.proc:
-            self.proc.terminate()
-            await self.proc.wait()
-        if self.logfile:
-            self.logfile.close()
+        if self.server:
+            await self.server.stop()
         self.unpublish()
 
 @pytest.fixture(scope="function", params=['s3','gs'])

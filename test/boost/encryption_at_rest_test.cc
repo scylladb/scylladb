@@ -378,7 +378,7 @@ database_path=:memory:
         auto python = co_await tests::proc::process_fixture::create(pyexec, 
             { // args
                 pyexec.string(),
-                "test/boost/kmip_wrapper.py",
+                "test/pylib/kmip_wrapper.py",
                 "-l", log,
                 "-f", cfgfile,
                 "-v", "DEBUG",
