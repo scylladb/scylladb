@@ -58,6 +58,8 @@ public:
 
     db::timeout_clock::duration get_timeout(const query_options& options) const;
 
+    std::optional<sstring> get_service_level_name() const;
+
     qos::service_level_options get_service_level(qos::service_level_controller& sl_controller) const;
 
     void fill_prepare_context(prepare_context& ctx);

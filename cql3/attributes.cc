@@ -115,6 +115,10 @@ db::timeout_clock::duration attributes::get_timeout(const query_options& options
     return std::chrono::duration_cast<db::timeout_clock::duration>(std::chrono::nanoseconds(duration.nanoseconds));
 }
 
+std::optional<sstring> attributes::get_service_level_name() const {
+    return _service_level;
+}
+
 qos::service_level_options attributes::get_service_level(qos::service_level_controller& sl_controller) const {
     auto sl_name = *_service_level;
     if (!sl_controller.has_service_level(sl_name)) {
