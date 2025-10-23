@@ -2691,6 +2691,14 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
+    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler));
+}
+
+future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+        file_input_stream_options options,
+        raw_stream raw, integrity_check integrity,
+        integrity_error_handler error_handler) {
 
     file f = make_tracked_file(_data_file, permit);
     if (trace_state) {
