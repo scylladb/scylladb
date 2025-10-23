@@ -502,6 +502,7 @@ class ManagerClient:
                           ignore_dead: List[IPAddress] | List[HostID] = list[IPAddress](),
                           expected_error: str | None = None,
                           wait_removed_dead: bool = True,
+                          only_mark: bool = False,
                           timeout: Optional[float] = ScyllaServer.TOPOLOGY_TIMEOUT) -> None:
         """Invoke remove node Scylla REST API for a specified server"""
         logger.debug("ManagerClient remove node %s on initiator %s", server_id, initiator_id)
@@ -516,6 +517,8 @@ class ManagerClient:
             await self.others_not_see_server(removed_ip)
 
         data = {"server_id": server_id, "ignore_dead": ignore_dead, "expected_error": expected_error}
+        if only_mark:
+            data["only_mark"] = str(only_mark)
         await self.client.put_json(f"/cluster/remove-node/{initiator_id}", data,
                                    timeout=timeout)
         self._driver_update()

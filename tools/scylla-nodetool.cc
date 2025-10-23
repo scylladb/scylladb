@@ -1674,6 +1674,9 @@ void removenode_operation(scylla_rest_client& client, const bpo::variables_map& 
         }
     } else {
         std::unordered_map<sstring, sstring> params{{"host_id", op}};
+        if (vm.contains("only-mark")) {
+            params["only_mark"] = "true";
+        }
         if (vm.contains("ignore-dead-nodes")) {
             params["ignore_nodes"] = vm["ignore-dead-nodes"].as<sstring>();
             const auto str_ids  = utils::split_comma_separated_list(params["ignore_nodes"]);
@@ -2397,6 +2400,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
     const auto joining = get_nodes_of_state(client, "joining");
     const auto leaving = get_nodes_of_state(client, "leaving");
     const auto moving = get_nodes_of_state(client, "moving");
+    const auto excluded = get_nodes_of_state(client, "excluded");
     const auto endpoint_load = rjson_to_map<ssize_t>(client.get("/storage_service/load_map"));
 
     const auto tablets_keyspace = keyspace && keyspace_uses_tablets(client, *keyspace);
@@ -2441,7 +2445,7 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
         const auto dc_header = fmt::format("Datacenter: {}", dc);
         fmt::print("{}\n", dc_header);
         fmt::print("{}\n", std::string(dc_header.size(), '='));
-        fmt::print("Status=Up/Down\n");
+        fmt::print("Status=Up/Down/eXcluded\n");
         fmt::print("|/ State=Normal/Leaving/Joining/Moving\n");
         Tabulate table;
         if (keyspace) {
@@ -2450,13 +2454,19 @@ void status_operation(scylla_rest_client& client, const bpo::variables_map& vm) 
             table.add("--", "Address", "Load", "Tokens", "Owns", "Host ID", "Rack");
         }
         for (const auto& ep : endpoints) {
-            char status, state;
-            if (live.contains(ep)) {
-                status = 'U';
+            char state;
+            sstring status;
+            if (endpoint_host_id.contains(ep) && excluded.contains(endpoint_host_id.at(ep))) {
+                status = "X";
+                if (live.contains(ep)) {
+                    status = "XU"; // Should not happen, but when it does, we better know.
+                }
+            } else if (live.contains(ep)) {
+                status = "U";
             } else if (down.contains(ep)) {
-                status = 'D';
+                status = "D";
             } else {
-                status = '?';
+                status = "?";
             }
             if (joining.contains(ep)) {
                 state = 'J';
@@ -4293,6 +4303,7 @@ For more information, see: {}
 )", doc_link("operating-scylla/nodetool-commands/removenode.html")),
                 {
                     typed_option<sstring>("ignore-dead-nodes", "Comma-separated list of dead node host IDs to ignore during removenode"),
+                    typed_option<>("only-mark", "Does not perform the removal, only marks the node as \"excluded\" so that topology operations can proceed without this node being UP. Cannot be reverted."),
                 },
                 {
                     typed_option<sstring>("remove-operation", "status|force|$HOST_ID - show status of current node removal, force completion of pending removal, or remove provided ID", 1),

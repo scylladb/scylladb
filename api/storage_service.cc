@@ -824,8 +824,9 @@ static
 future<json::json_return_type>
 rest_remove_node(sharded<service::storage_service>& ss, std::unique_ptr<http::request> req) {
         auto host_id = validate_host_id(req->get_query_param("host_id"));
+        auto only_mark = validate_bool_x(req->get_query_param("only_mark"), false);
         std::vector<sstring> ignore_nodes_strs = utils::split_comma_separated_list(req->get_query_param("ignore_nodes"));
-        apilog.info("remove_node: host_id={} ignore_nodes={}", host_id, ignore_nodes_strs);
+        apilog.info("remove_node: host_id={} ignore_nodes={} only_mark={}", host_id, ignore_nodes_strs, only_mark);
         locator::host_id_or_endpoint_list ignore_nodes;
         ignore_nodes.reserve(ignore_nodes_strs.size());
         for (const sstring& n : ignore_nodes_strs) {
@@ -839,7 +840,7 @@ rest_remove_node(sharded<service::storage_service>& ss, std::unique_ptr<http::re
                 throw std::runtime_error(fmt::format("Failed to parse ignore_nodes parameter: ignore_nodes={}, node={}: {}", ignore_nodes_strs, n, std::current_exception()));
             }
         }
-        return ss.local().removenode(host_id, std::move(ignore_nodes)).then([] {
+        return ss.local().removenode(host_id, std::move(ignore_nodes), only_mark).then([] {
             return make_ready_future<json::json_return_type>(json_void());
         });
 }

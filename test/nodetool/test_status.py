@@ -16,6 +16,7 @@ import pytest
 class NodeStatus(Enum):
     Up = 'U'
     Down = 'D'
+    Excluded = 'X'
     Unknown = '?'
 
 
@@ -64,7 +65,7 @@ def validate_status_output(res, keyspace, nodes, ownership, resolve, effective_o
         assert lines[i] == "=" * dc_line_len
 
         i += 1
-        assert lines[i] == "Status=Up/Down"
+        lines[i].startswith("Status=Up/Down")
 
         i += 1
         assert lines[i] == "|/ State=Normal/Leaving/Joining/Moving"
@@ -200,6 +201,7 @@ def _do_test_status(request, nodetool, status_query_target, node_list, resolve=N
     moving = [n.endpoint for n in node_list if n.state == NodeState.Moving]
     live = [n.endpoint for n in node_list if n.status == NodeStatus.Up]
     down = [n.endpoint for n in node_list if n.status == NodeStatus.Down]
+    excluded = [n.host_id for n in node_list if n.status == NodeStatus.Excluded]
 
     load_map = [{"key": ep, "value": node.load} for ep, node in nodes.items() if node.load is not None]
 
@@ -223,6 +225,7 @@ def _do_test_status(request, nodetool, status_query_target, node_list, resolve=N
         expected_request("GET", "/storage_service/nodes/joining", response=joining),
         expected_request("GET", "/storage_service/nodes/leaving", response=leaving),
         expected_request("GET", "/storage_service/nodes/moving", response=moving),
+        expected_request("GET", "/storage_service/nodes/excluded", response=excluded),
         expected_request("GET", "/storage_service/load_map", response=load_map),
         expected_request("GET", "/storage_service/tokens_endpoint", params=tokens_endpoint_params,
                          response=tokens_endpoint),

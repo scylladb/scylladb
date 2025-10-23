@@ -4284,13 +4284,50 @@ future<> storage_service::raft_removenode(locator::host_id host_id, locator::hos
     rtlogger.info("Removenode succeeded. Request ID: {}", request_id);
 }
 
-future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params) {
-    return run_with_api_lock_in_gossiper_mode_only(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params)] (storage_service& ss) mutable {
-        return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params)] () mutable {
+future<> storage_service::mark_excluded(locator::host_id_or_endpoint_list to_exclude) {
+    while (true) {
+        auto guard = co_await _group0->client().start_operation(_group0_as, raft_timeout{});
+
+        auto ignored_ids = find_raft_nodes_from_hoeps(to_exclude);
+        for (auto host_id : ignored_ids) {
+            if (_gossiper.is_alive(locator::host_id(host_id.uuid()))) {
+                const std::string message = ::format("Cannot mark host {} as excluded because it's alive", host_id);
+                rtlogger.warn("{}", message);
+                throw std::runtime_error(message);
+            }
+		}
+
+        topology_mutation_builder builder(guard.write_timestamp());
+        builder.add_ignored_nodes(ignored_ids);
+        topology_change change{{builder.build()}};
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("Mark as excluded: {}", ignored_ids));
+        rtlogger.info("Marking nodes as excluded: {}, previous set: {}", ignored_ids, _topology_state_machine._topology.ignored_nodes);
+        try {
+            co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
+        } catch (group0_concurrent_modification&) {
+            rtlogger.info("mark_excluded: concurrent operation is detected, retrying.");
+            continue;
+        }
+        rtlogger.info("Nodes marked as excluded: {}", ignored_ids);
+        break;
+    }
+}
+
+future<> storage_service::removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params, bool only_mark) {
+    return run_with_api_lock_in_gossiper_mode_only(sstring("removenode"), [host_id, ignore_nodes_params = std::move(ignore_nodes_params), only_mark] (storage_service& ss) mutable {
+        return seastar::async([&ss, host_id, ignore_nodes_params = std::move(ignore_nodes_params), only_mark] () mutable {
             ss.check_ability_to_perform_topology_operation("removenode");
             if (ss.raft_topology_change_enabled()) {
+                if (only_mark) {
+			        ignore_nodes_params.push_back(locator::host_id_or_endpoint(host_id.to_sstring()));
+                    ss.mark_excluded(ignore_nodes_params).get();
+		            return;
+                }
                 ss.raft_removenode(host_id, std::move(ignore_nodes_params)).get();
                 return;
+            }
+            if (only_mark) {
+                throw std::runtime_error("removenode: The only_mark option is supported only with topology on raft");
             }
             node_ops_ctl ctl(ss, node_ops_cmd::removenode_prepare, host_id, gms::inet_address());
             auto stop_ctl = deferred_stop(ctl);

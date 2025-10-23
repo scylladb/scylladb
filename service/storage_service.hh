@@ -784,7 +784,7 @@ public:
      *
      * @param hostIdString token for the node
      */
-    future<> removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes);
+    future<> removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes, bool only_mark);
     future<node_ops_cmd_response> node_ops_cmd_handler(gms::inet_address coordinator, std::optional<locator::host_id> coordinator_host_id, node_ops_cmd_request req);
     void node_ops_cmd_check(gms::inet_address coordinator, const node_ops_cmd_request& req);
     future<> node_ops_cmd_heartbeat_updater(node_ops_cmd cmd, node_ops_id uuid, std::list<gms::inet_address> nodes, lw_shared_ptr<bool> heartbeat_updater_done);
@@ -971,6 +971,7 @@ private:
     future<> raft_removenode(locator::host_id host_id, locator::host_id_or_endpoint_list ignore_nodes_params);
     future<> raft_rebuild(utils::optional_param source_dc);
     future<> raft_check_and_repair_cdc_streams();
+    future<> mark_excluded(locator::host_id_or_endpoint_list);
     future<> update_topology_with_local_metadata(raft::server&);
     void set_topology_change_kind(topology_change_kind kind);
 
