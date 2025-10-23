@@ -1,0 +1,7 @@
+[package]
+name = "vector-search-validator"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vector-search-validator-engine.workspace = true

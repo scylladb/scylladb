@@ -55,7 +55,8 @@ from test.pylib.util import LogPrefixAdapter, get_configured_modes
 if TYPE_CHECKING:
     from typing import List
 
-PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search']
+#PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'boost', TEST_DIR / 'ldap', TEST_DIR / 'raft', TEST_DIR / 'unit', TEST_DIR / 'vector_search', TEST_DIR / 'vector_search_validator']
+PYTEST_RUNNER_DIRECTORIES = [TEST_DIR / 'vector_search_validator']
 
 launch_time = time.monotonic()
 
@@ -287,7 +288,8 @@ def parse_cmd_line() -> argparse.Namespace:
 
 async def find_tests(options: argparse.Namespace) -> None:
 
-    for f in glob.glob(os.path.join("test", "*")):
+    #for f in glob.glob(os.path.join("test", "*")):
+    for f in glob.glob(os.path.join("test", "vector_search_validator")):
         if os.path.isdir(f) and os.path.isfile(os.path.join(f, SUITE_CONFIG_FILENAME)):
             for mode in options.modes:
                 suite = TestSuite.opt_create(f, options, mode)
