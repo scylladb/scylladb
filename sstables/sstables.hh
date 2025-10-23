@@ -773,6 +773,12 @@ public:
             raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
             integrity_error_handler error_handler = throwing_integrity_error_handler);
 
+    future<input_stream<char>> data_stream(uint64_t pos, size_t len,
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+        file_input_stream_options options,
+        raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,
+        integrity_error_handler error_handler = throwing_integrity_error_handler);
+
     // Read exactly the specific byte range from the data file (after
     // uncompression, if the file is compressed). This can be used to read
     // a specific row from the data file (its position and length can be
