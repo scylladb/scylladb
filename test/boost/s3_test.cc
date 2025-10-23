@@ -758,9 +758,10 @@ void test_chunked_download_data_source(const client_maker_function& client_maker
             }
         }
     };
-    BOOST_REQUIRE_EXCEPTION(reader(), aws::aws_exception, [](const aws::aws_exception& e) {
-        return e.what() == "Injected ResourceNotFound"sv;
-    });
+    BOOST_REQUIRE_EXCEPTION(
+        reader(), aws::aws_exception, [](const aws::aws_exception& e) {
+            return e.error().get_error_type() == aws::aws_error_type::RESOURCE_NOT_FOUND;
+        });
 #else
     testlog.info("Skipping error injection test, as it requires SCYLLA_ENABLE_ERROR_INJECTION to be enabled");
 #endif
