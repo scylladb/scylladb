@@ -1599,6 +1599,7 @@ protected:
     service_permit _permit; // holds admission permit until operation completes
     db::per_partition_rate_limit::info _rate_limit_info;
     db::view::update_backlog _view_backlog; // max view update backlog of all participating targets
+    int _destroy_promise_index = -1;
 
 protected:
     virtual bool waited_for(locator::host_id from) = 0;
@@ -1659,6 +1660,22 @@ public:
         }
 
         update_cancellable_live_iterators();
+
+        if (const auto index = _destroy_promise_index; index >= 0) {
+            auto& promises = _proxy->_write_handler_destroy_promises;
+            auto& p = promises[index];
+            p.on_destroy();
+            std::swap(p, promises.back());
+            p.handler()._destroy_promise_index = index;
+            promises.pop_back();
+        }
+    }
+    void ensure_destroy_promise() {
+        if (_destroy_promise_index < 0) {
+            auto& promises = _proxy->_write_handler_destroy_promises;
+            _destroy_promise_index = promises.size();
+            promises.emplace_back(*this);
+        }
     }
     bool is_counter() const {
         return _type == db::write_type::COUNTER;
@@ -2674,7 +2691,29 @@ void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) 
     remove_response_handler_entry(std::move(entry));
 }
 
+storage_proxy::write_handler_destroy_promise::write_handler_destroy_promise(abstract_write_response_handler& handler)
+    : _handler(&handler)
+    , _promise(std::nullopt)
+{
+}
+
+future<> storage_proxy::write_handler_destroy_promise::get_future() {
+    if (!_promise) {
+        _promise.emplace();
+    }
+    co_await _promise->get_shared_future();
+}
+
+void storage_proxy::write_handler_destroy_promise::on_destroy() {
+    if (_promise) {
+        _promise->set_value();
+    }
+}
+
 void storage_proxy::remove_response_handler_entry(response_handlers_map::iterator entry) {
+    if (auto& handler = *entry->second; handler.use_count() > 1) {
+        handler.ensure_destroy_promise();
+    }
     entry->second->on_released();
     _response_handlers.erase(std::move(entry));
 }
@@ -7143,54 +7182,69 @@ void storage_proxy::on_released(const locator::host_id& hid) {
     }
 }
 
-void storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
-    SCYLLA_ASSERT(thread::running_in_thread());
+future<> storage_proxy::cancel_write_handlers(noncopyable_function<bool(const abstract_write_response_handler&)> filter_fun) {
+    std::vector<future<>> futures;
     auto it = _cancellable_write_handlers_list->begin();
     while (it != _cancellable_write_handlers_list->end()) {
-        auto guard = it->shared_from_this();
-        if (filter_fun(*it) && _response_handlers.contains(it->id())) {
-            it->timeout_cb();
+        // timeout_cb() may destroy the current handler. Since the list uses
+        // bi::link_mode<bi::auto_unlink>, destruction automatically unlinks the
+        // element. To avoid accessing an invalidated iterator, we cache `next`
+        // before invoking timeout_cb().
+        const auto next = std::next(it);
+
+        if (filter_fun(*it)) {
+            auto handler = it->shared_from_this();
+            if (_response_handlers.contains(it->id())) {
+                it->timeout_cb();
+            }
+            if (it->use_count() > 1) {
+                it->ensure_destroy_promise();
+                futures.push_back(_write_handler_destroy_promises[it->_destroy_promise_index].get_future());
+            }
         }
-        ++it;
+        it = next;
         if (need_preempt() && it != _cancellable_write_handlers_list->end()) {
+            // Save the iterator position. If the handler is destroyed during yield(),
+            // the iterator will be updated to point to the next item in the list.
+            //
+            // Handler destruction triggers sending a response to the client.
+            // To avoid delaying that, we don’t hold a strong reference here; instead,
+            // iterator_guard handles safe iterator updates while allowing prompt
+            // handler destruction and client response.
             cancellable_write_handlers_list::iterator_guard ig{*_cancellable_write_handlers_list, it};
-            seastar::thread::yield();
+            co_await maybe_yield();
         }
     }
+    co_await when_all_succeed(std::move(futures));
 }
 
 void storage_proxy::on_down(const gms::inet_address& endpoint, locator::host_id id) {
-    // FIXME: make gossiper notifictaions to pass host ids
-    return cancel_write_handlers([id] (const abstract_write_response_handler& handler) {
+    cancel_write_handlers([id] (const abstract_write_response_handler& handler) {
         const auto& targets = handler.get_targets();
         return std::ranges::find(targets, id) != targets.end();
-    });
+    }).get();
 };
 
 future<> storage_proxy::drain_on_shutdown() {
-    //NOTE: the thread is spawned here because there are delicate lifetime issues to consider
-    // and writing them down with plain futures is error-prone.
-    return async([this] {
-        cancel_all_write_response_handlers().get();
-        _hints_resource_manager.stop().get();
-    });
+    co_await cancel_all_write_response_handlers();
+    co_await _hints_resource_manager.stop();
 }
 
 future<> storage_proxy::abort_view_writes() {
-    return async([this] {
-        cancel_write_handlers([] (const abstract_write_response_handler& handler) { return handler.is_view(); });
+    return cancel_write_handlers([] (const abstract_write_response_handler& handler) { 
+        return handler.is_view();
     });
 }
 
 future<> storage_proxy::abort_batch_writes() {
-    return async([this] {
-        cancel_write_handlers([] (const abstract_write_response_handler& handler) { return handler.is_batch(); });
+    return cancel_write_handlers([] (const abstract_write_response_handler& handler) { 
+        return handler.is_batch();
     });
 }
 
 future<>
 storage_proxy::stop() {
-    return make_ready_future<>();
+    co_await utils::get_local_injector().inject("storage_proxy::stop", utils::wait_for_message(5min));
 }
 
 locator::token_metadata_ptr storage_proxy::get_token_metadata_ptr() const noexcept {
@@ -7208,6 +7262,9 @@ future<> storage_proxy::cancel_all_write_response_handlers() {
         if (!_response_handlers.empty()) {
             co_await maybe_yield();
         }
+    }
+    while (!_write_handler_destroy_promises.empty()) {
+        co_await _write_handler_destroy_promises.front().get_future();
     }
 }
 }
