@@ -623,6 +623,15 @@ future<> take_snapshot(cql_test_env& e, sstring ks_name = "ks", sstring cf_name 
     }
 }
 
+future<std::set<sstring>> collect_files(fs::path path) {
+    std::set<sstring> ret;
+    directory_lister lister(path, lister::dir_entry_types::of<directory_entry_type::regular>());
+    while (auto de = co_await lister.get()) {
+        ret.insert(de->name);
+    }
+    co_return ret;
+}
+
 static future<> snapshot_works(const std::string& table_name) {
     return do_with_some_data({"cf"}, [table_name] (cql_test_env& e) {
         take_snapshot(e, "ks", table_name).get();
