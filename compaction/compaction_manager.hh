@@ -160,6 +160,7 @@ private:
     std::optional<utils::observer<uint32_t>> _throughput_option_observer;
     serialized_action _update_compaction_static_shares_action;
     utils::observer<float> _compaction_static_shares_observer;
+    utils::observer<float> _compaction_max_shares_observer;
     uint64_t _validation_errors = 0;
 
     class strategy_control;
