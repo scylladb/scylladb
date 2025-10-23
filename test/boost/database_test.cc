@@ -1465,18 +1465,9 @@ SEASTAR_TEST_CASE(snapshot_with_quarantine_works) {
 
         auto& cf = db.local().find_column_family("ks", "cf");
 
+        auto in_snap_dir = co_await collect_files(table_dir(cf) / sstables::snapshots_dir / "test");
         // all files were copied and manifest was generated
-        co_await lister::scan_dir((table_dir(cf) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected] (fs::path parent_dir, directory_entry de) {
-            testlog.debug("Found in snapshots: {}", de.name);
-            expected.erase(de.name);
-            return make_ready_future<>();
-        });
-
-        if (!expected.empty()) {
-            testlog.error("Not in snapshots: {}", expected);
-        }
-
-        BOOST_REQUIRE(expected.empty());
+        BOOST_REQUIRE(std::includes(in_snap_dir.begin(), in_snap_dir.end(), expected.begin(), expected.end()));
     });
 }
 
