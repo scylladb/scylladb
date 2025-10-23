@@ -719,6 +719,12 @@ future<> compaction_manager::update_static_shares(float static_shares) {
     return _compaction_controller.update_static_shares(static_shares);
 }
 
+future<> compaction_manager::update_max_shares(float max_shares) {
+    cmlog.info("Updating max shares to {}", max_shares);
+    _compaction_controller.update_max_shares(max_shares);
+    return make_ready_future();
+}
+
 compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
     : _cm(cm)
     , _table(&t)
@@ -1025,7 +1031,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
             return compaction_controller::normalization_factor;
         }
         return b;
-    }, 0.0f))
+    }, _cfg.max_shares.get()))
     , _backlog_manager(_compaction_controller)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
