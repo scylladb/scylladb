@@ -8,9 +8,7 @@
 
 #pragma once
 
-#include "dht/decorated_key.hh"
-#include "keys/keys.hh"
-#include "seastarx.hh"
+#include "primary_key.hh"
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
@@ -26,11 +24,6 @@ class inet_address;
 }
 
 namespace vector_search {
-
-struct primary_key {
-    dht::decorated_key partition;
-    clustering_key_prefix clustering;
-};
 
 struct ann_result {
     primary_key pk;
