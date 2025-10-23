@@ -14,6 +14,7 @@ See :doc:`OS Support by Platform and Version </getting-started/os-support/>`.
 
 Install ScyllaDB with Web Installer
 ---------------------------------------
+
 To install ScyllaDB with Web Installer, run:
 
 .. code:: console
@@ -27,7 +28,13 @@ You can run the command with the ``-h`` or ``--help`` flag to print information 
 Installing a Non-default Version
 ---------------------------------------
 
-You can install a version other than the default.
+You can install a version other than the default. To get the list of supported
+release versions, run:
+
+.. code:: console
+  
+  curl -sSf get.scylladb.com/server | sudo bash -s -- --list-active-releases
+
 
 Versions 2025.1 and Later
 ==============================
