@@ -10,6 +10,7 @@
 
 #include <vector>
 #include <seastar/core/sharded.hh>
+#include "dht/i_partitioner_fwd.hh"
 #include "schema/schema_fwd.hh"
 #include "sstables/shared_sstable.hh"
 #include "tasks/task_manager.hh"
@@ -129,7 +130,7 @@ public:
      * Download new SSTables not currently tracked by the system from object store
      */
     future<tasks::task_id> download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
+            sstring prefix, std::vector<std::pair<sstring, dht::token_range>> sstables,
             sstring endpoint, sstring bucket, stream_scope scope);
 
     class download_task_impl;

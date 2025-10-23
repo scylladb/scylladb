@@ -805,13 +805,19 @@ future<> sstables_loader::stop() {
 }
 
 future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, sstring cf_name,
-            sstring prefix, std::vector<sstring> sstables,
+            sstring prefix, std::vector<std::pair<sstring, dht::token_range>> sstables,
             sstring endpoint, sstring bucket, stream_scope scope) {
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
     llog.info("Restore sstables from {}({}) to {}", endpoint, prefix, ks_name);
 
-    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(prefix), std::move(sstables), scope);
+    // Extract just the sstable names from the pairs, preserve the current behavior
+    // of the download task until we advance with the tablet aware restore feature.
+    auto sstable_names = sstables
+        | std::views::transform([] (const auto& s) { return s.first; })
+        | std::ranges::to<std::vector>();
+
+    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(prefix), std::move(sstable_names), scope);
     co_return task->id();
 }
