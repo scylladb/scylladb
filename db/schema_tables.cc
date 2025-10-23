@@ -9,6 +9,7 @@
 
 #include "db/schema_tables.hh"
 
+#include "db/view/view_building_task_mutation_builder.hh"
 #include "service/migration_manager.hh"
 #include "service/storage_proxy.hh"
 #include "gms/feature_service.hh"
@@ -1878,7 +1879,8 @@ static void make_update_indices_mutations(
         utils::chunked_vector<mutation>& mutations)
 {
     mutation indices_mutation(indexes(), partition_key::from_singular(*indexes(), old_table->ks_name()));
-    std::vector<mutation> view_building_muts;
+    view::view_building_task_mutation_builder vb_mut_builder(timestamp);
+    std::vector<mutation> view_status_muts;
 
     auto diff = difference(old_table->all_indices(), new_table->all_indices());
     auto& db = sp.local_db();
@@ -1913,8 +1915,7 @@ static void make_update_indices_mutations(
                     }
 
                     for (auto& [id, _]: replica_tasks.view_tasks.at(view->id())) {
-                        auto mut = sys_ks.make_remove_view_building_task_mutation(timestamp, id).get();
-                        view_building_muts.push_back(std::move(mut));
+                        vb_mut_builder.del_task(id);
                         slogger.trace("Aborting view building task with ID: {} because the index is being dropped", id);
                     }
                 }
@@ -1922,7 +1923,7 @@ static void make_update_indices_mutations(
 
             // Remove entries from `system.view_build_status_v2`
             auto build_status_mut = sys_ks.make_remove_view_build_status_mutation(timestamp, {view->ks_name(), view->cf_name()}).get();
-            view_building_muts.push_back(std::move(build_status_mut));
+            view_status_muts.push_back(std::move(build_status_mut));
         }
     }
 
@@ -1965,14 +1966,13 @@ static void make_update_indices_mutations(
             for (const auto& tid: tablet_map.tablet_ids()) {
                 auto last_token = tablet_map.get_last_token(tid);
                 for (auto& replica: tablet_map.get_tablet_info(tid).replicas) {
-                    auto id = utils::UUID_gen::get_time_UUID();
+                    auto id = vb_mut_builder.new_id();
                     view::view_building_task task {
                         id, view::view_building_task::task_type::build_range, view::view_building_task::task_state::idle,
                         new_table->id(), view->id(), replica, last_token
                     };
 
-                    auto task_mut = sys_ks.make_view_building_task_mutation(timestamp, task).get();
-                    view_building_muts.push_back(std::move(task_mut));
+                    vb_mut_builder.set_task(task);
                     slogger.trace("Creating view building task: {} with ID: {} for replica: {}", task, id, replica);
                 }
             }
@@ -1982,7 +1982,8 @@ static void make_update_indices_mutations(
     }
 
     mutations.emplace_back(std::move(indices_mutation));
-    mutations.insert(mutations.end(), std::make_move_iterator(view_building_muts.begin()), std::make_move_iterator(view_building_muts.end()));
+    mutations.emplace_back(vb_mut_builder.build());
+    mutations.insert(mutations.end(), std::make_move_iterator(view_status_muts.begin()), std::make_move_iterator(view_status_muts.end()));
 }
 
 static void add_drop_column_to_mutations(schema_ptr table, const sstring& name, const schema::dropped_column& dc, api::timestamp_type timestamp, utils::chunked_vector<mutation>& mutations) {

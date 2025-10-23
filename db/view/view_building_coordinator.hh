@@ -97,10 +97,10 @@ private:
     std::set<locator::tablet_replica> get_replicas_with_tasks();
     std::vector<utils::UUID> select_tasks_for_replica(locator::tablet_replica replica);
 
-    future<utils::chunked_vector<mutation>> start_tasks(const service::group0_guard& guard, std::vector<utils::UUID> tasks);
+    mutation start_tasks(const service::group0_guard& guard, std::vector<utils::UUID> tasks);
     void attach_to_started_tasks(const locator::tablet_replica& replica, std::vector<utils::UUID> tasks);
     future<std::optional<remote_work_results>> work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks);
-    future<utils::chunked_vector<mutation>> update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, remote_work_results results);
+    std::optional<mutation> update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, remote_work_results results);
 };
 
 void abort_view_building_tasks(const db::view::view_building_state_machine& vb_sm,
