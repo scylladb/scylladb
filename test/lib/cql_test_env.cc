@@ -644,6 +644,7 @@ private:
                     .maintenance_sched_group = compaction::compaction_manager::scheduling_group{dbcfg.streaming_scheduling_group},
                     .available_memory = dbcfg.available_memory,
                     .static_shares = cfg->compaction_static_shares,
+                    .max_shares = utils::updateable_value<float>(0),
                     .throughput_mb_per_sec = cfg->compaction_throughput_mb_per_sec,
                     .flush_all_tables_before_major = cfg->compaction_flush_all_tables_before_major_seconds() * 1s,
                 };
