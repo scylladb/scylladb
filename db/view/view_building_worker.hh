@@ -150,6 +150,7 @@ private:
     view_update_generator& _vug;
     netw::messaging_service& _messaging;
     view_building_state_machine& _vb_state_machine;
+    condition_variable _cv;
     abort_source _as;
     named_gate _gate;
 
@@ -169,6 +170,7 @@ public:
             view_building_state_machine& vbsm);
     future<> init();
 
+    void trigger_state_update();
     future<> register_staging_sstable_tasks(std::vector<sstables::shared_sstable> ssts, table_id table_id);
 
     future<> drain();

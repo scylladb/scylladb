@@ -895,6 +895,10 @@ future<> storage_service::view_building_transition() {
     co_await view_building_state_load();
 
     _view_building_state_machine.event.broadcast();
+    if (_view_building_worker.local_is_initialized()) {
+        // View building worker might be already stopped.
+        _view_building_worker.local().trigger_state_update();
+    }
 }
 
 future<> storage_service::reload_raft_topology_state(service::raft_group0_client& group0_client) {
