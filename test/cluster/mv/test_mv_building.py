@@ -15,16 +15,26 @@ from test.cluster.util import new_test_keyspace, reconnect_driver
 
 logger = logging.getLogger(__name__)
 
-# This test makes sure that view building is done mainly in the streaming scheduling group
-# and not the gossip scheduling group. We do that by measuring the time each group was
-# busy during the view building process and confirming that the gossip group was busy
-# much less than the streaming group.
-# Reproduces https://github.com/scylladb/scylladb/issues/21232
+# This test makes sure that view building is done mainly in the streaming
+# scheduling group. We check that by grepping all relevant logs in TRACE mode
+# and verifying that they come from the streaming scheduling group.
+#
+# For more context, see: https://github.com/scylladb/scylladb/issues/21232.
+# This test reproduces the issue in non-tablet mode.
 @pytest.mark.asyncio
 @skip_mode('debug', 'the test needs to do some work which takes too much time in debug mode')
 async def test_view_building_scheduling_group(manager: ManagerClient):
-    server = await manager.server_add()
+    # Note: The view building coordinator works in the gossiping scheduling group,
+    #       and we intentionally omit it here.
+    # Note: We include "view" for keyspaces that don't use the view building coordinator
+    #       and will follow the legacy path instead.
+    loggers = ["view_building_worker", "view_consumer", "view_update_generator", "view"]
+    # Flatten the list of lists.
+    cmdline = sum([["--logger-log-level", f"{logger}=trace"] for logger in loggers], [])
+
+    server = await manager.server_add(cmdline=cmdline)
     cql = manager.get_cql()
+
     async with new_test_keyspace(manager, "WITH replication = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1}") as ks:
         await cql.run_async(f"CREATE TABLE {ks}.tab (p int, c int, PRIMARY KEY (p, c))")
 
@@ -34,21 +44,30 @@ async def test_view_building_scheduling_group(manager: ManagerClient):
             batch = "BEGIN UNLOGGED BATCH\n" + "\n".join(inserts) + "\nAPPLY BATCH\n"
             await manager.cql.run_async(batch)
 
-        metrics_before = await manager.metrics.query(server.ip_addr)
-        ms_gossip_before = metrics_before.get('scylla_scheduler_runtime_ms', {'group': 'gossip'})
-        ms_streaming_before = metrics_before.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
+        log = await manager.server_open_log(server.server_id)
+        mark = await log.mark()
 
         await cql.run_async(f"CREATE MATERIALIZED VIEW {ks}.mv AS SELECT p, c FROM {ks}.tab WHERE p IS NOT NULL AND c IS NOT NULL PRIMARY KEY (c, p)")
         await wait_for_view(cql, 'mv', 1)
 
-        metrics_after = await manager.metrics.query(server.ip_addr)
-        ms_gossip_after = metrics_after.get('scylla_scheduler_runtime_ms', {'group': 'gossip'})
-        ms_streaming_after = metrics_after.get('scylla_scheduler_runtime_ms', {'group': 'streaming'})
-        ms_streaming = ms_streaming_after - ms_streaming_before
-        ms_statement = ms_gossip_after - ms_gossip_before
-        ratio = ms_statement / ms_streaming
-        print(f"ms_streaming: {ms_streaming}, ms_statement: {ms_statement}, ratio: {ratio}")
-        assert ratio < 0.1
+        logger_alternative = "|".join(loggers)
+        pattern = rf"\[shard [0-9]+:(.+)\] ({logger_alternative}) - "
+
+        results = await log.grep(pattern, from_mark=mark)
+        # Sanity check. If there are no logs, something's wrong.
+        assert len(results) > 0
+
+        # In case of non-tablet keyspaces, we won't use the view building coordinator.
+        # Instead, view updates will follow the legacy path. Along the way, we'll observe
+        # this message, which will be printed using another scheduling group, so let's
+        # filter it out.
+        predicate = lambda result: f"Building view {ks}.mv, starting at token" not in result[0]
+        results = list(filter(predicate, results))
+
+        # Take the first parenthesized match for each result, i.e. the scheduling group.
+        sched_groups = [matches[1] for _, matches in results]
+
+        assert all(sched_group == "strm" for sched_group in sched_groups)
 
 # A sanity check test ensures that starting and shutting down Scylla when view building is
 # disabled is conducted properly and we don't run into any issues.
