@@ -14,6 +14,12 @@ See :doc:`OS Support by Platform and Version </getting-started/os-support/>`.
 
 Install ScyllaDB with Web Installer
 ---------------------------------------
+To get the list of supported release versions:
+
+.. code:: console
+
+    curl -sSf get.scylladb.com/server | sudo bash -s -- --list-active-releases
+
 To install ScyllaDB with Web Installer, run:
 
 .. code:: console
