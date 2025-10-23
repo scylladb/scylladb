@@ -154,6 +154,7 @@ public:
         std::optional<service_level_options> find_cached_effective_service_level(const sstring& role_name);
 
         future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
+        scheduling_group get_user_cached_scheduling_group(const std::optional<auth::authenticated_user>& usr);
 
         template <typename Func, typename Ret = std::invoke_result_t<Func>>
             requires std::invocable<Func>
@@ -313,6 +314,7 @@ public:
      * @return the default service level scheduling group (see service_level_controller::initialize).
      */
     scheduling_group get_default_scheduling_group();
+    
     /**
      * Get the scheduling group for a specific service level.
      * @param service_level_name - the service level which it's scheduling group
@@ -321,12 +323,21 @@ public:
      * get_scheduling_group("default")
      */
     scheduling_group get_scheduling_group(sstring service_level_name);
+    
     /**
      * Get the scheduling group of a specific user
      * @param user - the user for determining the service level
      * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
      */
     future<scheduling_group> get_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
+    
+    /**
+     * Get the scheduling group of a specific user for the service level cache
+     * @param user - the user for determining the service level
+     * @return if the user is authenticated the user's scheduling group. otherwise get_scheduling_group("default")
+     */
+    scheduling_group get_cached_user_scheduling_group(const std::optional<auth::authenticated_user>& usr);
+    
     /**
      * @return the name of the currently active service level if such exists or an empty
      * optional if no active service level.

@@ -12,24 +12,34 @@ from .rest_api import get_request, post_request
 from .util import new_session, unique_name
 import time
 
+
 # All tests in this file check the Scylla-only service levels feature,
 # so let's mark them all scylla_only with an autouse fixture:
 @pytest.fixture(scope="function", autouse=True)
 def all_tests_are_scylla_only(scylla_only):
     pass
 
+
 def get_shard_count(cql):
     return cql.execute("SELECT shard_count FROM system.topology").one().shard_count
 
+
+def is_v2(cql):
+    return cql.execute("SELECT upgrade_state FROM system.topology").one().upgrade_state == 'done'
+
+
 def read_barrier(cql):
     cql.execute("DROP TABLE IF EXISTS nosuchkeyspace.nosuchtable")
+
 
 def count_opened_connections(cql, retry_unauthenticated=True):
     response = get_request(cql, "service_levels/count_connections")
     return response
 
+
 def switch_tenants(cql):
     return post_request(cql, "service_levels/switch_tenants")
+
 
 def count_opened_connections_from_table(cql):
     connections = cql.execute("SELECT username, scheduling_group FROM system.clients WHERE client_type='cql' ALLOW FILTERING")
@@ -48,6 +58,7 @@ def count_opened_connections_from_table(cql):
     
     return result
 
+
 def wait_for_clients(cql, username, clients_num, wait_s = 1, timeout_s = 30):
     start_time = time.time()
     while time.time() - start_time < timeout_s:
@@ -59,6 +70,7 @@ def wait_for_clients(cql, username, clients_num, wait_s = 1, timeout_s = 30):
 
     raise RuntimeError(f"Awaiting for {clients_num} clients timed out.")
 
+
 def wait_until_all_connections_authenticated(cql, wait_s = 1, timeout_s = 30):
     start_time = time.time()
     while time.time() - start_time < timeout_s:
@@ -69,6 +81,7 @@ def wait_until_all_connections_authenticated(cql, wait_s = 1, timeout_s = 30):
             time.sleep(wait_s)
     
     raise RuntimeError(f"Awaiting for connections authentication timed out.")
+
 
 # The driver creates 1 connection per shard plus 1 control connection.
 # This function validates that all connections execept the control one use correct scheduling group.
@@ -82,6 +95,39 @@ def verify_scheduling_group_assignment(cql, user, target_scheduling_group, shard
     
     assert len(shards_with_correct_sg) == shard_count, (f"Not all user '{user}' connections are working under target scheduling group '{target_scheduling_group}'."
                                                         f"Shards with correct scehduling group: {shards_with_correct_sg}, shard")
+    
+def create_unique_user_service_levels_and_get_shards(cql):
+    user = f"test_user_{unique_name()}"
+    sl1 = f"sl1_{unique_name()}"
+    sl2 = f"sl2_{unique_name()}"
+    shard_count = get_shard_count(cql)
+
+    cql.execute(f"CREATE ROLE {user} WITH login = true AND password='{user}' AND superuser = true")
+    cql.execute(f"CREATE SERVICE LEVEL {sl1} WITH shares = 100")
+    cql.execute(f"CREATE SERVICE LEVEL {sl2} WITH shares = 200")
+    cql.execute(f"ATTACH SERVICE LEVEL {sl1} TO {user}")
+    read_barrier(cql)
+
+    return user, sl1, sl2, shard_count
+
+#this will wait for all clients to authenticate and then will check for initial serveice level
+# then it will attach a new service level to the user  
+def wait_for_clients_and_attach_service_level(cql, user, initial_sl, new_sl, shard_count):
+    wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
+    wait_until_all_connections_authenticated(cql)
+    verify_scheduling_group_assignment(cql, user, initial_sl, shard_count)
+
+    cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
+    cql.execute(f"ATTACH SERVICE LEVEL {new_sl} TO {user}")
+    read_barrier(cql)
+
+#this function will detach all service levels from active user and drop all roles for user
+def finalize_service_level_test(cql, user, service_levels):
+    cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
+    cql.execute(f"DROP ROLE {user}")
+    for sl in service_levels:
+        cql.execute(f"DROP SERVICE LEVEL {sl}")
+
 
 # Test if `/service_levels/count_connections` prints counted CQL connections
 # per scheduling group per user.
@@ -107,47 +153,51 @@ def test_count_opened_cql_connections(cql):
             table_response = count_opened_connections_from_table(cql)
             assert api_response == table_response
     finally:
-        cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
-        cql.execute(f"DROP ROLE {user}")
-        cql.execute(f"DROP SERVICE LEVEL {sl}")
+        finalize_service_level_test(cql, user, [sl])
 
-# Test if `/service_levels/switch_tenants` updates scheduling group 
+
+# Test if the service level is changed for all existing connections
+# This works with non-raft clusters 
+# and so it has to use `/service_levels/switch_tenants` to updates scheduling group 
 # of CQL connections without restarting them.
-# 
 # This test creates a `test_user` and 2 service levels `sl1` and `sl2`.
 # Firstly the user is assigned to `sl1` and his connections is created.
 # Then the test changes user's service level to `sl2` and 
 # `/service_levels/switch_tenants` endpoint is called.
-def test_switch_tenants(cql):
-    user = f"test_user_{unique_name()}"
-    sl1 = f"sl1_{unique_name()}"
-    sl2 = f"sl2_{unique_name()}"
-    shard_count = get_shard_count(cql)
+def test_appending_new_service_level_no_raft(cql):
+    if is_v2(cql):
+        pytest.skip("Test is not applicable for raft clusters.")
 
-    cql.execute(f"CREATE ROLE {user} WITH login = true AND password='{user}' AND superuser = true")
-    cql.execute(f"CREATE SERVICE LEVEL {sl1} WITH shares = 100")
-    cql.execute(f"CREATE SERVICE LEVEL {sl2} WITH shares = 200")
-    cql.execute(f"ATTACH SERVICE LEVEL {sl1} TO {user}")
-    read_barrier(cql)
+    user, sl1, sl2, shard_count = create_unique_user_service_levels_and_get_shards(cql)
 
     try:
         with new_session(cql, user) as user_session:
-            wait_for_clients(cql, user, 3) # 3 from smp=2 + control connection
-            wait_until_all_connections_authenticated(cql)
-            verify_scheduling_group_assignment(cql, user, sl1, shard_count)
-
-            cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
-            cql.execute(f"ATTACH SERVICE LEVEL {sl2} TO {user}")
-            read_barrier(cql)
-
+            wait_for_clients_and_attach_service_level(cql, user, sl1, sl2, shard_count)
             switch_tenants(cql)
-            # Switching tenants may be blocked if a connection is waiting for a request (see 'generic_server::connection::process_until_tenant_switch()').
-            # Execute enough cheap statements, so that connection on each shard will process at one statement and update its tenant.
+            # Switching tenants may be blocked if a connection is waiting for a 
+            # request (see 'generic_server::connection::process_until_tenant_switch()').
+            # Execute enough cheap statements, so that connection on each 
+            # shard will process at one statement and update its tenant.
             for _ in range(100):
                 read_barrier(user_session)
             verify_scheduling_group_assignment(cql, user, sl2, shard_count)
     finally:
-        cql.execute(f"DETACH SERVICE LEVEL FROM {user}")
-        cql.execute(f"DROP ROLE {user}")
-        cql.execute(f"DROP SERVICE LEVEL {sl1}")
-        cql.execute(f"DROP SERVICE LEVEL {sl2}")
+        finalize_service_level_test(cql, user, [sl1, sl2])
+
+
+# Test if the service level is changed for all excisting connections 
+# while using the cache from group0 this test will only work with raft clusters 
+# firt we will create a new service level and attach it then query it to see 
+# taht all connections are updated immidiatly 
+def test_appending_new_service_level_no_raft(cql):
+    if not is_v2(cql):
+        pytest.skip("Test is not applicable for non-raft clusters.")
+
+    user, sl1, sl2, shard_count = create_unique_user_service_levels_and_get_shards(cql)
+
+    try:
+        with new_session(cql, user) as user_session:
+            wait_for_clients_and_attach_service_level(cql, user, sl1, sl2, shard_count)
+            verify_scheduling_group_assignment(cql, user, sl2, shard_count)
+    finally:
+        finalize_service_level_test(cql, user, [sl1, sl2])
