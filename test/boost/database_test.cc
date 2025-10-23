@@ -636,29 +636,21 @@ static future<> snapshot_works(const std::string& table_name) {
     return do_with_some_data({"cf"}, [table_name] (cql_test_env& e) {
         take_snapshot(e, "ks", table_name).get();
 
-        std::set<sstring> expected = {
-            "manifest.json",
-            "schema.cql"
-        };
-
         auto& cf = e.local_db().find_column_family("ks", table_name);
         auto table_directory = table_dir(cf);
         auto snapshot_dir = table_directory / sstables::snapshots_dir / "test";
 
-        lister::scan_dir(table_directory, lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected](fs::path, directory_entry de) {
-            expected.insert(de.name);
-            return make_ready_future<>();
-        }).get();
+        auto in_table_dir = collect_files(table_directory).get();
         // snapshot triggered a flush and wrote the data down.
-        BOOST_REQUIRE_GE(expected.size(), 11);
+        BOOST_REQUIRE_GE(in_table_dir.size(), 9);
 
+        auto in_snapshot_dir = collect_files(snapshot_dir).get();
+
+        in_table_dir.insert("manifest.json");
+        in_table_dir.insert("schema.cql");
         // all files were copied and manifest was generated
-        lister::scan_dir(snapshot_dir, lister::dir_entry_types::of<directory_entry_type::regular>(), [&expected](fs::path, directory_entry de) {
-            expected.erase(de.name);
-            return make_ready_future<>();
-        }).get();
+        BOOST_REQUIRE_EQUAL(in_table_dir, in_snapshot_dir);
 
-        BOOST_REQUIRE_EQUAL(expected.size(), 0);
         return make_ready_future<>();
     }, true);
 }
