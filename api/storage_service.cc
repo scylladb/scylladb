@@ -504,6 +504,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto bucket = req->get_query_param("bucket");
         auto prefix = req->get_query_param("prefix");
         auto scope = parse_stream_scope(req->get_query_param("scope"));
+        auto primary_replica_only = validate_bool_x(req->get_query_param("primary_replica_only"), false);
 
         rjson::chunked_content content = co_await util::read_entire_stream(*req->content_stream);
         rjson::value parsed = rjson::parse(std::move(content));
@@ -513,7 +514,7 @@ void set_sstables_loader(http_context& ctx, routes& r, sharded<sstables_loader>&
         auto sstables = parsed.GetArray() |
             std::views::transform([] (const auto& s) { return sstring(rjson::to_string_view(s)); }) |
             std::ranges::to<std::vector>();
-        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope);
+        auto task_id = co_await sst_loader.local().download_new_sstables(keyspace, table, prefix, std::move(sstables), endpoint, bucket, scope, primary_replica_only);
         co_return json::json_return_type(fmt::to_string(task_id));
     });
 
@@ -1386,7 +1387,7 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
         auto cf = api::req_param<sstring>(*req, "cf", {}).value;
 
         // The size of this vector is bound by ks::cf. I.e. it is as most Nks + Ncf long
-        // which is not small, but not huge either. 
+        // which is not small, but not huge either.
         using table_sstables_list = std::vector<ss::table_sstables>;
 
         return do_with(table_sstables_list{}, [ks, cf, &ctx](table_sstables_list& dst) {
@@ -1399,7 +1400,7 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
                         dst.emplace_back(std::move(t));
                         continue;
                     }
-                    auto& ssd = i->sstables; 
+                    auto& ssd = i->sstables;
                     for (auto&& sd : t.sstables._elements) {
                         auto j = std::find_if(ssd._elements.begin(), ssd._elements.end(), [&sd](const ss::sstable& s) {
                             return s.generation() == sd.generation();
@@ -1470,7 +1471,7 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
 
                             for (auto& p : map) {
                                 struct {
-                                    const sstring& key; 
+                                    const sstring& key;
                                     ss::sstable& info;
                                     void operator()(const std::map<sstring, sstring>& map) const {
                                         ss::named_maps nm;
@@ -1487,7 +1488,7 @@ rest_sstable_info(http_context& ctx, std::unique_ptr<http::request> req) {
                                         ss::mapper e;
                                         e.key = key;
                                         e.value = value;
-                                        info.properties.push(std::move(e));                                        
+                                        info.properties.push(std::move(e));
                                     }
                                 } v{p.first, info};
 

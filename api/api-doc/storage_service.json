@@ -942,6 +942,14 @@
                           "type":"string",
                           "paramType":"query",
                           "enum": ["all", "dc", "rack", "node"]
+                      },
+                      {
+                         "name":"primary_replica_only",
+                         "description":"Load the sstables and stream to only local primary replica node.",
+                         "required":false,
+                         "allowMultiple":false,
+                         "type":"boolean",
+                         "paramType":"query"
                       }
                   ]
               }

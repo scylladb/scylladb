@@ -128,8 +128,8 @@ public:
 
 } // anonymous namespace
 
-using primary_replica_only = bool_class<struct primary_replica_only_tag>;
 using unlink_sstables = bool_class<struct unlink_sstables_tag>;
+using primary_replica_only = bool_class<struct primary_replica_only_tag>;
 
 class sstable_streamer {
 protected:
@@ -154,9 +154,6 @@ public:
             , _unlink_sstables(unlink)
             , _stream_scope(scope)
     {
-        if (_primary_replica_only && _stream_scope != stream_scope::all) {
-            throw std::runtime_error("Scoped streaming of primary replica only is not supported yet");
-        }
         // By sorting SSTables by their primary key, we allow SSTable runs to be
         // incrementally streamed.
         // Overlapping run fragments can have their content deduplicated, reducing
@@ -211,7 +208,7 @@ private:
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
-    return get_all_endpoints(token) | std::views::filter([&topo = _erm->get_topology(), scope = _stream_scope] (const auto& ep) {
+    auto filtered_endpoints = get_all_endpoints(token) | std::views::filter([&topo = _erm->get_topology(), scope = _stream_scope] (const auto& ep) {
         switch (scope) {
         case stream_scope::all:
             return true;
@@ -223,6 +220,11 @@ host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& tok
             return topo.is_me(ep);
         }
     }) | std::ranges::to<host_id_vector_replica_set>();
+
+    if (_primary_replica_only && !filtered_endpoints.empty()) {
+        filtered_endpoints.resize(1);
+    }
+    return filtered_endpoints;
 }
 
 host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token& token) const {
@@ -237,7 +239,6 @@ host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token&
 
 host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token) const {
     auto current_targets = _erm->get_natural_replicas(token);
-    current_targets.resize(1);
     return current_targets;
 }
 
@@ -557,15 +558,16 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
 }
 
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
-        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary, bool unlink, stream_scope scope,
+        ::table_id table_id, std::vector<sstables::shared_sstable> sstables, primary_replica_only primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {
+
     // streamer guarantees topology stability, for correctness, by holding effective_replication_map
     // throughout its lifetime.
     auto erm = co_await await_topology_quiesced_and_get_erm(table_id);
 
     auto streamer = make_sstable_streamer(_db.local().find_column_family(table_id).uses_tablets(),
                                           _messaging, _db.local(), table_id, std::move(erm), std::move(sstables),
-                                          primary_replica_only(primary), unlink_sstables(unlink), scope);
+                                          primary, unlink_sstables(unlink), scope);
 
     co_await streamer->stream(progress);
 }
@@ -574,7 +576,7 @@ future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
 // All the global operations are going to happen here, and just the reloading happens
 // in there.
 future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
-    bool load_and_stream, bool primary_replica_only, bool skip_cleanup, bool skip_reshape, stream_scope scope) {
+    bool load_and_stream, bool primary, bool skip_cleanup, bool skip_reshape, stream_scope scope) {
     if (_loading_new_sstables) {
         throw std::runtime_error("Already loading SSTables. Try again later");
     } else {
@@ -599,7 +601,7 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
     }
 
     llog.info("Loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, skip_cleanup={}",
-            ks_name, cf_name, load_and_stream_desc, primary_replica_only, skip_cleanup);
+            ks_name, cf_name, load_and_stream_desc, primary, skip_cleanup);
     try {
         if (load_and_stream) {
             ::table_id table_id;
@@ -610,20 +612,20 @@ future<> sstables_loader::load_new_sstables(sstring ks_name, sstring cf_name,
                 .load_bloom_filter = false,
             };
             std::tie(table_id, sstables_on_shards) = co_await replica::distributed_loader::get_sstables_from_upload_dir(_db, ks_name, cf_name, cfg);
-            co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary_replica_only, scope] (sstables_loader& loader) mutable -> future<> {
-                co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only, true, scope, {});
+            co_await container().invoke_on_all([&sstables_on_shards, ks_name, cf_name, table_id, primary, scope] (sstables_loader& loader) mutable -> future<> {
+                co_await loader.load_and_stream(ks_name, cf_name, table_id, std::move(sstables_on_shards[this_shard_id()]), primary_replica_only(primary), true, scope, {});
             });
         } else {
             co_await replica::distributed_loader::process_upload_dir(_db, _view_builder, _view_building_worker, ks_name, cf_name, skip_cleanup, skip_reshape);
         }
     } catch (...) {
         llog.warn("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=failed: {}",
-                ks_name, cf_name, load_and_stream, primary_replica_only, std::current_exception());
+                ks_name, cf_name, load_and_stream, primary, std::current_exception());
         _loading_new_sstables = false;
         throw;
     }
     llog.info("Done loading new SSTables for keyspace={}, table={}, load_and_stream={}, primary_replica_only={}, status=succeeded",
-            ks_name, cf_name, load_and_stream, primary_replica_only);
+            ks_name, cf_name, load_and_stream, primary);
     _loading_new_sstables = false;
     co_return;
 }
@@ -637,6 +639,7 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstring _prefix;
     sstables_loader::stream_scope _scope;
     std::vector<sstring> _sstables;
+    const primary_replica_only _primary_replica;
     struct progress_holder {
         // Wrap stream_progress in a smart pointer to enable polymorphism.
         // This allows derived progress types to be passed down for per-tablet
@@ -660,8 +663,8 @@ protected:
 
 public:
     download_task_impl(tasks::task_manager::module_ptr module, sharded<sstables_loader>& loader,
-            sstring endpoint, sstring bucket,
-            sstring ks, sstring cf, sstring prefix, std::vector<sstring> sstables, sstables_loader::stream_scope scope) noexcept
+            sstring endpoint, sstring bucket, sstring ks, sstring cf, sstring prefix, std::vector<sstring> sstables,
+            sstables_loader::stream_scope scope, primary_replica_only primary_replica) noexcept
         : tasks::task_manager::task::impl(module, tasks::task_id::create_random_id(), 0, "node", ks, "", "", tasks::task_id::create_null_id())
         , _loader(loader)
         , _endpoint(std::move(endpoint))
@@ -671,6 +674,7 @@ public:
         , _prefix(std::move(prefix))
         , _scope(scope)
         , _sstables(std::move(sstables))
+        , _primary_replica(primary_replica)
     {
         _status.progress_units = "batches";
     }
@@ -757,7 +761,7 @@ future<> sstables_loader::download_task_impl::run() {
         co_await _progress_per_shard.start();
         _progress_state = progress_state::initialized;
         co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
-            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), false, false, _scope,
+            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), _primary_replica, false, _scope,
                                             _progress_per_shard.local().progress);
         });
     } catch (...) {
@@ -806,12 +810,13 @@ future<> sstables_loader::stop() {
 
 future<tasks::task_id> sstables_loader::download_new_sstables(sstring ks_name, sstring cf_name,
             sstring prefix, std::vector<sstring> sstables,
-            sstring endpoint, sstring bucket, stream_scope scope) {
+            sstring endpoint, sstring bucket, stream_scope scope, bool primary_replica) {
     if (!_storage_manager.is_known_endpoint(endpoint)) {
         throw std::invalid_argument(format("endpoint {} not found", endpoint));
     }
     llog.info("Restore sstables from {}({}) to {}", endpoint, prefix, ks_name);
 
-    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name), std::move(prefix), std::move(sstables), scope);
+    auto task = co_await _task_manager_module->make_and_start_task<download_task_impl>({}, container(), std::move(endpoint), std::move(bucket), std::move(ks_name), std::move(cf_name),
+                                                                                       std::move(prefix), std::move(sstables), scope, primary_replica_only(primary_replica));
     co_return task->id();
 }
