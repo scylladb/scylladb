@@ -17,6 +17,7 @@
 #include <memory>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/metrics_api.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/net/api.hh>
 #include <seastar/http/function_handlers.hh>
 #include <seastar/http/httpd.hh>
@@ -545,9 +546,9 @@ SEASTAR_TEST_CASE(vector_store_client_ann_test_disabled) {
         auto schema = co_await create_test_table(env, "ks", "vs");
         auto& vs = env.local_qp().vector_store_client();
 
-        auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-        BOOST_REQUIRE(!keys);
-        BOOST_CHECK(std::holds_alternative<vector_store_client::disabled>(keys.error()));
+        auto ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+        BOOST_REQUIRE(!ann_results);
+        BOOST_CHECK(std::holds_alternative<vector_store_client::disabled>(ann_results.error()));
     });
 }
 
@@ -563,9 +564,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_addr_unavailable) {
 
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::addr_unavailable>(keys.error()));
+                auto ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::addr_unavailable>(ann_results.error()));
             },
             cfg);
 }
@@ -583,9 +584,9 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_unavailable) {
 
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(keys.error()));
+                auto ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_unavailable>(ann_results.error()));
             },
             cfg)
             .finally([&server] {
@@ -610,10 +611,10 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_service_aborted) {
 
                 vs.start_background_tasks();
 
-                auto keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset(milliseconds(10)));
+                auto ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset(milliseconds(10)));
 
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(keys.error()));
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::aborted>(ann_results.error()));
             },
             cfg)
             .finally([&server] {
@@ -636,63 +637,72 @@ SEASTAR_TEST_CASE(vector_store_client_test_ann_request) {
 
                 // server responds with 404 - client should return service_error
                 server->next_ann_response({status_type::not_found, "idx2 not found"});
-                auto keys = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, as.reset());
+                auto ann_results = co_await vs.ann("ks", "idx2", schema, std::vector<float>{0.3, 0.2, 0.1}, 1, as.reset());
                 BOOST_REQUIRE(!server->requests().empty());
                 BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.3,0.2,0.1],"limit":1})");
                 BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx2/ann");
-                BOOST_REQUIRE(!keys);
-                auto* err = std::get_if<vector_store_client::service_error>(&keys.error());
+                BOOST_REQUIRE(!ann_results);
+                auto* err = std::get_if<vector_store_client::service_error>(&ann_results.error());
                 BOOST_CHECK(err != nullptr);
                 BOOST_CHECK_EQUAL(err->status, status_type::not_found);
 
                 // missing primary_keys in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys1":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                 BOOST_REQUIRE(!server->requests().empty());
                 BOOST_REQUIRE_EQUAL(server->requests().back().body, R"({"vector":[0.1,0.2,0.3],"limit":2})");
                 BOOST_REQUIRE_EQUAL(server->requests().back().path, "/api/v1/indexes/ks/idx/ann");
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_results.error()));
 
                 // missing distances in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances1":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_results.error()));
 
                 // missing pk1 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk11":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_results.error()));
 
                 // missing ck1 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck11":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_results.error()));
 
                 // wrong size of pk2 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7],"ck1":[9,1],"ck2":[2,3]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_results.error()));
 
                 // wrong size of ck2 key in the reply - service should return format error
                 server->next_ann_response({status_type::ok, R"({"primary_keys":{"pk1":[5,6],"pk2":[7,8],"ck1":[9,1],"ck2":[2]},"distances":[0.1,0.2]})"});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(!keys);
-                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(keys.error()));
+                ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(!ann_results);
+                BOOST_CHECK(std::holds_alternative<vector_store_client::service_reply_format_error>(ann_results.error()));
 
                 // correct reply - service should return keys
                 server->next_ann_response({status_type::ok, CORRECT_RESPONSE_FOR_TEST_TABLE});
-                keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
-                BOOST_REQUIRE(keys);
-                BOOST_REQUIRE_EQUAL(keys->size(), 2);
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).partition.key().explode()), "[05, 07]");
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(0).clustering.explode()), "[09, 02]");
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).partition.key().explode()), "[06, 08]");
-                BOOST_CHECK_EQUAL(seastar::format("{}", keys->at(1).clustering.explode()), "[01, 03]");
+                ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                BOOST_REQUIRE(ann_results);
+                std::vector<vector_search::primary_key> keys;
+                std::vector<float> distances;
+                for (auto const& [key, distance] : ann_results.value()) {
+                    keys.push_back(key);
+                    distances.push_back(distance);
+                }
+                BOOST_REQUIRE_EQUAL(keys.size(), 2);
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(0).partition.key().explode()), "[05, 07]");
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(0).clustering.explode()), "[09, 02]");
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(1).partition.key().explode()), "[06, 08]");
+                BOOST_CHECK_EQUAL(seastar::format("{}", keys.at(1).clustering.explode()), "[01, 03]");
+                BOOST_REQUIRE_EQUAL(distances.size(), 2);
+                BOOST_CHECK_EQUAL(distances[0], 0.1f);
+                BOOST_CHECK_EQUAL(distances[1], 0.2f);
             },
             cfg)
             .finally([&server] {
@@ -817,18 +827,18 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_ips_high_availability) {
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns({{"good.authority.here", std::vector<std::string>{unavail_s->host(), responding_s->host()}}});
                 vs.start_background_tasks();
-                std::expected<vector_store_client::primary_keys, vector_store_client::ann_error> keys;
+                std::expected<vector_store_client::ann_results, vector_store_client::ann_error> ann_results;
 
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return unavail_s->connections() > 1;
                 }));
 
                 // The query is successful because the client falls back to the available server
                 // when the attempt to connect to the unavailable one fails.
-                BOOST_CHECK(keys);
+                BOOST_CHECK(ann_results);
             },
             cfg)
             .finally(seastar::coroutine::lambda([&responding_s, &unavail_s] -> future<> {
@@ -881,18 +891,18 @@ SEASTAR_TEST_CASE(vector_store_client_multiple_uris_high_availability) {
                 auto& vs = env.local_qp().vector_store_client();
                 configure(vs).with_dns({{"s1.node", std::vector<std::string>{unavail_s->host()}}, {"s2.node", std::vector<std::string>{responding_s->host()}}});
                 vs.start_background_tasks();
-                std::expected<vector_store_client::primary_keys, vector_store_client::ann_error> keys;
+                std::expected<vector_store_client::ann_results, vector_store_client::ann_error> ann_results;
 
                 // Because requests are distributed in random order due to load balancing,
                 // repeat the ANN query until the unavailable server is queried.
                 BOOST_CHECK(co_await repeat_until([&]() -> future<bool> {
-                    keys = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
+                    ann_results = co_await vs.ann("ks", "idx", schema, std::vector<float>{0.1, 0.2, 0.3}, 2, as.reset());
                     co_return unavail_s->connections() > 1;
                 }));
 
                 // The query is successful because the client falls back to the available server
                 // when the attempt to connect to the unavailable one fails.
-                BOOST_CHECK(keys);
+                BOOST_CHECK(ann_results);
             },
             cfg)
             .finally(seastar::coroutine::lambda([&responding_s, &unavail_s] -> future<> {
@@ -951,4 +961,130 @@ SEASTAR_TEST_CASE(vector_search_metrics_test) {
                 BOOST_CHECK_EQUAL(get_metrics_value("vector_store_dns_refreshes", metrics)->i(), 1);
             },
             cfg);
+}
+
+SEASTAR_TEST_CASE(vector_similarity_fails_on_mismatched_column) {
+
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(fmt::format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await env.execute_cql(R"(
+                    create table ks.test (
+                        pk1 tinyint, pk2 tinyint,
+                        ck1 tinyint, ck2 tinyint,
+                        v1 vector<float, 3>,
+                        v2 vector<float, 3>,
+                        primary key ((pk1, pk2), ck1, ck2))
+                )");
+                co_await env.execute_cql("INSERT INTO ks.test (pk1, pk2, ck1, ck2, v1, v2) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3], [0.1, 0.2, 0.3])");
+                auto& vs = env.local_qp().vector_store_client();
+                configure{vs};
+                vs.start_background_tasks();
+
+                for (auto const& similarity_function : {"cosine", "euclidean", "dot_product"}) {
+                    co_await env.execute_cql(
+                            fmt::format("CREATE CUSTOM INDEX idx1 ON ks.test (v1) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                    similarity_function));
+                    co_await env.execute_cql(
+                            fmt::format("CREATE CUSTOM INDEX idx2 ON ks.test (v2) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                    similarity_function));
+
+                    auto f = co_await coroutine::as_future(env.execute_cql(fmt::format(
+                            "SELECT pk1, similarity_{}(v2, [0.1, 0.2, 0.3]) FROM ks.test ORDER BY v1 ANN OF [0.1, 0.2, 0.3] LIMIT 1", similarity_function)));
+
+                    BOOST_CHECK(f.failed());
+                    auto err = f.get_exception();
+                    BOOST_CHECK(try_catch<exceptions::invalid_request_exception>(err));
+                    BOOST_CHECK_EQUAL(try_catch<exceptions::invalid_request_exception>(err)->what(),
+                            fmt::format("Vector column 'v2' of system.similarity_{} function does not match the ANN ordering vector column 'v1'",
+                                    similarity_function));
+
+                    co_await env.execute_cql("DROP INDEX ks.idx1");
+                    co_await env.execute_cql("DROP INDEX ks.idx2");
+                }
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
+SEASTAR_TEST_CASE(vector_similarity_fails_on_mismatched_vector) {
+
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(fmt::format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await create_test_table(env, "ks", "test");
+                co_await env.execute_cql("INSERT INTO ks.test (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])");
+                auto& vs = env.local_qp().vector_store_client();
+                configure{vs};
+                vs.start_background_tasks();
+
+                for (auto const& similarity_function : {"cosine", "euclidean", "dot_product"}) {
+                    co_await env.execute_cql(
+                            fmt::format("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                    similarity_function));
+
+                    auto f = co_await coroutine::as_future(env.execute_cql(
+                            fmt::format("SELECT pk1, similarity_{}(embedding, [1.0, 2.0, 3.0]) FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 1",
+                                    similarity_function)));
+                    BOOST_CHECK(f.failed());
+                    auto err = f.get_exception();
+                    BOOST_CHECK(try_catch<exceptions::invalid_request_exception>(err));
+                    BOOST_CHECK_EQUAL(try_catch<exceptions::invalid_request_exception>(err)->what(),
+                            fmt::format("Vector argument of system.similarity_{} function does not match the ANN ordering vector", similarity_function));
+
+                    co_await env.execute_cql("DROP INDEX ks.idx");
+                }
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
+}
+
+SEASTAR_TEST_CASE(vector_similarity_fails_on_null_vector) {
+
+    auto server = co_await make_vs_mock_server();
+
+    auto cfg = cql_test_config();
+    cfg.db_config->vector_store_primary_uri.set(fmt::format("http://server.node:{}", server->port()));
+    co_await do_with_cql_env(
+            [](cql_test_env& env) -> future<> {
+                auto as = abort_source_timeout();
+                co_await create_test_table(env, "ks", "test");
+                co_await env.execute_cql("INSERT INTO ks.test (pk1, pk2, ck1, ck2, embedding) VALUES (5, 7, 9, 2, [0.1, 0.2, 0.3])");
+                auto& vs = env.local_qp().vector_store_client();
+                configure{vs};
+                vs.start_background_tasks();
+
+                for (auto const& similarity_function : {"cosine", "euclidean", "dot_product"}) {
+                    co_await env.execute_cql(
+                            fmt::format("CREATE CUSTOM INDEX idx ON ks.test (embedding) USING 'vector_index' WITH OPTIONS = {{'similarity_function': '{}'}}",
+                                    similarity_function));
+
+                    auto f = co_await coroutine::as_future(env.execute_cql(
+                            fmt::format("SELECT pk1, similarity_{}(embedding, null) FROM ks.test ORDER BY embedding ANN OF [0.1, 0.2, 0.3] LIMIT 1",
+                                    similarity_function)));
+                    BOOST_CHECK(f.failed());
+                    auto err = f.get_exception();
+                    BOOST_CHECK(try_catch<exceptions::invalid_request_exception>(err));
+                    BOOST_CHECK_EQUAL(try_catch<exceptions::invalid_request_exception>(err)->what(),
+                            fmt::format("Vector similarity functions cannot be executed with null arguments"));
+
+                    co_await env.execute_cql("DROP INDEX ks.idx");
+                }
+            },
+            cfg)
+            .finally([&server] {
+                return server->stop();
+            });
 }
