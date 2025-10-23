@@ -30,6 +30,7 @@ from test.pylib.manager_client import ManagerClient
 from test.pylib.util import wait_for
 from test.pylib.tablets import get_all_tablet_replicas
 from test.cluster.conftest import skip_mode
+from tools.cqlsh.cqlshlib.formatting import append
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ async def test_alternator_ttl_scheduling_group(manager: ManagerClient):
        in the wrong scheduling group. We can assume this because we don't
        run multiple tests in parallel on the same cluster.
     """
+    manager.ignore_log_patterns.append(r"data_dictionary::no_such_column_family")
     servers = await manager.servers_add(3, config=alternator_config)
     alternator = get_alternator(servers[0].ip_addr)
     table = alternator.create_table(TableName=unique_table_name(),
@@ -313,6 +315,7 @@ async def test_localnodes_joining_nodes(manager: ManagerClient):
        not yet responsive, a "/localnodes" request should NOT return that node.
        Reproduces issue #19694.
     """
+    manager.ignore_log_patterns.append(r"raft .* Transferring snapshot .* failed with: raft::transport_error .* connection is closed")
     # Start a cluster with one node, and then bring up a second node,
     # pausing its bootstrap (with an injection) in JOINING state.
     # We need to start the second node in the background, because server_add()
@@ -778,6 +781,7 @@ async def test_concurrent_modify_tags(manager: ManagerClient, op):
        The name of this test is named after db::modify_tags(), which all
        three of these operations use to implement the change to the table.
     """
+    manager.ignore_log_patterns.append(r"data_dictionary::no_such_column_family")
     servers = await manager.servers_add(3, config=alternator_config)
     alternators = [get_alternator(server.ip_addr) for server in servers]
     table_name = unique_table_name()

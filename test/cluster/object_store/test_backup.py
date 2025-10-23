@@ -144,6 +144,7 @@ async def test_backup_to_non_existent_bucket(manager: ManagerClient, object_stor
     files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
     assert len(files) > 0
 
+    manager.ignore_log_patterns.append("S3 request failed. Code: 15. Reason: Access Denied.")
     prefix = f'{cf}/backup'
     tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, "non-existant-bucket", prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
@@ -171,6 +172,7 @@ async def test_backup_to_non_existent_endpoint(manager: ManagerClient, object_st
     files = set(os.listdir(f'{workdir}/data/{ks}/{cf_dir}/snapshots/backup'))
     assert len(files) > 0
 
+    manager.ignore_log_patterns.append("unable to find does_not_exist in configured object-storage endpoints")
     prefix = f'{cf}/backup'
     tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', "does_not_exist", object_storage.bucket_name, prefix)
     status = await manager.api.wait_task(server.ip_addr, tid)
@@ -208,6 +210,7 @@ async def do_test_backup_abort(manager: ManagerClient, object_storage,
     prefix = f'{cf_dir}/backup'
     tid = await manager.api.backup(server.ip_addr, ks, cf, 'backup', object_storage.address, object_storage.bucket_name, prefix)
 
+    manager.ignore_log_patterns.append(r"seastar::abort_requested_exception \(abort requested\)")
     print(f'Started task {tid}, aborting it early')
     await log.wait_for(breakpoint_name + ': waiting', from_mark=mark)
     await manager.api.abort_task(server.ip_addr, tid)

@@ -135,6 +135,10 @@ async def test_tablet_merge_simple(manager: ManagerClient):
         old_tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
         s1_mark = await s1_log.mark()
 
+        manager.ignore_log_patterns.extend([
+            "raft_topology - topology change coordinator fiber got error data_dictionary::no_such_column_family",
+            "table - Compacted SSTables deletion failed: seastar::named_gate_closed_exception"
+        ])
         await inject_error_on(manager, "replica_merge_completion_wait", servers)
         await disable_injection_on(manager, "tablet_merge_completion_bypass", servers)
 
@@ -269,6 +273,7 @@ async def test_tablet_split_and_merge_with_concurrent_topology_changes(manager: 
             logger.info("Split increased number of tablets from {} to {}".format(old_tablet_count, tablet_count))
 
             # Allow shuffling of tablet replicas to make co-location work harder
+            manager.ignore_log_patterns.append("storage_service - Failed to complete splitting of table .* due to seastar::rpc::remote_verb_error")
             await inject_error_on(manager, "tablet_allocator_shuffle", servers)
             # This will allow us to simulate some balancing after co-location with shuffling, to make sure that
             # balancer won't break co-location.

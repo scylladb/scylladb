@@ -54,6 +54,7 @@ async def run_test_cache_tombstone_gc(manager: ManagerClient, statement_pairs: l
                     "     AND compaction = {'class': 'NullCompactionStrategy'}")
 
         for write_statement, delete_statement in statement_pairs:
+            manager.ignore_log_patterns.append(r"std::runtime_error \(injected error\)")
             execute_with_tracing(cql, write_statement.format(ks=ks), log = True)
             await manager.api.enable_injection(node3.ip_addr, "database_apply", one_shot=False)
             execute_with_tracing(cql, delete_statement.format(ks=ks), log = True)

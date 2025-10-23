@@ -175,6 +175,7 @@ async def test_reject_split_compaction(manager: ManagerClient, volumes_factory: 
 
                 logger.info("Create a big file on the target node to reach critical disk utilization level")
                 disk_info = psutil.disk_usage(workdir)
+                manager.ignore_log_patterns.append(r"storage_service - Failed to complete splitting of table .* due to compaction::compaction_stopped_exception .* was stopped due to: drain")
                 with random_content_file(workdir, int(disk_info.total*0.85) - disk_info.used):
                     await log.wait_for(f"Split task .* for table {cf} .* stopped, reason: Compaction for {cf} was stopped due to: drain")
 

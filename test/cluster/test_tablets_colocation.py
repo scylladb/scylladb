@@ -228,6 +228,7 @@ async def test_tablet_split_and_merge(manager: ManagerClient, with_merge: bool):
         s1_host_id = await manager.get_host_id(servers[1].server_id)
 
         # Increases the chance of tablet migration concurrent with split
+        manager.ignore_log_patterns.append("raft_topology - topology change coordinator fiber got error data_dictionary::no_such_column_family")
         await inject_error_one_shot_on(manager, "tablet_allocator_shuffle", servers)
         await inject_error_on(manager, "tablet_load_stats_refresh_before_rebalancing", servers)
 

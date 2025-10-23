@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
 async def test_raft_snapshot_request(manager: ManagerClient):
+    manager.ignore_log_patterns.extend([
+        r"raft .* Transferring snapshot to .* failed with: raft::transport_error .* connection is closed",
+        r"raft - apply_snapshot.* ignore outdated snapshot"
+    ])
     cmdline = [
         '--logger-log-level', 'raft=trace',
         ]

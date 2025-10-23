@@ -149,6 +149,7 @@ async def check_auth_v2_works(manager: ManagerClient, hosts):
 
 @pytest.mark.asyncio
 async def test_auth_v2_migration(request, manager: ManagerClient):
+    manager.ignore_log_patterns.append("service_level_controller - Couldn't find service level sl1 in first level cache")
     # First, force the first node to start in legacy mode
     cfg = {**auth_config, 'force_gossip_topology_changes': True, 'tablets_mode_for_new_keyspaces': 'disabled'}
 
