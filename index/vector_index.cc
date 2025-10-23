@@ -84,6 +84,10 @@ void vector_index::check_target(const schema& schema, const std::vector<::shared
     if (!c_def) {
         throw exceptions::invalid_request_exception(format("Column {} not found in schema", target->column_name()));
     }
+    auto indexes = schema.indices();
+    if (has_vector_index_on_target(schema, target->column_name())) {
+            throw exceptions::invalid_request_exception("Cannot create more than one vector index on a given column");
+    }
     auto type = c_def->type;
     if (!type->is_vector() || static_cast<const vector_type_impl*>(type.get())->get_elements_type()->get_kind() != abstract_type::kind::float_kind) {
         throw exceptions::invalid_request_exception(format("Vector indexes are only supported on columns of vectors of floats", target->column_name()));
@@ -160,6 +164,19 @@ bool vector_index::has_vector_index(const schema& s) {
         if (it != index.options().end()) {
             auto custom_class = secondary_index_manager::get_custom_class_factory(it->second);
             return (custom_class && dynamic_cast<vector_index*>((*custom_class)().get()));
+        }
+        return false;
+    });
+}
+
+bool vector_index::has_vector_index_on_target(const schema& s, const sstring& target_name) {
+    auto i = s.indices();
+    return std::any_of(i.begin(), i.end(), [&target_name](const auto& index) {
+        auto class_it = index.options().find(db::index::secondary_index::custom_class_option_name);
+        auto target_it = index.options().find(cql3_parser::index_target::target_option_name);
+        if (class_it != index.options().end() && target_it != index.options().end()) {
+            auto custom_class = secondary_index_manager::get_custom_class_factory(class_it->second);
+            return (custom_class && dynamic_cast<vector_index*>((*custom_class)().get()) && target_it->second == target_name);
         }
         return false;
     });
