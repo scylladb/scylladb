@@ -8,6 +8,7 @@
 #pragma once
 
 #include "raft/raft.hh"
+#include "service/topology_state_machine.hh"
 #include "utils/UUID.hh"
 #include <seastar/core/future.hh>
 #include <seastar/core/timer.hh>
@@ -29,25 +30,11 @@ namespace service {
 
 class raft_group_registry;
 
-
-class group0_server_accessor {
-    raft_group_registry& _raft_gr;
-    raft::group_id _group0_id;
-
-public:
-    group0_server_accessor(raft_group_registry& raft_gr, raft::group_id group0_id)
-        : _raft_gr(raft_gr)
-        , _group0_id(group0_id) {
-    }
-
-    [[nodiscard]] raft::server* get_server() const;
-};
-
 class group0_state_id_handler {
 
+    topology_state_machine& _topo_sm;
     replica::database& _local_db;
     gms::gossiper& _gossiper;
-    group0_server_accessor _server_accessor;
     lowres_clock::duration _refresh_interval;
 
     timer<> _timer;
@@ -60,7 +47,7 @@ class group0_state_id_handler {
     void refresh();
 
 public:
-    group0_state_id_handler(replica::database& local_db, gms::gossiper& gossiper, group0_server_accessor server_accessor);
+    group0_state_id_handler(topology_state_machine& topo_sm, replica::database& local_db, gms::gossiper& gossiper);
 
     void run();
 

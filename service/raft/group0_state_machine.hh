@@ -118,7 +118,7 @@ class group0_state_machine : public raft_state_machine {
     future<> merge_and_apply(group0_state_machine_merger& merger);
 public:
     group0_state_machine(raft_group0_client& client, migration_manager& mm, storage_proxy& sp, storage_service& ss,
-            group0_server_accessor server_accessor, gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled);
+            gms::gossiper& gossiper, gms::feature_service& feat, bool topology_change_enabled);
     future<> apply(std::vector<raft::command_cref> command) override;
     future<raft::snapshot_id> take_snapshot() override;
     void drop_snapshot(raft::snapshot_id id) override;
