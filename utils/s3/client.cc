@@ -34,7 +34,6 @@
 #include <seastar/util/lazy.hh>
 #include <seastar/http/request.hh>
 #include <seastar/http/exception.hh>
-#include "s3_retry_strategy.hh"
 #include "db/config.hh"
 #include "utils/assert.hh"
 #include "utils/s3/aws_error.hh"
@@ -121,10 +120,7 @@ client::client(std::string host, endpoint_config_ptr cfg, semaphore& mem, global
 
     _creds_update_timer.arm(lowres_clock::now());
     if (!_retry_strategy) {
-        _retry_strategy = std::make_unique<aws::s3_retry_strategy>([this]() -> future<> {
-            auto units = co_await get_units(_creds_sem, 1);
-            co_await update_credentials_and_rearm();
-        });
+        _retry_strategy = std::make_unique<aws::default_retry_strategy>();
     }
 }
 
@@ -305,19 +301,50 @@ client::group_client& client::find_or_create_client() {
     }
 }
 
-future<> client::make_request(http::request req, http::experimental::client::reply_handler handle, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
-    co_await authorize(req);
-    auto& gc = find_or_create_client();
-    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+future<> client::make_request(http::request req,
+                              http::experimental::client::reply_handler handle,
+                              std::optional<http::reply::status_type> expected,
+                              seastar::abort_source* as) {
+    auto request = std::move(req);
+    constexpr size_t max_attempts = 3;
+    size_t attempts = 0;
+    while (true) {
+        co_await authorize(request);
+        auto& gc = find_or_create_client();
+        try {
+            co_return co_await gc.retryable_client.make_request(
+                request, [&handle](const http::reply& reply, input_stream<char>&& body) { return handle(reply, std::move(body)); }, expected, as);
+        } catch (const aws::aws_exception& ex) {
+            if (++attempts <= max_attempts) {
+                if (ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED) {
+                    s3l.warn("Request failed with REQUEST_TIME_TOO_SKEWED. Machine time: {}, request timestamp: {}",
+                             utils::aws::format_time_point(db_clock::now()),
+                             request.get_header("x-amz-date"));
+                    continue;
+                }
+                if (ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+                    s3l.warn("Request failed with EXPIRED_TOKEN. Resetting credentials");
+                    _credentials = {};
+                    continue;
+                }
+            }
+            map_s3_client_exception(std::current_exception());
+        } catch (const storage_io_error&) {
+            throw;
+        } catch (const abort_requested_exception&) {
+            throw;
+        } catch (...) {
+            map_s3_client_exception(std::current_exception());
+        }
+    }
 }
 
 future<> client::make_request(http::request req, reply_handler_ext handle_ex, std::optional<http::reply::status_type> expected, seastar::abort_source* as) {
-    co_await authorize(req);
     auto& gc = find_or_create_client();
     auto handle = [&gc, handle = std::move(handle_ex)] (const http::reply& rep, input_stream<char>&& in) {
         return handle(gc, rep, std::move(in));
     };
-    co_await gc.retryable_client.make_request(std::move(req), std::move(handle), expected, as);
+    co_await make_request(std::move(req), std::move(handle), expected, as);
 }
 
 future<> client::get_object_header(sstring object_name, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
@@ -1212,7 +1239,7 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                             while (_buffers_size < _max_buffers_size && !_is_finished) {
                                 utils::get_local_injector().inject("kill_s3_inflight_req", [] {
                                     // Inject non-retryable error to emulate source failure
-                                    throw aws::aws_exception(aws::aws_error::get_errors().at("ResourceNotFound"));
+                                    throw aws::aws_exception(aws::aws_error(aws::aws_error_type::RESOURCE_NOT_FOUND, "Injected ResourceNotFound", aws::retryable::no));
                                 });
                                 s3l.trace("Fiber for object '{}' will try to read within range {}", _object_name, _range);
                                 temporary_buffer<char> buf;
@@ -1256,20 +1283,23 @@ class client::chunked_download_source final : public seastar::data_source_impl {
                         co_await in.close();
                         if (ex) {
                             auto aws_ex = aws::aws_error::from_exception_ptr(ex);
-                            if (aws_ex.is_retryable()) {
-                                s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
-                                throw filler_exception(format("{}", ex).c_str());
-                            }
-                            std::rethrow_exception(ex);
+                            s3l.debug("Fiber for object '{}' rethrowing filler aws_exception {}", _object_name, ex);
+                            throw filler_exception(
+                                ex, aws_ex.is_retryable() == aws::retryable::no && aws_ex.get_error_type() != aws::aws_error_type::EXPIRED_TOKEN);
                         }
                     },
                     {},
                     _as);
                 _is_contiguous_mode = _buffers_size < _max_buffers_size * _buffers_high_watermark;
             } catch (const filler_exception& ex) {
-                s3l.warn("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex);
+                if (ex._should_abort) {
+                    s3l.info("Fiber for object '{}' experienced a non-retryable error in buffer filling loop. Reason: {}. Exiting", _object_name, ex._original_exception);
+                    _get_cv.broken(ex._original_exception);
+                    co_return;
+                }
+                s3l.info("Fiber for object '{}' experienced an error in buffer filling loop. Reason: {}. Re-issuing the request", _object_name, ex._original_exception);
             } catch (...) {
-                s3l.trace("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
+                s3l.info("Fiber for object '{}' failed: {}, exiting", _object_name, std::current_exception());
                 _get_cv.broken(std::current_exception());
                 co_return;
             }

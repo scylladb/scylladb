@@ -28,7 +28,7 @@ retryable_http_client::retryable_http_client(std::unique_ptr<http::experimental:
     assert(_error_handler);
 }
 
-future<> retryable_http_client::do_retryable_request(http::request req, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
+future<> retryable_http_client::do_retryable_request(seastar::http::request& req, http::experimental::client::reply_handler handler, seastar::abort_source* as) {
     // TODO: the http client does not check abort status on entry, and if
     // we're already aborted when we get here we will paradoxally not be
     // interrupted, because no registration etc will be done. So do a quick
@@ -52,7 +52,10 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
             e = std::current_exception();
             request_ex = aws_exception(aws_error::from_exception_ptr(e));
         }
-
+        if (request_ex.error().get_error_type() == aws::aws_error_type::REQUEST_TIME_TOO_SKEWED ||
+            request_ex.error().get_error_type() == aws::aws_error_type::EXPIRED_TOKEN) {
+            co_await coroutine::return_exception_ptr(std::move(e));
+        }
         if (!co_await _retry_strategy.should_retry(request_ex.error(), retries)) {
             break;
         }
@@ -65,12 +68,12 @@ future<> retryable_http_client::do_retryable_request(http::request req, http::ex
     }
 }
 
-future<> retryable_http_client::make_request(http::request req,
+future<> retryable_http_client::make_request(seastar::http::request& req,
                                              http::experimental::client::reply_handler handle,
                                              std::optional<http::reply::status_type> expected,
                                              seastar::abort_source* as) {
     co_await do_retryable_request(
-        std::move(req),
+        req,
         [handler = std::move(handle), expected](const http::reply& rep, input_stream<char>&& in) mutable -> future<> {
             auto payload = std::move(in);
             auto status_class = http::reply::classify_status(rep._status);

@@ -37,7 +37,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
 
     std::string token;
     co_await http_client.make_request(
-        std::move(req),
+        req,
         [&token](const http::reply&, input_stream<char>&& in) -> future<> {
             auto input = std::move(in);
             token = co_await util::read_entire_stream_contiguous(input);
@@ -48,7 +48,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
     req = http::request::make("GET", ec2_metadata_ip, seastar::format("{}/", EC2_SECURITY_CREDENTIALS_RESOURCE));
     req._headers["x-aws-ec2-metadata-token"] = token;
     co_await http_client.make_request(
-        std::move(req),
+        req,
         [&role](const http::reply&, input_stream<char>&& in) -> future<> {
             auto input = std::move(in);
             role = co_await util::read_entire_stream_contiguous(input);
@@ -58,7 +58,7 @@ future<> instance_profile_credentials_provider::update_credentials() {
     req = http::request::make("GET", ec2_metadata_ip, seastar::format("{}/{}", EC2_SECURITY_CREDENTIALS_RESOURCE, role));
     req._headers["x-aws-ec2-metadata-token"] = token;
     co_await http_client.make_request(
-        std::move(req),
+        req,
         [this](const http::reply&, input_stream<char>&& in) -> future<> {
             auto input = std::move(in);
             auto creds_response = co_await util::read_entire_stream_contiguous(input);
