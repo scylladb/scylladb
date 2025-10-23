@@ -1965,7 +1965,7 @@ alter_result alter_replication(cql_test_env& e,
     new_ks_props.add_property("replication", alter_options);
     new_ks_props.validate();
     BOOST_REQUIRE(new_ks_props.get_replication_strategy_class().has_value());
-    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, e.local_db().features());
+    auto ks_md = new_ks_props.as_ks_metadata_update(ks.metadata(), *tmptr, e.local_db().features(), e.local_db().get_config());
     auto new_options = ks_md->strategy_options();
 
     testlog.info("Altering {} from {} using {} to {}", ks_name, rs.get_config_options(), alter_options, new_options);
@@ -2637,12 +2637,14 @@ SEASTAR_THREAD_TEST_CASE(test_decommission_rack_load_failure) {
         auto host1 = topo.add_node(node_state::normal);
         auto host2 = topo.add_node(node_state::normal);
         auto host3 = topo.add_node(node_state::normal);
-        topo.start_new_rack();
+        auto rack2 = topo.start_new_rack();
         racks.push_back(topo.rack());
-        auto host4 = topo.add_node(node_state::decommissioning);
+        auto host4 = topo.add_node(node_state::normal);
 
-        auto ks_name = add_keyspace(e, {{topo.dc(), 1}}, 4);
+        auto ks_name = add_keyspace_racks(e, {{rack2.dc, {rack2.rack}}}, 4);
         auto table1 = add_table(e, ks_name).get();
+
+        topo.set_node_state(host4, node_state::decommissioning);
 
         mutate_tablets(e, [&] (tablet_metadata& tmeta) -> future<> {
             tablet_map tmap(4);
@@ -3438,32 +3440,27 @@ SEASTAR_THREAD_TEST_CASE(test_imbalance_in_hetero_cluster_with_two_tables_imbala
 
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_mixed_dc_rf) {
     cql_test_config cfg = tablet_cql_test_config();
-    // FIXME: This test creates two keyspaces with two different replication factors.
-    //        What's more, we distribute the nodes across only two racks. Because of that,
-    //        we won't be able to enable `rf_rack_valid_keyspaces`. That would require
-    //        increasing the number of racks to three, as well as implementing scylladb/scylladb#23426.
-    cfg.db_config->rf_rack_valid_keyspaces.set(false);
 
     do_with_cql_env_thread([] (auto& e) {
         auto per_shard_goal = e.local_db().get_config().tablets_per_shard_goal();
 
         topology_builder topo(e);
 
-        std::vector<endpoint_dc_rack> racks = {
-            topo.rack(),
-            topo.start_new_dc(),
-        };
-
         std::vector<host_id> hosts;
-        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
-        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
-        hosts.push_back(topo.add_node(node_state::normal, 2, racks[0]));
+        sstring dc1 = topo.dc();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 2));
 
-        hosts.push_back(topo.add_node(node_state::normal, 1, racks[1]));
-        hosts.push_back(topo.add_node(node_state::normal, 1, racks[1]));
+        auto dc2 = topo.start_new_dc().dc;
+        hosts.push_back(topo.add_node(node_state::normal, 1));
+        topo.start_new_rack();
+        hosts.push_back(topo.add_node(node_state::normal, 1));
 
-        auto ks_name1 = add_keyspace(e, {{racks[0].dc, 3}});
-        auto ks_name2 = add_keyspace(e, {{racks[1].dc, 2}});
+        auto ks_name1 = add_keyspace(e, {{dc1, 3}});
+        auto ks_name2 = add_keyspace(e, {{dc2, 2}});
 
         // table1 overflows per-shard goal in dc1, should be scaled down.
         // wants 400 tablets (3 nodes * 2 shards * 200 tablets/shard / rf=3 = 400 tablets)
