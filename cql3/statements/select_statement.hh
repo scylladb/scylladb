@@ -184,7 +184,7 @@ public:
                      std::unique_ptr<cql3::attributes> attrs);
 };
 
-class indexed_table_select_statement : public select_statement {
+class view_indexed_table_select_statement : public select_statement {
     secondary_index::index _index;
     expr::expression _used_index_restrictions;
     schema_ptr _view_schema;
@@ -207,7 +207,7 @@ public:
                                                                     cql_stats &stats,
                                                                     std::unique_ptr<cql3::attributes> attrs);
 
-    indexed_table_select_statement(schema_ptr schema,
+    view_indexed_table_select_statement(schema_ptr schema,
                                    uint32_t bound_terms,
                                    lw_shared_ptr<const parameters> parameters,
                                    ::shared_ptr<selection::selection> selection,
