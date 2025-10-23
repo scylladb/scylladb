@@ -1749,7 +1749,7 @@ database::query(schema_ptr query_schema, const query::read_command& cmd, query::
 
 future<std::tuple<reconcilable_result, cache_temperature>>
 database::query_mutations(schema_ptr query_schema, const query::read_command& cmd, const dht::partition_range& range,
-                          tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout) {
+                          tracing::trace_state_ptr trace_state, db::timeout_clock::time_point timeout, bool tombstone_gc_enabled) {
     const auto short_read_allwoed = query::short_read(cmd.slice.options.contains<query::partition_slice::option::allow_short_read>());
     auto& semaphore = get_reader_concurrency_semaphore();
     auto max_result_size = cmd.max_result_size ? *cmd.max_result_size : get_query_max_result_size();
@@ -1768,7 +1768,8 @@ database::query_mutations(schema_ptr query_schema, const query::read_command& cm
         reader_permit::need_cpu_guard ncpu_guard{permit};
         permit.set_max_result_size(max_result_size);
         return cf.mutation_query(std::move(query_schema), std::move(permit), cmd, range,
-                std::move(trace_state), std::move(accounter), timeout, &querier_opt).then([&result, ncpu_guard = std::move(ncpu_guard)] (reconcilable_result res) {
+                std::move(trace_state), std::move(accounter), timeout, tombstone_gc_enabled, &querier_opt)
+        .then([&result, ncpu_guard = std::move(ncpu_guard)] (reconcilable_result res) {
             result = std::move(res);
         });
     };
@@ -3376,14 +3377,15 @@ future<foreign_ptr<lw_shared_ptr<reconcilable_result>>> query_mutations(
         schema_ptr s,
         const dht::partition_range& pr,
         const query::partition_slice& ps,
-        db::timeout_clock::time_point timeout) {
+        db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled) {
     auto max_res_size = db.local().get_query_max_result_size();
     auto cmd = query::read_command(s->id(), s->version(), ps, max_res_size, query::tombstone_limit::max);
     auto erm = s->table().get_effective_replication_map();
     if (auto shard_opt = dht::is_single_shard(erm->get_sharder(*s), *s, pr)) {
         auto shard = *shard_opt;
-        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout] (replica::database& db) mutable {
-            return db.query_mutations(gs, cmd, pr, {}, timeout).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
+        co_return co_await db.invoke_on(shard, [gs = global_schema_ptr(s), &cmd, &pr, timeout, tombstone_gc_enabled] (replica::database& db) mutable {
+            return db.query_mutations(gs, cmd, pr, {}, timeout, tombstone_gc_enabled).then([] (std::tuple<reconcilable_result, cache_temperature>&& res) {
                 return make_foreign(make_lw_shared<reconcilable_result>(std::move(std::get<0>(res))));
             });
         });

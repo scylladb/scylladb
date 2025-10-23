@@ -17,12 +17,12 @@
 #include "utils/to_string.hh"
 #include "bytes.hh"
 
-static inline void fail(sstring msg) {
-    throw std::runtime_error(msg);
+static inline void fail(std::string_view msg, std::source_location loc) {
+    throw std::runtime_error(std::format("assertion at {}:{} failed: {}", loc.file_name(), loc.line(), msg));
 }
 
 void columns_assertions::fail(const sstring& msg) {
-    ::fail(msg);
+    ::fail(msg, _loc);
 }
 
 columns_assertions& columns_assertions::do_with_raw_column(const char* name, std::function<void(data_type, managed_bytes_view)> func) {
@@ -32,13 +32,13 @@ columns_assertions& columns_assertions::do_with_raw_column(const char* name, std
         return col->name->text() == name;
     });
     if (it == names.end()) {
-        ::fail(seastar::format("Column {} not found in metadata", name));
+        ::fail(seastar::format("Column {} not found in metadata", name), _loc);
     }
 
     const size_t index = std::distance(names.begin(), it);
     const auto& value  = _columns.at(index);
     if (!value) {
-        ::fail(seastar::format("Column {} is null", name));
+        ::fail(seastar::format("Column {} is null", name), _loc);
     }
 
     func((*it)->type, *value);
@@ -47,23 +47,24 @@ columns_assertions& columns_assertions::do_with_raw_column(const char* name, std
 }
 
 columns_assertions& columns_assertions::with_raw_column(const char* name, std::function<bool(managed_bytes_view)> predicate) {
-    return do_with_raw_column(name, [name, &predicate] (data_type, managed_bytes_view value) {
+    return do_with_raw_column(name, [this, name, &predicate] (data_type, managed_bytes_view value) {
         if (!predicate(value)) {
-            ::fail(seastar::format("Column {} failed predicate check: value = {}", name, value));
+            ::fail(seastar::format("Column {} failed predicate check: value = {}", name, value), _loc);
         }
     });
 }
 
 columns_assertions& columns_assertions::with_raw_column(const char* name, managed_bytes_view value) {
-    return do_with_raw_column(name, [name, &value] (data_type, managed_bytes_view cell_value) {
+    return do_with_raw_column(name, [this, name, &value] (data_type, managed_bytes_view cell_value) {
         if (cell_value != value) {
-            ::fail(seastar::format("Expected column {} to have value {}, but got {}", name, value, cell_value));
+            ::fail(seastar::format("Expected column {} to have value {}, but got {}", name, value, cell_value), _loc);
         }
     });
 }
 
-rows_assertions::rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows)
+rows_assertions::rows_assertions(shared_ptr<cql_transport::messages::result_message::rows> rows, std::source_location loc)
     : _rows(rows)
+    , _loc(loc)
 { }
 
 rows_assertions
@@ -71,7 +72,17 @@ rows_assertions::with_size(size_t size) {
     const auto& rs = _rows->rs().result_set();
     auto row_count = rs.size();
     if (row_count != size) {
-        fail(format("Expected {:d} row(s) but got {:d}", size, row_count));
+        fail(format("Expected {:d} row(s) but got {:d}", size, row_count), _loc);
+    }
+    return {*this};
+}
+
+rows_assertions
+rows_assertions::with_size(std::function<bool(size_t)> predicate) {
+    const auto& rs = _rows->rs().result_set();
+    auto row_count = rs.size();
+    if (!predicate(row_count)) {
+        fail(format("Predicate failed for row count {}", row_count), _loc);
     }
     return {*this};
 }
@@ -82,7 +93,7 @@ rows_assertions::is_empty() {
     auto row_count = rs.size();
     if (row_count != 0) {
         auto&& first_row = *rs.rows().begin();
-        fail(seastar::format("Expected no rows, but got {:d}. First row: {}", row_count, first_row));
+        fail(seastar::format("Expected no rows, but got {:d}. First row: {}", row_count, first_row), _loc);
     }
     return {*this};
 }
@@ -92,7 +103,7 @@ rows_assertions::is_not_empty() {
     const auto& rs = _rows->rs().result_set();
     auto row_count = rs.size();
     if (row_count == 0) {
-        fail("Expected some rows, but was result was empty");
+        fail("Expected some rows, but was result was empty", _loc);
     }
     return {*this};
 }
@@ -103,7 +114,7 @@ rows_assertions::rows_assertions::is_null() {
     for (auto&& row : rs.rows()) {
         for (const managed_bytes_opt& v : row) {
             if (v) {
-                fail(seastar::format("Expected null values. Found: {}\n", v));
+                fail(seastar::format("Expected null values. Found: {}\n", v), _loc);
             }
         }
     }
@@ -116,7 +127,7 @@ rows_assertions::rows_assertions::is_not_null() {
     for (auto&& row : rs.rows()) {
         for (const managed_bytes_opt& v : row) {
             if (!v) {
-                fail(seastar::format("Expected non-null values. {}\n", row));
+                fail(seastar::format("Expected non-null values. {}\n", row), _loc);
             }
         }
     }
@@ -128,7 +139,7 @@ rows_assertions::with_column_types(std::initializer_list<data_type> column_types
     auto meta = _rows->rs().result_set().get_metadata();
     const auto& columns = meta.get_names();
     if (column_types.size() != columns.size()) {
-        fail(format("Expected {:d} columns, got {:d}", column_types.size(), meta.column_count()));
+        fail(format("Expected {:d} columns, got {:d}", column_types.size(), meta.column_count()), _loc);
     }
     auto expected_it = column_types.begin();
     auto actual_it = columns.begin();
@@ -136,7 +147,7 @@ rows_assertions::with_column_types(std::initializer_list<data_type> column_types
         const auto& expected_type = *expected_it++;
         const auto& actual_spec = *actual_it++;
         if (expected_type != actual_spec->type) {
-            fail(format("Column {:d}: expected type {}, got {}", i, expected_type->name(), actual_spec->type->name()));
+            fail(format("Column {:d}: expected type {}, got {}", i, expected_type->name(), actual_spec->type->name()), _loc);
         }
     }
     return {*this};
@@ -151,7 +162,7 @@ rows_assertions::with_row(std::initializer_list<bytes_opt> values) {
             return {*this};
         }
     }
-    fail(seastar::format("Expected row not found: {} not in {}\n", expected_row, _rows));
+    fail(seastar::format("Expected row not found: {} not in {}\n", expected_row, _rows), _loc);
     return {*this};
 }
 
@@ -164,21 +175,21 @@ rows_assertions::with_rows(std::vector<std::vector<bytes_opt>> rows) {
     int row_nr = 0;
     for (auto&& row : rows) {
         if (actual_i == actual_end) {
-            fail(format("Expected more rows ({:d}), got {:d}", rows.size(), rs.size()));
+            fail(format("Expected more rows ({:d}), got {:d}", rows.size(), rs.size()), _loc);
         }
         auto& actual = *actual_i;
         auto expected_row = row | std::views::transform(to_managed_bytes_opt);
         if (!std::ranges::equal(
             expected_row,
             actual)) {
-            fail(seastar::format("row {} differs, expected {} got {}", row_nr, row, actual));
+            fail(seastar::format("row {} differs, expected {} got {}", row_nr, row, actual), _loc);
         }
         ++actual_i;
         ++row_nr;
     }
     if (actual_i != actual_end) {
         fail(seastar::format("Expected less rows ({:d}), got {:d}. Next row is: {}", rows.size(), rs.size(),
-                    *actual_i));
+                    *actual_i), _loc);
     }
     return {*this};
 }
@@ -197,40 +208,53 @@ rows_assertions::with_rows_ignore_order(std::vector<std::vector<bytes_opt>> rows
         });
         if (found == std::end(actual)) {
             fail(seastar::format("row {} not found in result set ({})", expected,
-               fmt::join(actual | std::views::transform([] (auto& r) { return fmt::to_string(r); }), ", ")));
+               fmt::join(actual | std::views::transform([] (auto& r) { return fmt::to_string(r); }), ", ")), _loc);
         }
     }
     if (rs.size() != rows.size()) {
-        fail(format("Expected different number of rows ({:d}), got {:d}", rows.size(), rs.size()));
+        fail(format("Expected different number of rows ({:d}), got {:d}", rows.size(), rs.size()), _loc);
     }
     return {*this};
 }
 
 columns_assertions rows_assertions::with_columns_of_row(size_t row_index) {
     const auto& rs = _rows->rs().result_set();
-    return columns_assertions(rs.get_metadata(), rs.rows().at(row_index));
+    if (row_index >= rs.rows().size()) {
+        fail(format("Requested row index {} is out of range, result has {} rows", row_index, rs.rows().size()), _loc);
+    }
+    return columns_assertions(rs.get_metadata(), rs.rows().at(row_index), _loc);
 }
 
-result_msg_assertions::result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg)
+rows_assertions& rows_assertions::assert_for_columns_of_each_row(std::function<void(columns_assertions&)> func) {
+    const auto& rs = _rows->rs().result_set();
+    for (size_t i = 0; i < rs.size(); ++i) {
+        auto columns = with_columns_of_row(i);
+        func(columns);
+    }
+    return *this;
+}
+
+result_msg_assertions::result_msg_assertions(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc)
     : _msg(msg)
+    , _loc(loc)
 { }
 
 rows_assertions result_msg_assertions::is_rows() {
     auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(_msg);
     if (!rows) {
-        fail("Expected rows in result set");
+        fail("Expected rows in result set", _loc);
     }
-    return rows_assertions(rows);
+    return rows_assertions(rows, _loc);
 }
 
-result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg) {
-    return result_msg_assertions(msg);
+result_msg_assertions assert_that(shared_ptr<cql_transport::messages::result_message> msg, std::source_location loc) {
+    return result_msg_assertions(msg, loc);
 }
 
 rows_assertions rows_assertions::with_serialized_columns_count(size_t columns_count) {
     size_t serialized_column_count = _rows->rs().get_metadata().column_count();
     if (serialized_column_count != columns_count) {
-        fail(format("Expected {:d} serialized columns(s) but got {:d}", columns_count, serialized_column_count));
+        fail(format("Expected {:d} serialized columns(s) but got {:d}", columns_count, serialized_column_count), _loc);
     }
     return {*this};
 }
@@ -255,7 +279,7 @@ void require_rows(cql_test_env& e,
                   const std::vector<std::vector<bytes_opt>>& expected,
                   const seastar::compat::source_location& loc) {
     try {
-        assert_that(cquery_nofail(e, qstr, nullptr, loc)).is_rows().with_rows_ignore_order(expected);
+        assert_that(cquery_nofail(e, qstr, nullptr, loc), loc).is_rows().with_rows_ignore_order(expected);
     }
     catch (const std::exception& e) {
         BOOST_FAIL(seastar::format("query '{}' failed: {}\n{}:{}: originally from here",

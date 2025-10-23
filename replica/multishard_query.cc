@@ -724,7 +724,7 @@ future<page_consume_result<ResultBuilder>> read_page(
         const tombstone_gc_state& gc_state,
         noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto compaction_state = make_lw_shared<compact_for_query_state>(*s, cmd.timestamp, cmd.slice, cmd.get_row_limit(),
-            cmd.partition_limit, gc_state);
+            cmd.partition_limit, gc_state, mutation_fragment_stream_validation_level::token);
 
     auto reader = make_multishard_combining_reader(ctx, s, ctx->erm(), ctx->permit(), ranges.front(), cmd.slice,
             trace_state, mutation_reader::forwarding(ranges.size() > 1));
@@ -771,14 +771,17 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled,
         noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto& table = db.local().find_column_family(s);
     auto erm = table.get_effective_replication_map();
     auto ctx = seastar::make_shared<read_context>(db, s, erm, cmd, ranges, trace_state, timeout);
 
+    tombstone_gc_state gc_state = tombstone_gc_enabled ? table.get_compaction_manager().get_tombstone_gc_state() : tombstone_gc_state::no_gc();
+
     // Use coroutine::as_future to prevent exception on timesout.
     auto f = co_await coroutine::as_future(ctx->lookup_readers(timeout).then([&, result_builder_factory = std::move(result_builder_factory)] () mutable {
-        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, table.get_compaction_manager().get_tombstone_gc_state(), std::move(result_builder_factory));
+        return read_page<ResultBuilder>(ctx, s, cmd, ranges, trace_state, gc_state, std::move(result_builder_factory));
     }).then([&] (page_consume_result<ResultBuilder> r) -> future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> {
         if (r.compaction_state->are_limits_reached() || r.result.is_short_read()) {
             // Must call before calling `detach_state()`.
@@ -802,6 +805,7 @@ future<foreign_ptr<lw_shared_ptr<typename ResultBuilder::result_type>>> do_query
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled,
         noncopyable_function<ResultBuilder()> result_builder_factory) {
     auto& table = db.local().find_column_family(s);
     auto erm = table.get_effective_replication_map();
@@ -840,6 +844,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled,
         std::function<ResultBuilder(query::result_memory_accounter&&)> result_builder_factory) {
     if (cmd.get_row_limit() == 0 || cmd.slice.partition_row_limit() == 0 || cmd.partition_limit == 0) {
         co_return std::tuple(
@@ -857,7 +862,7 @@ static future<std::tuple<foreign_ptr<lw_shared_ptr<typename ResultBuilder::resul
     try {
         auto accounter = co_await local_db.get_result_memory_limiter().new_mutation_read(*cmd.max_result_size, short_read_allowed);
 
-        auto result = co_await query_method(db, s, cmd, ranges, std::move(trace_state), timeout,
+        auto result = co_await query_method(db, s, cmd, ranges, std::move(trace_state), timeout, tombstone_gc_enabled,
                 [result_builder_factory, accounter = std::move(accounter)] () mutable {
 			return result_builder_factory(std::move(accounter));
 		});
@@ -881,11 +886,13 @@ public:
 private:
     reconcilable_result_builder _builder;
     schema_ptr _s;
+    bool _tombstone_gc_enabled;
 
 public:
-    mutation_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_memory_accounter&& accounter)
+    mutation_query_result_builder(const schema& s, const query::partition_slice& slice, query::result_memory_accounter&& accounter, bool tombstone_gc_enabled)
         : _builder(s, slice, std::move(accounter))
         , _s(s.shared_from_this())
+        , _tombstone_gc_enabled(tombstone_gc_enabled)
      { }
 
     void consume_new_partition(const dht::decorated_key& dk) { _builder.consume_new_partition(dk); }
@@ -903,7 +910,7 @@ public:
             const dht::partition_range& range,
             tracing::trace_state_ptr trace_state,
             db::timeout_clock::time_point timeout) {
-        auto res = co_await db.query_mutations(std::move(schema), cmd, range, std::move(trace_state), timeout);
+        auto res = co_await db.query_mutations(std::move(schema), cmd, range, std::move(trace_state), timeout, _tombstone_gc_enabled);
         co_return make_foreign(make_lw_shared<result_type>(std::get<0>(std::move(res))));
     }
 
@@ -997,10 +1004,11 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        db::timeout_clock::time_point timeout) {
-    return do_query_on_all_shards<mutation_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
-            [query_schema, &cmd] (query::result_memory_accounter&& accounter) {
-        return mutation_query_result_builder(*query_schema, cmd.slice, std::move(accounter));
+        db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled) {
+    return do_query_on_all_shards<mutation_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout, tombstone_gc_enabled,
+            [query_schema, &cmd, tombstone_gc_enabled] (query::result_memory_accounter&& accounter) {
+        return mutation_query_result_builder(*query_schema, cmd.slice, std::move(accounter), tombstone_gc_enabled);
     });
 }
 
@@ -1012,7 +1020,7 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<query::result>>, cache_temperature>>
         query::result_options opts,
         tracing::trace_state_ptr trace_state,
         db::timeout_clock::time_point timeout) {
-    return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout,
+    return do_query_on_all_shards<data_query_result_builder>(db, query_schema, cmd, ranges, std::move(trace_state), timeout, true,
             [query_schema, &cmd, opts] (query::result_memory_accounter&& accounter) {
         return data_query_result_builder(*query_schema, cmd.slice, opts, std::move(accounter), cmd.tombstone_limit);
     });

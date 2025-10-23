@@ -169,7 +169,6 @@ class compact_mutation_state {
     const schema& _schema;
     gc_clock::time_point _query_time;
     max_purgeable_fn _get_max_purgeable;
-    can_gc_fn _can_gc;
     max_purgeable _max_purgeable_regular;
     max_purgeable _max_purgeable_shadowable;
     std::optional<gc_clock::time_point> _gc_before;
@@ -333,7 +332,7 @@ private:
 
     max_purgeable::can_purge_result can_gc(tombstone t, is_shadowable is_shadowable) {
         if (!sstable_compaction()) {
-            return { };
+            return { .can_purge = _tombstone_gc_state.is_gc_enabled(), .timestamp_source = max_purgeable::timestamp_source::none };
         }
         if (!t) {
             return { .can_purge = false };
@@ -346,6 +345,10 @@ private:
         mclog.debug("can_gc: t={} is_shadowable={} max_purgeable={}: can_purge={}, timestamp_source={}", t, is_shadowable, max_purgeable, ret.can_purge, ret.timestamp_source);
         return ret;
     };
+
+    can_gc_fn make_can_gc_fn() {
+        return [this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable).can_purge; };
+    }
 
 public:
     compact_mutation_state(compact_mutation_state&&) = delete; // Because 'this' is captured
@@ -360,7 +363,6 @@ public:
             mutation_fragment_stream_validation_level validation_level = mutation_fragment_stream_validation_level::token)
         : _schema(s)
         , _query_time(query_time)
-        , _can_gc(always_gc)
         , _slice(slice)
         , _row_limit(limit)
         , _partition_limit(partition_limit)
@@ -379,7 +381,6 @@ public:
         : _schema(s)
         , _query_time(compaction_time)
         , _get_max_purgeable(std::move(get_max_purgeable))
-        , _can_gc([this] (tombstone t, is_shadowable is_shadowable) { return can_gc(t, is_shadowable).can_purge; })
         , _slice(s.full_slice())
         , _tombstone_gc_state(gc_state)
         , _last_pos(position_in_partition::for_partition_end())
@@ -445,9 +446,10 @@ public:
         if constexpr (sstable_compaction()) {
             _collector->start_collecting_static_row();
         }
+        auto can_gc = make_can_gc_fn();
         auto gc_before = get_gc_before();
         auto res = sr.cells().compact_and_expire(_schema, column_kind::static_column, row_tombstone(current_tombstone),
-                _query_time, _can_gc, gc_before, _collector.get());
+                _query_time, can_gc, gc_before, _collector.get());
         _stats.static_rows.add_row(res);
         const auto is_live = res.is_live();
         if constexpr (sstable_compaction()) {
@@ -495,9 +497,10 @@ public:
                 cr.remove_tombstone();
             }
         }
+        auto can_gc = make_can_gc_fn();
         auto gc_before = get_gc_before();
-        const bool marker_is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, _can_gc, gc_before, _collector.get());
-        const auto res = cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, _can_gc, gc_before, cr.marker(),
+        const bool marker_is_live = cr.marker().compact_and_expire(t.tomb(), _query_time, can_gc, gc_before, _collector.get());
+        const auto res = cr.cells().compact_and_expire(_schema, column_kind::regular_column, t, _query_time, can_gc, gc_before, cr.marker(),
                 _collector.get());
         _stats.clustering_rows.add_row(res, marker_is_live);
         const auto is_live = res.is_live() || marker_is_live;
