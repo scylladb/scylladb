@@ -7,10 +7,12 @@
  */
 
 #pragma once
+#include <seastar/core/metrics_registration.hh>
 #include <seastar/core/scheduling.hh>
 #include <seastar/core/timer.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/file.hh>
+#include <seastar/util/bool_class.hh>
 #include <chrono>
 #include <cmath>
 
@@ -129,18 +131,27 @@ class compaction_controller : public backlog_controller {
     float _max_shares = 0.0f;
     // Holds the last computed shares by the controller.
     float _computed_shares = 0.0f;
+    seastar::metrics::metric_groups _metrics;
+
+    void register_metrics();
 public:
     static constexpr unsigned normalization_factor = 30;
     static constexpr float disable_backlog = std::numeric_limits<double>::infinity();
     static constexpr float backlog_disabled(float backlog) { return std::isinf(backlog); }
-    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::chrono::milliseconds interval, std::function<float()> current_backlog, float max_shares)
+    using expose_metrics = seastar::bool_class<struct setup_metrics_tag>;
+    compaction_controller(backlog_controller::scheduling_group sg, float static_shares, std::chrono::milliseconds interval,
+        std::function<float()> current_backlog, float max_shares, expose_metrics expose_metrics)
         : backlog_controller(std::move(sg), std::move(interval),
           std::vector<backlog_controller::control_point>({{0.0, 50}, {1.5, 100} , {normalization_factor, 1000}}),
           std::move(current_backlog),
           static_shares
         ),
         _max_shares(max_shares)
-    {}
+    {
+        if (expose_metrics) {
+            register_metrics();
+        }
+    }
 
     void update_controller(float quota) override;
     void update_max_shares(float max_shares);
