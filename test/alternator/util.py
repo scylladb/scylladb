@@ -327,7 +327,7 @@ def scylla_config_read(dynamodb, name):
             ExpressionAttributeNames={'#key': 'name'},
             ExpressionAttributeValues={':val': name}
         )
-    if not 'Items' in r:
+    if not 'Items' in r or not r['Items']:
         return None
     return r['Items'][0]['value']
 
