@@ -715,10 +715,10 @@ SEASTAR_TEST_CASE(snapshot_list_okay) {
         BOOST_REQUIRE_EQUAL(sd.live, 0);
         BOOST_REQUIRE_GT(sd.total, 0);
 
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
-            fs::remove(parent_dir / de.name);
-            return make_ready_future<>();
-        }).get();
+        auto table_directory = table_dir(cf);
+        for (auto& f : collect_files(table_directory).get()) {
+            fs::remove(table_directory / f);
+        }
 
         auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
@@ -900,10 +900,10 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_details) {
         BOOST_REQUIRE_EQUAL(sc_sd.details.live, sd.live);
         BOOST_REQUIRE_EQUAL(sc_sd.details.total, sd.total);
 
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
-            fs::remove(parent_dir / de.name);
-            return make_ready_future<>();
-        }).get();
+        auto table_directory = table_dir(cf);
+        for (auto& f : collect_files(table_directory).get()) {
+            fs::remove(table_directory / f);
+        }
 
         auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
@@ -942,10 +942,10 @@ SEASTAR_TEST_CASE(test_snapshot_ctl_true_snapshots_size) {
         auto sc_live_size = sc.local().true_snapshots_size().get();
         BOOST_REQUIRE_EQUAL(sc_live_size, sd.live);
 
-        lister::scan_dir(table_dir(cf), lister::dir_entry_types::of<directory_entry_type::regular>(), [] (fs::path parent_dir, directory_entry de) {
-            fs::remove(parent_dir / de.name);
-            return make_ready_future<>();
-        }).get();
+        auto table_directory = table_dir(cf);
+        for (auto& f : collect_files(table_directory).get()) {
+            fs::remove(table_directory / f);
+        }
 
         auto sd_post_deletion = cf.get_snapshot_details().get().at("test");
 
