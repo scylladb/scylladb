@@ -785,11 +785,7 @@ SEASTAR_TEST_CASE(clear_snapshot) {
         take_snapshot(e).get();
         auto& cf = e.local_db().find_column_family("ks", "cf");
 
-        unsigned count = 0;
-        lister::scan_dir((table_dir(cf) / sstables::snapshots_dir / "test"), lister::dir_entry_types::of<directory_entry_type::regular>(), [&count] (fs::path parent_dir, directory_entry de) {
-            count++;
-            return make_ready_future<>();
-        }).get();
+        unsigned count = collect_files(table_dir(cf) / sstables::snapshots_dir / "test").get().size();
         BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
 
         e.local_db().clear_snapshot("test", {"ks"}, "").get();
@@ -820,12 +816,8 @@ SEASTAR_TEST_CASE(clear_multiple_snapshots) {
         }
 
         for (auto i = 0; i < num_snapshots; i++) {
-            unsigned count = 0;
             testlog.debug("Verifying {}", snapshots_dir / snapshot_name(i));
-            lister::scan_dir(snapshots_dir / snapshot_name(i), lister::dir_entry_types::of<directory_entry_type::regular>(), [&count] (fs::path parent_dir, directory_entry de) {
-                count++;
-                return make_ready_future<>();
-            }).get();
+            unsigned count = collect_files(snapshots_dir / snapshot_name(i)).get().size();
             BOOST_REQUIRE_GT(count, 1); // expect more than the manifest alone
         }
 
