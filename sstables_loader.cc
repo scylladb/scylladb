@@ -172,10 +172,10 @@ public:
 
     virtual future<> stream(shared_ptr<stream_progress> progress);
     host_id_vector_replica_set get_endpoints(const dht::token& token) const;
-    future<> stream_sstable_mutations(streaming::plan_id, const dht::partition_range&, std::vector<sstables::shared_sstable>);
+    future<> stream_sstable_mutations(streaming::plan_id, const dht::partition_range&, std::vector<sstables::shared_sstable>, unlink_sstables unlink);
 protected:
     virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token) const;
-    future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, shared_ptr<stream_progress> progress);
+    future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, shared_ptr<stream_progress> progress, unlink_sstables unlink);
 private:
     host_id_vector_replica_set get_all_endpoints(const dht::token& token) const;
 };
@@ -204,7 +204,7 @@ private:
 
     future<> stream_fully_contained_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
         // FIXME: fully contained sstables can be optimized.
-        return stream_sstables(pr, std::move(sstables), std::move(progress));
+        return stream_sstables(pr, std::move(sstables), std::move(progress), unlink_sstables::no);
     }
 
     bool tablet_in_scope(locator::tablet_id) const;
@@ -253,7 +253,7 @@ future<> sstable_streamer::stream(shared_ptr<stream_progress> progress) {
     }
     const auto full_partition_range = dht::partition_range::make_open_ended_both_sides();
 
-    co_await stream_sstables(full_partition_range, std::move(_sstables), std::move(progress));
+    co_await stream_sstables(full_partition_range, std::move(_sstables), std::move(progress), _unlink_sstables);
 }
 
 bool tablet_sstable_streamer::tablet_in_scope(locator::tablet_id tid) const {
@@ -346,6 +346,15 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
 
     // sstables are sorted by first key in reverse order.
     auto sstable_it = _sstables.rbegin();
+    auto streamed_sstables_end = sstable_it;
+
+    auto unlink_sstables = [s = _table.schema()] (auto begin, auto end) -> future<> {
+        co_await coroutine::parallel_for_each(begin, end, [&] (sstables::shared_sstable& sst) {
+            llog.debug("load_and_stream: ks={}, table={}, remove sst={}",
+                    s->ks_name(), s->cf_name(), sst->toc_filename());
+            return sst->unlink();
+        });
+    };
 
     for (auto tablet_id : _tablet_map.tablet_ids() | std::views::filter([this] (auto tid) { return tablet_in_scope(tid); })) {
         auto tablet_range = _tablet_map.get_token_range(tablet_id);
@@ -362,11 +371,24 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
         auto exhausted = [&tablet_range] (const sstables::shared_sstable& sst) {
             return tablet_range.before(sst->get_last_decorated_key().token(), dht::token_comparator{});
         };
+
+        auto exhausted_begin = sstable_it;
         while (sstable_it != _sstables.rend() && exhausted(*sstable_it)) {
             sstable_it++;
         }
 
-        for (auto sst_it = sstable_it; sst_it != _sstables.rend(); sst_it++) {
+        // Unlink any sstables that were streamed for previous tablets but are now exhausted
+        bool exhausted_sstables_found = exhausted_begin < sstable_it;
+        bool exhausted_include_streamed = streamed_sstables_end > exhausted_begin;
+        if (_unlink_sstables && exhausted_sstables_found && exhausted_include_streamed) {
+            // Remove only those sstables that were streamed
+            // If streamed_sstables_end is beyond sstable_it, we only unlink exhausted sstables
+            auto unlink_end = std::min(sstable_it, streamed_sstables_end);
+            co_await unlink_sstables(exhausted_begin, unlink_end);
+        }
+
+        auto sst_it = sstable_it;
+        for (; sst_it != _sstables.rend(); sst_it++) {
             auto sst_token_range = sstable_token_range(*sst_it);
             // sstables are sorted by first key, so we're done with current tablet when
             // the next sstable doesn't overlap with its owned token range.
@@ -381,17 +403,28 @@ future<> tablet_sstable_streamer::stream(shared_ptr<stream_progress> progress) {
             }
             co_await coroutine::maybe_yield();
         }
+        // If we covered more sstables, move the streamed_sstables_end forward.
+        if (streamed_sstables_end < sst_it) {
+            streamed_sstables_end = sst_it;
+        }
 
         auto per_tablet_progress = make_shared<per_tablet_stream_progress>(
             progress,
             sstables_fully_contained.size() + sstables_partially_contained.size());
         auto tablet_pr = dht::to_partition_range(tablet_range);
-        co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), per_tablet_progress);
+        // Do not unlink SSTables currently being streamed in this call, as they may still be required for other tablets.
+        // Remove them later safely once fully exhausted.
+        co_await stream_sstables(tablet_pr, std::move(sstables_partially_contained), per_tablet_progress, unlink_sstables::no);
         co_await stream_fully_contained_sstables(tablet_pr, std::move(sstables_fully_contained), per_tablet_progress);
+    }
+
+    // Unlink any remaining sstables that were streamed
+    if (_unlink_sstables && streamed_sstables_end > sstable_it) {
+        co_await unlink_sstables(sstable_it, streamed_sstables_end);
     }
 }
 
-future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress) {
+future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, shared_ptr<stream_progress> progress, unlink_sstables unlink_sstables) {
     size_t nr_sst_total = sstables.size();
     size_t nr_sst_current = 0;
 
@@ -408,14 +441,14 @@ future<> sstable_streamer::stream_sstables(const dht::partition_range& pr, std::
             ops_uuid, nr_sst_current, nr_sst_current + sst_processed.size(), nr_sst_total,
             fmt::join(sst_processed | std::views::transform([] (auto sst) { return sst->get_filename(); }), ", "));
         nr_sst_current += sst_processed.size();
-        co_await stream_sstable_mutations(ops_uuid, pr, std::move(sst_processed));
+        co_await stream_sstable_mutations(ops_uuid, pr, std::move(sst_processed), unlink_sstables);
         if (progress) {
             progress->advance(batch_sst_nr);
         }
     }
 }
 
-future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid, const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables) {
+future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid, const dht::partition_range& pr, std::vector<sstables::shared_sstable> sstables, unlink_sstables unlink_sstables) {
     const auto token_range = pr.transform(std::mem_fn(&dht::ring_position::token));
     auto s = _table.schema();
     const auto cf_id = s->id();
@@ -492,7 +525,7 @@ future<> sstable_streamer::stream_sstable_mutations(streaming::plan_id ops_uuid,
         llog.warn("load_and_stream: ops_uuid={}, ks={}, table={}, finish_phase, err={}",
                 ops_uuid, s->ks_name(), s->cf_name(), eptr);
     }
-    if (!failed && _unlink_sstables) {
+    if (!failed && unlink_sstables) {
         try {
             co_await coroutine::parallel_for_each(sstables, [&] (sstables::shared_sstable& sst) {
                 llog.debug("load_and_stream: ops_uuid={}, ks={}, table={}, remove sst={}",
