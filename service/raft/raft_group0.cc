@@ -242,7 +242,7 @@ const raft::server_id& raft_group0::load_my_id() {
 raft_server_for_group raft_group0::create_server_for_group0(raft::group_id gid, raft::server_id my_id, service::storage_service& ss, cql3::query_processor& qp,
                                                             service::migration_manager& mm, bool topology_change_enabled) {
     auto state_machine = std::make_unique<group0_state_machine>(
-            _client, mm, qp.proxy(), ss, group0_server_accessor{_raft_gr, gid}, _gossiper, _feat, topology_change_enabled);
+            _client, mm, qp.proxy(), ss, _gossiper, _feat, topology_change_enabled);
     auto rpc = std::make_unique<group0_rpc>(_raft_gr.direct_fd(), *state_machine, _ms.local(), _raft_gr.failure_detector(), gid, my_id);
     // Keep a reference to a specific RPC class.
     auto& rpc_ref = *rpc;
