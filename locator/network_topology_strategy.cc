@@ -433,7 +433,7 @@ tablet_replica_set network_topology_strategy::add_tablets_in_racks(schema_ptr s,
             // Assume that if there was a diff to add a rack, we don't already have a replica
             // in the target rack so all nodes in the rack are eligible.
             // FIXME: pick based on storage utilization: https://github.com/scylladb/scylladb/issues/26366
-            auto node_load = load.get_real_avg_shard_load(node.get().host_id());
+            auto node_load = load.get_avg_tablet_count(node.get().host_id());
             if (node_load < min_load) {
                 min_load = node_load;
                 min_node = node.get().host_id();
@@ -502,7 +502,7 @@ future<tablet_replica_set> network_topology_strategy::add_tablets_in_dc(schema_p
             const auto& host_id = node.get().host_id();
             if (!existing.contains(host_id)) {
                 // FIXME: https://github.com/scylladb/scylladb/issues/26366
-                candidate.nodes.emplace_back(host_id, load.get_avg_shard_load(host_id));
+                candidate.nodes.emplace_back(host_id, load.get_avg_tablet_count(host_id));
             }
         }
         if (candidate.nodes.empty()) {
