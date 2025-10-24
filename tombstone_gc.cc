@@ -58,6 +58,12 @@ void shared_tombstone_gc_state::drop_repair_history_for_table(const table_id& id
 // 1) if the tombstone_gc_mode is not repair, since we have the same value for all the keys in the ranges.
 // 2) if the tombstone_gc_mode is repair, and the range is a sub range of a range in the repair history map.
 tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_before_for_range(schema_ptr s, const dht::token_range& range, const gc_clock::time_point& query_time) const {
+    switch (_mode) {
+        case mode::no_gc: return get_gc_before_for_range_result{gc_clock::time_point::min(), gc_clock::time_point::min(), true};
+        case mode::gc_all: return get_gc_before_for_range_result{gc_clock::time_point::max(), gc_clock::time_point::max(), true};
+        case mode::gc_expired: break;
+    }
+
     bool knows_entire_range = true;
 
     if (s->static_props().is_group0_table) {
@@ -124,6 +130,9 @@ tombstone_gc_state::get_gc_before_for_range_result tombstone_gc_state::get_gc_be
 }
 
 bool tombstone_gc_state::cheap_to_get_gc_before(const schema& s) const noexcept {
+    if (_mode != mode::gc_expired) {
+        return true;
+    }
     return s.tombstone_gc_options().mode() != tombstone_gc_mode::repair;
 }
 
@@ -135,6 +144,12 @@ gc_clock::time_point tombstone_gc_state::check_min(schema_ptr s, gc_clock::time_
 }
 
 gc_clock::time_point tombstone_gc_state::get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const {
+    switch (_mode) {
+        case mode::no_gc: return gc_clock::time_point::min();
+        case mode::gc_all: return gc_clock::time_point::max();
+        case mode::gc_expired: break;
+    }
+
     if (s->static_props().is_group0_table) {
         const auto gc_before = get_gc_before_for_group0(s);
         dblog.trace("Get gc_before for ks={}, table={}, dk={}, mode=reconcile, gc_before={}", s->ks_name(), s->cf_name(), dk, gc_before);

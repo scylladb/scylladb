@@ -115,6 +115,10 @@ public:
 };
 
 class tombstone_gc_state {
+    enum class mode { no_gc, gc_all, gc_expired };
+
+private:
+    mode _mode{mode::gc_expired};
     const shared_tombstone_gc_state* _shared_state{nullptr};
     bool _check_commitlog{true};
 
@@ -125,15 +129,26 @@ private:
 
     [[nodiscard]] gc_clock::time_point get_gc_before_for_group0(schema_ptr s) const;
 
-    explicit tombstone_gc_state(const shared_tombstone_gc_state* shared_state, bool check_commitlog) noexcept
-        : _shared_state(shared_state)
+    explicit tombstone_gc_state(mode m, const shared_tombstone_gc_state* shared_state, bool check_commitlog) noexcept
+        : _mode(m)
+        , _shared_state(shared_state)
         , _check_commitlog(check_commitlog)
     { }
 
 public:
     tombstone_gc_state() = delete;
-    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept : tombstone_gc_state(&shared_state, check_commitlog) {}
-    explicit tombstone_gc_state(std::nullptr_t) noexcept : tombstone_gc_state(nullptr, true) {}
+    explicit tombstone_gc_state(const shared_tombstone_gc_state& shared_state, bool check_commitlog = true) noexcept
+        : tombstone_gc_state(mode::gc_expired, &shared_state, check_commitlog) {}
+    explicit tombstone_gc_state(std::nullptr_t) noexcept
+        : tombstone_gc_state(mode::gc_expired, nullptr, true) {}
+
+    static tombstone_gc_state no_gc() { return tombstone_gc_state(mode::no_gc, nullptr, false); }
+
+    static tombstone_gc_state gc_all() { return tombstone_gc_state(mode::gc_all, nullptr, false); }
+
+    bool is_gc_enabled() const noexcept {
+        return _mode != mode::no_gc;
+    }
 
     explicit operator bool() const noexcept {
         return _shared_state != nullptr;
@@ -153,7 +168,7 @@ public:
     [[nodiscard]] gc_clock::time_point get_gc_before_for_key(schema_ptr s, const dht::decorated_key& dk, const gc_clock::time_point& query_time) const;
 
     // returns a tombstone_gc_state copy with the commitlog check disabled (i.e.) without _gc_min_source.
-    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_shared_state, false); }
+    [[nodiscard]] tombstone_gc_state with_commitlog_check_disabled() const { return tombstone_gc_state(_mode, _shared_state, false); }
 };
 
 std::map<sstring, sstring> get_default_tombstone_gc_mode(const locator::abstract_replication_strategy&, const locator::token_metadata&);

@@ -73,7 +73,8 @@ future<std::tuple<foreign_ptr<lw_shared_ptr<reconcilable_result>>, cache_tempera
         const query::read_command& cmd,
         const dht::partition_range_vector& ranges,
         tracing::trace_state_ptr trace_state,
-        db::timeout_clock::time_point timeout);
+        db::timeout_clock::time_point timeout,
+        bool tombstone_gc_enabled = true);
 
 /// Run the data query on all shards.
 ///
