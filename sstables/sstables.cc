@@ -3751,7 +3751,7 @@ sstable_stream_source::sstable_stream_source(shared_sstable sst, component_type 
     , _type(type)
 {}
 
-std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot& snapshot) {
+std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot& snapshot, reader_permit permit) {
     std::vector<std::unique_ptr<sstable_stream_source>> result;
     result.reserve(snapshot.files.size());
 
@@ -3848,6 +3848,23 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
         }
     };
 
+    class sstable_data_stream_source_impl : public sstable_stream_source {
+        file _file;
+        reader_permit _permit;
+        mutable lw_shared_ptr<checksum> _checksum;
+    public:
+        sstable_data_stream_source_impl(shared_sstable table, component_type type, file f, reader_permit permit)
+            : sstable_stream_source(std::move(table), type)
+            , _file(std::move(f))
+            , _permit(std::move(permit))
+        {}
+        future<input_stream<char>> input(const file_input_stream_options& options) const override {
+            _checksum = co_await _sst->read_checksum();
+            co_await _sst->read_digest();
+            co_return co_await _sst->data_stream(0, _sst->data_size(), _permit, nullptr, nullptr, options, sstable::raw_stream::no, integrity_check::yes);
+        }
+    };
+
     auto& files = snapshot.files;
 
     auto add = [&](component_type type, file f) {
@@ -3861,7 +3878,9 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
         std::throw_with_nested(std::invalid_argument("Missing required sstable component"));
     }
     for (auto&& [type, f] : files) {
-        if (type != component_type::TOC && type != component_type::Scylla) {
+        if (type == component_type::Data) {
+            result.emplace_back(std::make_unique<sstable_data_stream_source_impl>(snapshot.sst, type, std::move(f), std::move(permit)));
+        } else if (type != component_type::TOC && type != component_type::Scylla) {
             add(type, std::move(f));
         }
     }

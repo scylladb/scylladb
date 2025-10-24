@@ -1215,7 +1215,7 @@ public:
 };
 
 // Translates the result of gathering readable snapshot files into ordered items for streaming.
-std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot&);
+std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot&, reader_permit);
 
 class sstable_stream_sink {
 public:
