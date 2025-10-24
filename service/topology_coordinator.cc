@@ -1909,7 +1909,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 .del_transition_state()
                 .set_version(_topo_sm._topology.version + 1)
                 .build());
-        co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet split finalization"));
+        co_await update_topology_state(std::move(guard), std::move(updates), format("Finished tablet resize finalization"));
     }
 
     future<> handle_truncate_table(group0_guard guard) {
