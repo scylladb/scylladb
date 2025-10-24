@@ -75,22 +75,22 @@ def test_create_keyspace_if_not_exists(cql, this_dc):
     cql.execute("DROP KEYSPACE test_create_keyspace_if_not_exists")
 
 # We treat ALTER to numeric RF of same count as no-op.
-def test_alter_rack_list_to_same_count_numeric_rf(cql, this_dc):
+def test_alter_rack_list_to_same_count_numeric_rf(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 1 }}")
         assert get_replication(cql, keyspace)[this_dc] == ['rack1']
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
 
-def test_empty_rack_list_is_accepted(cql, this_dc):
+def test_empty_rack_list_is_accepted(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': [] }}")
         assert this_dc not in get_replication(cql, keyspace)
 
-def test_can_alter_rack_list_to_0(cql, this_dc):
+def test_can_alter_rack_list_to_0(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}")
 
-def test_can_alter_to_rack_list_from_0(cql, this_dc):
+def test_can_alter_to_rack_list_from_0(cql, this_dc, scylla_only):
     with new_test_keyspace(cql, f"WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': 0 }}") as keyspace:
         cql.execute(f"ALTER KEYSPACE {keyspace} WITH REPLICATION = {{ 'class' : 'NetworkTopologyStrategy', '{this_dc}': ['rack1'] }}")
         assert get_replication(cql, keyspace)[this_dc] == ['rack1']
