@@ -3800,7 +3800,7 @@ sstable_stream_source::sstable_stream_source(shared_sstable sst, component_type 
     , _type(type)
 {}
 
-std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot& snapshot) {
+future<std::vector<std::unique_ptr<sstable_stream_source>>> create_stream_sources(const sstables::sstable_files_snapshot& snapshot, reader_permit permit) {
     std::vector<std::unique_ptr<sstable_stream_source>> result;
     result.reserve(snapshot.files.size());
 
@@ -3897,6 +3897,22 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
         }
     };
 
+    class sstable_data_stream_source_impl : public sstable_stream_source {
+        file _file;
+        reader_permit _permit;
+        lw_shared_ptr<checksum> _checksum;
+    public:
+        sstable_data_stream_source_impl(shared_sstable table, component_type type, file f, reader_permit permit, lw_shared_ptr<checksum> checksum)
+            : sstable_stream_source(std::move(table), type)
+            , _file(std::move(f))
+            , _permit(std::move(permit))
+            , _checksum(std::move(checksum))
+        {}
+        future<input_stream<char>> input(const file_input_stream_options& options) const override {
+            co_return co_await _sst->data_stream(0, _sst->ondisk_data_size(), _permit, nullptr, nullptr, options, sstable::raw_stream::compressed_chunks, integrity_check::yes);
+        }
+    };
+
     auto& files = snapshot.files;
 
     auto add = [&](component_type type, file f) {
@@ -3909,13 +3925,24 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
     } catch (std::out_of_range&) {
         std::throw_with_nested(std::invalid_argument("Missing required sstable component"));
     }
+
+    if (auto data_it = files.find(component_type::Data); data_it != files.end()) {
+        lw_shared_ptr<checksum> checksum;
+        if (auto crc = files.find(component_type::CRC); crc != files.end()) {
+            checksum = co_await snapshot.sst->read_checksum(crc->second);
+        }
+        if (auto digest = files.find(component_type::Digest); digest != files.end()) {
+            co_await snapshot.sst->read_digest(digest->second);
+        }
+        result.emplace_back(std::make_unique<sstable_data_stream_source_impl>(snapshot.sst, data_it->first, std::move(data_it->second), std::move(permit), std::move(checksum)));
+    }
     for (auto&& [type, f] : files) {
-        if (type != component_type::TOC && type != component_type::Scylla) {
+        if (type != component_type::TOC && type != component_type::Scylla && type != component_type::Data) {
             add(type, std::move(f));
         }
     }
 
-    return result;
+    co_return result;
 }
 
 class sstable_stream_sink_impl : public sstable_stream_sink {

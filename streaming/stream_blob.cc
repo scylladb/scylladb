@@ -635,13 +635,14 @@ future<stream_files_response> tablet_stream_files_handler(replica::database& db,
     auto files = std::list<stream_blob_info>();
 
     auto& sst_gen = table.get_sstable_generation_generator();
+    auto reader = co_await db.obtain_reader_permit(table, "tablet_file_streaming", db::no_timeout, {});
 
     for (auto& sst_snapshot : sstables) {
         auto& sst = sst_snapshot.sst;
         // stable state (across files) is a must for load to work on destination
         auto sst_state = sst->state();
 
-        auto sources = create_stream_sources(sst_snapshot);
+        auto sources = co_await create_stream_sources(sst_snapshot, reader);
         auto newgen = fmt::to_string(sst_gen());
 
         for (auto&& s : sources) {
