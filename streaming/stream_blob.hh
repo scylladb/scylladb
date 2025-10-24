@@ -183,7 +183,8 @@ future<size_t> tablet_stream_files(netw::messaging_service& ms,
     table_id table,
     file_stream_id ops_id,
     service::frozen_topology_guard topo_guard,
-    bool may_inject_errors = false
+    bool may_inject_errors = false,
+    bool prioritize_sender_error = false
     );
 
 
