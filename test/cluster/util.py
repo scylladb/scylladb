@@ -611,8 +611,8 @@ def disable_schema_agreement_wait(cql: Session):
 
 def parse_replication_options(replication_column) -> dict:
     """
-    Parses the value of the "replication" column from system_schema.keyspaces, which is a flattened map of options,
-     into an expanded map.
+    Parses the value of "replication_v2" or "replication" column from system_schema.keyspaces,
+    which is a flattened map of options, into an expanded map.
     Expands a flattened map like {"dc0:0": "r1", "dc0:1": "r2"} into {"dc0": ["r1", "r2"]}.
     See docs/dev/system_schema_keyspace.md
     """
