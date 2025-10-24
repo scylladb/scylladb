@@ -10,8 +10,11 @@
 #include "streaming/stream_blob.hh"
 #include "message/messaging_service.hh"
 #include "test/lib/log.hh"
+#include "test/lib/sstable_utils.hh"
 
+#include <boost/lexical_cast.hpp>
 #include <seastar/testing/thread_test_case.hh>
+#include <seastar/util/short_streams.hh>
 #include <seastar/core/seastar.hh>
 #include <seastar/core/reactor.hh>
 #include <seastar/core/future.hh>
@@ -136,6 +139,135 @@ do_test_file_stream(replica::database& db, netw::messaging_service& ms, std::vec
         });
     }
     co_return ret;
+}
+
+static future<> corrupt_digest_component(sstables::shared_sstable sst) {
+    auto f = co_await open_file_dma(sstables::test(sst).filename(component_type::Digest).native(), open_flags::rw);
+    auto stream = make_file_input_stream(f);
+    auto digest_str = co_await util::read_entire_stream_contiguous(stream);
+    auto digest = boost::lexical_cast<uint32_t>(digest_str);
+    auto new_digest = to_sstring<bytes>(digest + 1); // make it invalid
+    co_await f.dma_write(0, new_digest.c_str(), new_digest.size());
+    co_await stream.close();
+}
+
+static future<> corrupt_data_component(sstables::shared_sstable sst) {
+    auto f = co_await open_file_dma(sstables::test(sst).filename(component_type::Data).native(), open_flags::wo);
+    const auto align = f.memory_dma_alignment();
+    const auto len = f.disk_write_dma_alignment();
+    auto wbuf = seastar::temporary_buffer<char>::aligned(align, len);
+    std::fill(wbuf.get_write(), wbuf.get_write() + len, 0xba);
+    co_await f.dma_write(0, wbuf.get(), len);
+    co_await f.close();
+}
+
+using compress_sstable = bool_class<struct compress_sstable_tag>;
+static future<>
+do_test_sstable_stream(cql_test_env& env, compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "") {
+    bool verb_register = false;
+    auto ops_id = file_stream_id::create_random_id();
+    auto& db = env.local_db();
+    auto& ms = env.get_messaging_service().local();
+    auto& global_db = db.container();
+    auto& global_ms = ms.container();
+    int n_retries = 0;
+    bool exception_caught = false;
+    do {
+        try {
+            if (!verb_register) {
+                co_await smp::invoke_on_all([&global_db, &global_ms] {
+                    return global_ms.local().register_stream_blob([&global_db, &global_ms](const rpc::client_info& cinfo, streaming::stream_blob_meta meta, rpc::source<streaming::stream_blob_cmd_data> source) {
+                        const auto& from = cinfo.retrieve_auxiliary<locator::host_id>("host_id");
+                        auto sink = global_ms.local().make_sink_for_stream_blob(source);
+                        (void)stream_blob_handler(global_db.local(), global_ms.local(), from, meta, sink, source, [](auto&, const streaming::stream_blob_meta& meta) -> future<output_result> {
+                            auto path = meta.filename;
+                            auto f = co_await open_file_dma(path, open_flags::wo|open_flags::create);
+                            auto out = co_await make_file_output_stream(std::move(f));
+                            co_return output_result {
+                                [path = std::move(path)](store_result res) -> future<> {
+                                    co_await remove_file(path);
+                                },
+                                std::move(out)
+                            };
+                        }, false).handle_exception([sink, source, ms = global_ms.local().shared_from_this()] (std::exception_ptr eptr) {
+                            testlog.warn("Failed to run stream blob handler: {}", eptr);
+                        });
+                        return make_ready_future<rpc::sink<streaming::stream_blob_cmd_data>>(sink);
+                    });
+                });
+            }
+            verb_register = true;
+
+            co_await env.execute_cql("CREATE KEYSPACE ks_test WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1};");
+            if (compress) {
+                co_await env.execute_cql("CREATE TABLE ks_test.cf (pk text PRIMARY KEY, v int);");
+            } else {
+                co_await env.execute_cql("CREATE TABLE ks_test.cf (pk text PRIMARY KEY, v int) WITH compression = { 'sstable_compression' : '' };");
+            }
+
+            for (int i = 0; i < 10; i++) {
+                co_await env.execute_cql(format("INSERT INTO ks_test.cf (pk, v) VALUES ('key_{}', {});", i, i * 10));
+            }
+
+            auto& table = db.find_column_family("ks_test", "cf");
+            co_await table.flush();
+            auto schema = table.schema();
+
+            auto range = dht::token_range::make_open_ended_both_sides();
+            auto sstables = co_await table.take_storage_snapshot(range);
+
+            BOOST_REQUIRE_GT(sstables.size(), 0);
+
+            auto table_id = schema->id();
+            auto files = std::list<stream_blob_info>();
+            auto hostid = db.get_token_metadata().get_my_id();
+            seastar::shard_id dst_shard_id = 0;
+
+            co_await mark_tablet_stream_start(ops_id);
+            auto targets = std::vector<node_and_shard>{node_and_shard{hostid, dst_shard_id}};
+            auto permit = co_await db.obtain_reader_permit(table, "test_stream", db::no_timeout, {});
+
+            auto sst_snapshot = sstables.front();
+            if (corruption_fn) {
+                co_await corruption_fn(sst_snapshot.sst);
+            }
+            auto sources = co_await sstables::create_stream_sources(sst_snapshot, permit);
+
+            for (auto& source : sources) {
+                auto& info = files.emplace_back();
+                info.filename = source->component_basename();
+                info.fops = file_ops::stream_sstables;
+                info.source = [source = std::move(source)](const file_input_stream_options& foptions) mutable -> future<input_stream<char>> {
+                    co_return co_await source->input(foptions);
+                };
+            }
+
+            size_t stream_bytes = co_await tablet_stream_files(ms, std::move(files), targets, table_id, ops_id, service::null_topology_guard, false);
+            co_await mark_tablet_stream_done(ops_id);
+            testlog.info("do_test_sstable_stream[{}] status=ok stream_bytes={}", ops_id, stream_bytes);
+        } catch (seastar::rpc::stream_closed&) {
+            testlog.warn("do_test_sstable_stream[{}] status=fail error={} retry={}", ops_id, std::current_exception(), n_retries++);
+            if (n_retries < 3) {
+                testlog.info("Retrying send");
+                continue;
+            }
+        } catch (const malformed_sstable_exception& e) {
+            testlog.warn("do_test_sstable_stream[{}] status=fail error={}", ops_id, std::current_exception());
+            exception_caught = (sstring(e.what()).find(expected_error_msg) != sstring::npos);
+        }
+    } while (false);
+
+    if (corruption_fn) {
+        BOOST_REQUIRE(exception_caught);
+    } else {
+        BOOST_REQUIRE(!exception_caught);
+    }
+
+    if (verb_register) {
+        co_await smp::invoke_on_all([&global_ms] {
+            return global_ms.local().unregister_stream_blob();
+        });
+    }
 }
 
 void do_test_file_stream(bool inject_error) {
@@ -368,3 +500,34 @@ SEASTAR_THREAD_TEST_CASE(test_sink_wrapper_iovec) {
     BOOST_REQUIRE(std::equal(lin.begin(), lin.begin() + final_len, src.begin()));
 }
 
+static void test_sstable_stream(compress_sstable compress, std::function<future<>(shared_sstable)> corruption_fn = nullptr, const sstring& expected_error_msg = "") {
+    cql_test_config cfg;
+    cfg.ms_listen = true;
+    do_with_cql_env_thread([&](cql_test_env& env) {
+        do_test_sstable_stream(env, compress, corruption_fn, expected_error_msg).get();
+    }, cfg).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_compressed) {
+    test_sstable_stream(compress_sstable::yes);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_uncompressed) {
+    test_sstable_stream(compress_sstable::no);
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_checksum_mismatched_compressed) {
+    test_sstable_stream(compress_sstable::yes, corrupt_data_component, "failed checksum");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_checksum_mismatched_uncompressed) {
+    test_sstable_stream(compress_sstable::no, corrupt_data_component, "failed checksum");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_compressed) {
+    test_sstable_stream(compress_sstable::yes, corrupt_digest_component, "Digest mismatch");
+}
+
+SEASTAR_THREAD_TEST_CASE(test_sstable_stream_digest_mismatched_uncompressed) {
+    test_sstable_stream(compress_sstable::no, corrupt_digest_component, "Digest mismatch");
+}
