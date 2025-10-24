@@ -622,33 +622,8 @@ def compute_scope(topology, servers):
 
 async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope):
     logger.info(f'Check the data is back')
-    async def collect_mutations(server):
-        host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
-        await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
-        ret = {}
-        for frag in await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf})", host=host[0]):
-            if not frag.pk in ret:
-                ret[frag.pk] = []
-            ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
-        return ret
 
-    by_node = await asyncio.gather(*(collect_mutations(s) for s in servers))
-    mutations = {}
-    for node_frags in by_node:
-        for pk in node_frags:
-            if not pk in mutations:
-                mutations[pk] = []
-            mutations[pk].append(node_frags[pk])
-
-    for k in random.sample(keys, 17):
-        if not k in mutations:
-            logger.info(f'{k} not found in mutations')
-            logger.info(f'Mutations: {mutations}')
-            assert False, "Key not found in mutations"
-        if len(mutations[k]) != topology.rf * topology.dcs:
-            logger.info(f'{k} is replicated {len(mutations[k])} times only, expect {topology.rf * topology.dcs}')
-            logger.info(f'Mutations: {mutations}')
-            assert False, "Key not replicated enough"
+    await check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf)
 
     logger.info(f'Validate streaming directions')
     for i, s in enumerate(r_servers):
@@ -663,6 +638,53 @@ async def check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topolo
             scope_nodes.update([ str(host_ids[s.server_id]) for s in servers[i::topology.dcs] ])
         logger.info(f'{s.ip_addr} streamed to {streamed_to}, expected {scope_nodes}')
         assert streamed_to == scope_nodes
+
+async def do_restore(ks, cf, s, toc_names, scope, prefix, object_storage, manager, logger):
+    logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
+    tid = await manager.api.restore(s.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names, scope)
+    status = await manager.api.wait_task(s.ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done')
+
+async def do_backup(s, snap_name, prefix, ks, cf, object_storage, manager, logger):
+    logger.info(f'Backup to {snap_name}')
+    tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, prefix)
+    status = await manager.api.wait_task(s.ip_addr, tid)
+    assert (status is not None) and (status['state'] == 'done')
+
+
+async def collect_mutations(cql, server, manager, ks, cf):
+    host = await wait_for_cql_and_get_hosts(cql, [server], time.time() + 30)
+    await read_barrier(manager.api, server.ip_addr)  # scylladb/scylladb#18199
+    ret = {}
+    for frag in await cql.run_async(f"SELECT * FROM MUTATION_FRAGMENTS({ks}.{cf})", host=host[0]):
+        if not frag.pk in ret:
+            ret[frag.pk] = []
+        ret[frag.pk].append({'mutation_source': frag.mutation_source, 'partition_region': frag.partition_region, 'node': server.ip_addr})
+    return ret
+
+async def check_mutation_replicas(cql, manager, servers, keys, topology, logger, ks, cf, expected_replicas = None):
+    '''Check that each mutation is replicated to the expected number of replicas'''
+    if expected_replicas is None:
+        expected_replicas = topology.rf * topology.dcs
+
+    by_node = await asyncio.gather(*(collect_mutations(cql, s, manager, ks, cf) for s in servers))
+    mutations = {}
+    for node_frags in by_node:
+        for pk in node_frags:
+            if not pk in mutations:
+                mutations[pk] = []
+            mutations[pk].append(node_frags[pk])
+
+    for k in random.sample(keys, 17):
+        if not k in mutations:
+            logger.info(f'{k} not found in mutations')
+            logger.info(f'Mutations: {mutations}')
+            assert False, "Key not found in mutations"
+
+        if len(mutations[k]) != expected_replicas:
+            logger.info(f'{k} is replicated {len(mutations[k])} times only, expect {expected_replicas}')
+            logger.info(f'Mutations: {mutations}')
+            assert False, "Key not replicated enough"
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topology_rf_validity", [
@@ -689,31 +711,18 @@ async def test_restore_with_streaming_scopes(manager: ManagerClient, s3_server, 
     schema, keys, replication_opts = create_dataset(manager, ks, cf, topology, logger)
 
     snap_name, sstables = await take_snapshot(ks, servers, manager, logger)
-
-    logger.info(f'Backup to {snap_name}')
     prefix = f'{cf}/{snap_name}'
-    async def do_backup(s):
-        tid = await manager.api.backup(s.ip_addr, ks, cf, snap_name, s3_server.address, s3_server.bucket_name, prefix)
-        status = await manager.api.wait_task(s.ip_addr, tid)
-        assert (status is not None) and (status['state'] == 'done')
 
-    await asyncio.gather(*(do_backup(s) for s in servers))
+    await asyncio.gather(*(do_backup(s, snap_name, prefix, ks, cf, s3_server, manager, logger) for s in servers))
 
     logger.info(f'Re-initialize keyspace')
     cql.execute(f'DROP KEYSPACE {ks}')
     cql.execute((f"CREATE KEYSPACE {ks} WITH REPLICATION = {replication_opts};"))
     cql.execute(schema)
 
-    logger.info(f'Restore')
-    async def do_restore(s, toc_names, scope):
-        logger.info(f'Restore {s.ip_addr} with {toc_names}, scope={scope}')
-        tid = await manager.api.restore(s.ip_addr, ks, cf, s3_server.address, s3_server.bucket_name, prefix, toc_names, scope)
-        status = await manager.api.wait_task(s.ip_addr, tid)
-        assert (status is not None) and (status['state'] == 'done')
-
     scope,r_servers = compute_scope(topology, servers)
 
-    await asyncio.gather(*(do_restore(s, sstables, scope) for s in r_servers))
+    await asyncio.gather(*(do_restore(ks, cf, s, sstables, scope, prefix, s3_server, manager, logger) for s in r_servers))
 
     await check_data_is_back(manager, logger, cql, ks, cf, keys, servers, topology, r_servers, host_ids, scope)
 
