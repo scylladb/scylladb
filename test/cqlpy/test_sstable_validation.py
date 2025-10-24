@@ -80,7 +80,7 @@ def sstable_cache(scylla_path):
             with open(self._in_json, "w") as f:
                 f.write(json_str)
             version_arg = ["--sstable-version", version] if version is not None else []
-            generation = subprocess.check_output([self._scylla_path, "sstable", "write", *version_arg, "--schema-file", schema_file, "--output-dir", self._store_dir, "--input-file", self._in_json], text=True)
+            generation = subprocess.check_output([self._scylla_path, "sstable", "write", *version_arg, "--schema-file", schema_file, "--output-dir", self._store_dir, "--input-file", self._in_json, "--input-format", "json"], text=True).strip()
             self._cache[json_str] = generation
             return generation
 

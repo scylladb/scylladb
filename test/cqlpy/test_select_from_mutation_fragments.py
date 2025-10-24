@@ -521,3 +521,13 @@ def test_mutation_fragments_scan_includes_dead_partitions(cql, test_keyspace, sc
         time.sleep(1) # need one second sleep to make the above tombstone gc-eligible
         res = list(cql.execute(f'SELECT * FROM MUTATION_FRAGMENTS({table})'))
         assert len(res) == 2 # partition start and end fragments
+
+
+def test_virtual_table(cql):
+    clients = list(cql.execute('SELECT * FROM MUTATION_FRAGMENTS(system.clients)'))
+
+    # There should be at least one client -- 'cql'
+    assert len(clients) > 0
+
+    for row in clients:
+        assert row.mutation_source == "virtual-table"
