@@ -59,7 +59,7 @@ using wait_for_all_updates = bool_class<wait_for_all_updates_tag>;
 class view_update_generator : public async_sharded_service<view_update_generator> {
 public:
     static constexpr size_t registration_queue_size = 100;
-
+    static constexpr size_t max_concurrent_updates = 128;
 private:
     replica::database& _db;
     sharded<service::storage_proxy>& _proxy;
@@ -97,7 +97,7 @@ private:
             db::view::stats& stats,
             replica::cf_stats& cf_stats,
             tracing::trace_state_ptr tr_state,
-            db::timeout_semaphore_units pending_view_updates,
+            db::timeout_semaphore_units pending_view_update_memory_units,
             service::allow_hints allow_hints,
             wait_for_all_updates wait_for_all);
 
