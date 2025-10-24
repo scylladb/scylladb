@@ -654,13 +654,13 @@ public:
         return make_ready_future<>();
     }
 
-    template <typename T>
+    template <typename T = std::string_view>
     [[gnu::always_inline]]
     std::optional<T> inject_parameter(const std::string_view& name, const std::string_view param_name) {
         return std::nullopt;
     }
 
-    template <typename T>
+    template <typename T = std::string_view>
     [[gnu::always_inline]]
     std::optional<T> inject_parameter(const std::string_view& name) {
         return std::nullopt;
