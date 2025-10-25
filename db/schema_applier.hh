@@ -48,6 +48,7 @@ struct schema_persisted_state {
     std::map<table_id, schema_mutations> tables;
     schema_tables::schema_result types;
     std::map<table_id, schema_mutations> views;
+    std::map<table_id, schema_mutations> cdc;
     schema_tables::schema_result functions;
     schema_tables::schema_result aggregates;
     schema_tables::schema_result scylla_aggregates;
@@ -105,12 +106,12 @@ public:
 
 struct frozen_schema_diff {
     struct altered_schema {
-        frozen_schema_with_base_info old_schema;
-        frozen_schema_with_base_info new_schema;
+        extended_frozen_schema old_schema;
+        extended_frozen_schema new_schema;
     };
-    std::vector<frozen_schema_with_base_info> created;
+    std::vector<extended_frozen_schema> created;
     std::vector<altered_schema> altered;
-    std::vector<frozen_schema_with_base_info> dropped;
+    std::vector<extended_frozen_schema> dropped;
 };
 
 // schema_diff represents what is happening with tables or views during schema merge
@@ -140,6 +141,7 @@ public:
 
 struct affected_tables_and_views_per_shard {
     schema_diff_per_shard tables;
+    schema_diff_per_shard cdc;
     schema_diff_per_shard views;
     std::vector<bool> columns_changed;
 };

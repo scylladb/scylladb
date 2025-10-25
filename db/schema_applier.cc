@@ -30,6 +30,8 @@
 #include "mutation/frozen_mutation.hh"
 #include "schema/schema_fwd.hh"
 #include "utils/assert.hh"
+#include "cdc/log.hh"
+#include "cdc/cdc_partitioner.hh"
 #include "view_info.hh"
 #include "replica/database.hh"
 #include "lang/manager.hh"
@@ -592,9 +594,48 @@ future<> schema_applier::merge_tables_and_views()
     // diffs bound to current shard
     auto& local_views = _affected_tables_and_views.tables_and_views.local().views;
     auto& local_tables = _affected_tables_and_views.tables_and_views.local().tables;
+    auto& local_cdc = _affected_tables_and_views.tables_and_views.local().cdc;
 
-    local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, _reload, [&] (schema_mutations sm, schema_diff_side) {
-        return create_table_from_mutations(_proxy, std::move(sm), user_types);
+    // Create CDC tables before non-CDC base tables, because we want the base tables with CDC enabled
+    // to point to their CDC tables.
+    local_cdc = diff_table_or_view(_proxy, _before.cdc, _after.cdc, _reload, [&] (schema_mutations sm, schema_diff_side) {
+        return create_table_from_mutations(_proxy, std::move(sm), user_types, nullptr);
+    });
+    local_tables = diff_table_or_view(_proxy, _before.tables, _after.tables, _reload, [&] (schema_mutations sm, schema_diff_side side) {
+        // If the table has CDC enabled, find the CDC schema version and set it in the table schema.
+        // If the table is created or altered with CDC enabled, then the CDC
+        // table is also created or altered in the same operation, so we can
+        // find its schema version in the CDC schemas we created above in
+        // local_cdc.
+        query::result_set rs(sm.columnfamilies_mutation());
+        const query::result_set_row& table_row = rs.row(0);
+
+        auto ks_name = table_row.get_nonnull<sstring>("keyspace_name");
+        auto cf_name = table_row.get_nonnull<sstring>("table_name");
+        auto cdc_name = cdc::log_name(cf_name);
+
+        schema_ptr cdc_schema; // optional CDC schema of this table
+
+        // we only need to set the cdc schema for created schemas and new altered schemas.
+        // old altered schemas that we create here will not be used for generating cdc mutations.
+        if (side == schema_diff_side::right) {
+            for (const auto& cdc_created : local_cdc.created) {
+                const auto& new_cdc_schema = cdc_created;
+                if (new_cdc_schema->ks_name() == ks_name && new_cdc_schema->cf_name() == cdc_name) {
+                    cdc_schema = new_cdc_schema;
+                    break;
+                }
+            }
+            for (const auto& cdc_altered : local_cdc.altered) {
+                const auto& new_cdc_schema = cdc_altered.new_schema;
+                if (new_cdc_schema->ks_name() == ks_name && new_cdc_schema->cf_name() == cdc_name) {
+                    cdc_schema = new_cdc_schema;
+                    break;
+                }
+            }
+        }
+
+        return create_table_from_mutations(_proxy, std::move(sm), user_types, cdc_schema);
     });
     local_views = diff_table_or_view(_proxy, _before.views, _after.views, _reload, [&] (schema_mutations sm, schema_diff_side side) {
         // The view schema mutation should be created with reference to the base table schema because we definitely know it by now.
@@ -641,11 +682,14 @@ future<> schema_applier::merge_tables_and_views()
 
     // create schema_ptrs for all shards
     frozen_schema_diff tables_frozen = co_await local_tables.freeze();
+    frozen_schema_diff cdc_frozen = co_await local_cdc.freeze();
     frozen_schema_diff views_frozen = co_await local_views.freeze();
-    co_await _affected_tables_and_views.tables_and_views.invoke_on_others([this, &tables_frozen, &views_frozen] (affected_tables_and_views_per_shard& tables_and_views) -> future<> {
+    co_await _affected_tables_and_views.tables_and_views.invoke_on_others([this, &tables_frozen, &cdc_frozen, &views_frozen] (affected_tables_and_views_per_shard& tables_and_views) -> future<> {
         auto& db = _proxy.local().get_db().local();
         tables_and_views.tables = co_await schema_diff_per_shard::copy_from(
                 db, _types_storage, tables_frozen);
+        tables_and_views.cdc = co_await schema_diff_per_shard::copy_from(
+                db, _types_storage, cdc_frozen);
         tables_and_views.views = co_await schema_diff_per_shard::copy_from(
                 db, _types_storage, views_frozen);
     });
@@ -661,23 +705,28 @@ future<> schema_applier::merge_tables_and_views()
         _affected_tables_and_views.table_shards.insert({uuid,
                 co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
     });
+    co_await max_concurrent_for_each(local_cdc.dropped, max_concurrent, [&db, this] (schema_ptr& dt) -> future<> {
+        auto uuid = dt->id();
+        _affected_tables_and_views.table_shards.insert({uuid,
+                co_await replica::database::prepare_drop_table_on_all_shards(db, uuid)});
+    });
 }
 
 future<frozen_schema_diff> schema_diff_per_shard::freeze() const {
     frozen_schema_diff result;
     for (const auto& c : created) {
-        result.created.emplace_back(frozen_schema_with_base_info(c));
+        result.created.emplace_back(extended_frozen_schema(c));
         co_await coroutine::maybe_yield();
     }
     for (const auto& a : altered) {
         result.altered.push_back(frozen_schema_diff::altered_schema{
-            .old_schema = frozen_schema_with_base_info(a.old_schema),
-            .new_schema = frozen_schema_with_base_info(a.new_schema),
+            .old_schema = extended_frozen_schema(a.old_schema),
+            .new_schema = extended_frozen_schema(a.new_schema),
         });
         co_await coroutine::maybe_yield();
     }
     for (const auto& d : dropped) {
-        result.dropped.emplace_back(frozen_schema_with_base_info(d));
+        result.dropped.emplace_back(extended_frozen_schema(d));
         co_await coroutine::maybe_yield();
     }
     co_return result;
@@ -715,16 +764,20 @@ static future<> notify_tables_and_views(service::migration_notifier& notifier, c
     };
 
     const auto& tables = diff.tables_and_views.local().tables;
+    const auto& cdc = diff.tables_and_views.local().cdc;
     const auto& views = diff.tables_and_views.local().views;
 
     // View drops are notified first, because a table can only be dropped if its views are already deleted
     co_await notify(views.dropped, [&] (auto&& dt) { return notifier.drop_view(view_ptr(dt)); });
     co_await notify(tables.dropped, [&] (auto&& dt) { return notifier.drop_column_family(dt); });
+    co_await notify(cdc.dropped, [&] (auto&& dt) { return notifier.drop_column_family(dt); });
     // Table creations are notified first, in case a view is created right after the table
     co_await notify(tables.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
+    co_await notify(cdc.created, [&] (auto&& gs) { return notifier.create_column_family(gs); });
     co_await notify(views.created, [&] (auto&& gs) { return notifier.create_view(view_ptr(gs)); });
     // Table altering is notified first, in case new base columns appear
     co_await notify(tables.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
+    co_await notify(cdc.altered, [&] (auto&& altered) { return notifier.update_column_family(altered.new_schema, *it++); });
     co_await notify(views.altered, [&] (auto&& altered) { return notifier.update_view(view_ptr(altered.new_schema), *it++); });
 }
 
@@ -782,13 +835,38 @@ future<> schema_applier::merge_aggregates() {
     });
 }
 
+struct extracted_cdc {
+    std::map<table_id, schema_mutations> tables_without_cdc;
+    std::map<table_id, schema_mutations> cdc_tables;
+};
+
+static extracted_cdc extract_cdc(std::map<table_id, schema_mutations> tables) {
+    std::map<table_id, schema_mutations> cdc_tables;
+
+    auto it = tables.begin();
+    while (it != tables.end()) {
+        if (it->second.partitioner() == cdc::cdc_partitioner::classname) {
+            auto node = tables.extract(it++);
+            cdc_tables.insert(std::move(node));
+        } else {
+            ++it;
+        }
+    }
+
+    return extracted_cdc{std::move(tables), std::move(cdc_tables)};
+}
+
 future<schema_persisted_state> schema_applier::get_schema_persisted_state() {
+    auto tables_and_cdc = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::table, _affected_tables);
+    auto [tables, cdc] = extract_cdc(std::move(tables_and_cdc));
+
     schema_persisted_state v{
         .keyspaces = co_await read_schema_for_keyspaces(_proxy, KEYSPACES, _keyspaces),
         .scylla_keyspaces = co_await read_schema_for_keyspaces(_proxy, SCYLLA_KEYSPACES, _keyspaces),
-        .tables = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::table, _affected_tables),
+        .tables = std::move(tables),
         .types = co_await read_schema_for_keyspaces(_proxy, TYPES, _keyspaces),
         .views = co_await read_tables_for_keyspaces(_proxy, _keyspaces, table_kind::view, _affected_tables),
+        .cdc = std::move(cdc),
         .functions = co_await read_schema_for_keyspaces(_proxy, FUNCTIONS, _keyspaces),
         .aggregates = co_await read_schema_for_keyspaces(_proxy, AGGREGATES, _keyspaces),
         .scylla_aggregates = co_await read_schema_for_keyspaces(_proxy, SCYLLA_AGGREGATES, _keyspaces),
@@ -897,6 +975,7 @@ public:
         };
         auto& tables_and_views = _sa._affected_tables_and_views.tables_and_views.local();
         co_await include_pending_changes(tables_and_views.tables);
+        co_await include_pending_changes(tables_and_views.cdc);
         co_await include_pending_changes(tables_and_views.views);
 
         for (auto& [id, schema] : table_schemas) {
@@ -944,6 +1023,7 @@ void schema_applier::commit_tables_and_views() {
     auto& db = sharded_db.local();
     auto& diff = _affected_tables_and_views;
     const auto& tables = diff.tables_and_views.local().tables;
+    const auto& cdc = diff.tables_and_views.local().cdc;
     const auto& views = diff.tables_and_views.local().views;
 
     for (auto& dropped_view : views.dropped) {
@@ -953,6 +1033,15 @@ void schema_applier::commit_tables_and_views() {
     for (auto& dropped_table : tables.dropped) {
         auto s = dropped_table.get();
         replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
+    }
+    for (auto& dropped_cdc : cdc.dropped) {
+        auto s = dropped_cdc.get();
+        replica::database::drop_table(sharded_db, s->ks_name(), s->cf_name(), true, diff.table_shards[s->id()]);
+    }
+
+    for (auto& schema : cdc.created) {
+        auto& ks = db.find_keyspace(schema->ks_name());
+        db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
     }
 
     for (auto& schema : tables.created) {
@@ -965,7 +1054,11 @@ void schema_applier::commit_tables_and_views() {
         db.add_column_family(ks, schema, ks.make_column_family_config(*schema, db), replica::database::is_new_cf::yes, _pending_token_metadata.local());
     }
 
-    diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + views.altered.size());
+    diff.tables_and_views.local().columns_changed.reserve(tables.altered.size() + cdc.altered.size() + views.altered.size());
+    for (auto&& altered : cdc.altered) {
+        bool changed = db.update_column_family(altered.new_schema);
+        diff.tables_and_views.local().columns_changed.push_back(changed);
+    }
     for (auto&& altered : boost::range::join(tables.altered, views.altered)) {
         bool changed = db.update_column_family(altered.new_schema);
         diff.tables_and_views.local().columns_changed.push_back(changed);
@@ -1052,6 +1145,10 @@ future<> schema_applier::finalize_tables_and_views() {
         auto s = dropped_table.get();
         co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
     }
+    for (auto& dropped_cdc : diff.tables_and_views.local().cdc.dropped) {
+        auto s = dropped_cdc.get();
+        co_await replica::database::cleanup_drop_table_on_all_shards(sharded_db, _sys_ks, true, diff.table_shards[s->id()]);
+    }
 
     if (_tablet_hint) {
         auto& db = sharded_db.local();
@@ -1062,7 +1159,11 @@ future<> schema_applier::finalize_tables_and_views() {
 
     co_await sharded_db.invoke_on_all([&diff] (replica::database& db) -> future<> {
         const auto& tables = diff.tables_and_views.local().tables;
+        const auto& cdc = diff.tables_and_views.local().cdc;
         const auto& views = diff.tables_and_views.local().views;
+        for (auto& created_cdc : cdc.created) {
+            co_await db.make_column_family_directory(created_cdc);
+        }
         for (auto& created_table : tables.created) {
             co_await db.make_column_family_directory(created_table);
         }

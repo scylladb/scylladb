@@ -28,17 +28,17 @@ public:
     frozen_schema(const frozen_schema&) = default;
     frozen_schema& operator=(const frozen_schema&) = default;
     frozen_schema& operator=(frozen_schema&&) = default;
-    schema_ptr unfreeze(const db::schema_ctxt&, std::optional<db::view::base_dependent_view_info> base_info = {}) const;
+    schema_ptr unfreeze(const db::schema_ctxt&, schema_ptr cdc_schema, std::optional<db::view::base_dependent_view_info> base_info = {}) const;
     const bytes_ostream& representation() const;
 };
 
-// To unfreeze view without base table added to schema registry
-// we need base_info.
-class frozen_schema_with_base_info : public frozen_schema {
-public:
-    frozen_schema_with_base_info(const schema_ptr& c);
+// A frozen schema with additional information that is needed to be transported
+// with it to be used for unfreezing it.
+struct extended_frozen_schema {
+    extended_frozen_schema(const schema_ptr& c);
     schema_ptr unfreeze(const db::schema_ctxt& ctxt) const;
-private:
-    // Set only for views.
-    std::optional<db::view::base_dependent_view_info> base_info;
+
+    frozen_schema fs;
+    std::optional<db::view::base_dependent_view_info> base_info; // Set only for views.
+    std::optional<frozen_schema> frozen_cdc_schema; // Set only for tables with CDC enabled.
 };
