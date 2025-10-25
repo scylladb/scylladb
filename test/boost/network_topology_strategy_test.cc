@@ -194,7 +194,7 @@ void full_ring_check(const std::vector<ring_point>& ring_points,
     }
 }
 
-void full_ring_check(const tablet_map& tmap,
+void full_ring_check(const shared_tablet_map& tmap,
                      replication_strategy_ptr rs_ptr,
                      locator::token_metadata_ptr tmptr) {
     auto& tm = *tmptr;
@@ -214,7 +214,7 @@ void full_ring_check(const tablet_map& tmap,
     }
 }
 
-void check_tablets_balance(const tablet_map& tmap,
+void check_tablets_balance(const shared_tablet_map& tmap,
         const network_topology_strategy* nts_ptr,
         const locator::topology& topo) {
     std::unordered_map<sstring, std::unordered_map<sstring, std::unordered_map<host_id, std::unordered_map<unsigned, uint64_t>>>> load_map;

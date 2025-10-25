@@ -77,7 +77,7 @@ static future<> test_basic_operations(app_template& app) {
         testlog.info("Generating tablet metadata");
 
         for (int i = 0; i < nr_tables; ++i) {
-            tablet_map tmap(tablets_per_table);
+            shared_tablet_map tmap(tablets_per_table);
 
             for (tablet_id j : tmap.tablet_ids()) {
                 aborted.check();
@@ -87,7 +87,7 @@ static future<> test_basic_operations(app_template& app) {
                     replicas.push_back({h1, 0});
                 }
                 SCYLLA_ASSERT(std::cmp_equal(replicas.size(), rf));
-                tmap.set_tablet(j, tablet_info{std::move(replicas)});
+                tmap.set_tablet(j, shared_tablet_info{std::move(replicas)});
                 ++total_tablets;
             }
 
