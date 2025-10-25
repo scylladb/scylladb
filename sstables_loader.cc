@@ -174,7 +174,7 @@ public:
     host_id_vector_replica_set get_endpoints(const dht::token& token) const;
     future<> stream_sstable_mutations(streaming::plan_id, const dht::partition_range&, std::vector<sstables::shared_sstable>);
 protected:
-    virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token) const;
+    virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const;
     future<> stream_sstables(const dht::partition_range&, std::vector<sstables::shared_sstable>, shared_ptr<stream_progress> progress);
 private:
     host_id_vector_replica_set get_all_endpoints(const dht::token& token) const;
@@ -190,7 +190,7 @@ public:
     }
 
     virtual future<> stream(shared_ptr<stream_progress> on_streamed) override;
-    virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token) const override;
+    virtual host_id_vector_replica_set get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const override;
 
 private:
     host_id_vector_replica_set to_replica_set(const locator::tablet_replica_set& replicas) const {
@@ -211,7 +211,7 @@ private:
 };
 
 host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& token) const {
-    return get_all_endpoints(token) | std::views::filter([&topo = _erm->get_topology(), scope = _stream_scope] (const auto& ep) {
+    auto host_filter = [&topo = _erm->get_topology(), scope = _stream_scope] (const locator::host_id& ep) {
         switch (scope) {
         case stream_scope::all:
             return true;
@@ -222,28 +222,35 @@ host_id_vector_replica_set sstable_streamer::get_endpoints(const dht::token& tok
         case stream_scope::node:
             return topo.is_me(ep);
         }
-    }) | std::ranges::to<host_id_vector_replica_set>();
+    };
+
+    if (_primary_replica_only) {
+        if (_stream_scope != stream_scope::all) {
+            throw std::runtime_error("Scoped streaming of primary replica only is not supported yet");
+        }
+        return get_primary_endpoints(token, std::move(host_filter));
+    }
+    return get_all_endpoints(token) | std::views::filter(std::move(host_filter)) | std::ranges::to<host_id_vector_replica_set>();
 }
 
 host_id_vector_replica_set sstable_streamer::get_all_endpoints(const dht::token& token) const {
-    if (_primary_replica_only) {
-        return get_primary_endpoints(token);
-    }
     auto current_targets = _erm->get_natural_replicas(token);
     auto pending = _erm->get_pending_replicas(token);
     std::move(pending.begin(), pending.end(), std::back_inserter(current_targets));
     return current_targets;
 }
 
-host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token) const {
-    auto current_targets = _erm->get_natural_replicas(token);
+host_id_vector_replica_set sstable_streamer::get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const {
+    auto current_targets = _erm->get_natural_replicas(token) | std::views::filter(std::move(filter)) | std::ranges::to<host_id_vector_replica_set>();
     current_targets.resize(1);
     return current_targets;
 }
 
-host_id_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(const dht::token& token) const {
+host_id_vector_replica_set tablet_sstable_streamer::get_primary_endpoints(const dht::token& token, std::function<bool(const locator::host_id&)> filter) const {
     auto tid = _tablet_map.get_tablet_id(token);
-    auto replicas = locator::get_primary_replicas(_tablet_map.get_tablet_info(tid), _tablet_map.get_tablet_transition_info(tid));
+    auto replicas = locator::get_primary_replicas(_tablet_map, tid, [filter = std::move(filter)] (const locator::tablet_replica& replica) {
+        return filter(replica.host);
+    });
     return to_replica_set(replicas);
 }
 
