@@ -69,6 +69,7 @@ public:
     // Generates n mutations sharing the same schema nad sorted by their decorated keys.
     utils::chunked_vector<mutation> operator()(size_t n);
     schema_ptr schema() const;
+    void set_schema(schema_ptr s);
     clustering_key make_random_key();
     range_tombstone make_random_range_tombstone();
     std::vector<dht::decorated_key> make_partition_keys(size_t n);
