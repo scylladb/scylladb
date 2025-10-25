@@ -41,7 +41,7 @@ using timestamp_type = api::timestamp_type;
 
 compaction_descriptor compaction_strategy_impl::make_major_compaction_job(std::vector<sstables::shared_sstable> candidates, int level, uint64_t max_sstable_bytes) {
     // run major compaction in maintenance priority
-    return compaction_descriptor(std::move(candidates), level, max_sstable_bytes);
+    return compaction_descriptor(std::move(candidates), level, max_sstable_bytes, sstables::run_id::create_random_id(), compaction_type_options::make_major());
 }
 
 std::vector<compaction_descriptor> compaction_strategy_impl::get_cleanup_compaction_jobs(compaction_group_view& table_s, std::vector<sstables::shared_sstable> candidates) const {
