@@ -30,6 +30,13 @@ Removing a Running Node
 
    .. include:: /operating-scylla/_common/decommission_warning.rst
 
+   .. warning::
+
+       When removing the last node from a rack, all existing keyspaces must remain :term:`RF-rack-valid <RF-rack-valid keyspace>`.
+
+       If the `rf_rack_valid_keyspaces` option is set, the node removal will be rejected and the operation will fail.
+       Otherwise, violating this invariant may result in data inconsistencies, performance problems, or other issues.
+
 #. Run the ``nodetool netstats`` command to monitor the progress of the token reallocation.
 #. Run the ``nodetool status`` command to verify that the node has been removed.
 

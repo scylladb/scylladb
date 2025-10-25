@@ -62,7 +62,7 @@ async def test_unfinished_writes_during_shutdown(request: pytest.FixtureRequest,
         async def do_add_node():
             logger.info("Adding a node to the cluster")
             try:
-                await manager.server_add(property_file={"dc": "dc1", "rack": "rack4"})
+                await manager.server_add(property_file={"dc": "dc1", "rack": servers[0].rack})
             except Exception as exc:
                 logger.error(f"Failed to add a new node: {exc}")
 
