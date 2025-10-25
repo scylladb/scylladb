@@ -55,13 +55,14 @@ public:
     struct generate_counters_tag { };
     using generate_counters = bool_class<generate_counters_tag>;
     using generate_uncompactable = bool_class<class generate_uncompactable_tag>;
+    using compress = bool_class<struct compress_tag>;
 
     // With generate_uncompactable::yes, the mutation will be uncompactable, that
     // is no higher level tombstone will cover lower level tombstones and no
     // tombstone will cover data, i.e. compacting the mutation will not result
     // in any changes.
-    explicit random_mutation_generator(generate_counters, local_shard_only lso = local_shard_only::yes,
-            generate_uncompactable uc = generate_uncompactable::no, std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf");
+    explicit random_mutation_generator(generate_counters, local_shard_only lso = local_shard_only::yes, generate_uncompactable uc = generate_uncompactable::no,
+            std::optional<uint32_t> seed_opt = std::nullopt, const char* ks_name="ks", const char* cf_name="cf", compress c = compress::yes);
     random_mutation_generator(generate_counters gc, uint32_t seed)
             : random_mutation_generator(gc, local_shard_only::yes, generate_uncompactable::no, seed) {}
     ~random_mutation_generator();
