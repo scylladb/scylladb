@@ -531,6 +531,29 @@ void backlog_controller::update_controller(float shares) {
     _scheduling_group.set_shares(shares);
 }
 
+void compaction_controller::register_metrics() {
+    namespace sm = seastar::metrics;
+
+    _metrics.add_group("compaction_controller", {
+        sm::make_gauge("computed_shares", [this] { return _computed_shares; },
+                       sm::description("Holds the shares value last computed by the compaction controller.")),
+    });
+}
+
+void compaction_controller::update_controller(float shares) {
+    _computed_shares = shares;
+    if (_max_shares > 0.0f && shares > _max_shares) {
+        shares = _max_shares;
+    }
+    backlog_controller::update_controller(shares);
+}
+
+void compaction_controller::update_max_shares(float max_shares) {
+    _max_shares = max_shares;
+    // Update the shares of the controller w.r.to the new max shares.
+    update_controller(_computed_shares);
+}
+
 namespace replica {
 
 static const metrics::label class_label("class");

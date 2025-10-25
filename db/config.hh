@@ -189,6 +189,7 @@ public:
     named_value<bool> auto_adjust_flush_quota;
     named_value<float> memtable_flush_static_shares;
     named_value<float> compaction_static_shares;
+    named_value<float> compaction_max_shares;
     named_value<bool> compaction_enforce_min_threshold;
     named_value<uint32_t> compaction_flush_all_tables_before_major_seconds;
     named_value<sstring> cluster_name;

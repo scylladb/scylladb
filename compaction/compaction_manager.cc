@@ -719,6 +719,12 @@ future<> compaction_manager::update_static_shares(float static_shares) {
     return _compaction_controller.update_static_shares(static_shares);
 }
 
+future<> compaction_manager::update_max_shares(float max_shares) {
+    cmlog.info("Updating max shares to {}", max_shares);
+    _compaction_controller.update_max_shares(max_shares);
+    return make_ready_future();
+}
+
 compaction_reenabler::compaction_reenabler(compaction_manager& cm, compaction_group_view& t)
     : _cm(cm)
     , _table(&t)
@@ -867,8 +873,9 @@ auto fmt::formatter<compaction::compaction_task_executor>::format(const compacti
 
 namespace compaction {
 
-inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg, uint64_t static_shares, std::function<double()> fn) {
-    return compaction_controller(csg, static_shares, 250ms, std::move(fn));
+inline compaction_controller make_compaction_controller(const compaction_manager::scheduling_group& csg,
+    uint64_t static_shares, std::function<double()> fn, double max_shares, compaction_controller::expose_metrics expose_metrics) {
+    return compaction_controller(csg, static_shares, 250ms, std::move(fn), max_shares, expose_metrics);
 }
 
 compaction::compaction_state::~compaction_state() {
@@ -1025,7 +1032,7 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
             return compaction_controller::normalization_factor;
         }
         return b;
-    }))
+    }, _cfg.max_shares.get(), compaction_controller::expose_metrics::yes))
     , _backlog_manager(_compaction_controller)
     , _early_abort_subscription(as.subscribe([this] () noexcept {
         do_stop();
@@ -1033,6 +1040,8 @@ compaction_manager::compaction_manager(config cfg, abort_source& as, tasks::task
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _update_compaction_static_shares_action([this] { return update_static_shares(static_shares()); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _update_compaction_max_shares_action([this] { return update_max_shares(max_shares()); })
+    , _compaction_max_shares_observer(_cfg.max_shares.observe(_update_compaction_max_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(_shared_tombstone_gc_state) {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
@@ -1051,11 +1060,13 @@ compaction_manager::compaction_manager(tasks::task_manager& tm)
     , _sys_ks("compaction_manager::system_keyspace")
     , _cfg(config{ .available_memory = 1 })
     , _compaction_submission_timer(compaction_sg(), compaction_submission_callback())
-    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }))
+    , _compaction_controller(make_compaction_controller(compaction_sg(), 1, [] () -> float { return 1.0; }, 0.0f, compaction_controller::expose_metrics::no))
     , _backlog_manager(_compaction_controller)
     , _throughput_updater(serialized_action([this] { return update_throughput(throughput_mbs()); }))
     , _update_compaction_static_shares_action([] { return make_ready_future<>(); })
     , _compaction_static_shares_observer(_cfg.static_shares.observe(_update_compaction_static_shares_action.make_observer()))
+    , _update_compaction_max_shares_action([] { return make_ready_future<>(); })
+    , _compaction_max_shares_observer(_cfg.max_shares.observe(_update_compaction_max_shares_action.make_observer()))
     , _strategy_control(std::make_unique<strategy_control>(*this))
     , _tombstone_gc_state(_shared_tombstone_gc_state) {
     tm.register_module(_task_manager_module->get_name(), _task_manager_module);
@@ -1297,6 +1308,7 @@ future<> compaction_manager::really_do_stop() noexcept {
     co_await _compaction_controller.shutdown();
     co_await _throughput_updater.join();
     co_await _update_compaction_static_shares_action.join();
+    co_await _update_compaction_max_shares_action.join();
     cmlog.info("Stopped");
 }
 
