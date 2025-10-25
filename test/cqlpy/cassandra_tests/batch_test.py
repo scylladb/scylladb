@@ -44,39 +44,21 @@ def testNonCounterInCounterBatch(cql, test_keyspace):
     with pytest.raises(InvalidRequest):
         sendBatch(cql, test_keyspace, BatchType.COUNTER, False, True, False)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testNonCounterInLoggedBatch(cql, test_keyspace):
     sendBatch(cql, test_keyspace, BatchType.LOGGED, False, True, False)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testNonCounterInUnLoggedBatch(cql, test_keyspace):
     sendBatch(cql, test_keyspace, BatchType.UNLOGGED, False, True, False)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterInCounterBatch(cql, test_keyspace):
     sendBatch(cql, test_keyspace, BatchType.COUNTER, True, False, False)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterInUnLoggedBatch(cql, test_keyspace):
     sendBatch(cql, test_keyspace, BatchType.UNLOGGED, True, False, False)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testTableWithClusteringInLoggedBatch(cql, test_keyspace):
     sendBatch(cql, test_keyspace, BatchType.LOGGED, False, False, True)
 
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testTableWithClusteringInUnLoggedBatch(cql, test_keyspace):
     sendBatch(cql, test_keyspace, BatchType.UNLOGGED, False, False, True)
 

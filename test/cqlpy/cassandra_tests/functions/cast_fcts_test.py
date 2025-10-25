@@ -242,9 +242,6 @@ def testCastsWithReverseOrder(cql, test_keyspace):
         #           row("2.0"))
 
 # Reproduces #14501:
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testCounterCastsInSelectionClause(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(a int primary key, b counter)") as table:
         execute(cql, table, "UPDATE %s SET b = b + 2 WHERE a = 1")

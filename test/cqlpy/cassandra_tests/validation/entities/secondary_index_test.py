@@ -282,9 +282,6 @@ def testIndexOnCompoundRowKey(cql, test_keyspace):
                        ["t", 1, 4, 3])
 
 # Migrated from cql_tests.py:TestCQL.secondary_index_counters()
-@pytest.mark.parametrize("test_keyspace",
-                         [pytest.param("tablets", marks=[pytest.mark.xfail(reason="issue #18180")]), "vnodes"],
-                         indirect=True)
 def testIndexOnCountersInvalid(cql, test_keyspace):
     with create_table(cql, test_keyspace, "(k int PRIMARY KEY, c counter)") as table:
         assert_invalid(cql, table, "CREATE INDEX ON %s(c)")
