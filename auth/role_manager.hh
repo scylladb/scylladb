@@ -17,11 +17,16 @@
 #include <seastar/core/format.hh>
 #include <seastar/core/sstring.hh>
 
+#include "auth/common.hh"
 #include "auth/resource.hh"
 #include "cql3/description.hh"
 #include "seastarx.hh"
 #include "exceptions/exceptions.hh"
 #include "service/raft/raft_group0_client.hh"
+
+namespace service {
+class query_state;
+};
 
 namespace auth {
 
@@ -167,9 +172,9 @@ public:
     ///   (role2, role3)
     /// }
     ///  
-    virtual future<role_to_directly_granted_map> query_all_directly_granted() = 0;
+    virtual future<role_to_directly_granted_map> query_all_directly_granted(::service::query_state& = internal_distributed_query_state()) = 0;
 
-    virtual future<role_set> query_all() = 0;
+    virtual future<role_set> query_all(::service::query_state& = internal_distributed_query_state()) = 0;
 
     virtual future<bool> exists(std::string_view role_name) = 0;
 
@@ -186,12 +191,12 @@ public:
     ///
     /// \returns the value of the named attribute, if one is set.
     ///
-    virtual future<std::optional<sstring>> get_attribute(std::string_view role_name, std::string_view attribute_name) = 0;
+    virtual future<std::optional<sstring>> get_attribute(std::string_view role_name, std::string_view attribute_name, ::service::query_state& = internal_distributed_query_state()) = 0;
 
     ///
     /// \returns a mapping of each role's value for the named attribute, if one is set for the role.
     ///
-    virtual future<attribute_vals> query_attribute_for_all(std::string_view attribute_name) = 0;
+    virtual future<attribute_vals> query_attribute_for_all(std::string_view attribute_name, ::service::query_state& = internal_distributed_query_state()) = 0;
 
     /// Sets `attribute_name` with `attribute_value` for `role_name`.
     /// \returns an exceptional future with nonexistant_role if the role does not exist.
