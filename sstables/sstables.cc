@@ -2691,6 +2691,14 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
     options.buffer_size = sstable_buffer_size;
     options.read_ahead = 4;
     options.dynamic_adjustments = std::move(history);
+    return data_stream(pos, len, permit, std::move(trace_state), history, std::move(options), raw, integrity, std::move(error_handler));
+}
+
+future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
+        reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
+        file_input_stream_options options,
+        raw_stream raw, integrity_check integrity,
+        integrity_error_handler error_handler) {
 
     file f = make_tracked_file(_data_file, permit);
     if (trace_state) {
@@ -3743,7 +3751,7 @@ sstable_stream_source::sstable_stream_source(shared_sstable sst, component_type 
     , _type(type)
 {}
 
-std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot& snapshot) {
+std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const sstables::sstable_files_snapshot& snapshot, reader_permit permit) {
     std::vector<std::unique_ptr<sstable_stream_source>> result;
     result.reserve(snapshot.files.size());
 
@@ -3840,6 +3848,23 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
         }
     };
 
+    class sstable_data_stream_source_impl : public sstable_stream_source {
+        file _file;
+        reader_permit _permit;
+        mutable lw_shared_ptr<checksum> _checksum;
+    public:
+        sstable_data_stream_source_impl(shared_sstable table, component_type type, file f, reader_permit permit)
+            : sstable_stream_source(std::move(table), type)
+            , _file(std::move(f))
+            , _permit(std::move(permit))
+        {}
+        future<input_stream<char>> input(const file_input_stream_options& options) const override {
+            _checksum = co_await _sst->read_checksum();
+            co_await _sst->read_digest();
+            co_return co_await _sst->data_stream(0, _sst->data_size(), _permit, nullptr, nullptr, options, sstable::raw_stream::no, integrity_check::yes);
+        }
+    };
+
     auto& files = snapshot.files;
 
     auto add = [&](component_type type, file f) {
@@ -3853,7 +3878,9 @@ std::vector<std::unique_ptr<sstable_stream_source>> create_stream_sources(const 
         std::throw_with_nested(std::invalid_argument("Missing required sstable component"));
     }
     for (auto&& [type, f] : files) {
-        if (type != component_type::TOC && type != component_type::Scylla) {
+        if (type == component_type::Data) {
+            result.emplace_back(std::make_unique<sstable_data_stream_source_impl>(snapshot.sst, type, std::move(f), std::move(permit)));
+        } else if (type != component_type::TOC && type != component_type::Scylla) {
             add(type, std::move(f));
         }
     }
