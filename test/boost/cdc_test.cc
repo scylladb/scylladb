@@ -18,6 +18,7 @@
 #include "cdc/log.hh"
 #include "cdc/cdc_options.hh"
 #include "cdc/metadata.hh"
+#include "db/system_keyspace.hh"
 #include "schema/schema_builder.hh"
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/cql_test_env.hh"
@@ -2341,6 +2342,279 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_generate_stream_diff) {
         testlog.info("test_construct_next_stream_set: expected_opened={}", expected_opened);
 
         do_test_diff(a, b, expected_closed, expected_opened);
+    }
+}
+
+struct cdc_gc_test_config {
+    table_id table;
+    std::vector<std::vector<cdc::stream_id>> streams;
+    size_t new_base_stream;
+};
+
+void do_cdc_gc_test(cql_test_env& e, const cdc_gc_test_config& cfg) {
+    auto do_group0_write = [&] (std::function<future<utils::chunked_vector<mutation>>(api::timestamp_type ts)> fn) -> future<> {
+        while (true) {
+            auto& group0_client = e.get_raft_group0_client();
+            abort_source as;
+            auto guard = group0_client.start_operation(as).get();
+            auto ts = guard.write_timestamp();
+
+            auto muts = fn(ts).get();
+            utils::chunked_vector<canonical_mutation> cmuts = {muts.begin(), muts.end()};
+
+            auto group0_cmd = group0_client.prepare_command(
+                ::service::write_mutations{
+                    .mutations{std::move(cmuts)},
+                },
+                guard,
+                "test_cdc_gc_mutations");
+            try {
+                group0_client.add_entry(std::move(group0_cmd), std::move(guard), as, ::service::raft_timeout{}).get();
+            } catch (::service::group0_concurrent_modification&) {
+                continue;
+            }
+            break;
+        }
+        return make_ready_future<>();
+    };
+
+    std::vector<db_clock::time_point> stream_ts;
+    {
+        auto db_now = db_clock::now();
+        auto next_stream_ts = db_now;
+        for (size_t i = 0; i < cfg.streams.size(); i++) {
+            stream_ts.emplace_back(next_stream_ts);
+            next_stream_ts += std::chrono::seconds(5);
+        }
+    }
+
+    // write base stream to cdc_streams_state
+    do_group0_write([&] (api::timestamp_type ts) -> future<utils::chunked_vector<mutation>> {
+        auto m = co_await cdc::create_table_streams_mutation(cfg.table, stream_ts[0], cfg.streams[0], ts);
+        co_return utils::chunked_vector<mutation>({ std::move(m) });
+    }).get();
+
+    // write stream diffs to cdc_streams_history
+    for (size_t i = 0; i + 1 < cfg.streams.size(); i++) {
+        do_group0_write([&] (api::timestamp_type ts) -> future<utils::chunked_vector<mutation>> {
+            auto history_schema = db::system_keyspace::cdc_streams_history();
+            auto diff = co_await cdc::metadata::generate_stream_diff(cfg.streams[i], cfg.streams[i+1]);
+            auto mut = co_await get_switch_streams_mutation(cfg.table, stream_ts[i+1], diff, ts);
+            co_return utils::chunked_vector<mutation>({ std::move(mut) });
+        }).get();
+    }
+
+    // verify the base stream (streams[0]) is written to cdc_streams_state
+    e.execute_cql(format("SELECT stream_id FROM system.cdc_streams_state WHERE table_id = {}", cfg.table.uuid())).then([&] (shared_ptr<cql_transport::messages::result_message> msg) {
+        auto row_assert = assert_that(msg).is_rows()
+                    .with_size(cfg.streams[0].size());
+        for (auto sid : cfg.streams[0]) {
+            row_assert.with_row({ {sid.to_bytes()} });
+        }
+    }).get();
+
+    // gc the cdc streams with the new base stream cfg.new_base_stream
+    testlog.info("test_cdc_gc_mutations: start gc");
+
+    do_group0_write([&] (api::timestamp_type ts) -> future<utils::chunked_vector<mutation>> {
+        return cdc::get_cdc_stream_gc_mutations(cfg.table, stream_ts[cfg.new_base_stream], cfg.streams[cfg.new_base_stream], ts);
+    }).get();
+
+    // verify the new base stream is written to cdc_streams_state
+    e.execute_cql(format("SELECT stream_id FROM system.cdc_streams_state WHERE table_id = {}", cfg.table.uuid())).then([&] (shared_ptr<cql_transport::messages::result_message> msg) {
+        auto row_assert = assert_that(msg).is_rows()
+                    .with_size(cfg.streams[cfg.new_base_stream].size());
+        for (auto sid : cfg.streams[cfg.new_base_stream]) {
+            row_assert.with_row({ {sid.to_bytes()} });
+        }
+    }).get();
+
+    // verify that cdc_streams_history contains now only the timestamps that are bigger than the new base timestamp
+    e.execute_cql(format("SELECT timestamp FROM system.cdc_streams_history WHERE table_id = {}", cfg.table.uuid())).then([&] (shared_ptr<cql_transport::messages::result_message> msg) {
+        // find the distinct timestamps in cdc_streams_history
+        auto rows = dynamic_pointer_cast<cql_transport::messages::result_message::rows>(msg);
+        auto results = to_bytes(*rows);
+        size_t col_idx = column_index(*rows, "timestamp");
+        std::set<db_clock::time_point> history_ts;
+        for (const auto& row : results) {
+            auto value = row[col_idx];
+            auto ts_val = timestamp_type->deserialize(*value);
+            auto ts = value_cast<db_clock::time_point>(ts_val);
+            history_ts.insert(ts);
+        }
+
+        // verify it's exactly the timestamps that are after the new base stream timestamp
+        auto new_history_base = std::next(stream_ts.begin(), cfg.new_base_stream + 1);
+        BOOST_REQUIRE_EQUAL(std::distance(new_history_base, stream_ts.end()), history_ts.size());
+        for (auto it = new_history_base; it != stream_ts.end(); ++it) {
+            BOOST_REQUIRE(history_ts.contains(*it));
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cdc_gc_mutations) {
+    do_with_cql_env_thread([](cql_test_env& e) {
+
+        {
+            // create stream sets:
+            // 0: 10 20 30
+            // 1: 10    30 40 (20 closed, 40 opened)
+            // then gc with 1 as the new base, so after gc we should have only stream 1
+            // as the base and the history is empty
+
+            auto table = table_id(utils::UUID_gen::get_time_UUID());
+            std::vector<cdc::stream_id> streams0;
+            for (auto t : {10, 20, 30}) {
+                streams0.emplace_back(dht::token(t), 0);
+            }
+            std::vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
+
+            cdc_gc_test_config test1 = {
+                .table = table,
+                .streams = { std::move(streams0), std::move(streams1) },
+                .new_base_stream = 1,
+            };
+
+            do_cdc_gc_test(e, test1);
+
+            e.execute_cql(format("SELECT * FROM system.cdc_streams_history WHERE table_id = {}", table.uuid())).then([] (shared_ptr<cql_transport::messages::result_message> msg) {
+                assert_that(msg).is_rows()
+                        .with_size(0);
+            }).get();
+        }
+
+        {
+            // create stream sets:
+            // 0: 10 20 30
+            // 1: 10    30 40       (20 closed, 40 opened)
+            // 2: 10    30 40 50    (50 opened)
+            // then gc with 1 as the new base, so after gc we should have stream 1
+            // as the base and one history entry for open 50
+
+            auto table = table_id(utils::UUID_gen::get_time_UUID());
+            std::vector<cdc::stream_id> streams0;
+            for (auto t : {10, 20, 30}) {
+                streams0.emplace_back(dht::token(t), 0);
+            }
+            std::vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
+            std::vector<cdc::stream_id> streams2 = {streams0[0], streams0[2], streams1[2], cdc::stream_id(dht::token(50), 0)};
+
+            cdc_gc_test_config test2 = {
+                .table = table,
+                .streams = { std::move(streams0), std::move(streams1), std::move(streams2)},
+                .new_base_stream = 1,
+            };
+
+            do_cdc_gc_test(e, test2);
+
+            e.execute_cql(format("SELECT stream_state, stream_id FROM system.cdc_streams_history WHERE table_id = {}", table.uuid())).then([&] (shared_ptr<cql_transport::messages::result_message> msg) {
+                assert_that(msg).is_rows()
+                        .with_size(1)
+                        .with_row({ {byte_type->decompose(std::to_underlying(cdc::stream_state::opened))}, { test2.streams[2][3].to_bytes() } });
+            }).get();
+        }
+    }).get();
+}
+
+SEASTAR_THREAD_TEST_CASE(test_cdc_gc_get_new_base) {
+    auto make_streams_map = [&](std::vector<std::chrono::seconds> entries) {
+        cdc::table_streams streams_map;
+        auto base_time = db_clock::now() - std::chrono::seconds(100); // Start from 100 seconds ago
+
+        for (const auto& offset : entries) {
+            auto tp = base_time + offset;
+            auto ts = std::chrono::duration_cast<api::timestamp_clock::duration>(tp.time_since_epoch()).count();
+
+            streams_map[ts] = cdc::committed_stream_set{tp, std::vector<cdc::stream_id>{}};
+        }
+        return streams_map;
+    };
+
+    // Test case 1: Single entry
+    {
+        auto streams_map = make_streams_map({
+            std::chrono::seconds(20),
+        });
+
+        // Should point to the only entry
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(50));
+            BOOST_REQUIRE(it == streams_map.begin());
+        }
+
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(150));
+            BOOST_REQUIRE(it == streams_map.begin());
+        }
+    }
+
+    // Test case 2: two entries
+    {
+        auto streams_map = make_streams_map({
+            std::chrono::seconds(30), // covers up to 10 seconds ago
+            std::chrono::seconds(90),
+        });
+
+        // Should point to the first entry
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(80));
+            BOOST_REQUIRE(it == streams_map.begin());
+        }
+
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(50));
+            BOOST_REQUIRE(it == streams_map.begin());
+        }
+
+        // Should point to the second entry
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(10));
+            BOOST_REQUIRE(it == std::next(streams_map.begin()));
+        }
+
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(5));
+            BOOST_REQUIRE(it == std::next(streams_map.begin()));
+        }
+    }
+
+    // Test case 3: multiple entries
+    {
+        auto streams_map = make_streams_map({
+            std::chrono::seconds(10), // covers up to 70 seconds ago
+            std::chrono::seconds(30), // covers up to 40 seconds ago
+            std::chrono::seconds(60), // covers up to 10 seconds ago
+            std::chrono::seconds(90),
+        });
+
+        // Should point to the first entry
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(80));
+            BOOST_REQUIRE(it == streams_map.begin());
+        }
+
+        // Should point to the second entry
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(70));
+            BOOST_REQUIRE(it == std::next(streams_map.begin()));
+        }
+
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(50));
+            BOOST_REQUIRE(it == std::next(streams_map.begin()));
+        }
+
+        // Should point to the third entry
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(15));
+            BOOST_REQUIRE(it == std::next(streams_map.begin(), 2));
+        }
+
+        // Should point to the last entry
+        {
+            auto it = cdc::get_new_base_for_gc(streams_map, std::chrono::seconds(5));
+            BOOST_REQUIRE(it == std::next(streams_map.begin(), 3));
+        }
     }
 }
 

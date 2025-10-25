@@ -263,3 +263,16 @@ To list all available CDC streams for a tablets-based keyspace:
       ...
 
    Query all streams to read the entire CDC log.
+
+Garbage collection of CDC streams metadata
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For tablets-based keyspaces, Scylla periodically performs garbage collection of old CDC streams metadata in the ``system.cdc_timestamps`` and ``system.cdc_streams`` tables.
+This process removes information about streams that are no longer needed, helping to prevent unbounded growth of the metadata tables.
+
+The garbage collection process runs periodically in the background and examines streams that have been closed.
+It removes information about a stream if the stream's close timestamp is older than the configured TTL of the CDC table.
+Since the stream has been closed for longer than the TTL, this means that all rows in this stream have also exceeded their TTL and expired, unless the table's TTL was altered to a smaller value after some rows have been written.
+
+.. warning::
+   When altering the TTL of a CDC table to a smaller value, you can lose information about streams that still contain live rows. Make sure to read all the information you need from the ``system.cdc_timestamps`` and ``system.cdc_streams`` tables before performing such alterations.
