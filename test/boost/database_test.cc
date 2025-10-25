@@ -94,7 +94,7 @@ static future<> apply_mutation(sharded<replica::database>& sharded_db, table_id 
 
 future<> do_with_cql_env_and_compaction_groups_cgs(unsigned cgs, std::function<void(cql_test_env&)> func, cql_test_config cfg = {}, thread_attributes thread_attr = {}) {
     // clean the dir before running
-    if (cfg.db_config->data_file_directories.is_set()) {
+    if (cfg.db_config->data_file_directories.is_set() && cfg.clean_data_dir_before_test) {
         co_await recursive_remove_directory(fs::path(cfg.db_config->data_file_directories()[0]));
         co_await recursive_touch_directory(cfg.db_config->data_file_directories()[0]);
     }
@@ -442,16 +442,22 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_incomplete_sstables) {
 
     temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryTOC);
     touch_file(temp_file_name);
+    // Reproducer for #scylladb/scylladb#26393
+    temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryHashes);
+    touch_file(temp_file_name);
     temp_file_name = sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::Data);
     touch_file(temp_file_name);
 
+    auto test_config = cql_test_config(db_cfg_ptr);
+    test_config.clean_data_dir_before_test = false;
     do_with_cql_env_and_compaction_groups([&sst_dir, &ks, &cf, &temp_sst_dir_2, &temp_sst_dir_3] (cql_test_env& e) {
         require_exist(temp_sst_dir_2, false);
         require_exist(temp_sst_dir_3, false);
 
         require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryTOC), false);
+        require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::TemporaryHashes), false);
         require_exist(sst::filename(sst_dir, ks, cf, sstables::get_highest_sstable_version(), generation_from_value(4), sst::format_types::big, component_type::Data), false);
-    }, db_cfg_ptr).get();
+    }, test_config).get();
 }
 
 SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
@@ -531,6 +537,8 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
                component_basename(gen[7], component_type::TOC) + "\n" +
                component_basename(gen[8], component_type::TOC) + "\n");
 
+    auto test_config = cql_test_config(db_cfg_ptr);
+    test_config.clean_data_dir_before_test = false;
     do_with_cql_env_and_compaction_groups([&] (cql_test_env& e) {
         // Empty log filesst_dir
         // Empty temporary log file
@@ -556,7 +564,7 @@ SEASTAR_THREAD_TEST_CASE(test_distributed_loader_with_pending_delete) {
         require_exist(gen_filename(gen[6], component_type::Data), false);
         require_exist(gen_filename(gen[7], component_type::TemporaryTOC), false);
         require_exist(pending_delete_dir + "/sstables-6-8.log", false);
-    }, db_cfg_ptr).get();
+    }, test_config).get();
 }
 
 // Snapshot tests and their helpers
