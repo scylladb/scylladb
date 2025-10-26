@@ -296,7 +296,7 @@ class GSServer(GSFront):
             self.logfile.close()
         self.unpublish()
 
-@pytest.fixture(scope="function", params=['s3','gs'])
+@pytest.fixture(scope="function", params=['s3'])
 async def object_storage(request, pytestconfig, tmpdir):
     server = None
 

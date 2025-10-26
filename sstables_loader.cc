@@ -635,7 +635,6 @@ class sstables_loader::download_task_impl : public tasks::task_manager::task::im
     sstring _ks;
     sstring _cf;
     sstring _prefix;
-    sstables_loader::stream_scope _scope;
     std::vector<sstring> _sstables;
     struct progress_holder {
         // Wrap stream_progress in a smart pointer to enable polymorphism.
@@ -669,7 +668,6 @@ public:
         , _ks(std::move(ks))
         , _cf(std::move(cf))
         , _prefix(std::move(prefix))
-        , _scope(scope)
         , _sstables(std::move(sstables))
     {
         _status.progress_units = "batches";
@@ -756,10 +754,39 @@ future<> sstables_loader::download_task_impl::run() {
         });
         co_await _progress_per_shard.start();
         _progress_state = progress_state::initialized;
-        co_await _loader.invoke_on_all([this, &sstables_on_shards, table_id] (sstables_loader& loader) mutable -> future<> {
-            co_await loader.load_and_stream(_ks, _cf, table_id, std::move(sstables_on_shards[this_shard_id()]), false, false, _scope,
-                                            _progress_per_shard.local().progress);
+        co_await _loader.invoke_on_all([this, &sstables_on_shards, &shard_aborts](auto&) -> future<> {
+            auto sstables_on_shard = std::move(sstables_on_shards[this_shard_id()]);
+            auto start = std::chrono::system_clock::now();
+            while (true) {
+                for (auto it = sstables_on_shard.cbegin(); it != sstables_on_shard.cend();) {
+                    auto sst_nr = std::min(16z, std::distance(it, sstables_on_shard.cend()));
+                    co_await coroutine::parallel_for_each(it, it + sst_nr, [this, &shard_aborts](const auto& sstable) -> future<> {
+                        auto components = sstable->all_components();
+                        for (const auto& component : components) {
+                            auto client = _loader.local()._storage_manager.get_endpoint_client(_endpoint);
+
+                            auto fqn = sstables::object_name(_bucket, _prefix, sstable->component_basename(component.first));
+                            llog.debug("Trying to download sstable component from {}", fqn);
+                            // llog.debug("Path components 2, bucket: {}, ks: {}, cf: {}, prefix: {}", _bucket, _ks, _cf, _prefix);
+                            auto source = client->make_download_source(fqn, &shard_aborts[this_shard_id()]);
+                            while (true) {
+                                auto buff = co_await source.get();
+                                if (!buff) {
+                                    break;
+                                }
+                            }
+                            co_await source.close();
+                        }
+                    });
+                    std::advance(it, sst_nr);
+                    if (start + 90min < std::chrono::system_clock::now()) {
+                        throw abort_requested_exception();
+                    }
+                }
+            }
         });
+    } catch (const abort_requested_exception&) {
+        _as.request_abort();
     } catch (...) {
         ex = std::current_exception();
     }
