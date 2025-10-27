@@ -439,15 +439,15 @@ future<utils::chunked_vector<mutation>> view_building_coordinator::start_tasks(c
 
 void view_building_coordinator::attach_to_started_tasks(const locator::tablet_replica& replica, std::vector<utils::UUID> tasks) {
     vbc_logger.debug("Attaching to started tasks {} on replica {}", tasks, replica);
-    shared_future<std::optional<remote_work_results>> work = work_on_tasks(replica, std::move(tasks));
+    shared_future<std::optional<std::vector<utils::UUID>>> work = work_on_tasks(replica, std::move(tasks));
     _remote_work.insert({replica, std::move(work)});
 }
 
-future<std::optional<view_building_coordinator::remote_work_results>> view_building_coordinator::work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks) {
+future<std::optional<std::vector<utils::UUID>>> view_building_coordinator::work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks) {
     constexpr auto backoff_duration = std::chrono::seconds(1);
     static thread_local logger::rate_limit rate_limit{backoff_duration};
 
-    std::vector<view_task_result> remote_results;
+    std::vector<utils::UUID> remote_results;
     bool rpc_failed = false;
 
     try {
@@ -464,27 +464,17 @@ future<std::optional<view_building_coordinator::remote_work_results>> view_build
         co_return std::nullopt;
     }
 
-    if (tasks.size() != remote_results.size()) {
-        on_internal_error(vbc_logger, fmt::format("Number of tasks ({}) and results ({}) do not match for replica {}", tasks.size(), remote_results.size(), replica));
-    }
-
-    remote_work_results results;
-    for (size_t i = 0; i < tasks.size(); ++i) {
-        results.push_back({tasks[i], remote_results[i]});
-    }
     _vb_sm.event.broadcast();
-    co_return results;
+    co_return remote_results;
 }
 
 // Mark finished task as done (remove them from the table).
 // Retry failed tasks if possible (if failed tasks wasn't aborted).
-future<utils::chunked_vector<mutation>> view_building_coordinator::update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, view_building_coordinator::remote_work_results results) {
-    vbc_logger.debug("Got results from replica {}: {}", replica, results);
+future<utils::chunked_vector<mutation>> view_building_coordinator::update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, std::vector<utils::UUID> results) {
+    vbc_logger.debug("Got results from replica {}, finished tasks: {}", replica, results);
 
     utils::chunked_vector<mutation> muts;
     for (auto& result: results) {
-        vbc_logger.info("Task {} was finished with result: {}", result.first, result.second);
-
         if (!_vb_sm.building_state.currently_processed_base_table) {
             continue;
         }
@@ -494,10 +484,10 @@ future<utils::chunked_vector<mutation>> view_building_coordinator::update_state_
         // we shouldn't remove it here because it might be needed
         // to generate updated after tablet operation (migration/resize)
         // is finished.
-        auto task_opt = _vb_sm.building_state.get_task(*_vb_sm.building_state.currently_processed_base_table, replica, result.first);
+        auto task_opt = _vb_sm.building_state.get_task(*_vb_sm.building_state.currently_processed_base_table, replica, result);
         if (task_opt && task_opt->get().state != view_building_task::task_state::aborted) {
             // Otherwise, the task was completed successfully and we can remove it.
-            auto delete_mut = co_await _sys_ks.make_remove_view_building_task_mutation(guard.write_timestamp(), result.first);
+            auto delete_mut = co_await _sys_ks.make_remove_view_building_task_mutation(guard.write_timestamp(), result);
             muts.push_back(std::move(delete_mut));
         }
     }

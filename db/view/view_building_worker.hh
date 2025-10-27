@@ -202,7 +202,7 @@ private:
 
     void init_messaging_service();
     future<> uninit_messaging_service();
-    future<std::vector<view_task_result>> work_on_tasks(std::vector<utils::UUID> ids);
+    future<std::vector<utils::UUID>> work_on_tasks(std::vector<utils::UUID> ids);
 };
 
 }
