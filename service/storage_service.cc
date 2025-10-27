@@ -1414,8 +1414,11 @@ future<> storage_service::raft_initialize_discovery_leader(const join_node_reque
                 co_await _sys_ks.local().make_view_builder_version_mutation(write_timestamp, db::system_keyspace::view_builder_version_t::v2));
     }
 
+    insert_join_request_mutations.emplace_back(
+            co_await _sys_ks.local().make_replicated_key_provider_version_mutation(write_timestamp, db::system_keyspace::replicated_key_provider_version_t::v2));
+
     topology_change change{std::move(insert_join_request_mutations)};
-    
+
     auto history_append = db::system_keyspace::make_group0_history_state_id_mutation(new_group0_state_id,
             _migration_manager.local().get_group0_client().get_history_gc_duration(), "bootstrap: adding myself as the first node to the topology");
     auto mutation_creator_addr = _sys_ks.local().local_db().get_token_metadata().get_topology().my_address();
