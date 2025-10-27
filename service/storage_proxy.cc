@@ -2692,6 +2692,13 @@ void storage_proxy::remove_response_handler(storage_proxy::response_id_type id) 
     remove_response_handler_entry(std::move(entry));
 }
 
+void storage_proxy::remove_response_handler_if_exists(storage_proxy::response_id_type id) {
+    auto entry = _response_handlers.find(id);
+    if (entry != _response_handlers.end()) {
+        remove_response_handler_entry(std::move(entry));
+    }
+}
+
 void storage_proxy::remove_response_handler_entry(response_handlers_map::iterator entry) {
     entry->second->on_released();
     _response_handlers.erase(std::move(entry));
@@ -3295,7 +3302,7 @@ storage_proxy::unique_response_handler::operator=(unique_response_handler&& x) n
 
 storage_proxy::unique_response_handler::~unique_response_handler() {
     if (id) {
-        p.remove_response_handler(id);
+        p.remove_response_handler_if_exists(id);
     }
 }
 storage_proxy::response_id_type storage_proxy::unique_response_handler::release() {
@@ -3786,9 +3793,12 @@ void storage_proxy::register_cdc_operation_result_tracker(const storage_proxy::u
     }
 
     for (auto& id : ids) {
-        auto& h = get_write_response_handler(id.id);
-        if (h->get_schema()->cdc_options().enabled()) {
-            h->set_cdc_operation_result_tracker(tracker);
+        auto entry = _response_handlers.find(id.id);
+        if (entry != _response_handlers.end()) {
+            auto& h = entry->second;
+            if (h->get_schema()->cdc_options().enabled()) {
+                h->set_cdc_operation_result_tracker(tracker);
+            }
         }
     }
 }
