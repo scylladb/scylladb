@@ -1712,7 +1712,6 @@ async def test_tablet_load_and_stream_and_split_synchronization(manager: Manager
     cmdline = [
         '--logger-log-level', 'storage_service=debug',
         '--logger-log-level', 'table=debug',
-        '--smp', '1',
     ]
     servers = [await manager.server_add(config={
         'tablet_load_stats_refresh_interval_in_seconds': 1
