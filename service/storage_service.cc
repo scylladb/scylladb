@@ -1082,7 +1082,7 @@ public:
 
 // }}} ip_address_updater
 
-future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::holder group0_holder, sharded<service::storage_proxy>& proxy) noexcept {
+future<> storage_service::sstable_vnodes_cleanup_fiber(raft::server& server, gate::holder group0_holder, sharded<service::storage_proxy>& proxy) noexcept {
     while (!_group0_as.abort_requested()) {
         bool err = false;
         try {
@@ -1091,46 +1091,25 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                 return me && me->second.cleanup == cleanup_status::running;
             });
 
-            std::vector<future<>> tasks;
-
-            auto do_cleanup_ks = [this, &proxy] (sstring ks_name, std::vector<table_info> table_infos) -> future<> {
-                // Wait for all local writes to complete before cleanup
-                co_await proxy.invoke_on_all([] (storage_proxy& sp) -> future<> {
-                    co_return co_await sp.await_pending_writes();
-                });
-                auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
-                // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
-                auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
-                    {}, ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
-                try {
-                    co_return co_await task->done();
-                } catch (...) {
-                    rtlogger.error("cleanup failed keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
-                    throw;
-                }
-            };
-
+            std::unordered_map<sstring, std::vector<table_info>> ks_tables;
             {
                 // The scope for the guard
                 auto guard = co_await _group0->client().start_operation(_group0_as);
                 auto me = _topology_state_machine._topology.find(server.id());
                 // Recheck that cleanup is needed after the barrier
                 if (!me || me->second.cleanup != cleanup_status::running) {
-                    rtlogger.trace("cleanup triggered, but not needed");
+                    rtlogger.trace("vnodes_cleanup triggered, but not needed");
                     continue;
                 }
 
-                rtlogger.info("start cleanup");
+                rtlogger.info("start vnodes_cleanup");
 
                 // Skip tablets tables since they do their own cleanup and system tables
                 // since they are local and not affected by range movements.
                 auto ks_erms = _db.local().get_non_local_strategy_keyspaces_erms();
-                tasks.reserve(ks_erms.size());
+                ks_tables.reserve(ks_erms.size());
 
-                co_await _db.invoke_on_all([&] (replica::database& db) {
-                    return db.flush_all_tables();
-                });
-                for (auto [ks_name, erm] : ks_erms) {
+                for (auto&& [ks_name, erm] : ks_erms) {
                     auto& ks = _db.local().find_keyspace(ks_name);
                     const auto& cf_meta_data = ks.metadata().get()->cf_meta_data();
                     std::vector<table_info> table_infos;
@@ -1138,15 +1117,44 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                     for (const auto& [name, schema] : cf_meta_data) {
                         table_infos.emplace_back(table_info{name, schema->id()});
                     }
-
-                    tasks.push_back(do_cleanup_ks(std::move(ks_name), std::move(table_infos)));
+                    ks_tables.emplace(std::move(ks_name), std::move(table_infos));
                 };
             }
 
-            // Note that the guard is released while we are waiting for cleanup tasks to complete
-            co_await when_all_succeed(tasks.begin(), tasks.end()).discard_result();
+            {
+                rtlogger.info("vnodes_cleanup: drain closing sessions");
+                co_await proxy.invoke_on_all([] (storage_proxy& sp) {
+                    return get_topology_session_manager().drain_closing_sessions();
+                });
 
-            rtlogger.info("cleanup ended");
+                rtlogger.info("vnodes_cleanup: wait for stale pending writes");
+                co_await proxy.invoke_on_all([] (storage_proxy& sp) {
+                    return sp.await_stale_pending_writes();
+                });
+
+                rtlogger.info("vnodes_cleanup: flush_all_tables");
+                co_await _db.invoke_on_all([&] (replica::database& db) {
+                    return db.flush_all_tables();
+                });
+
+                co_await coroutine::parallel_for_each(ks_tables, [&](auto& item) -> future<> {
+                    auto& [ks_name, table_infos] = item;
+                    auto& compaction_module = _db.local().get_compaction_manager().get_task_manager_module();
+                    // we flush all tables before cleanup the keyspaces individually, so skip the flush-tables step here
+                    auto task = co_await compaction_module.make_and_start_task<compaction::cleanup_keyspace_compaction_task_impl>(
+                        {}, ks_name, _db, table_infos, compaction::flush_mode::skip, tasks::is_user_task::no);
+                    try {
+                        rtlogger.info("vnodes_cleanup {} started", ks_name);
+                        co_await task->done();
+                        rtlogger.info("vnodes_cleanup {} finished", ks_name);
+                    } catch (...) {
+                        rtlogger.error("vnodes_cleanup failed keyspace={} tables={} failed: {}", task->get_status().keyspace, table_infos, std::current_exception());
+                        throw;
+                    }
+                });
+            }
+
+            rtlogger.info("vnodes_cleanup ended");
 
             while (true) {
                 auto guard = co_await _group0->client().start_operation(_group0_as);
@@ -1164,18 +1172,18 @@ future<> storage_service::sstable_cleanup_fiber(raft::server& server, gate::hold
                 }
                 break;
             }
-            rtlogger.debug("cleanup flag cleared");
+            rtlogger.debug("vnodes_cleanup: cleanup flag cleared");
         } catch (const seastar::abort_requested_exception&) {
-             rtlogger.info("cleanup fiber aborted");
+             rtlogger.info("vnodes_cleanup fiber aborted");
              break;
         } catch (raft::request_aborted&) {
-             rtlogger.info("cleanup fiber aborted");
+             rtlogger.info("vnodes_cleanup fiber aborted");
              break;
         } catch (const seastar::broken_condition_variable&) {
-             rtlogger.info("cleanup fiber aborted");
+             rtlogger.info("vnodes_cleanup fiber aborted");
              break;
         } catch (...) {
-             rtlogger.error("cleanup fiber got an error: {}", std::current_exception());
+             rtlogger.error("vnodes_cleanup fiber got an error: {}", std::current_exception());
              err = true;
         }
         if (err) {
@@ -1902,8 +1910,8 @@ future<> storage_service::join_topology(sharded<service::storage_proxy>& proxy,
 
         // start topology coordinator fiber
         _raft_state_monitor = raft_state_monitor_fiber(*raft_server, _group0->hold_group0_gate());
-        // start cleanup fiber
-        _sstable_cleanup_fiber = sstable_cleanup_fiber(*raft_server, _group0->hold_group0_gate(), proxy);
+        // start vnodes cleanup fiber
+        _sstable_vnodes_cleanup_fiber = sstable_vnodes_cleanup_fiber(*raft_server, _group0->hold_group0_gate(), proxy);
 
         // Need to start system_distributed_keyspace before bootstrap because bootstrapping
         // process may access those tables.
@@ -2234,7 +2242,7 @@ future<> storage_service::track_upgrade_progress_to_topology_coordinator(sharded
     }
 
     try {
-        _sstable_cleanup_fiber = sstable_cleanup_fiber(_group0->group0_server(), _group0->hold_group0_gate(), proxy);
+        _sstable_vnodes_cleanup_fiber = sstable_vnodes_cleanup_fiber(_group0->group0_server(), _group0->hold_group0_gate(), proxy);
         start_tablet_split_monitor();
     } catch (...) {
         rtlogger.error("failed to start one of the raft-related background fibers: {}", std::current_exception());
@@ -3438,7 +3446,7 @@ future<> storage_service::wait_for_group0_stop() {
         _group0_as.request_abort();
         _topology_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
         _view_building_state_machine.event.broken(make_exception_ptr(abort_requested_exception()));
-        co_await when_all(std::move(_raft_state_monitor), std::move(_sstable_cleanup_fiber), std::move(_upgrade_to_topology_coordinator_fiber));
+        co_await when_all(std::move(_raft_state_monitor), std::move(_sstable_vnodes_cleanup_fiber), std::move(_upgrade_to_topology_coordinator_fiber));
     }
 }
 
@@ -4915,8 +4923,8 @@ future<> storage_service::do_cluster_cleanup() {
         }
     }
 
-    // The wait above only wait until the command is processed by the topology coordinator which start cleanup process,
-    // but we still need to wait for cleanup to complete here.
+    // The wait above only waits until the command is processed by the topology coordinator which start
+    // the vnodes cleanup process, but we still need to wait for it to complete here.
     co_await _topology_state_machine.event.when([this] {
         return std::all_of(_topology_state_machine._topology.normal_nodes.begin(), _topology_state_machine._topology.normal_nodes.end(), [] (auto& n) {
             return n.second.cleanup == cleanup_status::clean;
@@ -6220,7 +6228,7 @@ future<raft_topology_cmd_result> storage_service::raft_topology_cmd_handler(raft
 
 future<> storage_service::update_fence_version(token_metadata::version_t new_version) {
     return container().invoke_on_all([new_version] (storage_service& ss) {
-        ss._shared_token_metadata.update_fence_version(new_version);
+        ss._qp.proxy().update_fence_version(new_version);
     });
 }
 

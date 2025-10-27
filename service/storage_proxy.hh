@@ -354,7 +354,9 @@ private:
     cdc_stats _cdc_stats;
 
     // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
-    utils::phased_barrier _pending_writes_phaser;
+    locator::token_metadata::version_t _fence_version = 0;
+    std::map<locator::token_metadata::version_t, lw_shared_ptr<gate>> _pending_fenceable_writes;
+    shared_future<> _stale_pending_writes{make_ready_future<>()};
 private:
     future<result<coordinator_query_result>> query_singular(lw_shared_ptr<query::read_command> cmd,
             dht::partition_range_vector&& partition_ranges,
@@ -492,9 +494,11 @@ private:
             tracing::trace_state_ptr trace_state, clock_type::time_point timeout);
 
     future<> mutate_counters_on_leader(utils::chunked_vector<frozen_mutation_and_schema> mutations, db::consistency_level cl, clock_type::time_point timeout,
-                                       tracing::trace_state_ptr trace_state, service_permit permit);
+                                       tracing::trace_state_ptr trace_state, service_permit permit,
+                                       fencing_token fence, locator::host_id caller);
     future<> mutate_counter_on_leader_and_replicate(const schema_ptr& s, frozen_mutation m, db::consistency_level cl, clock_type::time_point timeout,
-                                                    tracing::trace_state_ptr trace_state, service_permit permit);
+                                                    tracing::trace_state_ptr trace_state, service_permit permit,
+                                                    fencing_token fence, locator::host_id caller);
 
     locator::host_id find_leader_for_counter_update(const mutation& m, const locator::effective_replication_map& erm, db::consistency_level cl);
 
@@ -663,13 +667,39 @@ private:
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 
-    utils::phased_barrier::operation start_write() {
-        return _pending_writes_phaser.start();
+    // Fencing tokens are checked twice: once before a replica-local storage operation
+    // and once after it completes. The second check ensures that if the coordinator
+    // was fenced out during execution, the replica does not count this operation
+    // toward the target CL.
+    //
+    // For writes, this creates a cleanup concern: if the coordinator is fenced out
+    // mid-operation, the write’s partial effects must be cleaned up before the range
+    // becomes visible again. Otherwise, data resurrection could occur. Cleanup is
+    // performed by ss::sstable_vnodes_cleanup_fiber for vnode-based tables.
+    //
+    // To ensure correctness, all potentially fenced-out writes must complete before
+    // cleanup runs. This function enforces that guarantee by holding a gate tied to
+    // the caller’s fencing_token version for the entire write operation. The vnode cleanup
+    // procedure waits for all gates with versions lower than the current fencing
+    // version to close().
+    //
+    // Whether the gate is needed depends on the replication strategy. For local and
+    // tablet-based tables, it is unnecessary: ss::sstable_vnodes_cleanup_fiber does
+    // not handle them. For tablets, table::cleanup_tablet() calls
+    // storage_group::stop(), which waits for all tablet operations to finish.
+    template <typename Func, typename F = futurize<std::invoke_result_t<Func>>>
+    requires requires (Func f) {
+        { f() } -> std::same_as<typename F::type>;
     }
+    F::type run_fenceable_write(const locator::abstract_replication_strategy& rs,
+        fencing_token caller_token, locator::host_id caller_id,
+        Func&& write_func);
 
     mutation do_get_batchlog_mutation_for(schema_ptr schema, const utils::chunked_vector<mutation>& mutations, const utils::UUID& id, int32_t version, db_clock::time_point now);
     future<> drain_on_shutdown();
 public:
+    void update_fence_version(locator::token_metadata::version_t fence_version);
+
     // Applies mutation on this node.
     // Resolves with timed_out_error when timeout is reached.
     future<> mutate_locally(const mutation& m, tracing::trace_state_ptr tr_state, db::commitlog::force_sync sync, clock_type::time_point timeout = clock_type::time_point::max(), db::per_partition_rate_limit::info rate_limit_info = std::monostate()) {
@@ -854,8 +884,8 @@ public:
         return _stats_key;
     }
 
-    future<> await_pending_writes() noexcept {
-        return _pending_writes_phaser.advance_and_await();
+    future<> await_stale_pending_writes() noexcept {
+        return _stale_pending_writes.get_future();
     }
 
     virtual void on_leave_cluster(const gms::inet_address& endpoint, const locator::host_id& hid) override;

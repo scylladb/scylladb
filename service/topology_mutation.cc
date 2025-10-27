@@ -248,7 +248,7 @@ topology_mutation_builder& topology_mutation_builder::queue_global_topology_requ
     return apply_set("global_requests", collection_apply_mode::update, std::vector<data_value>{value});
 }
 
-topology_mutation_builder& topology_mutation_builder::drop_first_global_topology_request_id(const std::vector<utils::UUID>& values, utils::UUID& id) {
+topology_mutation_builder& topology_mutation_builder::drop_first_global_topology_request_id(const std::vector<utils::UUID>& values, const utils::UUID& id) {
     if (!values.empty() && values[0] == id) {
         return apply_set("global_requests", collection_apply_mode::overwrite, std::span(values.begin() + 1, values.size() - 1));
     } else {

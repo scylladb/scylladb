@@ -2185,6 +2185,13 @@ future<> database::do_apply(schema_ptr s, const frozen_mutation& m, tracing::tra
             throw std::runtime_error("injected error");
         }
     });
+    co_await utils::get_local_injector().inject("database_apply_wait", [&] (auto& handler) -> future<> {
+        if (s->cf_name() == handler.get("cf_name")) {
+            dblog.info("database_apply_wait: wait");
+            co_await handler.wait_for_message(std::chrono::steady_clock::now() + std::chrono::minutes{5});
+            dblog.info("database_apply_wait: done");
+        }
+    });
 
     // I'm doing a nullcheck here since the init code path for db etc
     // is a little in flux and commitlog is created only when db is
