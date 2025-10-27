@@ -48,11 +48,12 @@ class incremental_compaction_strategy : public compaction_strategy_impl {
     using size_bucket_t = std::vector<sstables::frozen_sstable_run>;
 public:
     static constexpr int32_t DEFAULT_MAX_FRAGMENT_SIZE_IN_MB = 1000;
+    static constexpr double DEFAULT_SPACE_AMPLIFICATION_GOAL = 1.5;
     static constexpr auto FRAGMENT_SIZE_OPTION = "sstable_size_in_mb";
     static constexpr auto SPACE_AMPLIFICATION_GOAL_OPTION = "space_amplification_goal";
 private:
     size_t _fragment_size = DEFAULT_MAX_FRAGMENT_SIZE_IN_MB*1024*1024;
-    std::optional<double> _space_amplification_goal;
+    std::optional<double> _space_amplification_goal = DEFAULT_SPACE_AMPLIFICATION_GOAL;
     static std::vector<sstable_run_and_length> create_run_and_length_pairs(const std::vector<sstables::frozen_sstable_run>& runs);
 
     static std::vector<std::vector<sstables::frozen_sstable_run>> get_buckets(const std::vector<sstables::frozen_sstable_run>& runs, const incremental_compaction_strategy_options& options);
