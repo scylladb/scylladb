@@ -57,7 +57,16 @@ void paxos_state::key_lock_map::release_semaphore_for_key(const dht::token& key)
 future<paxos_state::replica_guard> paxos_state::get_replica_lock(const schema& s, const dht::token& token,
         clock_type::time_point timeout)
 {
-    auto shards = s.table().shard_for_writes(token);
+    // When a tablet is migrated between shards on the same node, during the
+    // write_both_read_new state we begin switching reads to the new shard.
+    // Until the corresponding global barrier completes, some requests may still
+    // use write_both_read_old erm, while others already use the write_both_read_new erm.
+    // To ensure mutual exclusion between these two types of requests, we must
+    // acquire locks on both the old and new shards.
+    // Once the global barrier completes, no requests remain on the old shard,
+    // so we can safely switch to acquiring locks only on the new shard.
+    auto shards = s.table().get_effective_replication_map()->shards_ready_for_reads(s, token);
+
     if (const auto it = std::ranges::find(shards, this_shard_id()); it == shards.end()) {
         const auto& erm = s.table().get_effective_replication_map();
         const auto& rs = erm->get_replication_strategy();
