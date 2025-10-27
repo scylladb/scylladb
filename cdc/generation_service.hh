@@ -153,6 +153,9 @@ public:
 
     future<> generate_tablet_resize_update(utils::chunked_vector<canonical_mutation>& muts, table_id table, const locator::tablet_map& new_tablet_map, api::timestamp_type ts);
 
+    future<utils::chunked_vector<mutation>> garbage_collect_cdc_streams_for_table(table_id table, std::optional<std::chrono::seconds> ttl, api::timestamp_type ts);
+    future<> garbage_collect_cdc_streams(utils::chunked_vector<canonical_mutation>& muts, api::timestamp_type ts);
+
 private:
     /* Retrieve the CDC generation which starts at the given timestamp (from a distributed table created for this purpose)
      * and start using it for CDC log writes if it's not obsolete.
