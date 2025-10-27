@@ -54,9 +54,7 @@ class view_building_coordinator : public service::endpoint_lifecycle_subscriber 
     const raft::term_t _term;
     abort_source& _as;
 
-
-    using remote_work_results = std::vector<std::pair<utils::UUID, db::view::view_task_result>>;
-    std::unordered_map<locator::tablet_replica, shared_future<std::optional<remote_work_results>>> _remote_work;
+    std::unordered_map<locator::tablet_replica, shared_future<std::optional<std::vector<utils::UUID>>>> _remote_work;
 
 public:
     view_building_coordinator(replica::database& db, raft::server& raft, service::raft_group0& group0,
@@ -99,8 +97,8 @@ private:
 
     future<utils::chunked_vector<mutation>> start_tasks(const service::group0_guard& guard, std::vector<utils::UUID> tasks);
     void attach_to_started_tasks(const locator::tablet_replica& replica, std::vector<utils::UUID> tasks);
-    future<std::optional<remote_work_results>> work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks);
-    future<utils::chunked_vector<mutation>> update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, remote_work_results results);
+    future<std::optional<std::vector<utils::UUID>>> work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks);
+    future<utils::chunked_vector<mutation>> update_state_after_work_is_done(const service::group0_guard& guard, const locator::tablet_replica& replica, std::vector<utils::UUID> results);
 };
 
 void abort_view_building_tasks(const db::view::view_building_state_machine& vb_sm,

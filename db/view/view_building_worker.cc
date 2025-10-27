@@ -424,8 +424,8 @@ bool view_building_worker::is_shard_free(shard_id shard) {
 }
 
 void view_building_worker::init_messaging_service() {
-    ser::view_rpc_verbs::register_work_on_view_building_tasks(&_messaging, [this] (std::vector<utils::UUID> ids) -> future<std::vector<view_task_result>> {
-        return container().invoke_on(0, [ids = std::move(ids)] (view_building_worker& vbw) mutable -> future<std::vector<view_task_result>> {
+    ser::view_rpc_verbs::register_work_on_view_building_tasks(&_messaging, [this] (std::vector<utils::UUID> ids) -> future<std::vector<utils::UUID>> {
+        return container().invoke_on(0, [ids = std::move(ids)] (view_building_worker& vbw) mutable -> future<std::vector<utils::UUID>> {
             return vbw.work_on_tasks(std::move(ids));
         });
     });
@@ -435,7 +435,7 @@ future<> view_building_worker::uninit_messaging_service() {
     return ser::view_rpc_verbs::unregister(&_messaging);
 }
 
-future<std::vector<view_task_result>> view_building_worker::work_on_tasks(std::vector<utils::UUID> ids) {
+future<std::vector<utils::UUID>> view_building_worker::work_on_tasks(std::vector<utils::UUID> ids) {
     vbw_logger.debug("Got request for results of tasks: {}", ids);
     auto guard = co_await _group0_client.start_operation(_as, service::raft_timeout{});
     auto processing_base_table = _state.processing_base_table;
@@ -446,17 +446,11 @@ future<std::vector<view_task_result>> view_building_worker::work_on_tasks(std::v
         });
     };
 
-    auto get_results = [&] () -> std::vector<view_task_result> {
-        std::vector<view_task_result> results;
+    auto get_results = [&] () -> std::vector<utils::UUID> {
+        std::vector<utils::UUID> results;
         for (const auto& id: ids) {
             if (_state.finished_tasks.contains(id)) {
-                results.emplace_back(view_task_result::command_status::success);
-            } else if (_state.aborted_tasks.contains(id)) {
-                results.emplace_back(view_task_result::command_status::abort);
-            } else {
-                // This means that the task was aborted. Throw an error,
-                // so the coordinator will refresh its state and retry without aborted IDs.
-                throw std::runtime_error(fmt::format("No status for task {}", id));
+                results.emplace_back(id);
             }
         }
         return results;
