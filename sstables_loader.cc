@@ -550,10 +550,13 @@ future<locator::effective_replication_map_ptr> sstables_loader::await_topology_q
         auto expected_topology_version = erm->get_token_metadata().get_version();
         auto& ss = _ss.local();
 
+        // The awaiting only works with raft enabled, and we only need it with tablets,
+        // so let's bypass the awaiting when tablet is disabled.
+        if (!t.uses_tablets()) {
+            break;
+        }
         // optimistically attempt to grab an erm on quiesced topology
-        // The awaiting is only needed with tablet over raft, so we're bypassing the check
-        // when raft is disabled.
-        if (!ss.raft_topology_change_enabled() || co_await ss.verify_topology_quiesced(expected_topology_version)) {
+        if (co_await ss.verify_topology_quiesced(expected_topology_version)) {
             break;
         }
         erm = nullptr;
