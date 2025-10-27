@@ -760,6 +760,10 @@ public:
     // When created with `raw_stream::yes`, the sstable data file will be
     // streamed as-is, without decompressing (if compressed).
     //
+    // When created with `raw_stream::compressed_chunks`, compressed sstable data
+    // will be streamed as raw compressed chunks with checksum verification but
+    // without decompression, and digests will be calculated.
+    //
     // When created with `integrity_check::yes`, the integrity mechanisms
     // of the underlying data streams will be enabled.
     //
@@ -767,7 +771,11 @@ public:
     // logic when a checksum or digest mismatch is detected on an
     // integrity-checked stream with no compression. The parameter is ignored
     // if integrity checking is disabled or the SSTable is compressed.
-    using raw_stream = bool_class<class raw_stream_tag>;
+    enum class raw_stream {
+        no,
+        yes,
+        compressed_chunks
+    };
     future<input_stream<char>> data_stream(uint64_t pos, size_t len,
             reader_permit permit, tracing::trace_state_ptr trace_state, lw_shared_ptr<file_input_stream_history> history,
             raw_stream raw = raw_stream::no, integrity_check integrity = integrity_check::no,

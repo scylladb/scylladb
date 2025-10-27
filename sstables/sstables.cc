@@ -2721,6 +2721,11 @@ future<input_stream<char>> sstable::data_stream(uint64_t pos, size_t len,
                 pos, len, std::move(options), permit, digest);
         }
     }
+
+    if (_components->compression && raw == raw_stream::compressed_chunks && _version >= sstable_version_types::mc) {
+        co_return make_compressed_raw_file_input_stream(stream_creator, &_components->compression, std::move(options), permit, digest);
+    }
+
     if (_components->checksum && integrity == integrity_check::yes) {
         auto checksum = get_checksum();
         auto file_len = data_size();
