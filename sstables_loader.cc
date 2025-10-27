@@ -511,6 +511,67 @@ static std::unique_ptr<sstable_streamer> make_sstable_streamer(bool uses_tablets
     return std::make_unique<sstable_streamer>(std::forward<Args>(args)...);
 }
 
+<<<<<<< HEAD
+||||||| parent of 7f34366b9d (sstables_loader: Don't bypass synchronization with busy topology)
+future<locator::effective_replication_map_ptr> sstables_loader::await_topology_quiesced_and_get_erm(::table_id table_id) {
+    // By waiting for topology to quiesce, we guarantee load-and-stream will not start in the middle
+    // of a topology operation that changes the token range boundaries, e.g. split or merge.
+    // Split, for example, first executes the barrier and then splits the tablets.
+    // So it can happen a sstable is generated between those steps and will incorrectly span two
+    // tablets. We want to serialize load-and-stream and split finalization (a topology op).
+
+    locator::effective_replication_map_ptr erm;
+    while (true) {
+        auto& t = _db.local().find_column_family(table_id);
+        erm = t.get_effective_replication_map();
+        auto expected_topology_version = erm->get_token_metadata().get_version();
+        auto& ss = _ss.local();
+
+        // optimistically attempt to grab an erm on quiesced topology
+        // The awaiting is only needed with tablet over raft, so we're bypassing the check
+        // when raft is disabled.
+        if (!ss.raft_topology_change_enabled() || co_await ss.verify_topology_quiesced(expected_topology_version)) {
+            break;
+        }
+        erm = nullptr;
+        co_await _ss.local().await_topology_quiesced();
+    }
+
+    co_return std::move(erm);
+}
+
+=======
+future<locator::effective_replication_map_ptr> sstables_loader::await_topology_quiesced_and_get_erm(::table_id table_id) {
+    // By waiting for topology to quiesce, we guarantee load-and-stream will not start in the middle
+    // of a topology operation that changes the token range boundaries, e.g. split or merge.
+    // Split, for example, first executes the barrier and then splits the tablets.
+    // So it can happen a sstable is generated between those steps and will incorrectly span two
+    // tablets. We want to serialize load-and-stream and split finalization (a topology op).
+
+    locator::effective_replication_map_ptr erm;
+    while (true) {
+        auto& t = _db.local().find_column_family(table_id);
+        erm = t.get_effective_replication_map();
+        auto expected_topology_version = erm->get_token_metadata().get_version();
+        auto& ss = _ss.local();
+
+        // The awaiting only works with raft enabled, and we only need it with tablets,
+        // so let's bypass the awaiting when tablet is disabled.
+        if (!t.uses_tablets()) {
+            break;
+        }
+        // optimistically attempt to grab an erm on quiesced topology
+        if (co_await ss.verify_topology_quiesced(expected_topology_version)) {
+            break;
+        }
+        erm = nullptr;
+        co_await _ss.local().await_topology_quiesced();
+    }
+
+    co_return std::move(erm);
+}
+
+>>>>>>> 7f34366b9d (sstables_loader: Don't bypass synchronization with busy topology)
 future<> sstables_loader::load_and_stream(sstring ks_name, sstring cf_name,
         ::table_id table_id, std::vector<sstables::shared_sstable> sstables, bool primary, bool unlink, stream_scope scope,
         shared_ptr<stream_progress> progress) {

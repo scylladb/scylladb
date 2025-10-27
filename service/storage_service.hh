@@ -826,12 +826,8 @@ private:
     topology_change_kind upgrade_state_to_topology_op_kind(topology::upgrade_state_type upgrade_state) const;
 
 public:
-    bool raft_topology_change_enabled() const {
-        return _topology_change_kind_enabled == topology_change_kind::raft;
-    }
-    bool legacy_topology_change_enabled() const {
-        return _topology_change_kind_enabled == topology_change_kind::legacy;
-    }
+    bool raft_topology_change_enabled() const;
+    bool legacy_topology_change_enabled() const;
 
 private:
     future<> _raft_state_monitor = make_ready_future<>();

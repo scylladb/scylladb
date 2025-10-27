@@ -7829,6 +7829,20 @@ void storage_service::set_topology_change_kind(topology_change_kind kind) {
     _gossiper.set_topology_state_machine(kind == topology_change_kind::raft ? & _topology_state_machine : nullptr);
 }
 
+bool storage_service::raft_topology_change_enabled() const {
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, "raft_topology_change_enabled() must run on shard 0");
+    }
+    return _topology_change_kind_enabled == topology_change_kind::raft;
+}
+
+bool storage_service::legacy_topology_change_enabled() const {
+    if (this_shard_id() != 0) {
+        on_internal_error(slogger, "legacy_topology_change_enabled() must run on shard 0");
+    }
+    return _topology_change_kind_enabled == topology_change_kind::legacy;
+}
+
 future<> storage_service::register_protocol_server(protocol_server& server, bool start_instantly) {
     _protocol_servers.push_back(&server);
     if (start_instantly) {
