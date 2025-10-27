@@ -10,9 +10,12 @@ import logging
 import asyncio
 import random
 import time
+from test import pylib
+from test.cluster.conftest import skip_mode
 from test.pylib.util import wait_for
 from test.pylib.manager_client import ManagerClient
 from test.pylib.random_tables import RandomTables
+from test.pylib.scylla_cluster import gather_safely
 from test.cluster.util import check_token_ring_and_group0_consistency,            \
                                wait_for_token_ring_and_group0_consistency
 import pytest
@@ -191,3 +194,26 @@ async def test_concurrent_removenode_two_initiators_two_dead_nodes(manager: Mana
     await asyncio.gather(*[manager.remove_node(servers[0].server_id, servers[2].server_id, ignore_dead=ignore_nodes),
             manager.remove_node(servers[3].server_id, servers[1].server_id, ignore_dead=ignore_nodes)])
 
+@pytest.mark.asyncio
+@skip_mode('release', 'error injection is not supported in release mode')
+async def test_decommission_left_token_ring_retry(manager: ManagerClient):
+    """
+    Tests the execution flow in case of performing decommission node
+    operation in left_token_ring transition state, while retrying the
+    left_token_ring handler due to failures in update_topology_state execution.
+
+    """
+    servers = await manager.running_servers()
+    await manager.servers_add(1, property_file=servers[0].property_file())
+    servers = await manager.running_servers()
+    assert len(servers) >= 4
+
+    await gather_safely(*[manager.api.enable_injection(s.ip_addr, "finish_left_token_ring_transition_throw", one_shot=True) for s in servers])
+
+    await manager.decommission_node(servers[3].server_id)
+
+    servers = await manager.running_servers()
+    logs = [await manager.server_open_log(srv.server_id) for srv in servers]
+
+    matches = [await log.grep("raft_topology - transition_state::left_token_ring, raft_topology_cmd::command::barrier failed") for log in logs]
+    assert sum(len(x) for x in matches) == 0
