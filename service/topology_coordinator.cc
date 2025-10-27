@@ -2730,6 +2730,39 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             case topology::transition_state::left_token_ring: {
                 auto node = get_node_to_work_on(std::move(guard));
 
+                auto finish_left_token_ring_transition = [&](node_to_work_on& node) -> future<> {
+                    // Remove the node from group0 here - in general, it won't be able to leave on its own
+                    // because we'll ban it as soon as we tell it to shut down.
+                    node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
+
+                    utils::get_local_injector().inject("finish_left_token_ring_transition_throw", [] {
+                        throw std::runtime_error("finish_left_token_ring_transition failed due to error injection");
+                    });
+
+                    utils::chunked_vector<canonical_mutation> muts;
+
+                    topology_mutation_builder builder(node.guard.write_timestamp());
+                    cleanup_ignored_nodes_on_left(builder, node.id);
+                    builder.del_transition_state()
+                            .with_node(node.id)
+                            .set("node_state", node_state::left);
+                    muts.push_back(builder.build());
+                    co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
+                    co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
+                    auto str = node.rs->state == node_state::decommissioning
+                            ? ::format("finished decommissioning node {}", node.id)
+                            : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
+                    co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
+                };
+
+                // Denotes the case when this path is already executed before and first topology state update was successful.
+                // So we can skip all steps and perform the second topology state update operation (which modifies node state to left)
+                // and remove node conditionally from group0.
+                if (auto [done, error] = co_await _sys_ks.get_topology_request_state(node.rs->request_id, false); done) {
+                    co_await finish_left_token_ring_transition(node);
+                    break;
+                }
+
                 if (node.id == _raft.id()) {
                     // Someone else needs to coordinate the rest of the decommission process,
                     // because the decommissioning node is going to shut down in the middle of this state.
@@ -2802,24 +2835,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                     node = retake_node(co_await start_operation(), node_id);
                 }
 
-                // Remove the node from group0 here - in general, it won't be able to leave on its own
-                // because we'll ban it as soon as we tell it to shut down.
-                node = retake_node(co_await remove_from_group0(std::move(node.guard), node.id), node.id);
-
-                utils::chunked_vector<canonical_mutation> muts;
-
-                topology_mutation_builder builder(node.guard.write_timestamp());
-                cleanup_ignored_nodes_on_left(builder, node.id);
-                builder.del_transition_state()
-                       .with_node(node.id)
-                       .set("node_state", node_state::left);
-                muts.push_back(builder.build());
-                co_await remove_view_build_statuses_on_left_node(muts, node.guard, node.id);
-                co_await db::view::view_builder::generate_mutations_on_node_left(_db, _sys_ks, node.guard.write_timestamp(), locator::host_id(node.id.uuid()), muts);
-                auto str = node.rs->state == node_state::decommissioning
-                        ? ::format("finished decommissioning node {}", node.id)
-                        : ::format("finished rollback of {} after {} failure", node.id, node.rs->state);
-                co_await update_topology_state(take_guard(std::move(node)), std::move(muts), std::move(str));
+                co_await finish_left_token_ring_transition(node);
             }
                 break;
             case topology::transition_state::rollback_to_normal: {
