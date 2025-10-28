@@ -45,8 +45,6 @@ enum class replication_strategy_type {
     everywhere_topology,
 };
 
-using rack_list = std::vector<sstring>;
-
 using replication_strategy_config_option = std::variant<sstring, rack_list>;
 using replication_strategy_config_options = std::map<sstring, replication_strategy_config_option>;
 
