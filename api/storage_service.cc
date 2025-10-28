@@ -12,6 +12,7 @@
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/storage_proxy.json.hh"
 #include "api/scrub_status.hh"
+#include "api/tasks.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "gms/feature_service.hh"
@@ -756,18 +757,7 @@ rest_force_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
 static
 future<json::json_return_type>
 rest_force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
-        auto [ keyspace, table_infos ] = parse_table_infos(ctx, *req, "cf");
-        auto flush = validate_bool_x(req->get_query_param("flush_memtables"), true);
-        auto consider_only_existing_data = validate_bool_x(req->get_query_param("consider_only_existing_data"), false);
-        apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
-        if (!flush && !consider_only_existing_data) {
-            fmopt = flush_mode::skip;
-        }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
+        auto task = co_await force_keyspace_compaction(ctx, std::move(req));
         co_await task->done();
         co_return json_void();
 }
