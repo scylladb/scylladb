@@ -29,6 +29,7 @@
 #include "db/view/view_building_task_mutation_builder.hh"
 #include "utils/assert.hh"
 #include "idl/view.dist.hh"
+#include "utils/error_injection.hh"
 
 static logging::logger vbc_logger("view_building_coordinator");
 
@@ -334,10 +335,13 @@ future<bool> view_building_coordinator::work_on_view_building(service::group0_gu
                 _remote_work.erase(replica);
             }
         }
-        if (!_gossiper.is_alive(replica.host)) {
+
+        const bool ignore_gossiper = utils::get_local_injector().enter("view_building_coordinator_ignore_gossiper");
+        if (!_gossiper.is_alive(replica.host) && !ignore_gossiper) {
             vbc_logger.debug("Replica {} is dead", replica);
             continue;
         }
+
         if (skip_work_on_this_replica) {
             continue;
         }
@@ -439,11 +443,20 @@ void view_building_coordinator::attach_to_started_tasks(const locator::tablet_re
 }
 
 future<std::optional<view_building_coordinator::remote_work_results>> view_building_coordinator::work_on_tasks(locator::tablet_replica replica, std::vector<utils::UUID> tasks) {
+    constexpr auto backoff_duration = std::chrono::seconds(1);
+
     std::vector<view_task_result> remote_results;
+    bool rpc_failed = false;
+
     try {
         remote_results = co_await ser::view_rpc_verbs::send_work_on_view_building_tasks(&_messaging, replica.host, _as, tasks);
     } catch (...) {
         vbc_logger.warn("Work on tasks {} on replica {}, failed with error: {}", tasks, replica, std::current_exception());
+        rpc_failed = true;
+    }
+
+    if (rpc_failed) {
+        co_await seastar::sleep(backoff_duration);
         _vb_sm.event.broadcast();
         co_return std::nullopt;
     }
