@@ -2142,6 +2142,30 @@ SEASTAR_THREAD_TEST_CASE(test_per_shard_count_respected_with_rack_list) {
     }, cfg).get();
 }
 
+// Reproduces https://github.com/scylladb/scylladb/issues/26768
+SEASTAR_THREAD_TEST_CASE(test_replacing_last_node_in_rack_with_rack_list_rf) {
+    cql_test_config cfg{};
+    cfg.db_config->tablets_initial_scale_factor.set(10);
+
+    do_with_cql_env_thread([] (auto& e) {
+        topology_builder topo(e);
+
+        auto rack1 = topo.rack();
+        auto rack2 = topo.start_new_rack();
+        auto dc = topo.dc();
+
+        auto host1 = topo.add_node(node_state::normal, 1, rack1);
+        auto host2 = topo.add_node(node_state::normal, 1, rack2);
+
+        auto ks_name = add_keyspace_racks(e, {{dc, {rack1.rack, rack2.rack}}});
+        auto table = add_table(e, ks_name).get();
+
+        topo.set_node_state(host2, node_state::left);
+
+        rebalance_tablets(e);
+    }, cfg).get();
+}
+
 SEASTAR_THREAD_TEST_CASE(test_per_shard_goal_shrinks_respecting_rack_allocation) {
     cql_test_config cfg{};
     cfg.db_config->tablets_per_shard_goal.set(10);
