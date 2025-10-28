@@ -21,6 +21,7 @@ target_sources(test-lib
     eventually.cc
     proc_utils.cc
     gcs_fixture.cc
+    aws_kms_fixture.cc
     )
 target_include_directories(test-lib
   PUBLIC
