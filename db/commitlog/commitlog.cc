@@ -3311,7 +3311,6 @@ db::commitlog::read_log_file(const replay_state& state, sstring filename, sstrin
         commit_load_reader_func func;
         input_stream<char> fin;
         replay_state::impl& state;
-        input_stream<char> r;
         uint64_t id = 0;
         size_t pos = 0;
         size_t next = 0;
