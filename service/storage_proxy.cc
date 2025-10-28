@@ -4533,6 +4533,10 @@ future<> storage_proxy::send_hint_to_all_replicas(frozen_mutation_and_schema fm_
 }
 
 future<> storage_proxy::send_batchlog_replay_to_all_replicas(utils::chunked_vector<mutation> mutations, clock_type::time_point timeout) {
+    if (utils::get_local_injector().is_enabled("batch_replay_throw")) {
+        throw std::runtime_error("Skipping batch replay due to batch_replay_throw injection");
+    }
+
     utils::chunked_vector<batchlog_replay_mutation> ms = mutations | std::views::transform([] (auto&& m) {
             return batchlog_replay_mutation(std::move(m));
         }) | std::ranges::to<utils::chunked_vector<batchlog_replay_mutation>>();
