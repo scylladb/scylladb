@@ -1926,59 +1926,18 @@ static void make_update_indices_mutations(
         }
     }
 
-    auto add_index = [&](const sstring& name) -> view_ptr {
+    auto add_index = [&](const sstring& name) -> void {
         const index_metadata& index = new_table->all_indices().at(name);
         add_index_to_schema_mutation(new_table, index, timestamp, indices_mutation);
-        auto& cf = db.find_column_family(new_table);
-        if (!view_should_exist(index)) {
-            return view_ptr(nullptr);
-        }
-        auto view = cf.get_index_manager().create_view_for_index(index);
-        auto view_mutations = make_view_mutations(view, timestamp, true);
-        view_mutations.copy_to(mutations);
-        return view;
     };
 
     // old indices with updated attributes
     for (auto&& name : diff.entries_differing) {
         add_index(name);
     }
-    // Newly added indices. Because these are newly created tables (views),
-    // we need to call the before_create_column_family callback for them.
-    // If we don't, among other things *tablets* will not be created for
-    // these new views.
-    // The callbacks must be called in a Seastar thread, which means that
-    // *this* function must be called in a Seastar thread when creating an
-    // index.
+    // New indexes.
     for (auto&& name : diff.entries_only_on_right) {
-        auto view = add_index(name);
-        if (!view) {
-            continue;
-        }
-        auto ksm = db.find_keyspace(new_table->ks_name()).metadata();
-
-        if (sp.features().view_building_coordinator && ksm->uses_tablets()) {
-            auto& sys_ks = sp.system_keyspace();
-            auto& cf = db.find_column_family(new_table);
-            auto& tablet_map = cf.get_effective_replication_map()->get_token_metadata().tablets().get_tablet_map(new_table->id());
-
-            for (const auto& tid: tablet_map.tablet_ids()) {
-                auto last_token = tablet_map.get_last_token(tid);
-                for (auto& replica: tablet_map.get_tablet_info(tid).replicas) {
-                    auto id = utils::UUID_gen::get_time_UUID();
-                    view::view_building_task task {
-                        id, view::view_building_task::task_type::build_range, view::view_building_task::task_state::idle,
-                        new_table->id(), view->id(), replica, last_token
-                    };
-
-                    auto task_mut = sys_ks.make_view_building_task_mutation(timestamp, task).get();
-                    view_building_muts.push_back(std::move(task_mut));
-                    slogger.trace("Creating view building task: {} with ID: {} for replica: {}", task, id, replica);
-                }
-            }
-        }
-
-        db.get_notifier().before_create_column_family(*ksm, *view, mutations, timestamp);
+        add_index(name);
     }
 
     mutations.emplace_back(std::move(indices_mutation));
