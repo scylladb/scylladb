@@ -960,6 +960,7 @@ private:
                 std::ref(_view_builder), std::ref(_view_building_worker),
                 std::ref(_qp),
                 std::ref(_sl_controller),
+                std::ref(_auth_cache),
                 std::ref(_topology_state_machine),
                 std::ref(_view_building_state_machine),
                 std::ref(_task_manager),
