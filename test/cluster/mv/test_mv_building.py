@@ -260,8 +260,7 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
     8. The total number of warnings should be small.
     """
 
-    # We'll count messages in the logs, so let's make it easier.
-    cmdline = ["--smp=1"]
+    cmdline = []
     # Not needed, but it will be of tremendous help if we end up debugging a failure.
     cmdline.extend(["--logger-log-level", "view_building_coordinator=trace",
                     "--logger-log-level", "view_building_worker=trace",
@@ -307,11 +306,25 @@ async def test_backoff_when_node_fails_task_rpc(manager: ManagerClient):
 
     start = time.time()
 
+    # We want to have at least 2 tablets per node to force node 1
+    # to have multiple tablet replica targets on node 2. Why?
+    #
+    # Because we also want to test that Scylla won't undergo a storm
+    # of warning messages from the view building coordinator. They should
+    # be rate limited. If we have multiple tablet replica targets, we will
+    # verify that the number of those messages is controlled.
+    #
+    # Hence: min_tablet_count = 2 * (node count) = 4.
+    #
+    # We rely on two assumptions
+    # 1. Each node will have at least two shards.
+    # 2. The load balancer will distribute the tablets equally between the nodes.
     await cql.run_async("CREATE MATERIALIZED VIEW ks.mv AS SELECT * FROM ks.t "
                         "WHERE pk IS NOT NULL AND ck IS NOT NULL AND v IS NOT NULL "
-                        "PRIMARY KEY ((ck, pk), v)")
+                        "PRIMARY KEY ((ck, pk), v) "
+                        "WITH tablets = {'min_tablet_count': 4}")
 
-    error = rf"Work on tasks .* on replica {host_id2}:0, failed with error"
+    error = rf"Work on tasks .* on replica {host_id2}:\d+, failed with error"
 
     await log.wait_for(error, from_mark=mark)
     await manager.api.disable_injection(s1.ip_addr, ignore_gossiper_err)
