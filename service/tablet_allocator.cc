@@ -1263,7 +1263,13 @@ public:
                 }
             } else {
                 for (auto rack : rf_in_dc->get_rack_list()) {
-                    auto shards = shards_per_rack.at(endpoint_dc_rack{dc, rack});
+                    size_t shards = 0;
+                    auto dc_rack = endpoint_dc_rack{dc, rack};
+                    if (!shards_per_rack.contains(dc_rack)) {
+                        lblogger.warn("No shards for rack {}, but table {}.{} replicates there", rack, s.ks_name(), s.cf_name());
+                    } else {
+                        shards = shards_per_rack.at(dc_rack);
+                    }
                     size_t tablets_in_rack = std::ceil(min_per_shard_tablet_count * shards);
                     lblogger.debug("Estimated {} tablets due to min_per_shard_tablet_count={:.3f} for table={}.{} in rack {} ({} shards) in DC {}",
                                    tablets_in_rack, min_per_shard_tablet_count, s.ks_name(), s.cf_name(), rack, shards, dc);
