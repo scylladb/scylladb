@@ -4860,7 +4860,7 @@ future<> storage_service::do_drain() {
     co_await _repair.invoke_on_all(&repair_service::shutdown);
 }
 
-future<> storage_service::do_cluster_cleanup() {
+future<> storage_service::do_clusterwide_vnodes_cleanup() {
     auto& raft_server = _group0->group0_server();
     auto holder = _group0->hold_group0_gate();
     utils::UUID request_id;
@@ -4871,7 +4871,7 @@ future<> storage_service::do_cluster_cleanup() {
         auto curr_req = _topology_state_machine._topology.global_request;
         if (!_feature_service.topology_global_request_queue && curr_req && *curr_req != global_topology_request::cleanup) {
             throw std::runtime_error{
-                "topology coordinator: cluster cleanup: a different topology request is already pending, try again later"};
+                "topology coordinator: cluster-wide vnodes cleanup: a different topology request is already pending, try again later"};
         }
 
 
@@ -4886,7 +4886,7 @@ future<> storage_service::do_cluster_cleanup() {
             throw std::runtime_error(::format("local node is not in the normal state (current state: {})", rs.state));
         }
 
-        rtlogger.info("cluster cleanup requested");
+        rtlogger.info("cluster-wide vnodes cleanup requested");
         topology_mutation_builder builder(guard.write_timestamp());
         utils::chunked_vector<canonical_mutation> muts;
         if (_feature_service.topology_global_request_queue) {
@@ -4902,12 +4902,12 @@ future<> storage_service::do_cluster_cleanup() {
         }
         muts.push_back(builder.build());
         topology_change change{std::move(muts)};
-        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("cleanup: cluster cleanup requested"));
+        group0_command g0_cmd = _group0->client().prepare_command(std::move(change), guard, ::format("vnodes cleanup: cluster-wide cleanup requested"));
 
         try {
             co_await _group0->client().add_entry(std::move(g0_cmd), std::move(guard), _group0_as, raft_timeout{});
         } catch (group0_concurrent_modification&) {
-            rtlogger.info("cleanup: concurrent operation is detected, retrying.");
+            rtlogger.info("cluster-wide vnodes cleanup: concurrent operation is detected, retrying.");
             continue;
         }
         break;
@@ -4917,7 +4917,7 @@ future<> storage_service::do_cluster_cleanup() {
         // Wait until request completes
         auto error = co_await wait_for_topology_request_completion(request_id);
         if (!error.empty()) {
-            auto err = fmt::format("Cleanup failed. See earlier errors ({}). Request ID: {}", error, request_id);
+            auto err = fmt::format("Cluster-wide vnodes cleanup failed. See earlier errors ({}). Request ID: {}", error, request_id);
             rtlogger.error("{}", err);
             throw std::runtime_error(err);
         }
@@ -4930,7 +4930,7 @@ future<> storage_service::do_cluster_cleanup() {
             return n.second.cleanup == cleanup_status::clean;
         });
     });
-    rtlogger.info("cluster cleanup done");
+    rtlogger.info("cluster-wide vnodes cleanup done");
 }
 
 future<sstring> storage_service::wait_for_topology_request_completion(utils::UUID id, bool require_entry) {

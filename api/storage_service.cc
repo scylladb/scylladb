@@ -768,7 +768,7 @@ rest_cleanup_all(http_context& ctx, sharded<service::storage_service>& ss, std::
             if (!ss.is_topology_coordinator_enabled()) {
                 co_return false;
             }
-            co_await ss.do_cluster_cleanup();
+            co_await ss.do_clusterwide_vnodes_cleanup();
             co_return true;
         });
         if (done) {
