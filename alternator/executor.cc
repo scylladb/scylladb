@@ -5890,7 +5890,7 @@ future<executor::request_return_type> executor::describe_endpoints(client_state&
 
 static locator::replication_strategy_config_options get_network_topology_options(service::storage_proxy& sp, gms::gossiper& gossiper, int rf) {
     locator::replication_strategy_config_options options;
-    for (const auto& dc : sp.get_token_metadata_ptr()->get_topology().get_datacenters()) {
+    for (const auto& dc : sp.get_token_metadata_ptr()->get_datacenter_racks_token_owners() | std::views::keys) {
         options.emplace(dc, std::to_string(rf));
     }
     return options;
