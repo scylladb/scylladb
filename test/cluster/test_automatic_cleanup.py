@@ -80,7 +80,7 @@ async def test_cleanup_waits_for_stale_writes(manager: ManagerClient):
     """Scenario:
        * Start two nodes, a vnodes-based table with an rf=2
        * Run insert while bootstrapping another node, suspend this insert in database_apply_wait injection
-       * Bootstrap succeeds, capture the final version
+       * Bootstrap succeeds, capture the final topology version
        * Start decommission -> triggers global barrier, which we fail on another injection
        * This failure is not fatal, the cleanup procedure continues and blocks on waiting for the stale write
        * We release the database_apply_wait injection, cleanup succeeds, write fails with 'stale topology exception'
