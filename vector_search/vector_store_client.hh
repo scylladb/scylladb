@@ -8,9 +8,7 @@
 
 #pragma once
 
-#include "dht/decorated_key.hh"
-#include "keys/keys.hh"
-#include "seastarx.hh"
+#include "primary_key.hh"
 #include <seastar/core/shared_future.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/http/reply.hh>
@@ -27,9 +25,9 @@ class inet_address;
 
 namespace vector_search {
 
-struct primary_key {
-    dht::decorated_key partition;
-    clustering_key_prefix clustering;
+struct ann_result {
+    primary_key pk;
+    float distance;
 };
 
 /// A client with the vector-store service.
@@ -46,6 +44,7 @@ public:
     using limit = std::size_t;
     using port_number = std::uint16_t;
     using primary_keys = std::vector<primary_key>;
+    using ann_results = std::vector<ann_result>;
     using schema_ptr = lw_shared_ptr<schema const>;
     using status_type = http::reply::status_type;
 
@@ -106,7 +105,7 @@ public:
 
     /// Request the vector store service for the primary keys of the nearest neighbors
     auto ann(keyspace_name keyspace, index_name name, schema_ptr schema, vs_vector vs_vector, limit limit, abort_source& as)
-            -> future<std::expected<primary_keys, ann_error>>;
+            -> future<std::expected<ann_results, ann_error>>;
 
 private:
     friend struct vector_store_client_tester;
