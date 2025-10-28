@@ -941,145 +941,135 @@ std::string make_aws_host(std::string_view aws_region, std::string_view service)
 BOOST_AUTO_TEST_SUITE(aws_kms, *seastar::testing::async_fixture<aws_kms_fixture>())
 
 SEASTAR_FIXTURE_TEST_CASE(test_kms_provider, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
-    {
-        tmpdir tmp;
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
-        auto yaml = fmt::format(R"foo(
-            kms_hosts:
-                kms_test:
-                    master_key: {0}
-                    aws_region: {1}
-                    aws_profile: {2}
-                    endpoint: {3}
-                    )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
-        );
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                master_key: {0}
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
 
-        co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    }
+    co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_master_key_in_cf, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
-    {
-        tmpdir tmp;
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
-        auto yaml = fmt::format(R"foo(
-            kms_hosts:
-                kms_test:
-                    aws_region: {1}
-                    aws_profile: {2}
-                    endpoint: {3}
-                    )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
-        );
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
 
-        // should fail
+    // should fail
+    try {
         try {
-            try {
-                co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', "
-                                       "'secret_key_strength': 128",
-                        tmp, yaml);
-            } catch (std::nested_exception& ex) {
-                std::rethrow_if_nested(ex);
-            }
-            BOOST_FAIL("Required an exception to be re-thrown");
-        } catch (encryption::configuration_error&) {
-            // EXPECTED
-        } catch (...) {
-            BOOST_FAIL(format("Unexpected exception: {}", std::current_exception()));
+            co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', "
+                                   "'secret_key_strength': 128",
+                    tmp, yaml);
+        } catch (std::nested_exception& ex) {
+            std::rethrow_if_nested(ex);
         }
-
-        // should be ok
-        co_await test_provider(fmt::format("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", kms_key_alias)
-            , tmp, yaml
-            );
+        BOOST_FAIL("Required an exception to be re-thrown");
+    } catch (encryption::configuration_error&) {
+        // EXPECTED
+    } catch (...) {
+        BOOST_FAIL(format("Unexpected exception: {}", std::current_exception()));
     }
+
+    // should be ok
+    co_await test_provider(fmt::format("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", kms_key_alias)
+        , tmp, yaml
+        );
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_broken_algo, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
-    {
-        tmpdir tmp;
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
-        auto yaml = fmt::format(R"foo(
-            kms_hosts:
-                kms_test:
-                    master_key: {0}
-                    aws_region: {1}
-                    aws_profile: {2}
-                    endpoint: {3}
-                    )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
-        );
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                master_key: {0}
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
 
-        try {
-            co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'', 'secret_key_strength': 128", tmp, yaml);
-            BOOST_FAIL("should not reach");
-        } catch (exceptions::configuration_exception&) {
-            // ok
-        }
+    try {
+        co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'', 'secret_key_strength': 128", tmp, yaml);
+        BOOST_FAIL("should not reach");
+    } catch (exceptions::configuration_exception&) {
+        // ok
     }
 }
 
 SEASTAR_FIXTURE_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
-    {
-        tmpdir tmp;
-        /**
-         * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
-         * from ~/.aws/credentials
-         */
+    tmpdir tmp;
+    /**
+     * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
+     * from ~/.aws/credentials
+     */
+    auto yaml = fmt::format(R"foo(
+        kms_hosts:
+            kms_test:
+                master_key: {0}
+                aws_region: {1}
+                aws_profile: {2}
+                endpoint: {3}
+                )foo"
+        , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+    );
+
+    co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }, yaml);
+}
+
+SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    tmpdir tmp;
+    std::string host, scheme;
+
+    if (endpoint.empty()) { 
+        host = make_aws_host(kms_aws_region, "kms");
+        scheme = "https://";
+    } else {
+        auto info = utils::http::parse_simple_url(endpoint);
+        host = info.host + ":" + std::to_string(info.port);
+        scheme = info.scheme;
+    }
+
+    co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
         auto yaml = fmt::format(R"foo(
             kms_hosts:
                 kms_test:
                     master_key: {0}
                     aws_region: {1}
                     aws_profile: {2}
-                    endpoint: {3}
+                    endpoint: {3}://{4}
+                    key_cache_expiry: 1ms
                     )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
+            , kms_key_alias, kms_aws_region, kms_aws_profile, scheme, proxy.address()
         );
-
-        co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }, yaml);
-    }
-}
-
-SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
-    {
-        tmpdir tmp;
-        std::string host, scheme;
-
-        if (endpoint.empty()) { 
-            host = make_aws_host(kms_aws_region, "kms");
-            scheme = "https://";
-        } else {
-            auto info = utils::http::parse_simple_url(endpoint);
-            host = info.host + ":" + std::to_string(info.port);
-            scheme = info.scheme;
-        }
-
-        co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
-            auto yaml = fmt::format(R"foo(
-                kms_hosts:
-                    kms_test:
-                        master_key: {0}
-                        aws_region: {1}
-                        aws_profile: {2}
-                        endpoint: {3}://{4}
-                        key_cache_expiry: 1ms
-                        )foo"
-                , kms_key_alias, kms_aws_region, kms_aws_profile, scheme, proxy.address()
-            );
-            return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
-        });
-    }
+        return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
+    });
 }
 
 BOOST_AUTO_TEST_SUITE_END()
