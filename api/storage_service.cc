@@ -12,6 +12,7 @@
 #include "api/api-doc/storage_service.json.hh"
 #include "api/api-doc/storage_proxy.json.hh"
 #include "api/scrub_status.hh"
+#include "api/tasks.hh"
 #include "db/config.hh"
 #include "db/schema_tables.hh"
 #include "utils/hash.hh"
@@ -750,26 +751,7 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::force_keyspace_compaction.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto& db = ctx.db;
-        auto params = req_params({
-            std::pair("keyspace", mandatory::yes),
-            std::pair("cf", mandatory::no),
-            std::pair("flush_memtables", mandatory::no),
-            std::pair("consider_only_existing_data", mandatory::no),
-        });
-        params.process(*req);
-        auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
-        auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
-        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
-        apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
-        if (!flush && !consider_only_existing_data) {
-            fmopt = flush_mode::skip;
-        }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
+        auto task = co_await force_keyspace_compaction(ctx, std::move(req));
         co_await task->done();
         co_return json_void();
     });

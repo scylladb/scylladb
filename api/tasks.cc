@@ -37,27 +37,32 @@ static auto wrap_ks_cf(http_context &ctx, ks_cf_func f) {
     };
 }
 
+future<tasks::task_manager::task_ptr> force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req) {
+    auto& db = ctx.db;
+    auto params = req_params({
+        std::pair("keyspace", mandatory::yes),
+        std::pair("cf", mandatory::no),
+        std::pair("flush_memtables", mandatory::no),
+        std::pair("consider_only_existing_data", mandatory::no),
+    });
+    params.process(*req);
+    auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
+    auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
+    auto flush = params.get_as<bool>("flush_memtables").value_or(true);
+    auto consider_only_existing_data = params.get_as<bool>("consider_only_existing_data").value_or(false);
+    apilog.info("force_keyspace_compaction: keyspace={} tables={}, flush={} consider_only_existing_data={}", keyspace, table_infos, flush, consider_only_existing_data);
+
+    auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
+    std::optional<compaction::flush_mode> fmopt;
+    if (!flush && !consider_only_existing_data) {
+        fmopt = compaction::flush_mode::skip;
+    }
+    return compaction_module.make_and_start_task<compaction::major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt, consider_only_existing_data);
+}
+
 void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::storage_service>& ss, sharded<db::snapshot_ctl>& snap_ctl) {
     t::force_keyspace_compaction_async.set(r, [&ctx](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto& db = ctx.db;
-        auto params = req_params({
-            std::pair("keyspace", mandatory::yes),
-            std::pair("cf", mandatory::no),
-            std::pair("flush_memtables", mandatory::no),
-        });
-        params.process(*req);
-        auto keyspace = validate_keyspace(ctx, *params.get("keyspace"));
-        auto table_infos = parse_table_infos(keyspace, ctx, params.get("cf").value_or(""));
-        auto flush = params.get_as<bool>("flush_memtables").value_or(true);
-        apilog.debug("force_keyspace_compaction_async: keyspace={} tables={}, flush={}", keyspace, table_infos, flush);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        std::optional<flush_mode> fmopt;
-        if (!flush) {
-            fmopt = flush_mode::skip;
-        }
-        auto task = co_await compaction_module.make_and_start_task<major_keyspace_compaction_task_impl>({}, std::move(keyspace), tasks::task_id::create_null_id(), db, table_infos, fmopt);
-
+        auto task = co_await force_keyspace_compaction(ctx, std::move(req));
         co_return json::json_return_type(task->get_status().id.to_sstring());
     });
 
