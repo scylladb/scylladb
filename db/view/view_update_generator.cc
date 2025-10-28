@@ -396,16 +396,16 @@ future<> view_update_generator::populate_views(const replica::table& table,
                 break;
             }
             size_t update_size = memory_usage_of(*updates);
-            size_t units_to_wait_for = std::min(table.get_config().view_update_concurrency_semaphore_limit, update_size);
-            auto units = co_await seastar::get_units(_db.view_update_sem(), units_to_wait_for);
-            units.adopt(seastar::consume_units(_db.view_update_sem(), update_size - units_to_wait_for));
+            size_t units_to_wait_for = std::min(table.get_config().view_update_memory_semaphore_limit, update_size);
+            auto memory_units = co_await seastar::get_units(_db.view_update_memory_sem(), units_to_wait_for);
+            memory_units.adopt(seastar::consume_units(_db.view_update_memory_sem(), update_size - units_to_wait_for));
             if (utils::get_local_injector().enter("view_building_failure")) {
                 co_await seastar::sleep(std::chrono::seconds(1));
                 err = std::make_exception_ptr(std::runtime_error("Timeout a view building update"));
                 continue;
             }
             co_await mutate_MV(schema, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(),
-                    tracing::trace_state_ptr(), std::move(units), service::allow_hints::no, wait_for_all_updates::yes);
+                    tracing::trace_state_ptr(), std::move(memory_units), service::allow_hints::no, wait_for_all_updates::yes);
         } catch (...) {
             if (!err) {
                 err = std::current_exception();
@@ -477,8 +477,8 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
             break;
         }
         tracing::trace(tr_state, "Generated {} view update mutations", updates->size());
-        auto units = seastar::consume_units(_db.view_update_sem(), memory_usage_of(*updates));
-        if (batch_num == 0 && _db.view_update_sem().current() == 0) {
+        auto memory_units = seastar::consume_units(_db.view_update_memory_sem(), memory_usage_of(*updates));
+        if (batch_num == 0 && _db.view_update_memory_sem().current() == 0) {
             // We don't have resources to propagate view updates for this write. If we reached this point, we failed to
             // throttle the client. The memory queue is already full, waiting on the semaphore would block view updates
             // that we've already started applying, and generating hints would ultimately result in the disk queue being
@@ -499,7 +499,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
 
             co_await seastar::sleep(throttle_delay);
 
-            if (utils::get_local_injector().enter("view_update_limit") && _db.view_update_sem().current() == 0) {
+            if (utils::get_local_injector().enter("view_update_limit") && _db.view_update_memory_sem().current() == 0) {
                 err = std::make_exception_ptr(std::runtime_error("View update backlog exceeded the limit"));
                 break;
             }
@@ -512,7 +512,7 @@ future<> view_update_generator::generate_and_propagate_view_updates(const replic
 
         try {
             co_await mutate_MV(base, base_token, std::move(*updates), table.view_stats(), *table.cf_stats(), tr_state,
-                std::move(units), service::allow_hints::yes, wait_for_all_updates::no);
+                std::move(memory_units), service::allow_hints::yes, wait_for_all_updates::no);
         } catch (...) {
             // Ignore exceptions: any individual failure to propagate a view update will be reported
             // by a separate mechanism in mutate_MV() function. Moreover, we should continue trying

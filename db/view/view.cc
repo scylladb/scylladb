@@ -2130,7 +2130,7 @@ future<> view_update_generator::mutate_MV(
         db::view::stats& stats,
         replica::cf_stats& cf_stats,
         tracing::trace_state_ptr tr_state,
-        db::timeout_semaphore_units pending_view_updates,
+        db::timeout_semaphore_units pending_view_update_memory_units,
         service::allow_hints allow_hints,
         wait_for_all_updates wait_for_all)
 {
@@ -2167,7 +2167,7 @@ future<> view_update_generator::mutate_MV(
         auto [target_endpoint, no_pairing_endpoint] = get_view_natural_endpoint(me, base_ermp, view_ermp, replication, base_token, view_token,
                 use_legacy_self_pairing, use_tablets_rack_aware_view_pairing, cf_stats);
         auto remote_endpoints = view_ermp->get_pending_replicas(view_token);
-        auto sem_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_updates.split(memory_usage_of(mut)));
+        auto memory_units = seastar::make_lw_shared<db::timeout_semaphore_units>(pending_view_update_memory_units.split(memory_usage_of(mut)));
         if (no_pairing_endpoint) {
             // The no_pairing_endpoint can appear during a replication factor increase when the base tablet migration finished after
             // the corresponding (for current token) view tablet migration. In this case, the view replica is no longer
@@ -2178,6 +2178,7 @@ future<> view_update_generator::mutate_MV(
             // similarly to https://github.com/scylladb/scylladb/issues/7711
             remote_endpoints.push_back(std::move(*no_pairing_endpoint));
         }
+
         const bool update_synchronously = should_update_synchronously(*mut.s);
         if (update_synchronously) {
             tracing::trace(tr_state, "Forcing {}.{} view update to be synchronous (synchronous_updates property was set)",
@@ -2227,11 +2228,15 @@ future<> view_update_generator::mutate_MV(
             auto mut_ptr = remote_endpoints.empty() ? std::make_unique<frozen_mutation>(std::move(mut.fm)) : std::make_unique<frozen_mutation>(mut.fm);
             tracing::trace(tr_state, "Locally applying view update for {}.{}; base token = {}; view token = {}",
                     mut.s->ks_name(), mut.s->cf_name(), base_token, view_token);
+            // For local view updates, we limit the number of concurrent view updates on each shard and for each service level
+            // to database::max_concurrent_local_view_updates. Local view updates are cpu-bound, so the cpu won't idle even
+            // if the concurrency is low and executing too many view updates concurrently can unnecessarily increase latency and memory usage.
+            auto count_units = co_await seastar::get_units(_db.get_view_update_concurrency_sem(), 1);
             local_view_update = _proxy.local().mutate_mv_locally(mut.s, *mut_ptr, tr_state, db::commitlog::force_sync::no).then_wrapped(
                     [s = mut.s, &stats, &cf_stats, tr_state, base_token, view_token, my_address, mut_ptr = std::move(mut_ptr),
-                            sem_units, this] (future<>&& f) mutable {
+                            count_units = std::move(count_units), memory_units, this] (future<>&& f) mutable {
                 --stats.writes;
-                sem_units = nullptr;
+                memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
                     ++stats.view_updates_failed_local;
@@ -2267,8 +2272,8 @@ future<> view_update_generator::mutate_MV(
             schema_ptr s = mut.s;
             future<> remote_view_update = apply_to_remote_endpoints(_proxy.local(), std::move(view_ermp), *target_endpoint, std::move(remote_endpoints), std::move(mut), base_token, view_token, allow_hints, tr_state).then_wrapped(
                 [s = std::move(s), &stats, &cf_stats, tr_state, base_token, view_token, target_endpoint, updates_pushed_remote,
-                 sem_units, apply_update_synchronously, this] (future<>&& f) mutable {
-                sem_units = nullptr;
+                 memory_units, apply_update_synchronously, this] (future<>&& f) mutable {
+                memory_units = nullptr;
                 _proxy.local().update_view_update_backlog();
                 if (f.failed()) {
                     stats.view_updates_failed_remote += updates_pushed_remote;

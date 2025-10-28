@@ -97,7 +97,7 @@ private:
             db::view::stats& stats,
             replica::cf_stats& cf_stats,
             tracing::trace_state_ptr tr_state,
-            db::timeout_semaphore_units pending_view_updates,
+            db::timeout_semaphore_units pending_view_update_memory_units,
             service::allow_hints allow_hints,
             wait_for_all_updates wait_for_all);
 
