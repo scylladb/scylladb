@@ -30,9 +30,6 @@ protected:
     future<sstring> aws_api_call(sstring addr, uint16_t port, const sstring cmd, std::optional<sstring> token);
     future<sstring> read_property_file();
 private:
-    connected_socket _sd;
-    input_stream<char> _in;
-    output_stream<char> _out;
     http_response_parser _parser;
     sstring _req;
     exponential_backoff_retry _ec2_api_retry = exponential_backoff_retry(std::chrono::seconds(5), std::chrono::seconds(2560));

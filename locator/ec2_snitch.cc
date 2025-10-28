@@ -90,12 +90,11 @@ future<sstring> ec2_snitch::aws_api_call(sstring addr, uint16_t port, sstring cm
 }
 
 future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstring cmd, std::optional<sstring> token) {
-    return connect(socket_address(inet_address{addr}, port))
-    .then([this, addr, cmd, token] (connected_socket fd) {
-        _sd = std::move(fd);
-        _in = _sd.input();
-        _out = _sd.output();
+    connected_socket fd = co_await connect(socket_address(inet_address{addr}, port));
+        auto in = fd.input();
+        auto out = fd.output();
 
+    {
         if (token) {
             _req = sstring("GET ") + cmd +
                    sstring(" HTTP/1.1\r\nHost: ") +addr +
@@ -108,14 +107,15 @@ future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstri
                    sstring("\r\n\r\n");
         }
 
-        return _out.write(_req.c_str()).then([this] {
-            return _out.flush();
-        });
-    }).then([this] {
+        co_await out.write(_req.c_str());
+        co_await out.flush();
+    }
+    {
         _parser.init();
-        return _in.consume(_parser).then([this] {
+        co_await in.consume(_parser);
+        {
             if (_parser.eof()) {
-                return make_exception_future<sstring>("Bad HTTP response");
+                co_await coroutine::return_exception(std::runtime_error("Bad HTTP response"));
             }
 
             // Read HTTP response header first
@@ -123,27 +123,27 @@ future<sstring> ec2_snitch::aws_api_call_once(sstring addr, uint16_t port, sstri
             auto rc = _rsp->_status;
             // Verify EC2 instance metadata access
             if (rc == http::reply::status_type(403)) {
-                return make_exception_future<sstring>(std::runtime_error("Error: Unauthorized response received when trying to communicate with instance metadata service."));
+                co_await coroutine::return_exception(std::runtime_error("Error: Unauthorized response received when trying to communicate with instance metadata service."));
             }
             if (_rsp->_status != http::reply::status_type::ok) {
-                return make_exception_future<sstring>(std::runtime_error(format("Error: HTTP response status {}", _rsp->_status)));
+                co_await coroutine::return_exception(std::runtime_error(format("Error: HTTP response status {}", _rsp->_status)));
             }
 
             auto it = _rsp->_headers.find("Content-Length");
             if (it == _rsp->_headers.end()) {
-                return make_exception_future<sstring>("Error: HTTP response does not contain: Content-Length\n");
+                co_await coroutine::return_exception(std::runtime_error("Error: HTTP response does not contain: Content-Length\n"));
             }
 
             auto content_len = std::stoi(it->second);
 
             // Read HTTP response body
-            return _in.read_exactly(content_len).then([] (temporary_buffer<char> buf) {
+            temporary_buffer<char> buf = co_await in.read_exactly(content_len);
+            {
                 sstring res(buf.get(), buf.size());
-
-                return make_ready_future<sstring>(std::move(res));
-            });
-        });
-    });
+                co_return res;
+            }
+        }
+    }
 }
 
 future<sstring> ec2_snitch::read_property_file() {
