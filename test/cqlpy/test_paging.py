@@ -35,3 +35,44 @@ def test_sticky_stop_flag(cql, test_keyspace):
         res = list(cql.execute(statement))
 
         assert len(res) == 199
+
+# In this test we verify that setting page_size=0 truly disables paging in
+# a request:
+# Scylla's paging not only ends pages after a query-defined "page_size" rows,
+# it also ends a page when reaching (roughly) a predefined size cutoff - 1MB.
+# In this test we verify that setting page_size = 0 truly disables paging,
+# i.e., it also disables that size cutoff, and the single page of response
+# can grow beyond 1MB.
+#
+# This is a Scylla-only test because Cassandra cuts pages only by row counts,
+# so if rows are long we can end up with extremely large pages in the
+# response, even when paging is enabled.
+def test_page_size_0(cql, test_keyspace, scylla_only):
+    with new_test_table(cql, test_keyspace, 'p int, c int, s text, PRIMARY KEY (p, c)') as table:
+        # We want the data below to span more than the 1MB page size
+        # cutoff, so choose long_len * nrows > 1MB.
+        long_len = 100000
+        nrows = 15
+        stmt = cql.prepare(f'INSERT INTO {table} (p, c, s) VALUES (?, ?, ?)')
+        p = 0
+        long = 'x'*long_len
+        for c in range(nrows):
+            cql.execute(stmt, [p, c, long])
+        # Reading with fetch_size = 3 should return a page with just three rows.
+        r = cql.execute(SimpleStatement(f'SELECT * FROM {table} WHERE p={p}', fetch_size=3))
+        assert len(r.current_rows) == 3
+        # Reading with fetch_size = 100000 will not return all rows - it will
+        # stop after the 1MB cutoff, while returning all the rows would have
+        # taken more than 1MB. So there will be fewer results than nrows.
+        r = cql.execute(SimpleStatement(f'SELECT * FROM {table} WHERE p={p}', fetch_size=100000))
+        assert len(r.current_rows) < nrows
+        # If we set fetch_size = 0, paging is completely disabled so the query
+        # doesn't stop after reaching 1MB and we get all nrows results:
+        r = cql.execute(SimpleStatement(f'SELECT * FROM {table} WHERE p={p}', fetch_size=0))
+        assert len(r.current_rows) == nrows
+        # Since commit 08c81427b9e we use page_size = -1 for internal unpaged
+        # queries. Let's verify that page_size = -1 also means unpaged.
+        # However, we don't recommend that users actually use page_size = -1,
+        # it's better to stick to the traditional page_size = 0.
+        r = cql.execute(SimpleStatement(f'SELECT * FROM {table} WHERE p={p}', fetch_size=-1))
+        assert len(r.current_rows) == nrows
