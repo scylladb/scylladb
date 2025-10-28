@@ -31,5 +31,6 @@ void unset_tasks_compaction_module(http_context& ctx, httpd::routes& r);
 
 future<tasks::task_manager::task_ptr> force_keyspace_compaction(http_context& ctx, std::unique_ptr<http::request> req);
 future<tasks::task_manager::task_ptr> force_keyspace_cleanup(http_context& ctx, sharded<service::storage_service>& ss, std::unique_ptr<http::request> req);
+future<tasks::task_manager::task_ptr> upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req, sstring keyspace, std::vector<table_info> table_infos);
 
 }
