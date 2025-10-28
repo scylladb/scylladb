@@ -692,36 +692,48 @@ SEASTAR_TEST_CASE(test_skipping_in_compressed_stream) {
             BOOST_REQUIRE(b.empty());
         };
 
+      {
         auto in = make_is();
         expect(in, buf1);
         expect(in, buf2);
         expect_eof(in);
+      }
 
-        in = make_is();
+      {
+        auto in = make_is();
         in.skip(0).get();
         expect(in, buf1);
         expect(in, buf2);
         expect_eof(in);
+      }
 
-        in = make_is();
+      {
+        auto in = make_is();
         expect(in, buf1);
         in.skip(0).get();
         expect(in, buf2);
         expect_eof(in);
+      }
 
-        in = make_is();
+      {
+        auto in = make_is();
         expect(in, buf1);
         in.skip(opts.buffer_size).get();
         expect_eof(in);
+      }
 
-        in = make_is();
+      {
+        auto in = make_is();
         in.skip(opts.buffer_size * 2).get();
         expect_eof(in);
+      }
 
-        in = make_is();
+      {
+        auto in = make_is();
         in.skip(opts.buffer_size).get();
         in.skip(opts.buffer_size).get();
         expect_eof(in);
+      }
     });
 }
 
