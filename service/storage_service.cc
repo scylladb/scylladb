@@ -7718,6 +7718,9 @@ void storage_service::init_messaging_service() {
                     additional_tables.push_back(db::system_keyspace::cdc_streams_state()->id());
                     additional_tables.push_back(db::system_keyspace::cdc_streams_history()->id());
                 }
+                if (ss._feature_service.encrypted_keys_on_group0) {
+                    additional_tables.push_back(db::system_keyspace::encrypted_keys()->id());
+                }
             }
 
             for (const auto& table : boost::join(params.tables, additional_tables)) {
@@ -7772,6 +7775,11 @@ void storage_service::init_messaging_service() {
             auto vb_processing_base_mut = co_await ss._sys_ks.local().get_view_building_processing_base_id_mutation();
             if (vb_processing_base_mut) {
                 mutations.emplace_back(*vb_processing_base_mut);
+            }
+
+            auto replicated_key_provider_version_mut = co_await ss._sys_ks.local().get_replicated_key_provider_version_mutation();
+            if (replicated_key_provider_version_mut) {
+                mutations.emplace_back(*replicated_key_provider_version_mut);
             }
 
             co_return raft_snapshot{
