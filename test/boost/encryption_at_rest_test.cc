@@ -21,6 +21,7 @@
 #include <seastar/http/request.hh>
 
 #include <seastar/testing/test_case.hh>
+#include <seastar/testing/test_fixture.hh>
 
 #include <fmt/ranges.h>
 
@@ -36,6 +37,7 @@
 #include "test/lib/cql_assertions.hh"
 #include "test/lib/log.hh"
 #include "test/lib/proc_utils.hh"
+#include "test/lib/aws_kms_fixture.hh"
 #include "db/config.hh"
 #include "db/extensions.hh"
 #include "db/commitlog/commitlog.hh"
@@ -44,6 +46,7 @@
 #include "sstables/sstables.hh"
 #include "cql3/untyped_result_set.hh"
 #include "utils/rjson.hh"
+#include "utils/http.hh"
 #include "utils/azure/identity/exceptions.hh"
 #include "utils/azure/identity/managed_identity_credentials.hh"
 #include "utils/azure/identity/service_principal_credentials.hh"
@@ -935,48 +938,11 @@ SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test
 
 std::string make_aws_host(std::string_view aws_region, std::string_view service);
 
-/*
-Simple test of KMS provider. Still has some caveats:
+BOOST_AUTO_TEST_SUITE(aws_kms, *seastar::testing::async_fixture<aws_kms_fixture>())
 
-    1.) Uses aws CLI credentials for auth. I.e. you need to have a valid
-        ~/.aws/credentials for the user running the test.
-    2.) I can't figure out a good way to set up a key "everyone" can access. So user needs
-        to have read/encrypt access to the key alias (default "alias/kms_encryption_test")
-        in the scylla AWS account.
-
-    A "better" solution might be to create dummmy user only for KMS testing with only access
-    to a single key, and no other priviledges. But that seems dangerous as well.
-
-    For this reason, this test is parameterized with env vars:
-    * ENABLE_KMS_TEST - set to non-zero (1/true) to run
-    * KMS_KEY_ALIAS - default "alias/kms_encryption_test" - set to key alias you have access to.
-    * KMS_AWS_REGION - default us-east-1 - set to whatever region your key is in.
-
-    NOTE: When run via test.py, the minio server used there will, unless already set,
-    put AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY into the inherited process env, with
-    values purely fictional, and only usable by itself. This _will_ screw up credentials
-    resolution in the KMS connector, and will lead to errors not intended.
-
-    In CI, we provide the vars from jenkins, with working values, and the minio
-    respects this.
-
-    As a workaround, try setting the vars yourself to something that actually works (i.e. 
-    values from your .awscredentials). Or complain until we find a way to make the minio
-    server optional for tests.
-
-*/
-static future<> kms_test_helper(std::function<future<>(const tmpdir&, std::string_view, std::string_view, std::string_view)> f) {
-    auto kms_key_alias = get_var_or_default("KMS_KEY_ALIAS", "alias/kms_encryption_test");
-    auto kms_aws_region = get_var_or_default("KMS_AWS_REGION", "us-east-1");
-    auto kms_aws_profile = get_var_or_default("KMS_AWS_PROFILE", "default");
-
-    tmpdir tmp;
-
-    co_await f(tmp, kms_key_alias, kms_aws_region, kms_aws_profile);
-}
-
-SEASTAR_TEST_CASE(test_kms_provider, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_kms_provider, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    {
+        tmpdir tmp;
         /**
          * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
          * from ~/.aws/credentials
@@ -987,16 +953,18 @@ SEASTAR_TEST_CASE(test_kms_provider, *check_run_test_decorator("ENABLE_KMS_TEST"
                     master_key: {0}
                     aws_region: {1}
                     aws_profile: {2}
+                    endpoint: {3}
                     )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
+            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
         );
 
         co_await test_provider("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
-    });
+    }
 }
 
-SEASTAR_TEST_CASE(test_kms_provider_with_master_key_in_cf, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_master_key_in_cf, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    {
+        tmpdir tmp;
         /**
          * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
          * from ~/.aws/credentials
@@ -1006,8 +974,9 @@ SEASTAR_TEST_CASE(test_kms_provider_with_master_key_in_cf, *check_run_test_decor
                 kms_test:
                     aws_region: {1}
                     aws_profile: {2}
+                    endpoint: {3}
                     )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
+            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
         );
 
         // should fail
@@ -1030,11 +999,12 @@ SEASTAR_TEST_CASE(test_kms_provider_with_master_key_in_cf, *check_run_test_decor
         co_await test_provider(fmt::format("'key_provider': 'KmsKeyProviderFactory', 'kms_host': 'kms_test', 'master_key': '{}', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", kms_key_alias)
             , tmp, yaml
             );
-    });
+    }
 }
 
-SEASTAR_TEST_CASE(test_kms_provider_with_broken_algo, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_kms_provider_with_broken_algo, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    {
+        tmpdir tmp;
         /**
          * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
          * from ~/.aws/credentials
@@ -1045,8 +1015,9 @@ SEASTAR_TEST_CASE(test_kms_provider_with_broken_algo, *check_run_test_decorator(
                     master_key: {0}
                     aws_region: {1}
                     aws_profile: {2}
+                    endpoint: {3}
                     )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
+            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
         );
 
         try {
@@ -1055,11 +1026,12 @@ SEASTAR_TEST_CASE(test_kms_provider_with_broken_algo, *check_run_test_decorator(
         } catch (exceptions::configuration_exception&) {
             // ok
         }
-    });
+    }
 }
 
-SEASTAR_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
+SEASTAR_FIXTURE_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    {
+        tmpdir tmp;
         /**
          * Note: NOT including any auth stuff here. The provider will pick up AWS credentials
          * from ~/.aws/credentials
@@ -1070,17 +1042,28 @@ SEASTAR_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, *check_ru
                     master_key: {0}
                     aws_region: {1}
                     aws_profile: {2}
+                    endpoint: {3}
                     )foo"
-            , kms_key_alias, kms_aws_region, kms_aws_profile
+            , kms_key_alias, kms_aws_region, kms_aws_profile, endpoint
         );
 
         co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }, yaml);
-    });
+    }
 }
 
-SEASTAR_TEST_CASE(test_kms_network_error, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
-        auto host = make_aws_host(kms_aws_region, "kms");
+SEASTAR_FIXTURE_TEST_CASE(test_kms_network_error, local_aws_kms_wrapper, *check_run_test_decorator("ENABLE_KMS_TEST", true)) {
+    {
+        tmpdir tmp;
+        std::string host, scheme;
+
+        if (endpoint.empty()) { 
+            host = make_aws_host(kms_aws_region, "kms");
+            scheme = "https://";
+        } else {
+            auto info = utils::http::parse_simple_url(endpoint);
+            host = info.host + ":" + std::to_string(info.port);
+            scheme = info.scheme;
+        }
 
         co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
             auto yaml = fmt::format(R"foo(
@@ -1089,15 +1072,17 @@ SEASTAR_TEST_CASE(test_kms_network_error, *check_run_test_decorator("ENABLE_KMS_
                         master_key: {0}
                         aws_region: {1}
                         aws_profile: {2}
-                        endpoint: https://{3}
+                        endpoint: {3}://{4}
                         key_cache_expiry: 1ms
                         )foo"
-                , kms_key_alias, kms_aws_region, kms_aws_profile, proxy.address()
+                , kms_key_alias, kms_aws_region, kms_aws_profile, scheme, proxy.address()
             );
             return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
         });
-    });
+    }
 }
+
+BOOST_AUTO_TEST_SUITE_END()
 
 SEASTAR_TEST_CASE(test_user_info_encryption) {
     tmpdir tmp;
