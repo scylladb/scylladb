@@ -125,6 +125,12 @@ Note that there is no guaranteed way to know when the tracing of a particular se
 * `request`: a short string describing the current query, like "Execute CQL3 query"
 * `started_at`: is a timestamp taken when tracing session has began
 
+##### Alternator specific
+Alternator commands will add following information to traces:
+* `alternator_op` key in `parameters` map - operation type, for example `CreateTable`
+* `table` key in `parameters` map - table used in given session if there was exactly one
+* `table[0]`, `table[1]`, ... in `parameters` map - tables used in given session, if there were more than one. Names will be sorted before inserting, names will not repeat
+
 ### Slow queries logging
 #### The motivation
 Many times in real life installations one of the most important parameters of the system is the longest response time. Naturally, the shorter it is - the better. Therefore capturing the request that take a long time and understanding why it took it so long is a very critical and challenging task.
