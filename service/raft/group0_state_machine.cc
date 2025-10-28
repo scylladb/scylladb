@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: LicenseRef-ScyllaDB-Source-Available-1.0
  */
 #include "service/raft/group0_state_machine.hh"
+#include "auth/cache.hh"
 #include "db/schema_tables.hh"
 #include "mutation/atomic_cell.hh"
 #include "cql3/selection/selection.hh"
@@ -375,6 +376,7 @@ future<> group0_state_machine::load_snapshot(raft::snapshot_id id) {
     if (_feature_service.cdc_with_tablets) {
         co_await _ss.load_cdc_streams();
     }
+    co_await _ss.auth_cache().load_all();
     _ss._topology_state_machine.event.broadcast();
     _ss._view_building_state_machine.event.broadcast();
 }
@@ -442,6 +444,8 @@ future<> group0_state_machine::transfer_snapshot(raft::server_id from_id, raft::
     if (raft_snp) {
         co_await mutate_locally(std::move(raft_snp->mutations), _sp);
     }
+
+    co_await _ss.auth_cache().load_all();
 
     co_await _sp.mutate_locally({std::move(history_mut)}, nullptr);
   } catch (const abort_requested_exception&) {
