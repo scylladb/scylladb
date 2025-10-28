@@ -175,6 +175,7 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     bool update_service_levels_effective_cache = false;
     bool make_view_building_state_transition = false;
     std::unordered_set<table_id> update_cdc_streams;
+    std::unordered_set<auth::cache::role_name_t> update_auth_cache_roles;
 
     for (const auto& m : modules.entries) {
         if (m.table == db::system_keyspace::service_levels_v2()->id()) {
@@ -198,6 +199,12 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
             const auto elements = m.pk.explode(*db::system_keyspace::cdc_streams_history());
             auto cdc_log_table_id = table_id(value_cast<utils::UUID>(uuid_type->deserialize_value(elements.front())));
             update_cdc_streams.insert(cdc_log_table_id);
+        } else if (auth::cache::includes_table(m.table)) {
+            auto schema = _ss.get_database().find_schema(m.table);
+            const auto elements = m.pk.explode(*schema);
+            auto role = value_cast<sstring>(schema->partition_key_type()->
+                    types().front()->deserialize(elements.front()));
+            update_auth_cache_roles.insert(std::move(role));
         }
     }
     
@@ -209,6 +216,9 @@ future<> group0_state_machine::reload_modules(modules_to_reload modules) {
     }
     if (update_cdc_streams.size()) {
         co_await _ss.load_cdc_streams(std::move(update_cdc_streams));
+    }
+    if (update_auth_cache_roles.size()) {
+        co_await _ss.auth_cache().load_roles(std::move(update_auth_cache_roles));
     }
 }
 
