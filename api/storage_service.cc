@@ -807,14 +807,8 @@ rest_perform_keyspace_offstrategy_compaction(http_context& ctx, std::unique_ptr<
 static
 future<json::json_return_type>
 rest_upgrade_sstables(http_context& ctx, std::unique_ptr<http::request> req) {
-        auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
-        bool exclude_current_version = req_param<bool>(*req, "exclude_current_version", false);
-
-        apilog.info("upgrade_sstables: keyspace={} tables={} exclude_current_version={}", keyspace, table_infos, exclude_current_version);
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<upgrade_sstables_compaction_task_impl>({}, std::move(keyspace), db, table_infos, exclude_current_version);
+        auto task = co_await upgrade_sstables(ctx, std::move(req), std::move(keyspace), std::move(table_infos));
         co_await task->done();
         co_return json::json_return_type(0);
 }
