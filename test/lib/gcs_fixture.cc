@@ -11,6 +11,7 @@
 
 #include <seastar/core/with_timeout.hh>
 #include <seastar/core/reactor.hh>
+#include <seastar/core/sleep.hh>
 
 #include "gcs_fixture.hh"
 #include "tmpdir.hh"
@@ -56,7 +57,7 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
             exec = tp::find_file_in_path("podman");
         }
         if (exec.empty()) {
-            throw std::runtime_error("Could not find fake-gcs-server or docker.");
+            throw std::runtime_error("Could not find fake-gcs-server, docker or podman.");
         }
 
         // publish port ephemeral, allows parallel instances
@@ -78,6 +79,8 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
 
     struct in_use{};
 
+    constexpr auto max_retries = 8;
+
     for (int retries = 0;; ++retries) {
         // podman in podman is hell. we run our "dbuild" with host network mode
         // so _cannot_ rely on ephermal ports or anything nice, atomic to 
@@ -94,7 +97,9 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
         auto port_string = std::to_string(port);
 
         params.resize(len);
-        params[port_index] = port_string + ":" + port_string;
+        if (port_index != 0) {
+            params[port_index] = port_string + ":" + port_string;
+        }
         params.emplace_back("--port");
         params.emplace_back(port_string);
 
@@ -108,7 +113,7 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
             , {}
             , tp::process_fixture::create_copy_handler(std::cout)
             // Must look at stderr log for state, because if we are using podman (and docker?)
-            // the 4443 port will in fact be connectible even before the actual 
+            // the server port might in fact be connectible even before the actual 
             // fake-gcs-server is up (in container), due to the port publisher.
             // Could do actual HTTP connection etc, but seems tricky.
             , [done = false, ready_promise = std::move(ready_promise), h = tp::process_fixture::create_copy_handler(std::cerr)](std::string_view line) mutable -> future<consumption_result<char>> {
@@ -120,6 +125,14 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
                 if (!done && line.find("address already in use") != std::string::npos) {
                     ready_promise.set_exception(in_use{});
                 }
+                // podman
+                if (!done && line.find("Address already in use") != std::string::npos) {
+                    ready_promise.set_exception(in_use{});
+                }
+                // docker
+                if (!done && line.find("port is already allocated") != std::string::npos) {
+                    ready_promise.set_exception(in_use{});
+                }
                 return h(line);
             }
         );
@@ -128,7 +141,7 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
         bool retry = false;
 
         try {
-            BOOST_TEST_MESSAGE("Waiting for process to laúnch...");
+            BOOST_TEST_MESSAGE("Waiting for fake-gcs-server process to laúnch...");
             // arbitrary timeout of 120s for the server to make some output. Very generous.
             // but since we (maybe) run docker, and might need to pull image, this can take
             // some time if we're unlucky.
@@ -140,24 +153,37 @@ static future<std::tuple<tp::process_fixture, int>> start_fake_gcs_server(const 
             p = std::current_exception();
         }
 
-        if (!p) {
+        auto backoff = 0ms;
+
+        while (!p) {
+            if (backoff > 0ms) {
+                co_await seastar::sleep(backoff);
+            }
             try {
-                BOOST_TEST_MESSAGE("Attempting to connect");
+                BOOST_TEST_MESSAGE("Attempting to connect to fake-gcs-fixture");
                 // TODO: seastar does not have a connect with timeout. That would be helpful here. But alas...
                 co_await with_timeout(std::chrono::steady_clock::now() + 20s, seastar::connect(socket_address(net::inet_address("127.0.0.1"), port)));
                 BOOST_TEST_MESSAGE("fake-gcs-server up and available"); // debug print. Why not.
+            } catch (std::system_error&) {
+                if (retries < max_retries) {
+                    backoff = 100ms;
+                    continue;
+                }
+                p = std::current_exception();
             } catch (...) {
                 p = std::current_exception();
             }
+            break;
         }
 
         if (p != nullptr) {
-            BOOST_TEST_MESSAGE(fmt::format("Got exception starting server: {}", p));
+            BOOST_TEST_MESSAGE(fmt::format("Got exception starting fake-gcs-server: {}", p));
             ps.terminate();
             co_await ps.wait();
-            if (!retry || ++retries > 8) {
+            if (!retry || retries >= max_retries) {
                 std::rethrow_exception(p);
             }
+            continue;
         }
 
         co_return std::make_tuple(std::move(ps), port);
