@@ -18,6 +18,7 @@
 #include "compaction/task_manager_module.hh"
 #include "gc_clock.hh"
 #include "raft/raft.hh"
+#include "auth/cache.hh"
 #include <ranges>
 #include <seastar/core/shard_id.hh>
 #include <seastar/core/sleep.hh>
@@ -203,6 +204,7 @@ storage_service::storage_service(abort_source& abort_source,
     sharded<db::view::view_building_worker>& view_building_worker,
     cql3::query_processor& qp,
     sharded<qos::service_level_controller>& sl_controller,
+    auth::cache& auth_cache,
     topology_state_machine& topology_state_machine,
     db::view::view_building_state_machine& view_building_state_machine,
     tasks::task_manager& tm,
@@ -221,6 +223,7 @@ storage_service::storage_service(abort_source& abort_source,
         , _stream_manager(stream_manager)
         , _snitch(snitch)
         , _sl_controller(sl_controller)
+        , _auth_cache(auth_cache)
         , _group0(nullptr)
         , _async_gate("storage_service")
         , _node_ops_abort_thread(node_ops_abort_thread())
@@ -272,6 +275,10 @@ storage_service::~storage_service() = default;
 
 node_ops::task_manager_module& storage_service::get_node_ops_module() noexcept {
     return *_node_ops_module;
+}
+
+auth::cache& storage_service::auth_cache() noexcept {
+    return _auth_cache;
 }
 
 enum class node_external_status {
