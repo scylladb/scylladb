@@ -76,7 +76,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
         auto& db = ctx.db;
         auto [keyspace, table_infos] = parse_table_infos(ctx, *req);
         apilog.info("force_keyspace_cleanup_async: keyspace={} tables={}", keyspace, table_infos);
-        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
+        if (!co_await ss.local().is_vnodes_cleanup_allowed(keyspace)) {
             auto msg = "Can not perform cleanup operation when topology changes";
             apilog.warn("force_keyspace_cleanup_async: keyspace={} tables={}: {}", keyspace, table_infos, msg);
             co_await coroutine::return_exception(std::runtime_error(msg));
@@ -98,7 +98,7 @@ void set_tasks_compaction_module(http_context& ctx, routes& r, sharded<service::
             co_return json::json_return_type(0);
         }
         apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
-        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
+        if (!co_await ss.local().is_vnodes_cleanup_allowed(keyspace)) {
             auto msg = "Can not perform cleanup operation when topology changes";
             apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
             co_await coroutine::return_exception(std::runtime_error(msg));

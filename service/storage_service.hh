@@ -878,7 +878,7 @@ private:
     future<> notify_cql_change(inet_address endpoint, locator::host_id hid,bool ready);
     future<> remove_rpc_client_with_ignored_topology(inet_address endpoint, locator::host_id id);
 public:
-    future<bool> is_cleanup_allowed(sstring keyspace);
+    future<bool> is_vnodes_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
     future<> update_fence_version(token_metadata::version_t version);
 
