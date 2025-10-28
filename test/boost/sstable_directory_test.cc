@@ -270,19 +270,16 @@ SEASTAR_THREAD_TEST_CASE(sstable_directory_test_temporary_statistics) {
         auto sst = make_sstable_for_this_shard(std::bind(new_env_sstable, std::ref(env.local())));
         auto tempstr = test(sst).filename(component_type::TemporaryStatistics);
         tests::touch_file(tempstr.native()).get();
-        auto tempstat = fs::canonical(tempstr);
+        auto statstr = test(sst).filename(component_type::Statistics);
 
         with_sstable_directory(env, [&] (sharded<sstables::sstable_directory>& sstdir_ok) {
             auto expect_ok = distributed_loader_for_tests::process_sstable_dir(sstdir_ok, {});
             BOOST_REQUIRE_NO_THROW(expect_ok.get());
-            const auto& dir = env.local().tempdir();
-            lister::scan_dir(dir.path(), lister::dir_entry_types::of<directory_entry_type::regular>(), [tempstat] (fs::path parent_dir, directory_entry de) {
-                BOOST_REQUIRE(fs::canonical(parent_dir / fs::path(de.name)) != tempstat);
-                return make_ready_future<>();
-            }).get();
+            BOOST_REQUIRE(!file_exists(tempstr.native()).get());
+            BOOST_REQUIRE(file_exists(statstr.native()).get()); // sanity check that we didn't miss the directory itself
         });
 
-        remove_file(test(sst).filename(sstables::component_type::Statistics).native()).get();
+        remove_file(statstr.native()).get();
 
         with_sstable_directory(env, [] (sharded<sstables::sstable_directory>& sstdir_fatal) {
             auto expect_malformed_sstable  = distributed_loader_for_tests::process_sstable_dir(sstdir_fatal, {});
