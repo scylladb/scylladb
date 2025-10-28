@@ -1349,7 +1349,7 @@ static managed_bytes reserialize_value(View value_bytes,
     if (type.is_map()) {
         std::vector<std::pair<managed_bytes, managed_bytes>> elements = partially_deserialize_map(value_bytes);
 
-        const map_type_impl mapt = dynamic_cast<const map_type_impl&>(type);
+        const map_type_impl& mapt = dynamic_cast<const map_type_impl&>(type);
         const abstract_type& key_type = mapt.get_keys_type()->without_reversed();
         const abstract_type& value_type = mapt.get_values_type()->without_reversed();
 
