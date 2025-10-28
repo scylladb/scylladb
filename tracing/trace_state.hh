@@ -501,6 +501,7 @@ private:
     friend void add_prepared_statement(const trace_state_ptr& p, prepared_checked_weak_ptr& prepared);
     friend void set_username(const trace_state_ptr& p, const std::optional<auth::authenticated_user>& user);
     friend void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name);
+    friend void add_alternator_table_name(const trace_state_ptr& p, std::string_view table_name);
     friend void add_prepared_query_options(const trace_state_ptr& state, const cql3::query_options& prepared_options_ptr);
     friend void stop_foreground(const trace_state_ptr& state) noexcept;
 };
@@ -674,6 +675,12 @@ inline void set_username(const trace_state_ptr& p, const std::optional<auth::aut
 inline void add_table_name(const trace_state_ptr& p, const sstring& ks_name, const sstring& cf_name) {
     if (p) {
         p->add_table_name(ks_name + "." + cf_name);
+    }
+}
+
+inline void add_alternator_table_name(const trace_state_ptr& p, std::string_view table_name) {
+    if (p) {
+        p->add_table_name(sstring{ table_name });
     }
 }
 

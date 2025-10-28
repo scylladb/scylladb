@@ -134,7 +134,7 @@ public:
     }
 };
 
-struct one_session_records;
+class one_session_records;
 using records_bulk = std::deque<lw_shared_ptr<one_session_records>>;
 
 struct backend_session_state_base {

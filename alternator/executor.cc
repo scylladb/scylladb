@@ -871,7 +871,7 @@ future<executor::request_return_type> executor::describe_table(client_state& cli
 
     schema_ptr schema = get_table(_proxy, request);
     get_stats_from_schema(_proxy, *schema)->api_operations.describe_table++;
-    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+    tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
     rjson::value table_description = co_await fill_table_description(schema, table_status::active, _proxy, client_state, trace_state, permit);
     rjson::value response = rjson::empty_object();
@@ -948,7 +948,7 @@ future<executor::request_return_type> executor::delete_table(client_state& clien
     std::string table_name = get_table_name(request);
 
     std::string keyspace_name = executor::KEYSPACE_NAME_PREFIX + table_name;
-    tracing::add_table_name(trace_state, keyspace_name, table_name);
+    tracing::add_alternator_table_name(trace_state, table_name);
     auto& p = _proxy.container();
 
     schema_ptr schema = get_table(_proxy, request);
@@ -1540,7 +1540,7 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
     std::unordered_set<std::string> unused_attribute_definitions =
         validate_attribute_definitions("", *attribute_definitions);
 
-    tracing::add_table_name(trace_state, keyspace_name, table_name);
+    tracing::add_alternator_table_name(trace_state, table_name);
 
     schema_builder builder(keyspace_name, table_name);
     auto [hash_key, range_key] = parse_key_schema(request, "");
@@ -1886,7 +1886,7 @@ future<executor::request_return_type> executor::update_table(client_state& clien
 
             schema_ptr tab = get_table(p.local(), request);
 
-            tracing::add_table_name(gt, tab->ks_name(), tab->cf_name());
+            tracing::add_alternator_table_name(gt, tab->cf_name());
 
             // the ugly but harmless conversion to string_view here is because
             // Seastar's sstring is missing a find(std::string_view) :-()
@@ -2813,7 +2813,7 @@ future<executor::request_return_type> executor::put_item(client_state& client_st
     elogger.trace("put_item {}", request);
 
     auto op = make_shared<put_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
-    tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
+    tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = op->needs_read_before_write();
 
     co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
@@ -2917,7 +2917,7 @@ future<executor::request_return_type> executor::delete_item(client_state& client
 
     auto op = make_shared<delete_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *(op->schema()));
-    tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
+    tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
 
     co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
@@ -3161,7 +3161,7 @@ future<executor::request_return_type> executor::batch_write_item(client_state& c
         per_table_stats->api_operations.batch_write_item++;
         per_table_stats->api_operations.batch_write_item_batch_total += it->value.Size();
         per_table_stats->api_operations.batch_write_item_histogram.add(it->value.Size());
-        tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+        tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
         std::unordered_set<primary_key, primary_key_hash, primary_key_equal> used_keys(
                 1, primary_key_hash{schema}, primary_key_equal{schema});
@@ -4421,7 +4421,7 @@ future<executor::request_return_type> executor::update_item(client_state& client
     elogger.trace("update_item {}", request);
 
     auto op = make_shared<update_item_operation>(*_parsed_expression_cache, _proxy, std::move(request));
-    tracing::add_table_name(trace_state, op->schema()->ks_name(), op->schema()->cf_name());
+    tracing::add_alternator_table_name(trace_state, op->schema()->cf_name());
     const bool needs_read_before_write = _proxy.data_dictionary().get_config().alternator_force_read_before_write() || op->needs_read_before_write();
 
     co_await verify_permission(_enforce_authorization, client_state, op->schema(), auth::permission::MODIFY);
@@ -4502,7 +4502,7 @@ future<executor::request_return_type> executor::get_item(client_state& client_st
     schema_ptr schema = get_table(_proxy, request);
     lw_shared_ptr<stats> per_table_stats = get_stats_from_schema(_proxy, *schema);
     per_table_stats->api_operations.get_item++;
-    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+    tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
     rjson::value& query_key = request["Key"];
     db::consistency_level cl = get_read_consistency(request);
@@ -4651,7 +4651,7 @@ future<executor::request_return_type> executor::batch_get_item(client_state& cli
     uint batch_size = 0;
     for (auto it = request_items.MemberBegin(); it != request_items.MemberEnd(); ++it) {
         table_requests rs(get_table_from_batch_request(_proxy, it));
-        tracing::add_table_name(trace_state, sstring(executor::KEYSPACE_NAME_PREFIX) + rs.schema->cf_name(), rs.schema->cf_name());
+        tracing::add_alternator_table_name(trace_state, rs.schema->cf_name());
         rs.cl = get_read_consistency(it->value);
         std::unordered_set<std::string> used_attribute_names;
         rs.attrs_to_get = ::make_shared<const std::optional<attrs_to_get>>(calculate_attrs_to_get(it->value, *_parsed_expression_cache, used_attribute_names));
@@ -5252,6 +5252,7 @@ future<executor::request_return_type> executor::scan(client_state& client_state,
     elogger.trace("Scanning {}", request);
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
+    tracing::add_alternator_table_name(trace_state, schema->cf_name());
     get_stats_from_schema(_proxy, *schema)->api_operations.scan++;
     auto segment = get_int_attribute(request, "Segment");
     auto total_segments = get_int_attribute(request, "TotalSegments");
@@ -5731,7 +5732,7 @@ future<executor::request_return_type> executor::query(client_state& client_state
 
     auto [schema, table_type] = get_table_or_view(_proxy, request);
     get_stats_from_schema(_proxy, *schema)->api_operations.query++;
-    tracing::add_table_name(trace_state, schema->ks_name(), schema->cf_name());
+    tracing::add_alternator_table_name(trace_state, schema->cf_name());
 
     rjson::value* exclusive_start_key = rjson::find(request, "ExclusiveStartKey");
     db::consistency_level cl = get_read_consistency(request);

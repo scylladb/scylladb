@@ -16,6 +16,7 @@
 
 import json
 import time
+import re
 
 import pytest
 import requests
@@ -117,10 +118,15 @@ def iterate_tracing_sessions(dynamodb):
         time.sleep(0.3)
         last_scan = full_scan(trace_sessions_table, ConsistentRead=False)
 
-
-def find_tracing_session(dynamodb, str):
+def iterate_tracing_sessions_with_table_filter(dynamodb, table_name):
+    expected_table_re = re.compile(fr'table(\[\d+\])? : {table_name}}}')
     for entry in iterate_tracing_sessions(dynamodb):
-        if str in entry['parameters']:
+        if expected_table_re.search(entry["parameters"]):
+            yield entry
+
+def find_tracing_session(dynamodb, session_key, table_name):
+    for entry in iterate_tracing_sessions_with_table_filter(dynamodb, table_name):
+        if session_key in entry['parameters']:
             return entry['session_id']
     pytest.fail("Couldn't find tracing session")
 
@@ -142,6 +148,10 @@ def get_tracing_events(dynamodb, session_id):
         ret.append(result['activity'])
     return ret
 
+def expect_tracing_events(dynamodb, session_key, expected_events, table_name):
+    session = find_tracing_session(dynamodb, session_key, table_name)
+    expect_tracing_events_with_session(dynamodb, session, expected_events)
+
 # We have no way to know whether the tracing events returned by
 # get_tracing_events() is the entire trace. Even though we have already seen
 # the tracing session, it doesn't guarantee that all the events were fully
@@ -149,8 +159,7 @@ def get_tracing_events(dynamodb, session_id):
 # expect_tracing_events() has to retry the get_tracing_events() call until
 # a timeout. In the successful case, we'll finish very quickly (usually,
 # even immediately).
-def expect_tracing_events(dynamodb, str, expected_events):
-    session = find_tracing_session(dynamodb, str)
+def expect_tracing_events_with_session(dynamodb, session, expected_events):
     start = time.time()
     while time.time() - start < 100:
         events = get_tracing_events(dynamodb, session)
@@ -171,14 +180,21 @@ def expect_tracing_events(dynamodb, str, expected_events):
         assert event in events
 
 # A test table based on test_table_s, but with isolation level defined to 'always'
-@pytest.fixture(scope="module")
-def test_table_s_isolation_always(dynamodb):
+def create_yield_destroy_test_table_s_isolation_always(dynamodb):
     table = create_test_table(dynamodb,
         KeySchema=[ { 'AttributeName': 'p', 'KeyType': 'HASH' }, ],
         AttributeDefinitions=[ { 'AttributeName': 'p', 'AttributeType': 'S' } ],
         Tags=[{'Key': 'system:write_isolation', 'Value': 'always'}])
     yield table
     table.delete()
+
+@pytest.fixture(scope="module")
+def test_table_s_isolation_always(dynamodb):
+    yield from create_yield_destroy_test_table_s_isolation_always(dynamodb)
+
+@pytest.fixture(scope="module")
+def test_table_s_isolation_always_2(dynamodb):
+    yield from create_yield_destroy_test_table_s_isolation_always(dynamodb)
 
 # Because tracing is asynchronous and usually appears as much as two
 # seconds after the request, it is inefficient to have separate tests
@@ -187,9 +203,14 @@ def test_table_s_isolation_always(dynamodb):
 # different request types. This test enables tracing, runs a bunch of
 # different requests - and only then looks for all of them in the trace
 # table.
-def test_tracing_all(with_tracing, test_table_s_isolation_always, dynamodb):
+def test_tracing_all(with_tracing, test_table_s_isolation_always, test_table_s_isolation_always_2, dynamodb):
     # Run the different requests, each one containing a long random string
-    # that we can later use to find with find_tracing_session():
+    # that we can later use to find with find_tracing_session()
+
+    if test_table_s_isolation_always.name > test_table_s_isolation_always_2.name:
+        # we don't care about those names, but we care about the order name wise, as later we check
+        # for `table[0]` and `table[1]` in tracing and tables in tracing are outputed sorted
+        test_table_s_isolation_always, test_table_s_isolation_always_2 = test_table_s_isolation_always_2, test_table_s_isolation_always
 
     table = test_table_s_isolation_always
     # PutItem:
@@ -229,32 +250,67 @@ def test_tracing_all(with_tracing, test_table_s_isolation_always, dynamodb):
     with scylla_config_temporary(dynamodb, 'alternator_max_users_query_size_in_trace_output', str(len(p_putitem_really_long) + 1024 * 256)):
         table.put_item(Item={'p': '_' + p_putitem_really_long})
 
+    p_batchwriteitem1 = random_string(20)
+    p_batchwriteitem2 = random_string(20)
+    p_batchgetitem1 = random_string(20)
+    p_batchgetitem2 = random_string(20)
+
+    table.meta.client.batch_write_item(RequestItems = {
+        test_table_s_isolation_always.name: [{'PutRequest': {'Item': {'p': p_batchwriteitem1}}}],
+        test_table_s_isolation_always_2.name: [{'PutRequest': {'Item': {'p': p_batchwriteitem2}}}],
+    })
+    table.meta.client.batch_get_item(RequestItems = {
+        test_table_s_isolation_always.name: {'Keys': [{'p': p_batchgetitem1}]},
+        test_table_s_isolation_always_2.name: {'Keys': [{'p': p_batchgetitem2}]},
+    })
 
     # Check the traces. NOTE: the following checks are fairly arbitrary, and
     # may break in the future if we change the tracing messages...
-    expect_tracing_events(dynamodb, p_putitem, ['PutItem', 'CAS successful'])
-    expect_tracing_events(dynamodb, p_getitem, ['GetItem', 'Querying is done'])
-    expect_tracing_events(dynamodb, p_deleteitem, ['DeleteItem', 'CAS successful'])
-    expect_tracing_events(dynamodb, p_updateitem, ['UpdateItem', 'CAS successful'])
-    expect_tracing_events(dynamodb, p_batchgetitem, ['BatchGetItem', 'Querying is done'])
-    expect_tracing_events(dynamodb, p_batchwriteitem, ['BatchWriteItem', 'CAS successful'])
-    expect_tracing_events(dynamodb, p_query, ['Query', 'Querying is done'])
-    expect_tracing_events(dynamodb, p_scan, ['Scan', 'Performing a database query'])
+    expect_tracing_events(dynamodb, p_putitem, ['PutItem', 'CAS successful'], table.name)
+    expect_tracing_events(dynamodb, p_getitem, ['GetItem', 'Querying is done'], table.name)
+    expect_tracing_events(dynamodb, p_deleteitem, ['DeleteItem', 'CAS successful'], table.name)
+    expect_tracing_events(dynamodb, p_updateitem, ['UpdateItem', 'CAS successful'], table.name)
+    expect_tracing_events(dynamodb, p_batchgetitem, ['BatchGetItem', 'Querying is done'], table.name)
+    expect_tracing_events(dynamodb, p_batchwriteitem, ['BatchWriteItem', 'CAS successful'], table.name)
+    expect_tracing_events(dynamodb, p_query, ['Query', 'Querying is done'], table.name)
+    expect_tracing_events(dynamodb, p_scan, ['Scan', 'Performing a database query'], table.name)
 
-    op = 'Alternator PutItem'
+    op_1 = 'Alternator PutItem'
+    op_2 = 'Alternator BatchWriteItem'
+    op_3 = 'Alternator BatchGetItem'
     found_truncated = False
     found_not_truncated = False
-    for entry in iterate_tracing_sessions(dynamodb):
-        if entry['request'] == op:
-            p = entry['parameters']
+    batch_get_item_double_tables_session_id = None
+    batch_write_item_double_tables_session_id = None
+    for entry in iterate_tracing_sessions_with_table_filter(dynamodb, table.name):
+        p = entry['parameters']
+        if entry['request'] == op_1:
             if beginning_of_p_putitem_really_long in p:
                 if '<truncated>' in p:
                     found_truncated = True
                 else:
                     found_not_truncated = True
-                if found_truncated and found_not_truncated:
-                    break
-    assert found_truncated and found_not_truncated
+        elif entry['request'] == op_2:
+            if p_batchwriteitem1 in p and p_batchwriteitem2 in p:
+                assert f'table[0] : {test_table_s_isolation_always.name}' in p
+                assert f'table[1] : {test_table_s_isolation_always_2.name}' in p
+                batch_write_item_double_tables_session_id = entry['session_id']
+        elif entry['request'] == op_3:
+            if p_batchgetitem1 in p and p_batchgetitem2 in p:
+                assert f'table[0] : {test_table_s_isolation_always.name}' in p
+                assert f'table[1] : {test_table_s_isolation_always_2.name}' in p
+                batch_get_item_double_tables_session_id = entry['session_id']
+        if found_truncated and found_not_truncated and batch_get_item_double_tables_session_id and batch_write_item_double_tables_session_id:
+            break
+
+    assert found_truncated
+    assert found_not_truncated
+    assert batch_get_item_double_tables_session_id
+    assert batch_write_item_double_tables_session_id
+
+    expect_tracing_events_with_session(dynamodb, batch_get_item_double_tables_session_id, ['BatchGetItem', 'Querying is done'])
+    expect_tracing_events_with_session(dynamodb, batch_write_item_double_tables_session_id, ['BatchWriteItem', 'CAS successful'])
+
 
 # TODO:
 # We could use traces to show that the right things actually happen during a

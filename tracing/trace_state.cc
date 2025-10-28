@@ -114,6 +114,7 @@ void trace_state::build_parameters_map() {
 
     auto& params_map = _records->session_rec.parameters;
     params_values& vals = *_params_ptr;
+    const auto &tables = _records->session_rec.tables;
 
     if (vals.batchlog_endpoints) {
         auto batch_endpoints = fmt::format("{}", fmt::join(*vals.batchlog_endpoints | std::views::transform([](locator::host_id ep) {return seastar::format("/{}", ep);}), ","));
@@ -130,6 +131,15 @@ void trace_state::build_parameters_map() {
 
     if (vals.page_size) {
         params_map.emplace("page_size", seastar::format("{:d}", *vals.page_size));
+    }
+
+    if (tables.size() == 1) {
+        params_map.emplace("table", *tables.begin());
+    } else {
+        size_t index = 0;
+        for (const auto& table : tables) {
+            params_map.emplace(format("table[{:d}]", index++), table);
+        }
     }
 
     auto& queries = vals.queries;
