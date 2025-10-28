@@ -188,6 +188,280 @@ static future<> test_provider(const std::string& options, const tmpdir& tmp, con
     co_await test_provider(args);
 }
 
+
+static auto make_commitlog_config(const test_provider_args& args, const std::unordered_map<std::string, std::string>& scopts) {
+    auto ext = std::make_shared<db::extensions>();
+    auto cfg = seastar::make_shared<db::config>(ext);
+    cfg->data_file_directories({args.tmp.path().string()});
+    cfg->commitlog_sync("batch"); // just to make sure files are written
+
+    // Currently the test fails with consistent_cluster_management = true. See #2995.
+    cfg->consistent_cluster_management(false);
+
+    boost::program_options::options_description desc;
+    boost::program_options::options_description_easy_init init(&desc);
+    configurable::append_all(*cfg, init);
+
+    std::ostringstream ss;
+    ss  << "system_info_encryption:" << std::endl
+        << "    enabled: true" << std::endl
+        << "    cipher_algorithm: AES/CBC/PKCS5Padding" << std::endl
+        << "    secret_key_strength: 128" << std::endl
+        ;
+
+    for (auto& [k, v] : scopts) {
+        ss << "    " << k << ": " << v << std::endl;
+    }
+    auto str = ss.str();
+    cfg->read_from_yaml(str);
+
+    if (!args.extra_yaml.empty()) {
+        cfg->read_from_yaml(args.extra_yaml);
+    }
+
+    return std::make_tuple(cfg, ext);
+}
+
+static future<> test_encrypted_commitlog(const test_provider_args& args, std::unordered_map<std::string, std::string> scopts = {}) {
+    fs::path clback = args.tmp.path() / "commitlog_back";
+
+    std::string pk = "apa";
+    std::string v = "ko";
+
+
+    {
+        auto [cfg, ext] = make_commitlog_config(args, scopts);
+
+        cql_test_config cqlcfg(cfg);
+
+        if (args.timeout) {
+            cqlcfg.query_timeout = args.timeout;
+        }
+
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            do_create_and_insert(env, args, pk, v);
+            fs::copy(fs::path(cfg->commitlog_directory()), clback);
+        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
+
+    }
+
+    {
+        auto [cfg, ext] = make_commitlog_config(args, scopts);
+
+        cql_test_config cqlcfg(cfg);
+
+        if (args.timeout) {
+            cqlcfg.query_timeout = args.timeout;
+        }
+
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            // Fake commitlog replay using the files copied.
+            std::vector<sstring> paths;
+            for (auto const& dir_entry : fs::directory_iterator{clback})  {
+                auto p = dir_entry.path();
+                try {
+                    db::commitlog::descriptor d(p);
+                    paths.emplace_back(std::move(p));
+                } catch (...) {
+                }
+            }
+
+            BOOST_REQUIRE(!paths.empty()); 
+
+            auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get();
+            rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
+
+            // not really checking anything, but make sure we did not break anything.
+            for (auto i = 0u; i < args.n_tables; ++i) {
+                require_rows(env, fmt::format("select * from ks.t{}", i), {{utf8_type->decompose(pk), utf8_type->decompose(v)}});
+            }
+        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
+    }
+}
+
+static future<> test_encrypted_commitlog(const tmpdir& tmp, std::unordered_map<std::string, std::string> scopts = {}, const std::string& extra_yaml = {}, unsigned n_tables = 1) {
+    test_provider_args args{
+        .tmp = tmp,
+        .extra_yaml = extra_yaml,
+        .n_tables = n_tables, 
+    };
+
+    co_await test_encrypted_commitlog(args, std::move(scopts));
+}
+
+using scopts_map = std::unordered_map<std::string, std::string>;
+
+static future<> test_broken_encrypted_commitlog(const test_provider_args& args, scopts_map scopts = {}) {
+    std::string pk = "apa";
+    std::string v = "ko";
+
+    {
+        auto [cfg, ext] = make_commitlog_config(args, scopts);
+
+        cql_test_config cqlcfg(cfg);
+
+        if (args.timeout) {
+            cqlcfg.query_timeout = args.timeout;
+        }
+
+        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
+            do_create_and_insert(env, args, pk, v);
+        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
+    }
+}
+
+class fake_proxy {
+    seastar::server_socket _socket;
+    socket_address _address;
+    bool _go_on = true;
+    bool _do_proxy = true;
+    future<> _f;
+
+    future<> run(std::string dst_addr) {
+        uint16_t port = 443u;
+        auto i = dst_addr.find_last_of(':');
+        if (i != std::string::npos && i > 0 && dst_addr[i - 1] != ':') { // just check against ipv6...
+            port = std::stoul(dst_addr.substr(i + 1));
+            dst_addr = dst_addr.substr(0, i);
+        }
+
+        auto addr = co_await seastar::net::dns::resolve_name(dst_addr);
+        std::vector<future<>> work;
+
+        while (_go_on) {
+            try {
+                auto client = co_await _socket.accept();
+                auto dst = co_await seastar::connect(socket_address(addr, port));
+
+                testlog.debug("Got proxy connection: {}->{}:{} ({})", client.remote_address, dst_addr, port, _do_proxy);
+
+                auto f = [&]() -> future<> {
+                    auto& s = client.connection;
+                    auto& ldst = dst;
+                    auto addr = client.remote_address;
+
+                    auto do_io = [this, &addr, &dst_addr, port](connected_socket& src, connected_socket& dst) noexcept -> future<> {
+                        try {
+                            auto sin = src.input();
+                            auto dout = output_stream<char>(dst.output().detach(), 1024);
+                            // note: have to have differing conditions for proxying
+                            // and shutdown, and need to check inside look, because
+                            // kmip connector caches connection -> not new socket.
+                            std::exception_ptr p;
+                            try {
+                                while (_go_on && _do_proxy && !sin.eof()) {
+                                    auto buf = co_await sin.read();
+                                    auto n = buf.size();
+                                    testlog.trace("Read {} bytes: {}->{}:{}", n, addr, dst_addr, port);
+                                    if (_do_proxy) {
+                                        co_await dout.write(std::move(buf));
+                                        co_await dout.flush();
+                                        testlog.trace("Wrote {} bytes: {}->{}:{}", n, addr, dst_addr, port);
+                                    }
+                                }
+                            } catch (...) {
+                                p = std::current_exception();
+                            }
+                            co_await dout.flush();
+                            co_await dout.close();
+                            co_await sin.close();
+                            if (p) {
+                                std::rethrow_exception(p);
+                            }
+                        } catch (...) {
+                            testlog.warn("Exception running proxy {}:{}->{}: {}", dst_addr, port, _address, std::current_exception());
+                        }
+                    };
+                    co_await when_all(do_io(s, ldst), do_io(ldst, s));
+                }();
+
+                work.emplace_back(std::move(f));
+            } catch (...) {
+                testlog.warn("Exception running proxy {}: {}", _address, std::current_exception());
+            }
+        }
+
+        for (auto&& f : work) {
+            try {
+                co_await std::move(f);
+            } catch (...) {
+            }
+        }
+    }
+public:
+    fake_proxy(std::string dst)
+        : _socket(seastar::listen(socket_address(0x7f000001, 0)))
+        , _address(_socket.local_address())
+        , _f(run(std::move(dst)))
+    {}
+
+    const socket_address& address() const {
+        return _address;
+    }
+    void enable(bool b) {
+        _do_proxy = b;
+        testlog.info("Set proxy {} enabled = {}", _address, b);
+    }
+    future<> stop() {
+        if (std::exchange(_go_on, false)) {
+            testlog.info("Stopping proxy {}", _address);
+            _socket.abort_accept();
+            co_await std::move(_f);
+        }
+    }
+};
+
+/**
+ * Tests that a network error in key resolution (in commitlog in this case) results in a non-fatal, non-isolating
+ * exception, i.e. an eventual write error.
+ */
+static future<> network_error_test_helper(const tmpdir& tmp, const std::string& host, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
+    fake_proxy proxy(host);
+    std::exception_ptr p;
+    try {
+        auto [scopts, yaml] = make_opts(proxy);
+
+        test_provider_args args{
+            .tmp = tmp,
+            .extra_yaml = yaml,
+            .n_tables = 10, 
+            .before_create_table = [&](auto& env) {
+                // turn off proxy. all key resolution after this should fail
+                proxy.enable(false);
+                // wait for key cache expiry.
+                seastar::sleep(10ms).get();
+                // ensure commitlog will create a new segment on write -> eventual write failure
+                env.db().invoke_on_all([](replica::database& db) {
+                    return db.commitlog()->force_new_active_segment();
+                }).get();
+            },
+            .on_insert_exception = [&](auto&&) {
+                // once we get the exception we have to enable key resolution again, 
+                // otherwise we can't shut down cql test env.
+                proxy.enable(true);
+            },
+            .timeout = timeout_config{
+                // set really low write timeouts so we get a failure (timeout)
+                // when we fail to write to commitlog
+                100ms, 100ms, 100ms, 100ms, 100ms, 100ms, 100ms
+            },
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_broken_encrypted_commitlog(args, scopts);
+            , exceptions::mutation_write_timeout_exception
+        );
+    } catch (...) {
+        p = std::current_exception();
+    }
+
+    co_await proxy.stop();
+
+    if (p) {
+        std::rethrow_exception(p);
+    }
+}
+
 SEASTAR_TEST_CASE(test_local_file_provider) {
     tmpdir tmp;
     auto keyfile = tmp.path() / "secret_key";
@@ -472,111 +746,6 @@ SEASTAR_TEST_CASE(test_kmip_provider, *check_run_test_decorator("ENABLE_KMIP_TES
     });
 }
 
-#endif // HAVE_KMIP
-
-class fake_proxy {
-    seastar::server_socket _socket;
-    socket_address _address;
-    bool _go_on = true;
-    bool _do_proxy = true;
-    future<> _f;
-
-    future<> run(std::string dst_addr) {
-        uint16_t port = 443u;
-        auto i = dst_addr.find_last_of(':');
-        if (i != std::string::npos && i > 0 && dst_addr[i - 1] != ':') { // just check against ipv6...
-            port = std::stoul(dst_addr.substr(i + 1));
-            dst_addr = dst_addr.substr(0, i);
-        }
-
-        auto addr = co_await seastar::net::dns::resolve_name(dst_addr);
-        std::vector<future<>> work;
-
-        while (_go_on) {
-            try {
-                auto client = co_await _socket.accept();
-                auto dst = co_await seastar::connect(socket_address(addr, port));
-
-                testlog.debug("Got proxy connection: {}->{}:{} ({})", client.remote_address, dst_addr, port, _do_proxy);
-
-                auto f = [&]() -> future<> {
-                    auto& s = client.connection;
-                    auto& ldst = dst;
-                    auto addr = client.remote_address;
-
-                    auto do_io = [this, &addr, &dst_addr, port](connected_socket& src, connected_socket& dst) noexcept -> future<> {
-                        try {
-                            auto sin = src.input();
-                            auto dout = output_stream<char>(dst.output().detach(), 1024);
-                            // note: have to have differing conditions for proxying
-                            // and shutdown, and need to check inside look, because
-                            // kmip connector caches connection -> not new socket.
-                            std::exception_ptr p;
-                            try {
-                                while (_go_on && _do_proxy && !sin.eof()) {
-                                    auto buf = co_await sin.read();
-                                    auto n = buf.size();
-                                    testlog.trace("Read {} bytes: {}->{}:{}", n, addr, dst_addr, port);
-                                    if (_do_proxy) {
-                                        co_await dout.write(std::move(buf));
-                                        co_await dout.flush();
-                                        testlog.trace("Wrote {} bytes: {}->{}:{}", n, addr, dst_addr, port);
-                                    }
-                                }
-                            } catch (...) {
-                                p = std::current_exception();
-                            }
-                            co_await dout.flush();
-                            co_await dout.close();
-                            co_await sin.close();
-                            if (p) {
-                                std::rethrow_exception(p);
-                            }
-                        } catch (...) {
-                            testlog.warn("Exception running proxy {}:{}->{}: {}", dst_addr, port, _address, std::current_exception());
-                        }
-                    };
-                    co_await when_all(do_io(s, ldst), do_io(ldst, s));
-                }();
-
-                work.emplace_back(std::move(f));
-            } catch (...) {
-                testlog.warn("Exception running proxy {}: {}", _address, std::current_exception());
-            }
-        }
-
-        for (auto&& f : work) {
-            try {
-                co_await std::move(f);
-            } catch (...) {
-            }
-        }
-    }
-public:
-    fake_proxy(std::string dst)
-        : _socket(seastar::listen(socket_address(0x7f000001, 0)))
-        , _address(_socket.local_address())
-        , _f(run(std::move(dst)))
-    {}
-
-    const socket_address& address() const {
-        return _address;
-    }
-    void enable(bool b) {
-        _do_proxy = b;
-        testlog.info("Set proxy {} enabled = {}", _address, b);
-    }
-    future<> stop() {
-        if (std::exchange(_go_on, false)) {
-            testlog.info("Stopping proxy {}", _address);
-            _socket.abort_accept();
-            co_await std::move(_f);
-        }
-    }
-};
-
-#ifdef HAVE_KMIP
-
 SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
     /**
      * Tests for #3251. KMIP connector ends up in endless loop if using more than one
@@ -618,7 +787,153 @@ SEASTAR_TEST_CASE(test_kmip_provider_multiple_hosts, *check_run_test_decorator("
     });
 }
 
+SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+        co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmipKeyProviderFactory" }, { "kmip_host", "kmip_test" } }, yaml);
+    });
+}
+
+SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        co_await network_error_test_helper(tmp, info.host, [&](const auto& proxy) {
+            auto yaml = fmt::format(R"foo(
+                kmip_hosts:
+                    kmip_test:
+                        hosts: {0}
+                        certificate: {1}
+                        keyfile: {2}
+                        truststore: {3}
+                        priority_string: {4}
+                        key_cache_expiry: 1ms
+                        )foo"
+                , proxy.address(), info.cert, info.key, info.ca, info.prio
+            );
+            return std::make_tuple(scopts_map({ { "key_provider", "KmipKeyProviderFactory" }, { "kmip_host", "kmip_test" } }), yaml);
+        });
+    });
+}
+
+SEASTAR_TEST_CASE(test_kmip_provider_broken_config_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+
+        bool past_create = false;
+
+        test_provider_args args{
+            .tmp = tmp,
+            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
+            .extra_yaml = yaml,
+            .n_tables = 1, 
+            .n_restarts = 1, 
+            .explicit_provider = {},
+        };
+
+        // After tables are created, and data inserted, remove EAR config
+        // for the restart. This should cause us to fail creating the 
+        // tables from schema tables, since the extension will throw.
+        args.after_insert = [&](cql_test_env&) {
+            past_create = true;
+            args.extra_yaml = {};
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_provider(args);
+            , std::exception
+        );
+
+        BOOST_REQUIRE(past_create);
+    });
+}
+
+
+SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
+    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
+        auto yaml = fmt::format(R"foo(
+            kmip_hosts:
+                kmip_test:
+                    hosts: {0}
+                    certificate: {1}
+                    keyfile: {2}
+                    truststore: {3}
+                    priority_string: {4}
+                    )foo"
+            , info.host, info.cert, info.key, info.ca, info.prio
+        );
+
+        bool past_create = false;
+        bool past_second_start = false;
+
+        test_provider_args args{
+            .tmp = tmp,
+            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
+            .extra_yaml = yaml,
+            .n_tables = 1, 
+            .n_restarts = 1, 
+            .explicit_provider = {},
+        };
+
+        // After data is inserted, flush all shards and alter the table
+        // to no longer use EAR, then remove EAR config. This will result
+        // in a schema that loads fine, but accessing the sstables will
+        // throw.
+        args.after_insert = [&](cql_test_env& env) {
+            try {
+                env.db().invoke_on_all([](replica::database& db) {
+                    auto& cf = db.find_column_family("ks", "t0");
+                    return cf.flush();
+                }).get();
+                env.execute_cql(fmt::format("alter table ks.t0 WITH scylla_encryption_options={{'key_provider': 'none'}}")).get();
+            } catch (...) {
+                testlog.error("Unexpected exception {}", std::current_exception());
+                throw;
+            }
+            past_create = true;
+            args.extra_yaml = {};
+            args.options = {};
+        };
+        // If we get here, startup of second run was successful.
+        args.before_verify = [&](cql_test_env& env) {
+            past_second_start = true;
+        };
+
+        BOOST_REQUIRE_THROW(
+            co_await test_provider(args);
+            , std::exception
+        );
+
+        BOOST_REQUIRE(past_create);
+        // We'd really want to be past this here, since "only" the sstables
+        // on disk should mention unresolvable EAR stuff here. But scylla will
+        // scan sstables on startup, and thus fail already there.
+        // TODO: move and upload sstables?
+        BOOST_REQUIRE(!past_second_start);
+    });
+}
+
 #endif // HAVE_KMIP
+
+std::string make_aws_host(std::string_view aws_region, std::string_view service);
 
 /*
 Simple test of KMS provider. Still has some caveats:
@@ -718,24 +1033,6 @@ SEASTAR_TEST_CASE(test_kms_provider_with_master_key_in_cf, *check_run_test_decor
     });
 }
 
-
-SEASTAR_TEST_CASE(test_user_info_encryption) {
-    tmpdir tmp;
-    auto keyfile = tmp.path() / "secret_key";
-
-    auto yaml = fmt::format(R"foo(
-        user_info_encryption:
-            enabled: True
-            key_provider: LocalFileSystemKeyProviderFactory
-            secret_key_file: {}
-            cipher_algorithm: AES/CBC/PKCS5Padding
-            secret_key_strength: 128
-        )foo"
-    , keyfile.string());
-
-    co_await test_provider({}, tmp, yaml, 4, 1, "LocalFileSystemKeyProviderFactory" /* verify encrypted even though no kp in options*/);
-}
-
 SEASTAR_TEST_CASE(test_kms_provider_with_broken_algo, *check_run_test_decorator("ENABLE_KMS_TEST")) {
     co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
         /**
@@ -761,106 +1058,6 @@ SEASTAR_TEST_CASE(test_kms_provider_with_broken_algo, *check_run_test_decorator(
     });
 }
 
-static auto make_commitlog_config(const test_provider_args& args, const std::unordered_map<std::string, std::string>& scopts) {
-    auto ext = std::make_shared<db::extensions>();
-    auto cfg = seastar::make_shared<db::config>(ext);
-    cfg->data_file_directories({args.tmp.path().string()});
-    cfg->commitlog_sync("batch"); // just to make sure files are written
-
-    // Currently the test fails with consistent_cluster_management = true. See #2995.
-    cfg->consistent_cluster_management(false);
-
-    boost::program_options::options_description desc;
-    boost::program_options::options_description_easy_init init(&desc);
-    configurable::append_all(*cfg, init);
-
-    std::ostringstream ss;
-    ss  << "system_info_encryption:" << std::endl
-        << "    enabled: true" << std::endl
-        << "    cipher_algorithm: AES/CBC/PKCS5Padding" << std::endl
-        << "    secret_key_strength: 128" << std::endl
-        ;
-
-    for (auto& [k, v] : scopts) {
-        ss << "    " << k << ": " << v << std::endl;
-    }
-    auto str = ss.str();
-    cfg->read_from_yaml(str);
-
-    if (!args.extra_yaml.empty()) {
-        cfg->read_from_yaml(args.extra_yaml);
-    }
-
-    return std::make_tuple(cfg, ext);
-}
-
-static future<> test_encrypted_commitlog(const test_provider_args& args, std::unordered_map<std::string, std::string> scopts = {}) {
-    fs::path clback = args.tmp.path() / "commitlog_back";
-
-    std::string pk = "apa";
-    std::string v = "ko";
-
-
-    {
-        auto [cfg, ext] = make_commitlog_config(args, scopts);
-
-        cql_test_config cqlcfg(cfg);
-
-        if (args.timeout) {
-            cqlcfg.query_timeout = args.timeout;
-        }
-
-        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
-            do_create_and_insert(env, args, pk, v);
-            fs::copy(fs::path(cfg->commitlog_directory()), clback);
-        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
-
-    }
-
-    {
-        auto [cfg, ext] = make_commitlog_config(args, scopts);
-
-        cql_test_config cqlcfg(cfg);
-
-        if (args.timeout) {
-            cqlcfg.query_timeout = args.timeout;
-        }
-
-        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
-            // Fake commitlog replay using the files copied.
-            std::vector<sstring> paths;
-            for (auto const& dir_entry : fs::directory_iterator{clback})  {
-                auto p = dir_entry.path();
-                try {
-                    db::commitlog::descriptor d(p);
-                    paths.emplace_back(std::move(p));
-                } catch (...) {
-                }
-            }
-
-            BOOST_REQUIRE(!paths.empty()); 
-
-            auto rp = db::commitlog_replayer::create_replayer(env.db(), env.get_system_keyspace()).get();
-            rp.recover(paths, db::commitlog::descriptor::FILENAME_PREFIX).get();
-
-            // not really checking anything, but make sure we did not break anything.
-            for (auto i = 0u; i < args.n_tables; ++i) {
-                require_rows(env, fmt::format("select * from ks.t{}", i), {{utf8_type->decompose(pk), utf8_type->decompose(v)}});
-            }
-        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
-    }
-}
-
-static future<> test_encrypted_commitlog(const tmpdir& tmp, std::unordered_map<std::string, std::string> scopts = {}, const std::string& extra_yaml = {}, unsigned n_tables = 1) {
-    test_provider_args args{
-        .tmp = tmp,
-        .extra_yaml = extra_yaml,
-        .n_tables = n_tables, 
-    };
-
-    co_await test_encrypted_commitlog(args, std::move(scopts));
-}
-
 SEASTAR_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, *check_run_test_decorator("ENABLE_KMS_TEST")) {
     co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
         /**
@@ -881,26 +1078,43 @@ SEASTAR_TEST_CASE(test_commitlog_kms_encryption_with_slow_key_resolve, *check_ru
     });
 }
 
-#ifdef HAVE_KMIP
+SEASTAR_TEST_CASE(test_kms_network_error, *check_run_test_decorator("ENABLE_KMS_TEST")) {
+    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
+        auto host = make_aws_host(kms_aws_region, "kms");
 
-SEASTAR_TEST_CASE(test_commitlog_kmip_encryption_with_slow_key_resolve, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
-    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            kmip_hosts:
-                kmip_test:
-                    hosts: {0}
-                    certificate: {1}
-                    keyfile: {2}
-                    truststore: {3}
-                    priority_string: {4}
-                    )foo"
-            , info.host, info.cert, info.key, info.ca, info.prio
-        );
-        co_await test_encrypted_commitlog(tmp, { { "key_provider", "KmipKeyProviderFactory" }, { "kmip_host", "kmip_test" } }, yaml);
+        co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
+            auto yaml = fmt::format(R"foo(
+                kms_hosts:
+                    kms_test:
+                        master_key: {0}
+                        aws_region: {1}
+                        aws_profile: {2}
+                        endpoint: https://{3}
+                        key_cache_expiry: 1ms
+                        )foo"
+                , kms_key_alias, kms_aws_region, kms_aws_profile, proxy.address()
+            );
+            return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
+        });
     });
 }
 
-#endif // HAVE_KMIP
+SEASTAR_TEST_CASE(test_user_info_encryption) {
+    tmpdir tmp;
+    auto keyfile = tmp.path() / "secret_key";
+
+    auto yaml = fmt::format(R"foo(
+        user_info_encryption:
+            enabled: True
+            key_provider: LocalFileSystemKeyProviderFactory
+            secret_key_file: {}
+            cipher_algorithm: AES/CBC/PKCS5Padding
+            secret_key_strength: 128
+        )foo"
+    , keyfile.string());
+
+    co_await test_provider({}, tmp, yaml, 4, 1, "LocalFileSystemKeyProviderFactory" /* verify encrypted even though no kp in options*/);
+}
 
 SEASTAR_TEST_CASE(test_user_info_encryption_dont_allow_per_table_encryption) {
     tmpdir tmp;
@@ -1079,231 +1293,6 @@ SEASTAR_TEST_CASE(test_gcp_provider_with_impersonated_user, *check_run_test_deco
         co_await test_provider("'key_provider': 'GcpKeyProviderFactory', 'gcp_host': 'gcp_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128", tmp, yaml);
     });
 }
-
-std::string make_aws_host(std::string_view aws_region, std::string_view service);
-
-using scopts_map = std::unordered_map<std::string, std::string>;
-
-static future<> test_broken_encrypted_commitlog(const test_provider_args& args, scopts_map scopts = {}) {
-    std::string pk = "apa";
-    std::string v = "ko";
-
-    {
-        auto [cfg, ext] = make_commitlog_config(args, scopts);
-
-        cql_test_config cqlcfg(cfg);
-
-        if (args.timeout) {
-            cqlcfg.query_timeout = args.timeout;
-        }
-
-        co_await do_with_cql_env_thread([&] (cql_test_env& env) {
-            do_create_and_insert(env, args, pk, v);
-        }, cqlcfg, {}, cql_test_init_configurables{ *ext });
-    }
-}
-
-/**
- * Tests that a network error in key resolution (in commitlog in this case) results in a non-fatal, non-isolating
- * exception, i.e. an eventual write error.
- */
-static future<> network_error_test_helper(const tmpdir& tmp, const std::string& host, std::function<std::tuple<scopts_map, std::string>(const fake_proxy&)> make_opts) {
-    fake_proxy proxy(host);
-    std::exception_ptr p;
-    try {
-        auto [scopts, yaml] = make_opts(proxy);
-
-        test_provider_args args{
-            .tmp = tmp,
-            .extra_yaml = yaml,
-            .n_tables = 10, 
-            .before_create_table = [&](auto& env) {
-                // turn off proxy. all key resolution after this should fail
-                proxy.enable(false);
-                // wait for key cache expiry.
-                seastar::sleep(10ms).get();
-                // ensure commitlog will create a new segment on write -> eventual write failure
-                env.db().invoke_on_all([](replica::database& db) {
-                    return db.commitlog()->force_new_active_segment();
-                }).get();
-            },
-            .on_insert_exception = [&](auto&&) {
-                // once we get the exception we have to enable key resolution again, 
-                // otherwise we can't shut down cql test env.
-                proxy.enable(true);
-            },
-            .timeout = timeout_config{
-                // set really low write timeouts so we get a failure (timeout)
-                // when we fail to write to commitlog
-                100ms, 100ms, 100ms, 100ms, 100ms, 100ms, 100ms
-            },
-        };
-
-        BOOST_REQUIRE_THROW(
-            co_await test_broken_encrypted_commitlog(args, scopts);
-            , exceptions::mutation_write_timeout_exception
-        );
-    } catch (...) {
-        p = std::current_exception();
-    }
-
-    co_await proxy.stop();
-
-    if (p) {
-        std::rethrow_exception(p);
-    }
-}
-
-SEASTAR_TEST_CASE(test_kms_network_error, *check_run_test_decorator("ENABLE_KMS_TEST")) {
-    co_await kms_test_helper([](const tmpdir& tmp, std::string_view kms_key_alias, std::string_view kms_aws_region, std::string_view kms_aws_profile) -> future<> {
-        auto host = make_aws_host(kms_aws_region, "kms");
-
-        co_await network_error_test_helper(tmp, host, [&](const auto& proxy) {
-            auto yaml = fmt::format(R"foo(
-                kms_hosts:
-                    kms_test:
-                        master_key: {0}
-                        aws_region: {1}
-                        aws_profile: {2}
-                        endpoint: https://{3}
-                        key_cache_expiry: 1ms
-                        )foo"
-                , kms_key_alias, kms_aws_region, kms_aws_profile, proxy.address()
-            );
-            return std::make_tuple(scopts_map({ { "key_provider", "KmsKeyProviderFactory" }, { "kms_host", "kms_test" } }), yaml);
-        });
-    });
-}
-
-#ifdef HAVE_KMIP
-
-SEASTAR_TEST_CASE(test_kmip_network_error, *check_run_test_decorator("ENABLE_KMIP_TEST")) {
-    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        co_await network_error_test_helper(tmp, info.host, [&](const auto& proxy) {
-            auto yaml = fmt::format(R"foo(
-                kmip_hosts:
-                    kmip_test:
-                        hosts: {0}
-                        certificate: {1}
-                        keyfile: {2}
-                        truststore: {3}
-                        priority_string: {4}
-                        key_cache_expiry: 1ms
-                        )foo"
-                , proxy.address(), info.cert, info.key, info.ca, info.prio
-            );
-            return std::make_tuple(scopts_map({ { "key_provider", "KmipKeyProviderFactory" }, { "kmip_host", "kmip_test" } }), yaml);
-        });
-    });
-}
-
-SEASTAR_TEST_CASE(test_kmip_provider_broken_config_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
-    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            kmip_hosts:
-                kmip_test:
-                    hosts: {0}
-                    certificate: {1}
-                    keyfile: {2}
-                    truststore: {3}
-                    priority_string: {4}
-                    )foo"
-            , info.host, info.cert, info.key, info.ca, info.prio
-        );
-
-        bool past_create = false;
-
-        test_provider_args args{
-            .tmp = tmp,
-            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
-            .extra_yaml = yaml,
-            .n_tables = 1, 
-            .n_restarts = 1, 
-            .explicit_provider = {},
-        };
-
-        // After tables are created, and data inserted, remove EAR config
-        // for the restart. This should cause us to fail creating the 
-        // tables from schema tables, since the extension will throw.
-        args.after_insert = [&](cql_test_env&) {
-            past_create = true;
-            args.extra_yaml = {};
-        };
-
-        BOOST_REQUIRE_THROW(
-            co_await test_provider(args);
-            , std::exception
-        );
-
-        BOOST_REQUIRE(past_create);
-    });
-}
-
-
-SEASTAR_TEST_CASE(test_kmip_provider_broken_sstables_on_restart, *check_run_test_decorator("ENABLE_KMIP_TEST", true)) {
-    co_await kmip_test_helper([](const kmip_test_info& info, const tmpdir& tmp) -> future<> {
-        auto yaml = fmt::format(R"foo(
-            kmip_hosts:
-                kmip_test:
-                    hosts: {0}
-                    certificate: {1}
-                    keyfile: {2}
-                    truststore: {3}
-                    priority_string: {4}
-                    )foo"
-            , info.host, info.cert, info.key, info.ca, info.prio
-        );
-
-        bool past_create = false;
-        bool past_second_start = false;
-
-        test_provider_args args{
-            .tmp = tmp,
-            .options = "'key_provider': 'KmipKeyProviderFactory', 'kmip_host': 'kmip_test', 'cipher_algorithm':'AES/CBC/PKCS5Padding', 'secret_key_strength': 128",
-            .extra_yaml = yaml,
-            .n_tables = 1, 
-            .n_restarts = 1, 
-            .explicit_provider = {},
-        };
-
-        // After data is inserted, flush all shards and alter the table
-        // to no longer use EAR, then remove EAR config. This will result
-        // in a schema that loads fine, but accessing the sstables will
-        // throw.
-        args.after_insert = [&](cql_test_env& env) {
-            try {
-                env.db().invoke_on_all([](replica::database& db) {
-                    auto& cf = db.find_column_family("ks", "t0");
-                    return cf.flush();
-                }).get();
-                env.execute_cql(fmt::format("alter table ks.t0 WITH scylla_encryption_options={{'key_provider': 'none'}}")).get();
-            } catch (...) {
-                testlog.error("Unexpected exception {}", std::current_exception());
-                throw;
-            }
-            past_create = true;
-            args.extra_yaml = {};
-            args.options = {};
-        };
-        // If we get here, startup of second run was successful.
-        args.before_verify = [&](cql_test_env& env) {
-            past_second_start = true;
-        };
-
-        BOOST_REQUIRE_THROW(
-            co_await test_provider(args);
-            , std::exception
-        );
-
-        BOOST_REQUIRE(past_create);
-        // We'd really want to be past this here, since "only" the sstables
-        // on disk should mention unresolvable EAR stuff here. But scylla will
-        // scan sstables on startup, and thus fail already there.
-        // TODO: move and upload sstables?
-        BOOST_REQUIRE(!past_second_start);
-    });
-}
-#endif // HAVE_KMIP
 
 // Note: cannot do the above test for gcp, because we can't use false endpoints there. Could mess with address resolution,
 // but there is no infrastructure for that atm.
