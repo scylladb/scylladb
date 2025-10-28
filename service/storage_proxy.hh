@@ -353,7 +353,6 @@ private:
 
     cdc_stats _cdc_stats;
 
-    // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
     locator::token_metadata::version_t _fence_version = 0;
     std::map<locator::token_metadata::version_t, lw_shared_ptr<gate>> _pending_fenceable_writes;
     shared_future<> _stale_pending_writes{make_ready_future<>()};
