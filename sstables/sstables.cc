@@ -275,9 +275,11 @@ future<> parse(const schema&, sstable_version_types, random_access_reader& in, T
 // All composite parsers must come after this
 template<typename First, typename... Rest>
 future<> parse(const schema& s, sstable_version_types v, random_access_reader& in, First& first, Rest&&... rest) {
-    return parse(s, v, in, first).then([v, &s, &in, &rest...] {
-        return parse(s, v, in, std::forward<Rest>(rest)...);
-    });
+    auto fut = parse(s, v, in, first);
+    (..., (void)(fut = fut.then([&s, v, &in, &rest] () mutable {
+        return parse(s, v, in, std::forward<Rest>(rest));
+    })));
+    return fut;
 }
 
 // Intended to be used for a type that describes itself through describe_type().
