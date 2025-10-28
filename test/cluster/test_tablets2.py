@@ -1040,13 +1040,16 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
     def move_sstables_to_upload(table_dir: str, dst_table_dir: str):
         logger.info("Moving sstables to upload dir of destination table")
         table_upload_dir = os.path.join(dst_table_dir, "upload")
+        moved_files = []
         for sst in glob.glob(os.path.join(table_dir, "*-Data.db")):
             for src_path in glob.glob(os.path.join(table_dir, sst.removesuffix("-Data.db") + "*")):
                 dst_path = os.path.join(table_upload_dir, os.path.basename(src_path))
                 logger.info(f"Moving sstable file {src_path} to {dst_path}")
                 os.rename(src_path, dst_path)
+                moved_files.append(dst_path)
+        return moved_files
 
-    move_sstables_to_upload(table_dir, dst_table_dir)
+    moved_sstable_files = move_sstables_to_upload(table_dir, dst_table_dir)
 
     await manager.server_start(servers[0].server_id)
     cql = manager.get_cql()
@@ -1069,6 +1072,18 @@ async def test_tablet_load_and_stream(manager: ManagerClient, primary_replica_on
     time.sleep(1)
 
     await check(ks2)
+
+    logger.info("Checking that streamed SSTables are deleted from upload directory")
+    remaining_files = []
+    for file_path in moved_sstable_files:
+        if os.path.exists(file_path):
+            logger.info(f"SSTable file still exists: {file_path}")
+            remaining_files.append(file_path)
+
+    if remaining_files:
+        raise AssertionError(f"SSTable files were not deleted after load_and_stream: {remaining_files}")
+
+    logger.info("All SSTable files successfully deleted after streaming")
 
     await asyncio.gather(*[cql.run_async(f"drop keyspace {i}") for i in [ks, ks2]])
 
