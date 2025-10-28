@@ -41,6 +41,7 @@
 #include "service/mapreduce_service.hh"
 #include "service/endpoint_lifecycle_subscriber.hh"
 #include "auth/service.hh"
+#include "auth/cache.hh"
 #include "auth/common.hh"
 #include "db/config.hh"
 #include "db/batchlog_manager.hh"
@@ -141,6 +142,7 @@ private:
     sharded<service::paxos::paxos_store> _paxos_store;
     sharded<cql3::query_processor> _qp;
     sharded<auth::service> _auth_service;
+    sharded<auth::cache> _auth_cache;
     sharded<db::view::view_builder> _view_builder;
     sharded<db::view::view_building_worker> _view_building_worker;
     sharded<db::view::view_update_generator> _view_update_generator;
@@ -938,6 +940,9 @@ private:
 
             _stream_manager.start(std::ref(*cfg), std::ref(_db), std::ref(_view_builder), std::ref(_view_building_worker), std::ref(_ms), std::ref(_mm), std::ref(_gossiper), scheduling_groups.streaming_scheduling_group).get();
             auto stop_streaming = defer_verbose_shutdown("stream manager", [this] { _stream_manager.stop().get(); });
+
+            _auth_cache.start(std::ref(_qp)).get();
+            auto stop_auth_cache = defer_verbose_shutdown("auth cache", [this] { _auth_cache.stop().get(); });
 
             _ss.start(std::ref(abort_sources), std::ref(_db),
                 std::ref(_gossiper),

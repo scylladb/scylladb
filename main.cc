@@ -118,6 +118,7 @@
 #include "message/dictionary_service.hh"
 #include "sstable_dict_autotrainer.hh"
 #include "utils/disk_space_monitor.hh"
+#include "auth/cache.hh"
 #include "utils/labels.hh"
 #include "tools/utils.hh"
 
@@ -727,6 +728,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
     seastar::sharded<service::cache_hitrate_calculator> cf_cache_hitrate_calculator;
     service::load_meter load_meter;
     sharded<service::storage_proxy> proxy;
+    sharded<auth::cache> auth_cache;
     sharded<service::storage_service> ss;
     sharded<service::migration_manager> mm;
     sharded<tasks::task_manager> task_manager;
@@ -789,7 +791,7 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
         return seastar::async([&app, cfg, ext, &disk_space_monitor_shard0, &cm, &sstm, &db, &qp, &bm, &proxy, &mapreduce_service, &mm, &mm_notifier, &ctx, &opts, &dirs,
                 &prometheus_server, &cf_cache_hitrate_calculator, &load_meter, &feature_service, &gossiper, &snitch,
                 &token_metadata, &erm_factory, &snapshot_ctl, &messaging, &sst_dir_semaphore, &raft_gr, &service_memory_limiter,
-                &repair, &sst_loader, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker,
+                &repair, &sst_loader, &auth_cache, &ss, &lifecycle_notifier, &stream_manager, &task_manager, &rpc_dict_training_worker,
                 &hashing_worker, &vector_store_client] {
           try {
               if (opts.contains("relabel-config-file") && !opts["relabel-config-file"].as<sstring>().empty()) {
@@ -1800,6 +1802,12 @@ To start the scylla server proper, simply invoke as: scylla server (or just scyl
             api::set_server_stream_manager(ctx, stream_manager).get();
             auto stop_stream_manager_api = defer_verbose_shutdown("stream manager api", [&ctx] {
                 api::unset_server_stream_manager(ctx).get();
+            });
+
+            checkpoint(stop_signal, "starting auth cache");
+            auth_cache.start(std::ref(qp)).get();
+            auto stop_auth_cache = defer_verbose_shutdown("auth cache", [&] {
+                auth_cache.stop().get();
             });
 
             checkpoint(stop_signal, "initializing storage service");
