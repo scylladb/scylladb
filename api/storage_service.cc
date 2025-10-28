@@ -757,26 +757,10 @@ void set_storage_service(http_context& ctx, routes& r, sharded<service::storage_
     });
 
     ss::force_keyspace_cleanup.set(r, [&ctx, &ss](std::unique_ptr<http::request> req) -> future<json::json_return_type> {
-        auto& db = ctx.db;
-        auto keyspace = validate_keyspace(ctx, req);
-        auto table_infos = parse_table_infos(keyspace, ctx, req->query_parameters, "cf");
-        const auto& rs = db.local().find_keyspace(keyspace).get_replication_strategy();
-        if (rs.get_type() == locator::replication_strategy_type::local || !rs.is_vnode_based()) {
-            auto reason = rs.get_type() == locator::replication_strategy_type::local ? "require" : "support";
-            apilog.info("Keyspace {} does not {} cleanup", keyspace, reason);
-            co_return json::json_return_type(0);
+        auto task = co_await force_keyspace_cleanup(ctx, ss, std::move(req));
+        if (task) {
+            co_await task->done();
         }
-        apilog.info("force_keyspace_cleanup: keyspace={} tables={}", keyspace, table_infos);
-        if (!co_await ss.local().is_cleanup_allowed(keyspace)) {
-            auto msg = "Can not perform cleanup operation when topology changes";
-            apilog.warn("force_keyspace_cleanup: keyspace={} tables={}: {}", keyspace, table_infos, msg);
-            co_await coroutine::return_exception(std::runtime_error(msg));
-        }
-
-        auto& compaction_module = db.local().get_compaction_manager().get_task_manager_module();
-        auto task = co_await compaction_module.make_and_start_task<cleanup_keyspace_compaction_task_impl>(
-            {}, std::move(keyspace), db, table_infos, flush_mode::all_tables, tasks::is_user_task::yes);
-        co_await task->done();
         co_return json::json_return_type(0);
     });
 
