@@ -2618,11 +2618,7 @@ future<gc_clock::time_point> repair_service::repair_tablet(gms::gossip_address_m
     auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now()- start);
     rlogger.info("repair[{}]: Finished tablet repair for table={}.{} range={} duration={} replicas={} global_tablet_id={} flush_time={}",
             id.uuid(), keyspace_name, table_name, range, duration, replicas, gid, flush_time);
-    if (!flush_time.has_value()) {
-        throw std::runtime_error(format("Batchlog reply failed for table={}.{} range={} replicas={} global_tablet_id={}",
-            id.uuid(), keyspace_name, table_name, range, replicas, gid));
-    }
-    co_return flush_time.value();
+    co_return flush_time;
 }
 
 tasks::is_user_task repair::tablet_repair_task_impl::is_user_task() const noexcept {
@@ -2698,10 +2694,12 @@ future<> repair::tablet_repair_task_impl::run() {
         });
 
         auto parent_shard = this_shard_id();
-        std::vector<std::optional<gc_clock::time_point>> flush_times(smp::count, gc_clock::time_point{});
-        rs.container().invoke_on_all([&idx, &flush_times, id, &metas = _metas, &parent_data, reason = _reason, &tables = _tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<> {
+        auto flush_time = _flush_time;
+        auto res = rs.container().map_reduce0([&idx, id, &metas = _metas, &parent_data, reason = _reason, &tables = _tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism = _ranges_parallelism, parent_shard, topo_guard = _topo_guard, skip_flush = _skip_flush] (repair_service& rs) -> future<std::pair<gc_clock::time_point, bool>> {
             std::exception_ptr error;
-            co_await metas.for_each_local_meta(coroutine::lambda([&rs, metas_size = metas.size(), &idx, id, &flush_times, parent_data, reason, &tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism, parent_shard, topo_guard, skip_flush, &error] (const tablet_repair_task_meta& m) -> future<> {
+            gc_clock::time_point shard_flush_time;
+            bool flush_failed = false;
+            co_await metas.for_each_local_meta(coroutine::lambda([&rs, metas_size = metas.size(), &idx, id, parent_data, reason, &tables, sched_by_scheduler = sched_by_scheduler, ranges_parallelism, parent_shard, topo_guard, skip_flush, &error, &shard_flush_time, &flush_failed] (const tablet_repair_task_meta& m) -> future<> {
                 co_await coroutine::maybe_yield();
                 auto nr = idx.fetch_add(1);
                 rlogger.info("repair[{}] Repair {} out of {} tablets: table={}.{} range={} replicas={}",
@@ -2755,27 +2753,24 @@ future<> repair::tablet_repair_task_impl::run() {
                         error = std::move(ep);
                     }
                 }
-                auto current = flush_times[this_shard_id()];
-                if ((needs_flush_before_repair &&!hints_batchlog_flushed) || !current.has_value()) {
-                    flush_times[this_shard_id()] = std::nullopt;
-                } else {
-                    auto time = task_impl_ptr->get_flush_time();
-                    flush_times[this_shard_id()] = current == gc_clock::time_point() ? time : std::min(current.value(), time);
-                }
+                auto time = task_impl_ptr->get_flush_time();
+                shard_flush_time = shard_flush_time == gc_clock::time_point() ? time : std::min(shard_flush_time, time);
+                flush_failed = flush_failed || (needs_flush_before_repair && !hints_batchlog_flushed);
             }));
             if (error) {
                 co_await coroutine::return_exception_ptr(std::move(error));
             }
+            co_return std::make_pair(shard_flush_time, flush_failed);
+        }, std::make_pair<gc_clock::time_point, bool>(std::move(flush_time), false), [] (const auto& p1, const auto& p2) {
+            auto& [time1, failed1] = p1;
+            auto& [time2, failed2] = p2;
+            auto flush_time = time1 == gc_clock::time_point() ? time2 :
+                             (time2 == gc_clock::time_point() ? time1 : std::min(time1, time2));
+            auto failed = failed1 || failed2;
+            return std::make_pair(flush_time, failed);
         }).get();
-        for (auto& time : flush_times) {
-            if (!time.has_value()) {
-                _flush_time = std::nullopt;
-                break;
-            }
-            if (time != gc_clock::time_point()) {
-                _flush_time = _flush_time == gc_clock::time_point() ? time : std::min(_flush_time.value(), time.value());
-            }
-        }
+        _flush_time = res.first;
+        _should_flush_and_flush_failed = res.second;
         auto duration = std::chrono::duration<float>(std::chrono::steady_clock::now() - start_time);
         rlogger.info("repair[{}]: Finished user-requested repair for tablet keyspace={} tables={} repair_id={} tablets_repaired={} duration={}",
                 id.uuid(), _keyspace, _tables, id.id, _metas.size(), duration);

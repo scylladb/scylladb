@@ -156,7 +156,8 @@ private:
     optimized_optional<abort_source::subscription> _abort_subscription;
     std::optional<int> _ranges_parallelism;
     size_t _metas_size = 0;
-    std::optional<gc_clock::time_point> _flush_time = gc_clock::time_point();
+    gc_clock::time_point _flush_time = gc_clock::time_point();
+    bool _should_flush_and_flush_failed = false;
     service::frozen_topology_guard _topo_guard;
     utils::chunked_vector<locator::effective_replication_map_ptr> _erms;
     bool _skip_flush;
@@ -179,7 +180,12 @@ public:
         return tasks::is_abortable(!_abort_subscription);
     }
 
-    std::optional<gc_clock::time_point> get_flush_time() const { return _flush_time; }
+    gc_clock::time_point get_flush_time() const {
+        if (_should_flush_and_flush_failed) {
+            throw std::runtime_error(fmt::format("Flush is needed for repair {} with parent {}, but failed", _status.id, _parent_id));
+        }
+        return _flush_time;
+    }
 
     tasks::is_user_task is_user_task() const noexcept override;
     virtual future<> release_resources() noexcept override;
