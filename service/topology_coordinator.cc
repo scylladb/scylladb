@@ -1511,10 +1511,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                         utils::get_local_injector().inject("stream_tablet_fail_on_drain",
                                         [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
                     }
-                    utils::get_local_injector().inject("stream_tablet_fail",
-                                        [] { throw std::runtime_error("stream_tablet failed due to error injection"); });
 
-                    if (action_failed(tablet_state.streaming)) {
+                    if (action_failed(tablet_state.streaming) || utils::get_local_injector().enter("stream_tablet_fail")) {
                         const bool cleanup = utils::get_local_injector().enter("stream_tablet_move_to_cleanup");
                         bool critical_disk_utilization = false;
                         if (auto stats = _tablet_allocator.get_load_stats()) {
@@ -1659,8 +1657,9 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                                 .del_transition(last_token)
                                 .del_migration_task_info(last_token, _feature_service)
                                 .build());
-                        if (trinfo.pending_replica) {
-                            _vb_coordinator->rollback_aborted_tasks(updates, guard, gid.table, *trinfo.pending_replica, last_token);
+                        auto leaving_replica = get_leaving_replica(tmap.get_tablet_info(gid.tablet), trinfo);
+                        if (leaving_replica) {
+                            _vb_coordinator->rollback_aborted_tasks(updates, guard, gid.table, *leaving_replica, last_token);
                         }
                     }
                     break;
