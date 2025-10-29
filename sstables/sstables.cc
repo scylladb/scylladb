@@ -2810,6 +2810,27 @@ static future<bool> do_validate_uncompressed(input_stream<char>& stream, size_t 
     co_return true;
 }
 
+future<uint32_t> sstable::read_digest_from_file(file f) {
+    sstring digest_str;
+    file_input_stream_options options;
+    options.buffer_size = 4096;
+
+    auto digest_stream = make_file_input_stream(std::move(f), options);
+    std::exception_ptr ex;
+
+    try {
+        digest_str = co_await util::read_entire_stream_contiguous(digest_stream);
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await digest_stream.close();
+    maybe_rethrow_exception(std::move(ex));
+
+    co_return boost::lexical_cast<uint32_t>(digest_str);
+}
+
+
 future<std::optional<uint32_t>> sstable::read_digest() {
     if (_components->digest) {
         co_return *_components->digest;
@@ -2817,28 +2838,75 @@ future<std::optional<uint32_t>> sstable::read_digest() {
     if (!has_component(component_type::Digest)) {
         co_return std::nullopt;
     }
-    sstring digest_str;
+    uint32_t digest;
 
     co_await do_read_simple(component_type::Digest, [&] (version_types v, file digest_file) -> future<> {
-        file_input_stream_options options;
-        options.buffer_size = 4096;
-
-        auto digest_stream = make_file_input_stream(std::move(digest_file), options);
-
-        std::exception_ptr ex;
-
-        try {
-            digest_str = co_await util::read_entire_stream_contiguous(digest_stream);
-        } catch (...) {
-            ex = std::current_exception();
-        }
-
-        co_await digest_stream.close();
-        maybe_rethrow_exception(std::move(ex));
+        digest = co_await read_digest_from_file(std::move(digest_file));
     });
 
-    _components->digest = boost::lexical_cast<uint32_t>(digest_str);
+    _components->digest = digest;
     co_return _components->digest;
+}
+
+future<std::optional<uint32_t>> sstable::read_digest(file f) {
+    if (_components->digest) {
+        co_return *_components->digest;
+    }
+    if (!has_component(component_type::Digest)) {
+        co_return std::nullopt;
+    }
+
+    _components->digest = co_await read_digest_from_file(std::move(f));
+    co_return _components->digest;
+}
+
+future<lw_shared_ptr<checksum>> sstable::read_checksum_from_file(file f) {
+    auto checksum = make_lw_shared<sstables::checksum>();
+
+    file_input_stream_options options;
+    options.buffer_size = 4096;
+
+    auto crc_stream = make_file_input_stream(std::move(f), options);
+
+    std::exception_ptr ex;
+
+    try {
+        const auto size = sizeof(uint32_t);
+
+        auto buf = co_await crc_stream.read_exactly(size);
+        check_buf_size(buf, size);
+        checksum->chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
+
+        buf = co_await crc_stream.read_exactly(size);
+        while (!buf.empty()) {
+            check_buf_size(buf, size);
+            checksum->checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
+            buf = co_await crc_stream.read_exactly(size);
+        }
+    } catch (...) {
+        ex = std::current_exception();
+    }
+
+    co_await crc_stream.close();
+    maybe_rethrow_exception(std::move(ex));
+
+    co_return checksum;
+}
+
+
+future<lw_shared_ptr<checksum>> sstable::read_checksum(file f) {
+    auto checksum = co_await read_checksum_from_file(std::move(f));
+
+    if (!_components->checksum) {
+        _components->checksum = checksum->weak_from_this();
+    } else {
+        // Race condition: Another fiber/thread has called `read_checksum()`
+        // while we were loading the component from disk. Discard our local
+        // copy and use theirs.
+        checksum = _components->checksum->shared_from_this();
+    }
+
+    co_return checksum;
 }
 
 future<lw_shared_ptr<checksum>> sstable::read_checksum() {
@@ -2848,34 +2916,10 @@ future<lw_shared_ptr<checksum>> sstable::read_checksum() {
     if (!has_component(component_type::CRC)) {
         co_return nullptr;
     }
-    auto checksum = make_lw_shared<sstables::checksum>();
+    lw_shared_ptr<checksum> checksum;
     co_await do_read_simple(component_type::CRC, [&checksum, this] (version_types v, file crc_file) -> future<> {
-        file_input_stream_options options;
-        options.buffer_size = 4096;
+        checksum = co_await read_checksum_from_file(std::move(crc_file));
 
-        auto crc_stream = make_file_input_stream(std::move(crc_file), options);
-
-        std::exception_ptr ex;
-
-        try {
-            const auto size = sizeof(uint32_t);
-
-            auto buf = co_await crc_stream.read_exactly(size);
-            check_buf_size(buf, size);
-            checksum->chunk_size = net::ntoh(read_unaligned<uint32_t>(buf.get()));
-
-            buf = co_await crc_stream.read_exactly(size);
-            while (!buf.empty()) {
-                check_buf_size(buf, size);
-                checksum->checksums.push_back(net::ntoh(read_unaligned<uint32_t>(buf.get())));
-                buf = co_await crc_stream.read_exactly(size);
-            }
-        } catch (...) {
-            ex = std::current_exception();
-        }
-
-        co_await crc_stream.close();
-        maybe_rethrow_exception(std::move(ex));
         if (!_components->checksum) {
             _components->checksum = checksum->weak_from_this();
         } else {

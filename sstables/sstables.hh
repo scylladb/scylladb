@@ -813,6 +813,8 @@ private:
     future<> open_or_create_data(open_flags oflags, file_open_options options = {}) noexcept;
     // runs in async context (called from storage::open)
     void write_toc(file_writer w);
+    static future<uint32_t> read_digest_from_file(file f);
+    static future<lw_shared_ptr<checksum>> read_checksum_from_file(file f);
 public:
 
     shareable_components& get_shared_components() const {
@@ -1091,6 +1093,8 @@ public:
     gc_clock::time_point get_gc_before_for_fully_expire(const gc_clock::time_point& compaction_time, const tombstone_gc_state& gc_state, const schema_ptr& s) const;
 
     future<std::optional<uint32_t>> read_digest();
+    future<std::optional<uint32_t>> read_digest(file f);
+    future<lw_shared_ptr<checksum>> read_checksum(file f);
     future<lw_shared_ptr<checksum>> read_checksum();
 
     friend in_memory_config_type;
