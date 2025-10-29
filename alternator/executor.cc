@@ -16,6 +16,7 @@
 #include "cdc/cdc_options.hh"
 #include "auth/service.hh"
 #include "db/config.hh"
+#include "db/view/view_build_status.hh"
 #include "mutation/tombstone.hh"
 #include "utils/log.hh"
 #include "schema/schema_builder.hh"
@@ -1496,6 +1497,23 @@ bytes extract_from_attrs_column_computation::compute_value(const schema&, const 
     on_internal_error(elogger, "extract_from_attrs_column_computation::compute_value called without row");
 }
 
+// Because `CreateTable` request creates GSI/LSI together with the base table (so the base table is empty),
+// we can skip view building process and immediately mark the view as built on all nodes.
+//
+// However, we can do this only for tablet-based views because `view_building_worker` will automatically propagate
+// this information to `system.built_views` table (see `view_building_worker::update_built_views()`).
+// For vnode-based views, `view_builder` will process the view and mark it as built.
+static future<> mark_view_schemas_as_built(utils::chunked_vector<mutation>& out, std::vector<schema_ptr> schemas, api::timestamp_type ts, service::storage_proxy& sp) {
+    auto token_metadata = sp.get_token_metadata_ptr();
+    for (auto& schema: schemas) {
+        if (schema->is_view()) {
+            for (auto& host_id: token_metadata->get_topology().get_all_host_ids()) {
+                auto view_status_mut = co_await sp.system_keyspace().make_view_build_status_mutation(ts, {schema->ks_name(), schema->cf_name()}, host_id, db::view::build_status::SUCCESS);
+                out.push_back(std::move(view_status_mut));
+            }
+        }
+    }
+}
 
 static future<executor::request_return_type> create_table_on_shard0(service::client_state&& client_state, tracing::trace_state_ptr trace_state, rjson::value request, service::storage_proxy& sp, service::migration_manager& mm, gms::gossiper& gossiper, bool enforce_authorization) {
     SCYLLA_ASSERT(this_shard_id() == 0);
@@ -1754,6 +1772,9 @@ static future<executor::request_return_type> create_table_on_shard0(service::cli
             schemas.push_back(view_builder.build());
         }
         co_await service::prepare_new_column_families_announcement(schema_mutations, sp, *ksm, schemas, ts);
+        if (ksm->uses_tablets()) {
+            co_await mark_view_schemas_as_built(schema_mutations, schemas, ts, sp);
+        }
 
         // If a role is allowed to create a table, we must give it permissions to
         // use (and eventually delete) the specific table it just created (and
