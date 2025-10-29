@@ -2193,10 +2193,8 @@ sharded<locator::shared_token_metadata> token_metadata;
             // required SSTABLE_COMPRESSION_DICTS cluster feature has been negotiated.
             try {
                 const auto& dicts_feature_enabled = feature_service.local().sstable_compression_dicts;
-                const auto& dicts_usage_allowed = cfg->sstable_compression_dictionaries_allow_in_ddl();
                 cfg->sstable_compression_user_table_options().validate(
-                        compression_parameters::dicts_feature_enabled(bool(dicts_feature_enabled)),
-                        compression_parameters::dicts_usage_allowed(dicts_usage_allowed));
+                        compression_parameters::dicts_feature_enabled(bool(dicts_feature_enabled)));
             } catch (const std::exception& e) {
                 startlog.error("Invalid sstable_compression_user_table_options: {}", e.what());
                 throw bad_configuration_error();

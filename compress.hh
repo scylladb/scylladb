@@ -106,8 +106,7 @@ public:
     std::optional<int> zstd_compression_level() const { return _zstd_compression_level; }
 
     using dicts_feature_enabled = bool_class<struct dicts_feature_enabled_tag>;
-    using dicts_usage_allowed = bool_class<struct dicts_usage_allowed_tag>;
-    void validate(dicts_feature_enabled, dicts_usage_allowed) const;
+    void validate(dicts_feature_enabled) const;
 
     std::map<sstring, sstring> get_options() const;
 
