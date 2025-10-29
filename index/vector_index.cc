@@ -143,10 +143,21 @@ void vector_index::check_index_options(const cql3::statements::index_prop_defs& 
     }
 }
 
+void vector_index::check_uses_tablets(const schema& schema, const data_dictionary::database& db) const {
+    const auto& keyspace = db.find_keyspace(schema.ks_name());
+    if (!keyspace.uses_tablets()) {
+        throw exceptions::invalid_request_exception(
+            "Vector index requires the base table's keyspace to use tablets.\n"
+            "Please alter the keyspace to use tablets and try again.");
+    }
+}
+
 void vector_index::validate(const schema &schema, const cql3::statements::index_prop_defs &properties,
         const std::vector<::shared_ptr<cql3::statements::index_target>> &targets,
-        const gms::feature_service& fs) const
+        const gms::feature_service& fs,
+        const data_dictionary::database& db) const
 {
+    check_uses_tablets(schema, db);
     check_target(schema, targets);
     check_cdc_not_explicitly_disabled(schema);
     check_cdc_options(schema);
