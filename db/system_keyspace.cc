@@ -2463,14 +2463,14 @@ future<bool> system_keyspace::cdc_is_rewritten() {
 }
 
 future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,
-        noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f) {
+        noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f) {
     static const sstring all_tables_query = format("SELECT table_id, timestamp, stream_id FROM {}.{}", NAME, CDC_STREAMS_STATE);
     static const sstring single_table_query = format("SELECT table_id, timestamp, stream_id FROM {}.{} WHERE table_id = ?", NAME, CDC_STREAMS_STATE);
 
     struct cur_t {
         table_id tid;
         db_clock::time_point ts;
-        std::vector<cdc::stream_id> streams;
+        utils::chunked_vector<cdc::stream_id> streams;
     };
     std::optional<cur_t> cur;
 
@@ -2487,7 +2487,7 @@ future<> system_keyspace::read_cdc_streams_state(std::optional<table_id> table,
             if (cur) {
                 co_await f(cur->tid, cur->ts, std::move(cur->streams));
             }
-            cur = { tid, ts, std::vector<cdc::stream_id>() };
+            cur = { tid, ts, utils::chunked_vector<cdc::stream_id>() };
         }
         cur->streams.push_back(std::move(stream_id));
 

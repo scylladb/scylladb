@@ -1209,7 +1209,7 @@ future<mutation> create_table_streams_mutation(table_id table, db_clock::time_po
     co_return std::move(m);
 }
 
-future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const std::vector<cdc::stream_id>& stream_ids, api::timestamp_type ts) {
+future<mutation> create_table_streams_mutation(table_id table, db_clock::time_point stream_ts, const utils::chunked_vector<cdc::stream_id>& stream_ids, api::timestamp_type ts) {
     auto s = db::system_keyspace::cdc_streams_state();
 
     mutation m(s, partition_key::from_single_value(*s,
@@ -1252,24 +1252,24 @@ future<> generation_service::load_cdc_tablet_streams(std::optional<std::unordere
         tables_to_process = _cdc_metadata.get_tables_with_cdc_tablet_streams() | std::ranges::to<std::unordered_set<table_id>>();
     }
 
-    auto read_streams_state = [this] (const std::optional<std::unordered_set<table_id>>& tables, noncopyable_function<future<>(table_id, db_clock::time_point, std::vector<cdc::stream_id>)> f) -> future<> {
+    auto read_streams_state = [this] (const std::optional<std::unordered_set<table_id>>& tables, noncopyable_function<future<>(table_id, db_clock::time_point, utils::chunked_vector<cdc::stream_id>)> f) -> future<> {
         if (tables) {
             for (auto table : *tables) {
-                co_await _sys_ks.local().read_cdc_streams_state(table, [&] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+                co_await _sys_ks.local().read_cdc_streams_state(table, [&] (table_id table, db_clock::time_point base_ts, utils::chunked_vector<cdc::stream_id> base_stream_set) -> future<> {
                     return f(table, base_ts, std::move(base_stream_set));
                 });
             }
         } else {
-            co_await _sys_ks.local().read_cdc_streams_state(std::nullopt, [&] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+            co_await _sys_ks.local().read_cdc_streams_state(std::nullopt, [&] (table_id table, db_clock::time_point base_ts, utils::chunked_vector<cdc::stream_id> base_stream_set) -> future<> {
                 return f(table, base_ts, std::move(base_stream_set));
             });
         }
     };
 
-    co_await read_streams_state(changed_tables, [this, &tables_to_process] (table_id table, db_clock::time_point base_ts, std::vector<cdc::stream_id> base_stream_set) -> future<> {
+    co_await read_streams_state(changed_tables, [this, &tables_to_process] (table_id table, db_clock::time_point base_ts, utils::chunked_vector<cdc::stream_id> base_stream_set) -> future<> {
         table_streams new_table_map;
 
-        auto append_stream = [&new_table_map] (db_clock::time_point stream_tp, std::vector<cdc::stream_id> stream_set) {
+        auto append_stream = [&new_table_map] (db_clock::time_point stream_tp, utils::chunked_vector<cdc::stream_id> stream_set) {
             auto ts = std::chrono::duration_cast<api::timestamp_clock::duration>(stream_tp.time_since_epoch()).count();
             new_table_map[ts] = committed_stream_set {stream_tp, std::move(stream_set)};
         };
@@ -1345,7 +1345,7 @@ future<> generation_service::query_cdc_timestamps(table_id table, bool ascending
     }
 }
 
-future<> generation_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
+future<> generation_service::query_cdc_streams(table_id table, noncopyable_function<future<>(db_clock::time_point, const utils::chunked_vector<cdc::stream_id>& current, cdc::cdc_stream_diff)> f) {
     const auto& all_tables = _cdc_metadata.get_all_tablet_streams();
     auto table_it = all_tables.find(table);
     if (table_it == all_tables.end()) {
@@ -1402,8 +1402,8 @@ future<> generation_service::generate_tablet_resize_update(utils::chunked_vector
         co_return;
     }
 
-    std::vector<cdc::stream_id> new_streams;
-    new_streams.reserve(new_tablet_map.tablet_count());
+    utils::chunked_vector<cdc::stream_id> new_streams;
+    co_await utils::reserve_gently(new_streams, new_tablet_map.tablet_count());
     for (auto tid : new_tablet_map.tablet_ids()) {
         new_streams.emplace_back(new_tablet_map.get_last_token(tid), 0);
         co_await coroutine::maybe_yield();
@@ -1425,7 +1425,7 @@ future<> generation_service::generate_tablet_resize_update(utils::chunked_vector
     muts.emplace_back(std::move(mut));
 }
 
-future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id table, db_clock::time_point base_ts, const std::vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts) {
+future<utils::chunked_vector<mutation>> get_cdc_stream_gc_mutations(table_id table, db_clock::time_point base_ts, const utils::chunked_vector<cdc::stream_id>& base_stream_set, api::timestamp_type ts) {
     utils::chunked_vector<mutation> muts;
     muts.reserve(2);
 

@@ -2202,7 +2202,7 @@ SEASTAR_THREAD_TEST_CASE(test_construct_next_stream_set) {
         };
 
         auto tokens_to_stream_ids = [&stream_id_for_token] (const stream_set& tokens) {
-            std::vector<cdc::stream_id> stream_ids;
+            utils::chunked_vector<cdc::stream_id> stream_ids;
             for (auto t : tokens) {
                 stream_ids.push_back(stream_id_for_token(t));
             }
@@ -2311,7 +2311,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_generate_stream_diff) {
         };
 
         auto tokens_to_stream_ids = [&stream_id_for_token] (const stream_set& tokens) {
-            std::vector<cdc::stream_id> stream_ids;
+            utils::chunked_vector<cdc::stream_id> stream_ids;
             for (auto t : tokens) {
                 stream_ids.push_back(stream_id_for_token(t));
             }
@@ -2406,7 +2406,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_generate_stream_diff) {
 
 struct cdc_gc_test_config {
     table_id table;
-    std::vector<std::vector<cdc::stream_id>> streams;
+    std::vector<utils::chunked_vector<cdc::stream_id>> streams;
     size_t new_base_stream;
 };
 
@@ -2522,11 +2522,11 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_gc_mutations) {
             // as the base and the history is empty
 
             auto table = table_id(utils::UUID_gen::get_time_UUID());
-            std::vector<cdc::stream_id> streams0;
+            utils::chunked_vector<cdc::stream_id> streams0;
             for (auto t : {10, 20, 30}) {
                 streams0.emplace_back(dht::token(t), 0);
             }
-            std::vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
+            utils::chunked_vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
 
             cdc_gc_test_config test1 = {
                 .table = table,
@@ -2551,12 +2551,12 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_gc_mutations) {
             // as the base and one history entry for open 50
 
             auto table = table_id(utils::UUID_gen::get_time_UUID());
-            std::vector<cdc::stream_id> streams0;
+            utils::chunked_vector<cdc::stream_id> streams0;
             for (auto t : {10, 20, 30}) {
                 streams0.emplace_back(dht::token(t), 0);
             }
-            std::vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
-            std::vector<cdc::stream_id> streams2 = {streams0[0], streams0[2], streams1[2], cdc::stream_id(dht::token(50), 0)};
+            utils::chunked_vector<cdc::stream_id> streams1 = {streams0[0], streams0[2], cdc::stream_id(dht::token(40), 0)};
+            utils::chunked_vector<cdc::stream_id> streams2 = {streams0[0], streams0[2], streams1[2], cdc::stream_id(dht::token(50), 0)};
 
             cdc_gc_test_config test2 = {
                 .table = table,
@@ -2584,7 +2584,7 @@ SEASTAR_THREAD_TEST_CASE(test_cdc_gc_get_new_base) {
             auto tp = base_time + offset;
             auto ts = std::chrono::duration_cast<api::timestamp_clock::duration>(tp.time_since_epoch()).count();
 
-            streams_map[ts] = cdc::committed_stream_set{tp, std::vector<cdc::stream_id>{}};
+            streams_map[ts] = cdc::committed_stream_set{tp, utils::chunked_vector<cdc::stream_id>{}};
         }
         return streams_map;
     };
