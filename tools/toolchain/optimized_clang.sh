@@ -66,7 +66,6 @@ SCYLLA_NINJA_FILE_FULLPATH="${SCYLLA_DIR}"/"${SCYLLA_NINJA_FILE}"
 
 # Which LLVM release to build in order to compile Scylla
 LLVM_CLANG_TAG=20.1.8
-CLANG_SUFFIX=20
 
 CLANG_ARCHIVE=$(cd "${SCYLLA_DIR}" && realpath -m "${CLANG_ARCHIVE}")
 
