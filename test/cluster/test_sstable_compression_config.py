@@ -25,25 +25,6 @@ def yaml_to_cmdline(config):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
-async def test_dict_compression_not_allowed(manager: ManagerClient, cfg_source: str):
-    config = {
-        'sstable_compression_dictionaries_allow_in_ddl': False,
-        'sstable_compression_user_table_options': {
-            'sstable_compression': 'ZstdWithDictsCompressor',
-            'chunk_length_in_kb': 4,
-            'compression_level': 10
-        }
-    }
-    expected_error = 'Invalid sstable_compression_user_table_options: sstable_compression ZstdWithDictsCompressor has been disabled by `sstable_compression_dictionaries_allow_in_ddl: false`'
-
-    if cfg_source == 'yaml':
-        await manager.server_add(config=config, expected_error=expected_error)
-    else:
-        await manager.server_add(cmdline=yaml_to_cmdline(config), expected_error=expected_error)
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('cfg_source', ['yaml', 'cmdline'])
 async def test_chunk_size_negative(manager: ManagerClient, cfg_source: str):
     config = {
         'sstable_compression_user_table_options': {

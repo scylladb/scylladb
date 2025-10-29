@@ -1323,7 +1323,7 @@ db::config::config(std::shared_ptr<db::extensions> exts)
         "* chunk_length_in_kb: (Default: 4) The size of chunks to compress in kilobytes. Allowed values are powers of two between 1 and 128.\n"
         "* crc_check_chance: (Default: 1.0) Not implemented (option value is ignored).\n"
         "* compression_level: (Default: 3) Compression level for ZstdCompressor and ZstdWithDictsCompressor. Higher levels provide better compression ratios at the cost of speed. Allowed values are integers between 1 and 22.")
-    , sstable_compression_dictionaries_allow_in_ddl(this, "sstable_compression_dictionaries_allow_in_ddl", liveness::LiveUpdate, value_status::Used, true,
+    , sstable_compression_dictionaries_allow_in_ddl(this, "sstable_compression_dictionaries_allow_in_ddl", liveness::LiveUpdate, value_status::Deprecated, true,
         "Allows for configuring tables to use SSTable compression with shared dictionaries. "
         "If the option is disabled, Scylla will reject CREATE and ALTER statements which try to set dictionary-based sstable compressors.\n"
         "This is only enforced when this node validates a new DDL statement; disabling the option won't disable dictionary-based compression "
