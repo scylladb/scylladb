@@ -140,4 +140,11 @@ get_fully_expired_sstables(const compaction_group_view& table_s, const std::vect
 // For tests, can drop after we virtualize sstables.
 mutation_reader make_scrubbing_reader(mutation_reader rd, compaction_type_options::scrub::mode scrub_mode, uint64_t& validation_errors, bool& failed_to_fix_sstable, compaction_type_options::scrub::drop_unfixable_sstables drop_unfixable_sstables);
 
+// Splits a single SSTable by segregating all its data according to the classifier.
+// If SSTable doesn't need split, the same input SSTable is returned as output.
+// If SSTable needs split, then output SSTables are returned and the input SSTable is deleted.
+// NOTE: it should never go through manager, since manager might decide to ignore the request
+// (e.g. compaction disabled) and split must happen if needed for correctness.
+future<std::vector<sstables::shared_sstable>> maybe_split_offline_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt);
+
 }

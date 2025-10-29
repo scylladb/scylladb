@@ -1135,7 +1135,7 @@ tablet_storage_group_manager::maybe_split_sstable(const sstables::shared_sstable
     auto holder = cg.async_gate().hold();
     auto& view = cg.view_for_sstable(sst);
     auto lock_holder = co_await _t.get_compaction_manager().get_incremental_repair_read_lock(view, "maybe_split_sstable");
-    co_return co_await _t.get_compaction_manager().maybe_split_sstable(sst, view, co_await split_compaction_options());
+    co_return co_await compaction::maybe_split_offline_sstable(sst, view, co_await split_compaction_options());
 }
 
 future<> table::maybe_split_compaction_group_of(locator::tablet_id tablet_id) {
