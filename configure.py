@@ -1409,6 +1409,7 @@ scylla_tests_dependencies = scylla_core + alternator + idls + scylla_tests_gener
     'test/lib/proc_utils.cc',
     'test/lib/gcs_fixture.cc',
     'test/lib/aws_kms_fixture.cc',
+    'test/lib/azure_kms_fixture.cc',
 ]
 
 scylla_raft_dependencies = scylla_raft_core + ['utils/uuid.cc', 'utils/error_injection.cc', 'utils/exceptions.cc']
