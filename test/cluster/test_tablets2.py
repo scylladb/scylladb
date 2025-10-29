@@ -10,7 +10,7 @@ from cassandra.policies import FallthroughRetryPolicy
 from test.pylib.internal_types import HostID, ServerInfo, ServerNum
 from test.pylib.manager_client import ManagerClient
 from test.pylib.rest_client import inject_error_one_shot, HTTPError, read_barrier
-from test.pylib.util import wait_for_cql_and_get_hosts, unique_name
+from test.pylib.util import wait_for_cql_and_get_hosts, unique_name, wait_for
 from test.pylib.tablets import get_tablet_replica, get_all_tablet_replicas, get_tablet_count, TabletReplicas
 from test.cluster.conftest import skip_mode
 from test.cluster.util import reconnect_driver, create_new_test_keyspace, new_test_keyspace
@@ -1981,3 +1981,94 @@ async def test_timed_out_reader_after_cleanup(manager: ManagerClient):
 
         rows = await cql.run_async(f"SELECT pk from {ks}.test")
         assert len(list(rows)) == 1
+
+# This is a test and reproducer for https://github.com/scylladb/scylladb/issues/26041
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repair_before_split", [False, True])
+@skip_mode('release', 'error injections are not supported in release mode')
+async def test_split_and_incremental_repair_synchronization(manager: ManagerClient, repair_before_split: bool):
+    logger.info('Bootstrapping cluster')
+    cfg = { 'enable_tablets': True,
+            'tablet_load_stats_refresh_interval_in_seconds': 1
+            }
+    cmdline = [
+        '--logger-log-level', 'load_balancer=debug',
+        '--logger-log-level', 'debug_error_injection=debug',
+        '--logger-log-level', 'compaction=debug',
+    ]
+    servers = await manager.servers_add(2, cmdline=cmdline, config=cfg, auto_rack_dc="dc1")
+
+    cql = manager.get_cql()
+
+    await manager.api.disable_tablet_balancing(servers[0].ip_addr)
+
+    initial_tablets = 2
+
+    async with new_test_keyspace(manager, f"WITH replication = {{'class': 'NetworkTopologyStrategy', 'replication_factor': 2}}") as ks:
+        await cql.run_async(f"CREATE TABLE {ks}.test (pk int PRIMARY KEY, c int) WITH tablets = {{'min_tablet_count': {initial_tablets}}};")
+
+        # insert data
+        pks = range(256)
+        await asyncio.gather(*[cql.run_async(f"INSERT INTO {ks}.test (pk, c) VALUES ({k}, {k});") for k in pks])
+
+        # flush the table
+        for server in servers:
+            await manager.api.flush_keyspace(server.ip_addr, ks)
+
+        s0_log = await manager.server_open_log(servers[0].server_id)
+        s0_mark = await s0_log.mark()
+        s1_log = await manager.server_open_log(servers[1].server_id)
+        s1_mark = await s1_log.mark()
+        expected_tablet_count = 4 # expected tablet count post split
+
+        async def run_split_prepare():
+            await manager.api.enable_injection(servers[0].ip_addr, 'tablet_resize_finalization_postpone', one_shot=False)
+
+            # force split on the test table
+            await cql.run_async(f"ALTER TABLE {ks}.test WITH tablets = {{'min_tablet_count': {expected_tablet_count}}}")
+
+            await s0_log.wait_for('Finalizing resize decision for table', from_mark=s0_mark)
+
+        async def generate_repair_work():
+            insert_stmt = cql.prepare(f"INSERT INTO {ks}.test (pk, c) VALUES (?, ?)")
+            insert_stmt.consistency_level = ConsistencyLevel.ONE
+
+            await manager.api.enable_injection(servers[0].ip_addr, "database_apply", one_shot=False)
+            pks = range(256, 512)
+            await asyncio.gather(*[cql.run_async(insert_stmt, (k, k)) for k in pks])
+            await manager.api.disable_injection(servers[0].ip_addr, "database_apply")
+
+        token = 'all'
+
+        await manager.api.enable_tablet_balancing(servers[0].ip_addr)
+
+        if repair_before_split:
+            await generate_repair_work()
+            for server in servers:
+                await manager.api.enable_injection(server.ip_addr, "incremental_repair_prepare_wait", one_shot=True)
+            repair_task = asyncio.create_task(manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental'))
+            await s0_log.wait_for('incremental_repair_prepare_wait: waiting', from_mark=s0_mark)
+            await s1_log.wait_for('incremental_repair_prepare_wait: waiting', from_mark=s1_mark)
+
+            await run_split_prepare()
+
+            for server in servers:
+                await manager.api.message_injection(server.ip_addr, "incremental_repair_prepare_wait")
+            await repair_task
+        else:
+            await run_split_prepare()
+            await generate_repair_work()
+            await manager.api.tablet_repair(servers[0].ip_addr, ks, "test", token, incremental_mode='incremental')
+
+        await manager.api.disable_injection(servers[0].ip_addr, "tablet_resize_finalization_postpone")
+
+        async def finished_splitting():
+            tablet_count = await get_tablet_count(manager, servers[0], ks, 'test')
+            return tablet_count >= expected_tablet_count or None
+        # Give enough time for split to happen in debug mode
+        await wait_for(finished_splitting, time.time() + 120)
+
+        await manager.server_stop(servers[0].server_id)
+        await manager.server_start(servers[0].server_id)
+        hosts = await wait_for_cql_and_get_hosts(cql, servers, time.time() + 60)
+        await manager.servers_see_each_other(servers)
