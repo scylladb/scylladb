@@ -54,7 +54,7 @@ cdc::stream_id get_stream(
 }
 
 static cdc::stream_id get_stream(
-        const std::vector<cdc::stream_id>& streams,
+        const utils::chunked_vector<cdc::stream_id>& streams,
         dht::token tok) {
     if (streams.empty()) {
         on_internal_error(cdc_log, "get_stream: streams empty");
@@ -159,7 +159,7 @@ cdc::stream_id cdc::metadata::get_vnode_stream(api::timestamp_type ts, dht::toke
     return ret;
 }
 
-const std::vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id tid, api::timestamp_type ts) const {
+const utils::chunked_vector<cdc::stream_id>& cdc::metadata::get_tablet_stream_set(table_id tid, api::timestamp_type ts) const {
     auto now = api::new_timestamp();
     if (ts > now + get_generation_leeway().count()) {
         throw exceptions::invalid_request_exception(seastar::format(
@@ -259,10 +259,10 @@ bool cdc::metadata::prepare(db_clock::time_point tp) {
     return !it->second;
 }
 
-future<std::vector<cdc::stream_id>> cdc::metadata::construct_next_stream_set(
-        const std::vector<cdc::stream_id>& prev_stream_set,
-        std::vector<cdc::stream_id> opened,
-        const std::vector<cdc::stream_id>& closed) {
+future<utils::chunked_vector<cdc::stream_id>> cdc::metadata::construct_next_stream_set(
+        const utils::chunked_vector<cdc::stream_id>& prev_stream_set,
+        utils::chunked_vector<cdc::stream_id> opened,
+        const utils::chunked_vector<cdc::stream_id>& closed) {
 
     if (closed.size() == prev_stream_set.size()) {
         // all previous streams are closed, so the next stream set is just the opened streams.
@@ -273,8 +273,8 @@ future<std::vector<cdc::stream_id>> cdc::metadata::construct_next_stream_set(
     // streams and removing the closed streams. we assume each stream set is
     // sorted by token, and the result is sorted as well.
 
-    std::vector<cdc::stream_id> next_stream_set;
-    next_stream_set.reserve(prev_stream_set.size() + opened.size() - closed.size());
+    utils::chunked_vector<cdc::stream_id> next_stream_set;
+    co_await utils::reserve_gently(next_stream_set, prev_stream_set.size() + opened.size() - closed.size());
 
     auto next_prev = prev_stream_set.begin();
     auto next_closed = closed.begin();
@@ -318,8 +318,8 @@ std::vector<table_id> cdc::metadata::get_tables_with_cdc_tablet_streams() const 
     return _tablet_streams | std::views::keys | std::ranges::to<std::vector<table_id>>();
 }
 
-future<cdc::cdc_stream_diff> cdc::metadata::generate_stream_diff(const std::vector<stream_id>& before, const std::vector<stream_id>& after) {
-    std::vector<stream_id> closed, opened;
+future<cdc::cdc_stream_diff> cdc::metadata::generate_stream_diff(const utils::chunked_vector<stream_id>& before, const utils::chunked_vector<stream_id>& after) {
+    utils::chunked_vector<stream_id> closed, opened;
 
     auto before_it = before.begin();
     auto after_it = after.begin();

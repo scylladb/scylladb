@@ -49,7 +49,7 @@ class metadata final {
 
     container_t::const_iterator gen_used_at(api::timestamp_type ts) const;
 
-    const std::vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
+    const utils::chunked_vector<stream_id>& get_tablet_stream_set(table_id tid, api::timestamp_type ts) const;
 
 public:
     /* Is a generation with the given timestamp already known or obsolete? It is obsolete if and only if
@@ -111,14 +111,14 @@ public:
 
     std::vector<table_id> get_tables_with_cdc_tablet_streams() const;
 
-    static future<std::vector<stream_id>> construct_next_stream_set(
-        const std::vector<cdc::stream_id>& prev_stream_set,
-        std::vector<cdc::stream_id> opened,
-        const std::vector<cdc::stream_id>& closed);
+    static future<utils::chunked_vector<stream_id>> construct_next_stream_set(
+        const utils::chunked_vector<cdc::stream_id>& prev_stream_set,
+        utils::chunked_vector<cdc::stream_id> opened,
+        const utils::chunked_vector<cdc::stream_id>& closed);
 
     static future<cdc_stream_diff> generate_stream_diff(
-        const std::vector<stream_id>& before,
-        const std::vector<stream_id>& after);
+        const utils::chunked_vector<stream_id>& before,
+        const utils::chunked_vector<stream_id>& after);
 
 };
 
