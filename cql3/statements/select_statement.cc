@@ -24,7 +24,6 @@
 #include "index/vector_index.hh"
 #include "service/broadcast_tables/experimental/lang.hh"
 #include "service/qos/qos_common.hh"
-#include "vector_search/vector_store_client.hh"
 #include "transport/messages/result_message.hh"
 #include "cql3/functions/as_json_function.hh"
 #include "cql3/selection/selection.hh"
@@ -68,6 +67,25 @@ bool is_internal_keyspace(std::string_view name);
 namespace cql3 {
 
 namespace statements {
+namespace {
+
+constexpr std::string_view ANN_CUSTOM_INDEX_OPTION = "vector_index";
+
+template <typename Func>
+auto measure_index_latency(const schema& schema, const secondary_index::index& index, Func&& func) -> std::invoke_result_t<Func> {
+    auto start_time = lowres_system_clock::now();
+    auto result = co_await func();
+    auto duration = lowres_system_clock::now() - start_time;
+
+    auto stats = schema.table().get_index_manager().get_index_stats(index.metadata().name());
+    if (stats) {
+        stats->add_latency(duration);
+    }
+
+    co_return result;
+}
+
+} // namespace
 
 static logging::logger logger("select_statement");
 
@@ -1005,7 +1023,6 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
                                         ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                         bool is_reversed,
                                         ordering_comparator_type ordering_comparator,
-                                        std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                         std::optional<expr::expression> limit,
                                          std::optional<expr::expression> per_partition_limit,
                                          cql_stats &stats,
@@ -1015,31 +1032,13 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
     auto& sim = cf.get_index_manager();
     auto [index_opt, used_index_restrictions] = restrictions->find_idx(sim);
 
-    if (prepared_ann_ordering.has_value()) {
-        auto indexes = sim.list_indexes();
-        auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
-            return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name)
-                && ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == ann_custom_index_option)
-                && (ind.target_column() == prepared_ann_ordering->first->name_as_text());
-        });
-
-        if (it == indexes.end()) {
-            throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
-        } else {
-            if (index_opt || parameters->allow_filtering() || restrictions->need_filtering() || check_needs_allow_filtering_anyway(*restrictions)) {
-                throw exceptions::invalid_request_exception("ANN ordering by vector does not support filtering");
-            }
-            index_opt = *it;
-        }
-    } else if (index_opt) {
-        auto it = index_opt->metadata().options().find(db::index::secondary_index::custom_class_option_name);
-        if (it != index_opt->metadata().options().end() && it->second == ann_custom_index_option) {
-            throw exceptions::invalid_request_exception("Vector indexes only support ANN queries");
-        }
-    }
-
     if (!index_opt) {
         throw std::runtime_error("No index found.");
+    }
+
+    auto it = index_opt->metadata().options().find(db::index::secondary_index::custom_class_option_name);
+    if (it != index_opt->metadata().options().end() && it->second == ANN_CUSTOM_INDEX_OPTION) {
+        throw exceptions::invalid_request_exception("Vector indexes only support ANN queries");
     }
 
     schema_ptr view_schema = restrictions->get_view_schema();
@@ -1053,7 +1052,6 @@ indexed_table_select_statement::prepare(data_dictionary::database db,
             std::move(group_by_cell_indices),
             is_reversed,
             std::move(ordering_comparator),
-            std::move(prepared_ann_ordering),
             std::move(limit),
             std::move(per_partition_limit),
             stats,
@@ -1071,7 +1069,6 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
                                                            ::shared_ptr<std::vector<size_t>> group_by_cell_indices,
                                                            bool is_reversed,
                                                            ordering_comparator_type ordering_comparator,
-                                                           std::optional<prepared_ann_ordering_type> prepared_ann_ordering,
                                                            std::optional<expr::expression> limit,
                                                            std::optional<expr::expression> per_partition_limit,
                                                            cql_stats &stats,
@@ -1083,8 +1080,8 @@ indexed_table_select_statement::indexed_table_select_statement(schema_ptr schema
     , _index{index}
     , _used_index_restrictions(std::move(used_index_restrictions))
     , _view_schema(view_schema)
-    , _prepared_ann_ordering(std::move(prepared_ann_ordering))
 {
+    SCYLLA_ASSERT(_view_schema);
     if (_index.metadata().local()) {
         _get_partition_ranges_for_posting_list = [this] (const query_options& options) { return get_partition_ranges_for_local_index_posting_list(options); };
         _get_partition_slice_for_posting_list = [this] (const query_options& options) { return get_partition_slice_for_local_index_posting_list(options); };
@@ -1174,15 +1171,10 @@ lw_shared_ptr<const service::pager::paging_state> indexed_table_select_statement
 
 future<shared_ptr<cql_transport::messages::result_message>> indexed_table_select_statement::do_execute(
         query_processor& qp, service::query_state& state, const query_options& options) const {
-        
-        auto start_time = lowres_system_clock::now();
-        auto result = co_await actually_do_execute(qp, state, options);
-        auto duration = lowres_system_clock::now() - start_time;
-        auto stats = _schema->table().get_index_manager().get_index_stats(_index.metadata().name());
-        if (stats) {
-            stats->add_latency(duration);
-        }
-        co_return result;
+
+    return measure_index_latency(*_schema, _index, [this, &qp, &state, &options]() -> future<shared_ptr<cql_transport::messages::result_message>> {
+        return actually_do_execute(qp, state, options);
+    });
 }
 
 future<shared_ptr<cql_transport::messages::result_message>>
@@ -1207,50 +1199,7 @@ indexed_table_select_statement::actually_do_execute(query_processor& qp,
             ? source_selector::INTERNAL : source_selector::USER;
     ++_stats.query_cnt(src_sel, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
 
-    SCYLLA_ASSERT(_restrictions->uses_secondary_indexing() || _prepared_ann_ordering.has_value());
-
-    if (_prepared_ann_ordering.has_value()) {
-        auto limit = get_limit(options, _limit);
-        if (limit > max_ann_query_limit) {
-            co_await coroutine::return_exception(exceptions::invalid_request_exception(fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
-        }
-
-        auto [ann_column, ann_vector_expr] = _prepared_ann_ordering.value();
-
-        auto expr_value = expr::evaluate(ann_vector_expr, options);
-
-        if (expr_value.is_null()) {
-            throw exceptions::invalid_request_exception(fmt::format("Unsupported null value for column {}", _prepared_ann_ordering->first->name_as_text()));
-        }
-
-        auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(std::move(expr_value).to_bytes()));
-        auto ann_vector = util::to_vector<float>(values);
-
-        auto as = abort_source();
-        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema , std::move(ann_vector), limit, as);
-        if (!pkeys.has_value()) {
-            co_await coroutine::return_exception(
-                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
-        }
-
-        // If there are no clustering columns, we have to convert the partition keys to partition ranges.
-        if (_schema->clustering_key_size() == 0) {
-            std::vector<dht::partition_range> partition_ranges;
-            std::ranges::transform(pkeys.value(), std::back_inserter(partition_ranges), [](const auto& pkey) {
-                    return dht::partition_range::make_singular(pkey.partition);
-                });
-
-            co_return co_await this->execute_base_query(qp, std::move(partition_ranges), state, options, now, nullptr);
-        } else {
-            std::vector<primary_key> primary_keys;
-            std::ranges::transform(pkeys.value(), std::back_inserter(primary_keys),[](const auto& pkey) {
-                    return primary_key{pkey.partition, pkey.clustering};
-                });
-            co_return co_await this->execute_base_query(qp, std::move(primary_keys), state, options, now, nullptr);
-        }
-
-        
-    }
+    SCYLLA_ASSERT(_restrictions->uses_secondary_indexing());
 
     _stats.unpaged_select_queries(_ks_sel) += options.get_page_size() <= 0;
 
@@ -2008,6 +1957,175 @@ mutation_fragments_select_statement::do_execute(query_processor& qp, service::qu
             }));
 }
 
+::shared_ptr<cql3::statements::select_statement> vector_indexed_table_select_statement::prepare(data_dictionary::database db, schema_ptr schema,
+        uint32_t bound_terms, lw_shared_ptr<const parameters> parameters, ::shared_ptr<selection::selection> selection,
+        ::shared_ptr<restrictions::statement_restrictions> restrictions, ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed,
+        ordering_comparator_type ordering_comparator, prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, std::unique_ptr<attributes> attrs) {
+    auto cf = db.find_column_family(schema);
+    auto& sim = cf.get_index_manager();
+    auto [index_opt, _] = restrictions->find_idx(sim);
+
+    auto indexes = sim.list_indexes();
+    auto it = std::find_if(indexes.begin(), indexes.end(), [&prepared_ann_ordering](const auto& ind) {
+        return (ind.metadata().options().contains(db::index::secondary_index::custom_class_option_name) &&
+                       ind.metadata().options().at(db::index::secondary_index::custom_class_option_name) == ANN_CUSTOM_INDEX_OPTION) &&
+               (ind.target_column() == prepared_ann_ordering.first->name_as_text());
+    });
+
+    if (it == indexes.end()) {
+        throw exceptions::invalid_request_exception("ANN ordering by vector requires the column to be indexed using 'vector_index'");
+    }
+    if (index_opt || parameters->allow_filtering() || restrictions->need_filtering() || check_needs_allow_filtering_anyway(*restrictions)) {
+        throw exceptions::invalid_request_exception("ANN ordering by vector does not support filtering");
+    }
+    index_opt = *it;
+
+    if (!index_opt) {
+        throw std::runtime_error("No index found.");
+    }
+
+    return ::make_shared<cql3::statements::vector_indexed_table_select_statement>(schema, bound_terms, parameters, std::move(selection), std::move(restrictions),
+            std::move(group_by_cell_indices), is_reversed, std::move(ordering_comparator), std::move(prepared_ann_ordering), std::move(limit),
+            std::move(per_partition_limit), stats, *index_opt, std::move(attrs));
+}
+
+vector_indexed_table_select_statement::vector_indexed_table_select_statement(schema_ptr schema, uint32_t bound_terms, lw_shared_ptr<const parameters> parameters,
+        ::shared_ptr<selection::selection> selection, ::shared_ptr<const restrictions::statement_restrictions> restrictions,
+        ::shared_ptr<std::vector<size_t>> group_by_cell_indices, bool is_reversed, ordering_comparator_type ordering_comparator,
+        prepared_ann_ordering_type prepared_ann_ordering, std::optional<expr::expression> limit,
+        std::optional<expr::expression> per_partition_limit, cql_stats& stats, const secondary_index::index& index, std::unique_ptr<attributes> attrs)
+    : select_statement{schema, bound_terms, parameters, selection, restrictions, group_by_cell_indices, is_reversed, ordering_comparator, limit,
+              per_partition_limit, stats, std::move(attrs)}
+    , _index{index}
+    , _prepared_ann_ordering(std::move(prepared_ann_ordering)) {
+
+    if (!limit.has_value()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
+    }
+
+    if (per_partition_limit.has_value()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries do not support per-partition limits");
+    }
+
+    if (selection->is_aggregate()) {
+        throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
+    }
+}
+
+future<shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::do_execute(
+        query_processor& qp, service::query_state& state, const query_options& options) const {
+
+    return measure_index_latency(*_schema, _index, [this, &qp, &state, &options](this auto) -> future<shared_ptr<cql_transport::messages::result_message>> {
+        tracing::add_table_name(state.get_trace_state(), keyspace(), column_family());
+        validate_for_read(options.get_consistency());
+
+        _query_start_time_point = gc_clock::now();
+
+        update_stats();
+
+        auto limit = get_limit(options, _limit);
+
+        if (limit > max_ann_query_limit) {
+            co_await coroutine::return_exception(exceptions::invalid_request_exception(
+                    fmt::format("Use of ANN OF in an ORDER BY clause requires a LIMIT that is not greater than {}. LIMIT was {}", max_ann_query_limit, limit)));
+        }
+
+        auto as = abort_source();
+        auto pkeys = co_await qp.vector_store_client().ann(_schema->ks_name(), _index.metadata().name(), _schema, get_ann_ordering_vector(options), limit, as);
+        if (!pkeys.has_value()) {
+            co_await coroutine::return_exception(
+                    exceptions::invalid_request_exception(std::visit(vector_search::vector_store_client::ann_error_visitor{}, pkeys.error())));
+        }
+
+        co_return co_await query_base_table(qp, state, options, pkeys.value());
+    });
+}
+
+void vector_indexed_table_select_statement::update_stats() const {
+    ++_stats.secondary_index_reads;
+    ++_stats.query_cnt(source_selector::USER, _ks_sel, cond_selector::NO_CONDITIONS, statement_type::SELECT);
+}
+
+lw_shared_ptr<query::read_command> vector_indexed_table_select_statement::prepare_command_for_base_query(
+        query_processor& qp, service::query_state& state, const query_options& options) const {
+    auto slice = make_partition_slice(options);
+    return ::make_lw_shared<query::read_command>(_schema->id(), _schema->version(), std::move(slice), qp.proxy().get_max_result_size(slice),
+            query::tombstone_limit(qp.proxy().get_tombstone_limit()),
+            query::row_limit(get_inner_loop_limit(get_limit(options, _limit), _selection->is_aggregate())), query::partition_limit(query::max_partitions),
+            _query_start_time_point, tracing::make_trace_info(state.get_trace_state()), query_id::create_null_id(), query::is_first_page::no,
+            options.get_timestamp(state));
+}
+
+std::vector<float> vector_indexed_table_select_statement::get_ann_ordering_vector(const query_options& options) const {
+    auto [ann_column, ann_vector_expr] = _prepared_ann_ordering;
+    auto expr_value = expr::evaluate(ann_vector_expr, options);
+    if (expr_value.is_null()) {
+        throw exceptions::invalid_request_exception(fmt::format("Unsupported null value for column {}", _prepared_ann_ordering.first->name_as_text()));
+    }
+    auto values = value_cast<vector_type_impl::native_type>(ann_column->type->deserialize(expr::evaluate(ann_vector_expr, options).to_bytes()));
+    return util::to_vector<float>(values);
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(
+        query_processor& qp, service::query_state& state, const query_options& options, const std::vector<vector_search::primary_key>& pkeys) const {
+    auto command = prepare_command_for_base_query(qp, state, options);
+    auto timeout = db::timeout_clock::now() + get_timeout(state.get_client_state(), options);
+
+    // For tables without clustering columns, we can optimize by querying
+    // partition ranges instead of individual primary keys, since the
+    // partition key alone uniquely identifies each row.
+    if (_schema->clustering_key_size() == 0) {
+        auto to_partition_ranges = [](const std::vector<vector_search::primary_key>& pkeys) -> std::vector<dht::partition_range> {
+            std::vector<dht::partition_range> partition_ranges;
+            std::ranges::transform(pkeys, std::back_inserter(partition_ranges), [](const auto& pkey) {
+                return dht::partition_range::make_singular(pkey.partition);
+            });
+
+            return partition_ranges;
+        };
+        co_return co_await query_base_table(qp, state, options, std::move(command), timeout, to_partition_ranges(pkeys));
+    }
+    co_return co_await query_base_table(qp, state, options, std::move(command), timeout, pkeys);
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
+        service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
+        const std::vector<vector_search::primary_key>& pkeys) const {
+
+    coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>> result = co_await utils::result_map_reduce(
+            pkeys.begin(), pkeys.end(),
+            [&](this auto, auto& key) -> future<coordinator_result<foreign_ptr<lw_shared_ptr<query::result>>>> {
+                auto cmd = ::make_lw_shared<query::read_command>(*command);
+                cmd->slice._row_ranges = query::clustering_row_ranges{query::clustering_range::make_singular(key.clustering)};
+                coordinator_result<service::storage_proxy::coordinator_query_result> rqr =
+                        co_await qp.proxy().query_result(_schema, cmd, {dht::partition_range::make_singular(key.partition)}, options.get_consistency(),
+                                {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state()});
+                if (!rqr) {
+                    co_return std::move(rqr).as_failure();
+                }
+                co_return std::move(rqr.value().query_result);
+            },
+            query::result_merger{command->get_row_limit(), query::max_partitions});
+
+    co_return co_await wrap_result_to_error_message([this, &command, &options](auto result) {
+        return process_results(std::move(result), command, options, _query_start_time_point);
+    })(std::move(result));
+}
+
+future<::shared_ptr<cql_transport::messages::result_message>> vector_indexed_table_select_statement::query_base_table(query_processor& qp,
+        service::query_state& state, const query_options& options, lw_shared_ptr<query::read_command> command, lowres_clock::time_point timeout,
+        std::vector<dht::partition_range> partition_ranges) const {
+
+    co_return co_await qp.proxy()
+            .query_result(_query_schema, command, std::move(partition_ranges), options.get_consistency(),
+                    {timeout, state.get_permit(), state.get_client_state(), state.get_trace_state(), {}, {}, options.get_specific_options().node_local_only},
+                    std::nullopt)
+            .then(wrap_result_to_error_message([this, &options, command](service::storage_proxy::coordinator_query_result qr) {
+                return this->process_results(std::move(qr.query_result), command, options, _query_start_time_point);
+            }));
+}
+
 namespace raw {
 
 static void validate_attrs(const cql3::attributes::raw& attrs) {
@@ -2166,7 +2284,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
         std::visit([&](auto&& ordering) {
             using T = std::decay_t<decltype(ordering)>;
             if constexpr (std::is_same_v<T, select_statement::ann_vector>) {
-                verify_ann_ordering_is_valid(_limit, _per_partition_limit, *selection);
                 prepared_ann_ordering = prepare_ann_ordering(*schema, ctx, db);
             } else {
                 SCYLLA_ASSERT(!for_view);
@@ -2264,7 +2381,11 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
                 std::move(prepared_attrs));
-    } else if (restrictions->uses_secondary_indexing() || prepared_ann_ordering) {
+    } else if (prepared_ann_ordering) {
+        stmt = vector_indexed_table_select_statement::prepare(db, schema, ctx.bound_variables_size(), _parameters, std::move(selection), std::move(restrictions),
+                std::move(group_by_cell_indices), is_reversed_, std::move(ordering_comparator), std::move(*prepared_ann_ordering),
+                prepare_limit(db, ctx, _limit), prepare_limit(db, ctx, _per_partition_limit), stats, std::move(prepared_attrs));
+    } else if (restrictions->uses_secondary_indexing()) {
         stmt = indexed_table_select_statement::prepare(
                 db,
                 schema,
@@ -2275,7 +2396,6 @@ std::unique_ptr<prepared_statement> select_statement::prepare(data_dictionary::d
                 std::move(group_by_cell_indices),
                 is_reversed_,
                 std::move(ordering_comparator),
-                std::move(prepared_ann_ordering),
                 prepare_limit(db, ctx, _limit),
                 prepare_limit(db, ctx, _per_partition_limit),
                 stats,
@@ -2483,22 +2603,6 @@ void select_statement::verify_ordering_is_valid(const prepared_orderings_type& o
                     cur_ck_column.name_as_text()));
             }
         }
-    }
-}
-
-void select_statement::verify_ann_ordering_is_valid(const std::optional<expr::expression>& limit,
-                                                    const std::optional<expr::expression>& per_partition_limit,
-                                                    const selection::selection& selection) const {
-    if (!limit.has_value()) {
-        throw exceptions::invalid_request_exception("Vector ANN queries must have a limit specified");
-    }
-
-    if (per_partition_limit.has_value()) {
-        throw exceptions::invalid_request_exception("Vector ANN queries do not support per-partition limits");
-    }
-
-    if (selection.is_aggregate()) {
-        throw exceptions::invalid_request_exception("Vector ANN queries cannot be run with aggregation");
     }
 }
 
