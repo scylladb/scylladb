@@ -335,7 +335,7 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
     #    - ...
     suffix = 'suffix'
     old_files = list_sstables();
-    toc_names = [f'{suffix}/{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
+    toc_names = [f'{entry.name}' for entry in old_files if entry.name.endswith('TOC.txt')]
 
     prefix = f'{cf}/{snap_name}'
     tid = await manager.api.backup(server.ip_addr, ks, cf, snap_name, object_storage.address, object_storage.bucket_name, f'{prefix}/{suffix}')
@@ -352,7 +352,7 @@ async def do_test_simple_backup_and_restore(manager: ManagerClient, object_stora
     assert len(objects) > 0
 
     print('Try to restore')
-    tid = await manager.api.restore(server.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, prefix, toc_names)
+    tid = await manager.api.restore(server.ip_addr, ks, cf, object_storage.address, object_storage.bucket_name, f'{prefix}/{suffix}', toc_names)
 
     if do_abort:
         await manager.api.abort_task(server.ip_addr, tid)
