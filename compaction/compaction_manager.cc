@@ -2278,33 +2278,6 @@ future<compaction_manager::compaction_stats_opt> compaction_manager::perform_spl
     return perform_task_on_all_files<split_compaction_task_executor>("split", info, t, std::move(options), std::move(owned_ranges_ptr), std::move(get_sstables), throw_if_stopping::no);
 }
 
-future<std::vector<sstables::shared_sstable>>
-compaction_manager::maybe_split_new_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt) {
-    if (!split_compaction_task_executor::sstable_needs_split(sst, opt)) {
-        co_return std::vector<sstables::shared_sstable>{sst};
-    }
-    if (!can_proceed(&t)) {
-        co_return std::vector<sstables::shared_sstable>{sst};
-    }
-    std::vector<sstables::shared_sstable> ret;
-
-    auto gate = get_compaction_state(&t).gate.hold();
-    compaction_progress_monitor monitor;
-    compaction_data info = create_compaction_data();
-    compaction_descriptor desc = split_compaction_task_executor::make_descriptor(sst, opt);
-    desc.creator = [&t] (shard_id _) {
-        return t.make_sstable();
-    };
-    desc.replacer = [&] (compaction_completion_desc d) {
-        std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
-    };
-
-    co_await compact_sstables(std::move(desc), info, t, monitor);
-    co_await sst->unlink();
-
-    co_return ret;
-}
-
 // Submit a table to be scrubbed and wait for its termination.
 future<compaction_manager::compaction_stats_opt> compaction_manager::perform_sstable_scrub(compaction_group_view& t, compaction_type_options::scrub opts, tasks::task_info info) {
     auto scrub_mode = opts.operation_mode;
