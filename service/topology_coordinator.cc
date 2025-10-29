@@ -145,6 +145,8 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
     std::unordered_map<locator::host_id, locator::load_stats> _load_stats_per_node;
     serialized_action _tablet_load_stats_refresh;
 
+    static constexpr std::chrono::seconds cdc_streams_gc_refresh_interval = std::chrono::seconds(60);
+
     std::chrono::milliseconds _ring_delay;
 
     gate::holder _group0_holder;
@@ -762,6 +764,42 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
                 }
             }
             co_await coroutine::maybe_yield();
+        }
+    }
+
+    future<> cdc_streams_gc_fiber() {
+        auto can_proceed = [this] { return !_async_gate.is_closed() && !_as.abort_requested(); };
+        while (can_proceed()) {
+            bool sleep = true;
+            try {
+                auto guard = co_await start_operation();
+                utils::chunked_vector<canonical_mutation> updates;
+
+                co_await _cdc_gens.garbage_collect_cdc_streams(updates, guard.write_timestamp());
+
+                if (!updates.empty()) {
+                    co_await update_topology_state(std::move(guard), std::move(updates), "CDC streams GC");
+                } else {
+                    release_guard(std::move(guard));
+                }
+            } catch (raft::request_aborted&) {
+                rtlogger.debug("CDC streams GC fiber aborted");
+                sleep = false;
+            } catch (seastar::abort_requested_exception&) {
+                rtlogger.debug("CDC streams GC fiber aborted");
+                sleep = false;
+            } catch (...) {
+                rtlogger.warn("CDC streams GC fiber got error {}", std::current_exception());
+            }
+            auto refresh_interval = utils::get_local_injector().is_enabled("short_cdc_streams_gc_refresh_interval") ?
+                    std::chrono::seconds(1) : cdc_streams_gc_refresh_interval;
+            if (sleep && can_proceed()) {
+                try {
+                    co_await seastar::sleep_abortable(refresh_interval, _as);
+                } catch (...) {
+                    rtlogger.debug("CDC streams GC: sleep failed: {}", std::current_exception());
+                }
+            }
         }
     }
 
@@ -3710,6 +3748,7 @@ future<> topology_coordinator::run() {
 
     co_await fence_previous_coordinator();
     auto cdc_generation_publisher = cdc_generation_publisher_fiber();
+    auto cdc_streams_gc = cdc_streams_gc_fiber();
     auto tablet_load_stats_refresher = start_tablet_load_stats_refresher();
     auto gossiper_orphan_remover = gossiper_orphan_remover_fiber();
     auto group0_voter_refresher = group0_voter_refresher_fiber();
@@ -3753,6 +3792,7 @@ future<> topology_coordinator::run() {
     co_await std::move(tablet_load_stats_refresher);
     co_await _tablet_load_stats_refresh.join();
     co_await std::move(cdc_generation_publisher);
+    co_await std::move(cdc_streams_gc);
     co_await std::move(gossiper_orphan_remover);
     co_await std::move(group0_voter_refresher);
     co_await std::move(vb_coordinator_fiber);
