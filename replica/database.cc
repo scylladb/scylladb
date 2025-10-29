@@ -483,12 +483,13 @@ locator::static_effective_replication_map_ptr keyspace::get_static_effective_rep
 } // namespace replica
 
 void backlog_controller::adjust() {
+    // Compute and update the backlog even when static shares are set to
+    // ensure that the backlog metrics reflect the current state.
+    auto backlog = _current_backlog();
     if (controller_disabled()) {
         update_controller(_static_shares);
         return;
     }
-
-    auto backlog = _current_backlog();
 
     if (backlog >= _control_points.back().input) {
         update_controller(_control_points.back().output);
@@ -510,7 +511,7 @@ void backlog_controller::adjust() {
 
 float backlog_controller::backlog_of_shares(float shares) const {
     size_t idx = 1;
-    if (controller_disabled() || _control_points.size() == 0) {
+    if (_control_points.size() == 0) {
             return 1.0f;
     }
     while ((idx < _control_points.size() - 1) && (_control_points[idx].output < shares)) {
