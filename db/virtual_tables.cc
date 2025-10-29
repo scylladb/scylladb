@@ -1278,7 +1278,7 @@ public:
             static_assert(int(cdc::stream_state::current) < int(cdc::stream_state::closed));
             static_assert(int(cdc::stream_state::closed) < int(cdc::stream_state::opened));
 
-            co_await _ss.query_cdc_streams(table, [&] (db_clock::time_point ts, const std::vector<cdc::stream_id>& current, cdc::cdc_stream_diff diff) -> future<> {
+            co_await _ss.query_cdc_streams(table, [&] (db_clock::time_point ts, const utils::chunked_vector<cdc::stream_id>& current, cdc::cdc_stream_diff diff) -> future<> {
                 co_await emit_stream_set(ts, cdc::stream_state::current, current);
                 co_await emit_stream_set(ts, cdc::stream_state::closed, diff.closed_streams);
                 co_await emit_stream_set(ts, cdc::stream_state::opened, diff.opened_streams);
