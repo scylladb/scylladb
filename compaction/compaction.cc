@@ -2234,8 +2234,16 @@ maybe_split_offline_sstable(sstables::shared_sstable sst, compaction_group_view&
     compaction_data info;
     auto desc = compaction_descriptor({ sst }, sst->get_sstable_level(), compaction_descriptor::default_max_sstable_bytes,
                                       sst->run_identifier(), compaction_type_options::make_split(opt.classifier));
-    desc.creator = [&t] (shard_id _) {
-        return t.make_sstable();
+    desc.creator = [&t, sst] (shard_id _) {
+        // NOTE: preserves the sstable state, since want the output to be on the same state as the original.
+        // For example, if base table has views, it's important that sstable produced by repair will be
+        // in the staging state.
+        auto new_sst = t.make_sstable(sst->state());
+        // Also preserves the repaired state, such that the new sstable will be excluded by compaction
+        // while being processed by repair.
+        new_sst->move_repaired_state_from(*sst);
+        return new_sst;
+
     };
     desc.replacer = [&] (compaction_completion_desc d) {
         std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
