@@ -353,7 +353,6 @@ private:
 
     cdc_stats _cdc_stats;
 
-    // Needed by sstable cleanup fiber to wait for all ongoing writes to complete
     locator::token_metadata::version_t _fence_version = 0;
     std::map<locator::token_metadata::version_t, lw_shared_ptr<gate>> _pending_fenceable_writes;
     shared_future<> _stale_pending_writes{make_ready_future<>()};
@@ -667,10 +666,12 @@ private:
     // Returns fencing_token based on effective_replication_map.
     static fencing_token get_fence(const locator::effective_replication_map& erm);
 
-    // Fencing tokens are checked twice: once before a replica-local storage operation
-    // and once after it completes. The second check ensures that if the coordinator
-    // was fenced out during execution, the replica does not count this operation
-    // toward the target CL.
+    // Fencing tokens are checked twice: once before performing a replica-local storage
+    // operation, and again after it completes. The second check ensures that if the
+    // request coordinator is fenced out while the replica is still executing the request — that is,
+    // when the topology coordinator distributes a new topology version across the cluster
+    // and increments the replica’s fence version — the request coordinator does not count this
+    // operation toward the target consistency level (CL).
     //
     // For writes, this creates a cleanup concern: if the coordinator is fenced out
     // mid-operation, the write’s partial effects must be cleaned up before the range

@@ -966,7 +966,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         }
         break;
         case global_topology_request::cleanup:
-            co_await start_cleanup_on_dirty_nodes(std::move(guard), req_id);
+            co_await start_vnodes_cleanup_on_dirty_nodes(std::move(guard), req_id);
             break;
         case global_topology_request::keyspace_rf_change: {
             rtlogger.info("keyspace_rf_change requested");
@@ -2188,7 +2188,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
             }
 
             if (auto* cleanup = std::get_if<start_vnodes_cleanup>(&work)) {
-                co_await start_cleanup_on_dirty_nodes(std::move(cleanup->guard), 
+                co_await start_vnodes_cleanup_on_dirty_nodes(std::move(cleanup->guard), 
                     std::pair(cleanup->request, cleanup->request_server_id));
                 co_return true;
             }
@@ -3115,7 +3115,7 @@ class topology_coordinator : public endpoint_lifecycle_subscriber {
         return muts;
     }
 
-    future<> start_cleanup_on_dirty_nodes(group0_guard guard, std::variant<std::pair<topology_request, raft::server_id>, utils::UUID> cmd) {
+    future<> start_vnodes_cleanup_on_dirty_nodes(group0_guard guard, std::variant<std::pair<topology_request, raft::server_id>, utils::UUID> cmd) {
         sstring cleanup_reason;
         if (const auto* global_request_id = std::get_if<utils::UUID>(&cmd)) {
             cleanup_reason = ::format("by global request {}", *global_request_id);

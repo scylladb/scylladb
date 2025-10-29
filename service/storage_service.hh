@@ -878,7 +878,7 @@ private:
     future<> notify_cql_change(inet_address endpoint, locator::host_id hid,bool ready);
     future<> remove_rpc_client_with_ignored_topology(inet_address endpoint, locator::host_id id);
 public:
-    future<bool> is_cleanup_allowed(sstring keyspace);
+    future<bool> is_vnodes_cleanup_allowed(sstring keyspace);
     bool is_repair_based_node_ops_enabled(streaming::stream_reason reason);
     future<> update_fence_version(token_metadata::version_t version);
 
@@ -1012,7 +1012,7 @@ public:
 
     future<> load_cdc_streams(std::optional<std::unordered_set<table_id>> changed_tables = std::nullopt);
 
-    future<> do_cluster_cleanup();
+    future<> do_clusterwide_vnodes_cleanup();
 
     // Starts the upgrade procedure to topology on raft.
     // Must be called on shard 0.
