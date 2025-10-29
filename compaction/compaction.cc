@@ -2228,6 +2228,31 @@ uint64_t compaction_descriptor::sstables_size() const {
     return std::ranges::fold_left(sstables | std::views::transform(std::mem_fn(&sstables::sstable::data_size)), uint64_t(0), std::plus{});
 }
 
+
+future<std::vector<sstables::shared_sstable>>
+maybe_split_new_sstable(sstables::shared_sstable sst, compaction_group_view& t, compaction_type_options::split opt) {
+    if (opt.classifier(sst->get_first_decorated_key().token()) == opt.classifier(sst->get_last_decorated_key().token())) {
+        co_return std::vector<sstables::shared_sstable>{sst};
+    }
+    std::vector<sstables::shared_sstable> ret;
+
+    compaction_progress_monitor monitor;
+    compaction_data info;
+    auto desc = compaction_descriptor({ sst }, sst->get_sstable_level(), compaction_descriptor::default_max_sstable_bytes,
+                                      sst->run_identifier(), compaction_type_options::make_split(opt.classifier));
+    desc.creator = [&t] (shard_id _) {
+        return t.make_sstable();
+    };
+    desc.replacer = [&] (compaction_completion_desc d) {
+        std::move(d.new_sstables.begin(), d.new_sstables.end(), std::back_inserter(ret));
+    };
+
+    co_await compact_sstables(std::move(desc), info, t, monitor);
+    co_await sst->unlink();
+
+    co_return ret;
+}
+
 }
 
 auto fmt::formatter<::compaction::compaction_type>::format(::compaction::compaction_type type, fmt::format_context& ctx) const
